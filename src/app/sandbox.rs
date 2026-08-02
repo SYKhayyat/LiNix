@@ -52,13 +52,13 @@ impl Sandbox {
     }
 
     fn bwrap_available() -> bool {
-        which::which("bwrap").is_ok()
+        crate::core::executor::program_exists("bwrap")
     }
 
     fn sandbox_exec_available() -> bool {
         #[cfg(target_os = "macos")]
         {
-            return which::which("sandbox-exec").is_ok();
+            return crate::core::executor::program_exists("sandbox-exec");
         }
         #[allow(unreachable_code)]
         false

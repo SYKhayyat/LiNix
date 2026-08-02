@@ -751,8 +751,7 @@ impl<'a> ChangePlanner<'a> {
         if !tokio::fs::try_exists(target).await.unwrap_or(false) {
             return true;
         }
-        let s_hash = crate::core::security::generate_checksum(source);
-        let t_hash = crate::core::security::generate_checksum(target);
+        let (s_hash, t_hash) = crate::core::security::checksum_pair(source, target).await;
         match (s_hash, t_hash) {
             (Ok(s), Ok(t)) => s != t,
             _ => true,

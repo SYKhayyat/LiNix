@@ -11,7 +11,6 @@ use crate::app::App;
 use crate::core::{Error, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::time::Duration;
 use tracing::debug;
 
 /// A managed package with its best-known concrete version resolved from the live backend.
@@ -261,13 +260,9 @@ pub async fn audit(app: &App) -> Result<AuditReport> {
         return Ok(report);
     }
 
-    let client = reqwest::Client::builder()
-        // Honour the configured value (F1). `.max(1)` only rejects a literal 0, which
-        // reqwest reads as "time out after zero seconds" — every request fails instantly —
-        // not "no timeout". The old `.max(10)` silently tripled a documented `5`.
-        .timeout(Duration::from_secs(app.config.network_timeout_secs.max(1)))
-        .user_agent("linix-audit")
-        .build()
+    // Honour the configured value (F1); the pool raises a literal 0 to 1s, because reqwest
+    // reads a zero-second timeout as "fail instantly" rather than "no timeout".
+    let client = crate::core::http::api("linix-audit", app.config.network_timeout_secs)
         .map_err(|e| Error::Http(e.to_string()))?;
 
     let resp = client.post(OSV_BATCH_URL).json(&body).send().await?;

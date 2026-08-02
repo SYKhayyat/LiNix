@@ -248,7 +248,10 @@ fn a_covered_manager_recognises_its_own_words_for_a_missing_name() {
     for (manager, output) in cases {
         let policy = exit_policy::for_manager(manager);
         assert!(
-            policy.names_an_absent_package(output.as_bytes(), b""),
+            policy.names_an_absent_package(&exit_policy::ExitPolicy::haystack(
+                output.as_bytes(),
+                b""
+            )),
             "`{manager}` does not recognise its own words for a name that is not there, so a \
              typo behind `{manager}:` wedges the config:\n  {output}"
         );
@@ -286,7 +289,9 @@ fn a_failure_about_a_name_that_exists_is_not_read_as_absent() {
 
     for (manager, output) in cases {
         assert!(
-            !exit_policy::for_manager(manager).names_an_absent_package(output.as_bytes(), b""),
+            !exit_policy::for_manager(manager).names_an_absent_package(
+                &exit_policy::ExitPolicy::haystack(output.as_bytes(), b"")
+            ),
             "`{manager}` read this as a name that does not exist, so LiNix would delete a \
              declaration whose package is real:\n  {output}"
         );

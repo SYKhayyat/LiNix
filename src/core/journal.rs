@@ -34,13 +34,21 @@ pub struct JournalEntry {
     /// Set only on reaching a terminal state; `None` while Pending or InProgress.
     pub finished_at_unix: Option<i64>,
     pub error: Option<String>,
-    /// Merged into the StateRegistry only once the action succeeds.
-    pub staged_properties: HashMap<String, String>,
 }
 
 /// Recovery from power failure, OS crash, or a kill mid-transaction depends on an
 /// 'InProgress' entry being flushed to disk before any backend is invoked. A backend
 /// called ahead of that flush is a modification `heal` cannot see or undo.
+///
+/// **Append-only, one line per state change.** It used to serialise the entire map, pretty
+/// printed, through a temp file and a rename, on every transition — so installing 50 packages
+/// wrote the whole growing journal ~100 times and the bytes written were O(n²) in the number of
+/// actions. Worse, it did that synchronously while holding the one mutex every concurrent DAG
+/// worker has to take, which put a hard throttle directly under the transaction's concurrency:
+/// the more parallel the graph became, the more this cost. A log is the canonical append-only
+/// structure, and appending makes each transition a constant-size write.
+///
+/// Reading is forward, last-writer-wins per id — the same rule `heal` already applies.
 pub struct Journal {
     path: PathBuf,
     pub entries: HashMap<String, JournalEntry>,
@@ -48,8 +56,11 @@ pub struct Journal {
 
 impl Journal {
     pub fn new() -> Result<Self> {
-        Self::at(crate::utils::safe_data_dir().join("journal.json"))
+        Self::at(crate::utils::safe_data_dir().join(Self::FILE_NAME))
     }
+
+    /// `.jsonl`, because it is one JSON value per line and not one JSON document.
+    pub const FILE_NAME: &'static str = "journal.jsonl";
 
     /// The WAL at an explicit path. Injected rather than always derived, so a test kernel
     /// gets its own: `TestKernel` isolated the registry and the groups dir but not this,
@@ -85,59 +96,71 @@ impl Journal {
             return Ok(());
         }
 
-        match serde_json::from_str(&data) {
-            Ok(entries) => {
-                self.entries = entries;
-                debug!(
-                    "Successfully loaded {} historical log entries.",
-                    self.entries.len()
-                );
+        // Forward, last-writer-wins: a later line for the same id supersedes an earlier one,
+        // which is how a transition is recorded without rewriting what came before.
+        let mut unreadable = 0usize;
+        for line in data.lines().filter(|l| !l.trim().is_empty()) {
+            match serde_json::from_str::<JournalEntry>(line) {
+                Ok(entry) => {
+                    self.entries.insert(entry.id.clone(), entry);
+                }
+                Err(_) => unreadable += 1,
             }
-            Err(e) => {
-                // S10: a corrupt WAL must NOT brick every command. It used to return Err,
-                // which failed `App::new`, which failed everything — with no message saying
-                // which file to delete. The WAL only records in-flight actions for crash
-                // recovery; a corrupt one means we cannot auto-recover an interrupted run, but
-                // that is no reason to refuse `list`, `plan`, or anything else. So: move the
-                // bad file aside (preserved for inspection, and so it stops re-triggering),
-                // say so loudly (P3 — fail loud), and start fresh.
-                let backup = {
-                    let mut s = self.path.clone().into_os_string();
-                    s.push(".corrupt");
-                    std::path::PathBuf::from(s)
-                };
-                let moved = std::fs::rename(&self.path, &backup).is_ok();
-                self.entries = HashMap::new();
-                warn!(
-                    "the WAL at {:?} is corrupt and could not be parsed ({}). {} \
-                     Starting a fresh journal so commands still run; an operation interrupted \
-                     before this cannot be auto-recovered — re-run `linix sync` to reconcile.",
-                    self.path,
-                    e,
-                    if moved {
-                        format!("It has been moved to {:?} for inspection.", backup)
-                    } else {
-                        "It could not be moved aside; it will be overwritten on the next write."
-                            .to_string()
-                    },
-                );
-            }
+        }
+
+        if unreadable > 0 {
+            // S10: a damaged WAL must NOT brick every command — it used to return `Err`, which
+            // failed `App::new`, which failed everything. It is also no longer all-or-nothing:
+            // a crash partway through an append leaves one truncated line, and every complete
+            // line before it is still a true record. So the readable entries stand, and the
+            // damage is named rather than swallowed (P3 — fail loud).
+            warn!(
+                "{} line(s) of the WAL at {:?} could not be read and were skipped; {} entr(ies) \
+                 were recovered. If an operation was interrupted it may not be auto-healable — \
+                 run `linix sync` to reconcile.",
+                unreadable,
+                self.path,
+                self.entries.len()
+            );
+        } else {
+            debug!(
+                "Successfully loaded {} historical log entries.",
+                self.entries.len()
+            );
         }
         Ok(())
     }
 
-    /// Atomic because a torn write of the WAL loses the record of an in-flight action.
-    pub fn flush(&self) -> Result<()> {
-        trace!("flushing WAL");
-
-        let data = serde_json::to_string_pretty(&self.entries)
-            .map_err(|e| Error::Other(format!("Failed to serialize Journal: {}", e)))?;
-
-        // A preview records no WAL entry: `persist` answers that, and a run that performed
+    /// Record one entry's current state, durably, before the backend it describes is invoked.
+    ///
+    /// One line appended and synced — not a re-serialisation of every entry ever recorded.
+    fn append(&self, entry: &JournalEntry) -> Result<()> {
+        trace!("appending to WAL");
+        let line = serde_json::to_string(entry)
+            .map_err(|e| Error::Other(format!("Failed to serialize Journal entry: {}", e)))?;
+        // A preview records no WAL entry: `append_line` answers that, and a run that performed
         // nothing has nothing to roll back.
+        crate::utils::file::append_line(&self.path, &line)
+            .map(|_| ())
+            .map_err(|e| Error::Persist(format!("Write of WAL Journal failed: {}", e)))
+    }
+
+    /// Rewrite the log from the in-memory entries, dropping everything they no longer contain.
+    ///
+    /// Only `cleanup` needs this — removal is the one thing an append cannot express — and it
+    /// runs once per invocation, not once per package.
+    fn compact(&self) -> Result<()> {
+        let mut data = String::new();
+        for entry in self.entries.values() {
+            data.push_str(
+                &serde_json::to_string(entry)
+                    .map_err(|e| Error::Other(format!("Failed to serialize Journal: {}", e)))?,
+            );
+            data.push('\n');
+        }
         persist(&self.path, &data)
             .map(|_| ())
-            .map_err(|e| Error::Persist(format!("Atomic write of WAL Journal failed: {}", e)))
+            .map_err(|e| Error::Persist(format!("Atomic rewrite of WAL Journal failed: {}", e)))
     }
 
     fn generate_id(backend: &str, package: &str) -> String {
@@ -160,22 +183,21 @@ impl Journal {
             started_at_unix: Utc::now().timestamp(),
             finished_at_unix: None,
             error: None,
-            staged_properties: HashMap::new(),
         };
 
+        self.append(&entry)?;
         self.entries.insert(id.clone(), entry);
-        self.flush()?;
 
         debug!("Operation {} marked as InProgress in WAL.", id);
         Ok(id)
     }
 
-    pub fn record_success(&mut self, id: &str, properties: HashMap<String, String>) -> Result<()> {
+    pub fn record_success(&mut self, id: &str) -> Result<()> {
         if let Some(entry) = self.entries.get_mut(id) {
             entry.status = ActionStatus::Completed;
             entry.finished_at_unix = Some(Utc::now().timestamp());
-            entry.staged_properties = properties;
-            self.flush()?;
+            let entry = entry.clone();
+            self.append(&entry)?;
             trace!("Operation {} marked as Completed.", id);
         } else {
             warn!("Attempted to mark unknown operation {} as successful.", id);
@@ -188,7 +210,8 @@ impl Journal {
             entry.status = ActionStatus::Failed;
             entry.finished_at_unix = Some(Utc::now().timestamp());
             entry.error = Some(err.to_string());
-            self.flush()?;
+            let entry = entry.clone();
+            self.append(&entry)?;
             // `debug!`, not `warn!`: the user is about to be told this failure once, in their
             // own words, by whoever is returning the error. Saying it again here — with a
             // 32-hex operation id and the word WAL in it — is the same sentence a third time
@@ -228,8 +251,9 @@ impl Journal {
             .any(|e| matches!(e.status, ActionStatus::InProgress | ActionStatus::Abandoned))
     }
 
-    /// InProgress and Failed entries are NEVER purged until they are resolved.
-    pub fn cleanup_expired_logs(&mut self, days_threshold: i64) -> Result<()> {
+    /// InProgress and Failed entries are NEVER purged until they are resolved. Returns whether
+    /// anything was dropped, which is also whether the log on disk was rewritten.
+    pub fn cleanup_expired_logs(&mut self, days_threshold: i64) -> Result<bool> {
         let cutoff = Utc::now() - ChronoDuration::days(days_threshold);
         let cutoff_ts = cutoff.timestamp();
 
@@ -255,10 +279,11 @@ impl Journal {
                 "Maintenance complete. Purged {} historical records older than {} days.",
                 purged, days_threshold
             );
-            self.flush()?;
+            // A removal is the one transition an append cannot express.
+            self.compact()?;
         }
 
-        Ok(())
+        Ok(purged > 0)
     }
 
     pub fn cleanup(&mut self) -> Result<()> {
@@ -269,15 +294,22 @@ impl Journal {
         let stale_limit = Utc::now() - ChronoDuration::hours(4);
         let stale_ts = stale_limit.timestamp();
 
+        let mut aged_out = false;
         for entry in self.entries.values_mut() {
             if entry.status == ActionStatus::InProgress && entry.started_at_unix < stale_ts {
                 debug!("Marking stale task {} as Abandoned.", entry.id);
                 entry.status = ActionStatus::Abandoned;
                 entry.finished_at_unix = Some(Utc::now().timestamp());
+                aged_out = true;
             }
         }
 
-        self.cleanup_expired_logs(7)?;
+        let purged = self.cleanup_expired_logs(7)?;
+        // `cleanup_expired_logs` rewrites when it drops something; aging an entry out without
+        // dropping anything still has to reach the disk, or the next process re-ages it.
+        if aged_out && !purged {
+            self.compact()?;
+        }
 
         if self.entries.is_empty() && self.path.exists() {
             trace!("WAL is empty. Removing journal file.");

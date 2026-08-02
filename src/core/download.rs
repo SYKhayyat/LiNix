@@ -79,25 +79,10 @@ pub fn check_checksum_declared(spec: &PackageSpec) -> Result<()> {
 /// The binding requirement is that the *final* download is HTTPS; checking each hop is the
 /// cheapest correct form and also catches a downgrade in the middle of a chain that ends back
 /// on HTTPS.
+/// A download carries no whole-request timeout: a release asset can legitimately take an hour,
+/// and a bound sized for an API call turns a slow link into a corrupt install.
 pub fn client(allow_http: bool, user_agent: &str) -> Result<reqwest::Client> {
-    let policy = if allow_http {
-        reqwest::redirect::Policy::default()
-    } else {
-        reqwest::redirect::Policy::custom(|attempt| {
-            if attempt.url().scheme() != "https" {
-                return attempt.error("redirected to a non-HTTPS URL");
-            }
-            if attempt.previous().len() >= 10 {
-                return attempt.stop();
-            }
-            attempt.follow()
-        })
-    };
-    reqwest::Client::builder()
-        .user_agent(user_agent.to_string())
-        .redirect(policy)
-        .build()
-        .map_err(Error::from)
+    crate::core::http::client(user_agent, allow_http, 0)
 }
 
 #[cfg(test)]

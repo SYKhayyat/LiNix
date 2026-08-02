@@ -62,8 +62,8 @@ impl App {
         let journal_path = state_path
             .as_ref()
             .and_then(|p| p.parent())
-            .map(|d| d.join("journal.json"))
-            .unwrap_or_else(|| crate::utils::safe_data_dir().join("journal.json"));
+            .map(|d| d.join(Journal::FILE_NAME))
+            .unwrap_or_else(|| crate::utils::safe_data_dir().join(Journal::FILE_NAME));
 
         let state_registry = if let Some(path) = state_path {
             tokio::task::spawn_blocking(move || StateRegistry::load_from(&path))
@@ -680,10 +680,11 @@ impl App {
         // The managed check touches the state lock once, after the process work is done,
         // rather than holding it across every backend's query.
         let state = self.state.lock().await;
+        let managed = state.managed_index();
         Ok(listed
             .into_iter()
             .flatten()
-            .filter(|pkg| !state.is_managed(&pkg.backend, &pkg.name))
+            .filter(|pkg| !managed.contains(&(pkg.backend.as_str(), pkg.name.as_str())))
             .filter(|pkg| !owned.contains(&pkg.name))
             .collect())
     }

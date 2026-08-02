@@ -31,6 +31,36 @@ pub fn persist(path: &Path, content: &str) -> Result<bool> {
     Ok(true)
 }
 
+/// Add one line to the end of a file, durably. Returns whether the bytes reached the disk.
+///
+/// For append-only logs, where rewriting the whole file to record one more event is O(n²) in
+/// the number of events. Same preview policy as [`persist`]: a run that performs nothing writes
+/// nothing.
+///
+/// A crash partway through leaves a truncated final line rather than a corrupt file, which is
+/// the property that makes the format worth having — the reader drops an unparseable tail and
+/// keeps everything before it.
+pub fn append_line(path: &Path, line: &str) -> Result<bool> {
+    if crate::core::dry_run::active() {
+        tracing::warn!("[DRY-RUN] would append to {}", path.display());
+        return Ok(false);
+    }
+    if let Some(dir) = path.parent() {
+        if !dir.exists() {
+            fs::create_dir_all(dir).map_err(Error::from)?;
+        }
+    }
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(Error::from)?;
+    file.write_all(line.as_bytes()).map_err(Error::from)?;
+    file.write_all(b"\n").map_err(Error::from)?;
+    file.sync_data().map_err(Error::from)?;
+    Ok(true)
+}
+
 /// The bytes, atomically, with no policy. **Private on purpose** — [`persist`] is the way in,
 /// so a new writer cannot reach the disk during a preview by picking the shorter name.
 fn atomic_write(path: &Path, content: &str) -> Result<()> {

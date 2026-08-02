@@ -595,9 +595,9 @@ impl Installable for GithubInstallable {
                 // `@sha256` is legal only on a line that resolves to exactly one file
                 // (VIII.2/D6), so it needs no per-artifact story here.
                 if let Some(expected_sha) = spec.options.get("sha256") {
-                    verify_checksum(&dl_path, expected_sha)?;
+                    verify_checksum(&dl_path, expected_sha).await?;
                 }
-                let sha = generate_checksum(&dl_path)?;
+                let sha = generate_checksum(&dl_path).await?;
                 downloaded.push((pick, dl_path, sha));
             }
 

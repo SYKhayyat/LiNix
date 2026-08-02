@@ -134,6 +134,73 @@ fn command_idle_timeout() -> Option<std::time::Duration> {
     }
 }
 
+/// Where a program lives, answered once per name per process.
+///
+/// `is_available()` on nearly every backend is a PATH lookup, `registry.available()` calls it
+/// for all ~45 of them, and `available()` itself is called at 20+ sites — six times in
+/// `AppContext` alone. On Windows a *miss* walks every PATH entry × every `PATHEXT` extension,
+/// and a miss is the common case, because most registered backends are not installed on any
+/// given host. The same lookup runs again on every spawn to decide how to launch the program.
+///
+/// One backend had already cached its own probe and the other forty-four had not; a memo here
+/// closes all of them at once and dedupes across backends that probe the same program (`krew`
+/// probes `kubectl`; `yay`/`paru`/`pacman` overlap).
+static PATH_LOOKUP: once_cell::sync::Lazy<DashMap<String, Option<PathBuf>>> =
+    once_cell::sync::Lazy::new(DashMap::new);
+
+/// Resolve a program on PATH, from the memo.
+///
+/// Uses the `which` *crate* — an in-process PATH/PATHEXT search — rather than spawning the
+/// external `which`/`where` program: minimal fedora/arch/alpine images do not ship `which`,
+/// which made every backend read as OFFLINE there.
+pub fn resolve_program(cmd: &str) -> Option<PathBuf> {
+    if let Some(hit) = PATH_LOOKUP.get(cmd) {
+        return hit.clone();
+    }
+    let found = which::which(cmd).ok();
+    PATH_LOOKUP.insert(cmd.to_string(), found.clone());
+    found
+}
+
+pub fn program_exists(cmd: &str) -> bool {
+    resolve_program(cmd).is_some()
+}
+
+/// Drop the memo, for the one case where PATH really does change mid-run: LiNix has just
+/// installed the program it is about to ask about.
+///
+/// Without this, `linix setup` would install a manager and then keep answering from the
+/// lookup it took before the installer ran.
+pub fn forget_path_lookups() {
+    PATH_LOOKUP.clear();
+    #[cfg(windows)]
+    LAUNCH_PATH.clear();
+}
+
+/// Windows: the path a program is actually launched through, memoised.
+///
+/// Resolving it means a PATH scan *and* a `.ps1` stat beside the resolved shim, and it ran on
+/// every single spawn — synchronously, inside an `async fn`, on the same task the planner's
+/// `buffer_unordered` relies on to interleave.
+#[cfg(windows)]
+static LAUNCH_PATH: once_cell::sync::Lazy<DashMap<String, Option<PathBuf>>> =
+    once_cell::sync::Lazy::new(DashMap::new);
+
+#[cfg(windows)]
+fn launch_path(cmd: &str) -> Option<PathBuf> {
+    if let Some(hit) = LAUNCH_PATH.get(cmd) {
+        return hit.clone();
+    }
+    let plan = resolve_program(cmd).map(|resolved| preferred_shim(&resolved));
+    LAUNCH_PATH.insert(cmd.to_string(), plan.clone());
+    plan
+}
+
+/// Lock directories already created, so `create_dir_all` runs once per directory per process
+/// instead of once per exclusive command.
+static LOCK_DIRS: once_cell::sync::Lazy<dashmap::DashSet<PathBuf>> =
+    once_cell::sync::Lazy::new(dashmap::DashSet::new);
+
 pub struct RawExecutor {
     stdin: ChildStdin,
     idle: Option<std::time::Duration>,
@@ -317,8 +384,8 @@ fn windows_shim_wrap(cmd: &str, resolved: &Path, args: &[String]) -> Option<(Str
 /// `.exe`/native commands pass through unchanged.
 #[cfg(windows)]
 fn windows_effective_command(cmd: &str, args: &[String]) -> (String, Vec<String>) {
-    if let Ok(resolved) = which::which(cmd) {
-        if let Some(wrapped) = windows_shim_wrap(cmd, &preferred_shim(&resolved), args) {
+    if let Some(resolved) = launch_path(cmd) {
+        if let Some(wrapped) = windows_shim_wrap(cmd, &resolved, args) {
             return wrapped;
         }
     }
@@ -457,11 +524,7 @@ impl ExecutionLayer for RawExecutor {
     }
 
     fn check_command(&self, cmd: &str) -> bool {
-        // Resolve via the `which` CRATE (in-process PATH/PATHEXT search) rather than
-        // spawning the external `which`/`where` program — minimal fedora/arch/alpine
-        // images don't ship `which`, which made every backend read as OFFLINE there
-        // (breaking query/remove even though the manager was installed).
-        which::which(cmd).is_ok()
+        program_exists(cmd)
     }
 
     async fn symlink(&self, src: &Path, dst: &Path) -> Result<()> {
@@ -780,7 +843,12 @@ impl CommandExecutor {
     /// tolerate a non-zero exit (searches, existence probes) must use `run_output`/`run_raw`.
     pub async fn run(&self, cmd: &str, args: &[&str], sudo: bool) -> Result<StdOutput> {
         let output = self.run_raw(cmd, args, sudo).await?;
-        self.ensure_status(cmd, output)
+        let checked = self.ensure_status(cmd, output);
+        // A mutation is the only thing that can change what is on PATH during a one-shot run —
+        // installing `npm` and then asking whether `npm` is available is a real sequence inside
+        // one `sync`. Every read stays memoised; this is the one edge that invalidates it.
+        forget_path_lookups();
+        checked
     }
 
     pub async fn run_output(&self, cmd: &str, args: &[&str], sudo: bool) -> Result<String> {
@@ -828,7 +896,11 @@ impl CommandExecutor {
     }
 
     pub(crate) fn open_lock_at(dir: &Path, lock_key: &str) -> Result<File> {
-        std::fs::create_dir_all(dir).map_err(Error::from)?;
+        // Created once per process, not once per lock: this runs on every exclusive command,
+        // for a directory that exists after the first one.
+        if LOCK_DIRS.insert(dir.to_path_buf()) {
+            std::fs::create_dir_all(dir).map_err(Error::from)?;
+        }
         // A lock key is a backend name, and a backend name comes from a config file. Anything
         // that is not a plain name would otherwise pick the directory the lock lands in.
         let stem: String = lock_key
@@ -869,7 +941,15 @@ impl CommandExecutor {
         }
 
         let lock_file = Self::open_exec_lock(lock_key)?;
-        lock_file.lock_exclusive().map_err(Error::from)?;
+        // `fs2`'s flock is a blocking syscall. When a second `linix` holds this lock, taking it
+        // inline parks a whole runtime worker for however long that other process runs —
+        // minutes, for an `apt dist-upgrade`. The wait belongs on the blocking pool; the file
+        // comes back out so the unlock below is the same handle.
+        let lock_file =
+            tokio::task::spawn_blocking(move || lock_file.lock_exclusive().map(|_| lock_file))
+                .await
+                .map_err(|e| Error::Io(format!("waiting for the `{}` lock: {}", lock_key, e)))?
+                .map_err(Error::from)?;
         let result = self.run_raw(cmd, args, sudo).await;
         let _ = lock_file.unlock();
         // Enforce status only after releasing the lock, so a failed mutation still frees it.
@@ -948,11 +1028,17 @@ impl CommandExecutor {
     /// nothing is classified, which is what the retry loop already assumed.
     fn ensure_status(&self, cmd: &str, output: StdOutput) -> Result<StdOutput> {
         let status_ok = output.status.success() || self.exit_policy.is_benign(output.status.code());
-        if status_ok
-            && !self
-                .exit_policy
-                .signals_failure(&output.stdout, &output.stderr)
-        {
+        // One lowercased join of both streams for all three marker questions below. Each used
+        // to build its own, so a command's whole transcript was copied and lowercased three
+        // times — per package, and an `apt install` or `cargo build` transcript is not small.
+        // A policy with no markers answers every question from its empty lists and never reads
+        // this, so it is not built for one.
+        let hay = if self.exit_policy.reads_output() {
+            ExitPolicy::haystack(&output.stdout, &output.stderr)
+        } else {
+            String::new()
+        };
+        if status_ok && !self.exit_policy.signals_failure(&hay) {
             return Ok(output);
         }
         let code = output
@@ -994,15 +1080,11 @@ impl CommandExecutor {
         };
         Err(Error::CommandFailed {
             message: msg,
-            retry: self
-                .exit_policy
-                .retryability(&output.stdout, &output.stderr),
-            // Asked of the raw output, here, because this is the last place it exists: the
+            retry: self.exit_policy.retryability(&hay),
+            // Asked of the whole output, here, because this is the last place it exists: the
             // message keeps whichever stream was non-empty, so a marker on the other one is
             // gone by the time any caller sees it.
-            absent_name: self
-                .exit_policy
-                .names_an_absent_package(&output.stdout, &output.stderr),
+            absent_name: self.exit_policy.names_an_absent_package(&hay),
         })
     }
 
@@ -1312,10 +1394,8 @@ mod child_process_tests {
     /// all. Two earlier hangs were killed by hand and recorded as undiagnosed.
     #[tokio::test]
     async fn a_child_that_goes_silent_is_killed_and_named() {
-        let layer = RawExecutor::with_idle(
-            ChildStdin::Closed,
-            Some(std::time::Duration::from_secs(2)),
-        );
+        let layer =
+            RawExecutor::with_idle(ChildStdin::Closed, Some(std::time::Duration::from_secs(2)));
         let (cmd, args) = silent_forever();
         let started = std::time::Instant::now();
         let err = layer
@@ -1352,10 +1432,8 @@ mod child_process_tests {
     /// wall-clock cap set low enough to catch the hang would kill every real build.
     #[tokio::test]
     async fn a_child_that_keeps_talking_outlives_the_bound() {
-        let layer = RawExecutor::with_idle(
-            ChildStdin::Closed,
-            Some(std::time::Duration::from_secs(3)),
-        );
+        let layer =
+            RawExecutor::with_idle(ChildStdin::Closed, Some(std::time::Duration::from_secs(3)));
         let (cmd, args) = chatty_for_a_while();
         let started = std::time::Instant::now();
         let out = layer
@@ -1367,7 +1445,10 @@ mod child_process_tests {
             "the fixture must outlive the bound or it proves nothing"
         );
         assert!(out.status.success());
-        assert_eq!(String::from_utf8_lossy(&out.stdout).matches("tick").count(), 12);
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).matches("tick").count(),
+            12
+        );
     }
 
     /// `0` in the config means the old behaviour, for whoever has a legitimately silent
@@ -1389,16 +1470,11 @@ mod child_process_tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn the_killed_child_is_actually_dead() {
-        let layer = RawExecutor::with_idle(
-            ChildStdin::Closed,
-            Some(std::time::Duration::from_secs(2)),
-        );
+        let layer =
+            RawExecutor::with_idle(ChildStdin::Closed, Some(std::time::Duration::from_secs(2)));
         // `pgrep -f` on a marker only this test uses; a survivor is visible to the whole host.
         let marker = format!("linix-idle-probe-{}", std::process::id());
-        let args = vec![
-            "-c".to_string(),
-            format!("# {}\nsleep 600", marker),
-        ];
+        let args = vec!["-c".to_string(), format!("# {}\nsleep 600", marker)];
         let _ = layer.execute("sh", &args, &HashMap::new()).await;
         let found = std::process::Command::new("pgrep")
             .args(["-f", &marker])
@@ -1777,15 +1853,21 @@ mod exit_status_tests {
     fn a_choco_package_that_failed_outranks_a_benign_reboot_code() {
         let choco = exit_policy::choco();
         assert!(
-            choco.signals_failure(CHOCO_UNINSTALL_ABSENT.as_bytes(), b""),
+            choco.signals_failure(&ExitPolicy::haystack(
+                CHOCO_UNINSTALL_ABSENT.as_bytes(),
+                b""
+            )),
             "choco said 0/1 and 1 failed"
         );
         assert!(
-            choco.signals_failure(b"Chocolatey installed 10/11 packages. 1 packages failed.", b""),
+            choco.signals_failure(&ExitPolicy::haystack(
+                b"Chocolatey installed 10/11 packages. 1 packages failed.",
+                b""
+            )),
             "a dependency took the package down with it"
         );
         assert!(
-            !choco.signals_failure(CHOCO_INSTALL_OK.as_bytes(), b""),
+            !choco.signals_failure(&ExitPolicy::haystack(CHOCO_INSTALL_OK.as_bytes(), b"")),
             "a clean 11/11 install says nothing about failing"
         );
         assert!(choco.is_benign(Some(3010)), "still a reboot, still benign");
@@ -1822,11 +1904,17 @@ mod exit_status_tests {
     fn winget_install_of_an_absent_name_is_not_the_success_its_exit_code_claims() {
         let winget = exit_policy::winget();
         assert!(
-            winget.signals_failure(b"No package found matching input criteria.", b""),
+            winget.signals_failure(&ExitPolicy::haystack(
+                b"No package found matching input criteria.",
+                b""
+            )),
             "nothing was installed"
         );
         assert!(
-            !winget.signals_failure(b"No installed package found matching input criteria.", b""),
+            !winget.signals_failure(&ExitPolicy::haystack(
+                b"No installed package found matching input criteria.",
+                b""
+            )),
             "removing something already gone is the outcome that was wanted"
         );
     }

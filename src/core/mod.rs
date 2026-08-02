@@ -13,6 +13,7 @@ pub mod exit_policy;
 pub mod extras_lock;
 pub mod git;
 pub mod hook_lock;
+pub mod http;
 pub mod journal;
 pub mod latency;
 pub mod manager;

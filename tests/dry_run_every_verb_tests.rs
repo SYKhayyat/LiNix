@@ -41,7 +41,7 @@ struct Case {
     /// What to run, after `--dry-run`.
     argv: &'static [&'static str],
     /// Files to place before the run, **relative to the fixture root** — so a case can plant
-    /// `data/journal.json` as readily as `config/profiles/Work`.
+    /// `data/journal.jsonl` as readily as `config/profiles/Work`.
     setup: &'static [(&'static str, &'static str)],
     /// Commands run *for real* first, so the measured one has something to change. `unhold`
     /// releases nothing on a machine holding nothing.
@@ -110,7 +110,7 @@ const CASES: &[Case] = &[
         nothing_to_do: None,
     },
     // The three the config-only snapshot excused, and the one that made it matter. Every one
-    // writes `data/registry.json` or `data/journal.json` and nothing else.
+    // writes `data/registry.json` or `data/journal.jsonl` and nothing else.
     Case {
         argv: &["hold", "github:sharkdp/hexyl"],
         setup: &[("config/modules/starter.txt", "github:sharkdp/hexyl\n")],
@@ -129,7 +129,7 @@ const CASES: &[Case] = &[
     Case {
         argv: &["heal", "-y"],
         setup: &[(
-            "data/journal.json",
+            "data/journal.jsonl",
             r#"{"github:linix-probe-zzz:wal": {
                 "id": "github:linix-probe-zzz:wal",
                 "action": {"Remove": {"name": "linix-probe-zzz", "backend": "github"}},

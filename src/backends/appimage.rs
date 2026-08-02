@@ -147,7 +147,7 @@ impl Installable for AppImageInstallable {
             // Before the chmod below, never after: an unverified file must never exist as an
             // executable, even briefly.
             if let Some(expected) = spec.options.get("sha256") {
-                if let Err(e) = crate::core::verify_checksum(&dest_path, expected) {
+                if let Err(e) = crate::core::verify_checksum(&dest_path, expected).await {
                     let _ = tokio::fs::remove_file(&dest_path).await;
                     return Err(e);
                 }

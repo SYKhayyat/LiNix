@@ -727,7 +727,7 @@ pub(crate) async fn compute_outdated(app: &App, list: &[linix::core::Package]) -
         let Some(s) = b.as_searchable() else {
             continue;
         };
-        let Ok(Some(remote)) = s.remote_info(&p.name).await else {
+        let Ok(Some(remote)) = s.lookup(&p.name).await else {
             continue;
         };
         let Some(latest) = remote.version.as_deref() else {
@@ -997,12 +997,15 @@ mod tests {
         ];
         for (output, policy) in cases {
             assert_eq!(
-                policy.retryability(output.as_bytes(), b""),
+                policy.retryability(&linix::core::ExitPolicy::haystack(output.as_bytes(), b"")),
                 Retryability::Permanent,
                 "not permanent, so this case does not test the distinction: {output}"
             );
             assert!(
-                !policy.names_an_absent_package(output.as_bytes(), b""),
+                !policy.names_an_absent_package(&linix::core::ExitPolicy::haystack(
+                    output.as_bytes(),
+                    b""
+                )),
                 "read as a missing name, so a declaration would be withdrawn over: {output}"
             );
         }

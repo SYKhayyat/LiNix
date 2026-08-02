@@ -68,7 +68,7 @@ fn fixture(name: &str, backend: &str, package: &str) -> PathBuf {
     assert_eq!(code, 0, "the fixture's own `init` failed:\n{out}");
 
     std::fs::write(
-        root.join("data").join("journal.json"),
+        root.join("data").join("journal.jsonl"),
         format!(
             r#"{{"{backend}:{package}:wal": {{
                 "id": "{backend}:{package}:wal",
@@ -179,7 +179,7 @@ fn a_failed_recovery_leaves_the_entry_open() {
     }
 
     let journal =
-        std::fs::read_to_string(dir.join("data").join("journal.json")).unwrap_or_default();
+        std::fs::read_to_string(dir.join("data").join("journal.jsonl")).unwrap_or_default();
     assert!(
         journal.contains("InProgress"),
         "the failed recovery closed the entry anyway, which is the answer a \"mark everything \

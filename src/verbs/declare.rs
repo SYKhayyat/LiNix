@@ -147,14 +147,9 @@ pub(crate) async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> 
             let path = layout.module_file(&module_name(&final_name)?);
             refuse_overwrite(&path, &final_name, *force)?;
 
-            let client = reqwest::Client::builder()
-                // Honour the configured value (F1); `.max(1)` only rejects a literal 0,
-                // which reqwest reads as an instant-fail timeout, not "no timeout".
-                .timeout(std::time::Duration::from_secs(
-                    app.config.network_timeout_secs.max(1),
-                ))
-                .user_agent("linix-module")
-                .build()?;
+            // Honour the configured value (F1); the pool raises a literal 0 to 1s, which
+            // reqwest would otherwise read as an instant-fail timeout rather than "no timeout".
+            let client = linix::core::http::api("linix-module", app.config.network_timeout_secs)?;
             info!("Fetching module from {}", url);
             let resp = client.get(&url).send().await?;
             if !resp.status().is_success() {

@@ -13,6 +13,17 @@ use tokio::fs;
 use tracing::{debug, instrument, warn};
 use version_compare::{compare as loose_compare, Cmp};
 
+/// This invocation's resolved variables, per repo and provider setting (IX.6).
+///
+/// See [`StateResolver::resolve_vars_against`] for why this exists at all.
+#[allow(clippy::type_complexity)]
+static VARS_MEMO: once_cell::sync::Lazy<
+    dashmap::DashMap<
+        (std::path::PathBuf, String),
+        Arc<tokio::sync::Mutex<Option<(crate::model::vars::Vars, crate::model::vars::VarOrigins)>>>,
+    >,
+> = once_cell::sync::Lazy::new(dashmap::DashMap::new);
+
 /// Whether the statements handed to the prober are the whole model.
 ///
 /// Only then does a name's absence mean it is no longer declared. A single `linix run jq` is
@@ -206,17 +217,61 @@ impl<'a> StateResolver<'a> {
 
     /// Resolve the variables against the given facts — the one implementation, so `linix vars`
     /// prints what a `when` will see rather than a second opinion about it.
+    ///
+    /// **Resolved once per invocation (IX.6), and now actually once.** Every resolver entry
+    /// point comes through here, and `StateResolver` is constructed at 39 sites — so a single
+    /// `linix check` ran the user's `vars.sh` three times, measured, and any `http()` variable
+    /// was fetched three times over three fresh connections. That is not only slow: a vars
+    /// provider is a program the user wrote, and running it three times runs its side effects
+    /// three times. `HostFacts::with_vars` has claimed "resolved once per invocation and
+    /// carried, never recomputed" since it was written; this is what makes the sentence true.
+    ///
+    /// Keyed by the repo and the provider setting rather than global, because one process can
+    /// legitimately hold more than one config — that is exactly what the test suite is.
     async fn resolve_vars_against(
+        &self,
+        facts: &HostFacts,
+    ) -> Result<(crate::model::vars::Vars, crate::model::vars::VarOrigins)> {
+        let key = (
+            self.layout.config_root().to_path_buf(),
+            format!("{:?}", self.config.vars.source),
+        );
+        let slot = VARS_MEMO
+            .entry(key)
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(None)))
+            .clone();
+        // Held across the resolution, so two concurrent askers do not both run the provider.
+        let mut slot = slot.lock().await;
+        if let Some(resolved) = slot.as_ref() {
+            return Ok(resolved.clone());
+        }
+        let resolved = self.resolve_vars_uncached(facts).await?;
+        *slot = Some(resolved.clone());
+        Ok(resolved)
+    }
+
+    async fn resolve_vars_uncached(
         &self,
         facts: &HostFacts,
     ) -> Result<(crate::model::vars::Vars, crate::model::vars::VarOrigins)> {
         let priority = self.vars_vocabulary().await?;
         let known = self.vocab(&priority);
-        crate::model::Resolver::new(&self.layout, &known, &priority)
-            .with_facts(facts.clone())
-            .with_vars_source(self.config.vars.source.clone())
-            .load_vars_with_origins()
-            .map_err(Error::from)
+        let layout = self.layout.clone();
+        let facts = facts.clone();
+        let source = self.config.vars.source.clone();
+        // Synchronous, and not cheaply so: this runs the user's external vars provider as a
+        // subprocess, every embedded `sh()` as another, and every `http()` as a network round
+        // trip. On a runtime worker thread that is a worker parked for the length of somebody
+        // else's script, which is why it goes to the blocking pool instead.
+        tokio::task::spawn_blocking(move || {
+            crate::model::Resolver::new(&layout, &known, &priority)
+                .with_facts(facts)
+                .with_vars_source(source)
+                .load_vars_with_origins()
+        })
+        .await
+        .map_err(|e| Error::Other(format!("resolving variables: {}", e)))?
+        .map_err(Error::from)
     }
 
     /// Resolve just the variables (Part IX), without planning the whole model — for `linix vars`.
@@ -341,9 +396,20 @@ impl<'a> StateResolver<'a> {
         // Steps 1-3 read the files. Probing needs the network, so it happens out here,
         // between reading and merging: a bare `ripgrep` and an explicit `cargo:ripgrep` are
         // one package, and they only meet if the answer is known before the merge (V.16).
-        let mut reached = crate::model::Resolver::new(&self.layout, &known, &priority)
-            .with_facts(facts.clone())
-            .statements()?;
+        // Reading `active`, every profile and every module is dozens of synchronous file reads;
+        // collecting is the same again. Both go to the blocking pool so the runtime keeps its
+        // workers.
+        let mut reached = {
+            let (layout, known, facts) = (self.layout.clone(), known.clone(), facts.clone());
+            let priority = priority.clone();
+            tokio::task::spawn_blocking(move || {
+                crate::model::Resolver::new(&layout, &known, &priority)
+                    .with_facts(facts)
+                    .statements()
+            })
+            .await
+            .map_err(|e| Error::Other(format!("reading the model: {}", e)))??
+        };
         // U33: run any `generate:` command and splice its declarations into the stream BEFORE
         // aliases, regexes, bare-name probing and collect — so generated lines get exactly the
         // same treatment (and the same guard and removal preview) as typed ones. Off by default,
@@ -357,10 +423,17 @@ impl<'a> StateResolver<'a> {
             .probe_bare_names(&reached.statements, &priority, Coverage::WholeModel)
             .await?;
 
-        let mut state = crate::model::Resolver::new(&self.layout, &known, &priority)
-            .with_facts(facts)
-            .with_bare(answers)
-            .collect(reached)?;
+        let mut state = {
+            let (layout, known, priority) = (self.layout.clone(), known.clone(), priority.clone());
+            tokio::task::spawn_blocking(move || {
+                crate::model::Resolver::new(&layout, &known, &priority)
+                    .with_facts(facts)
+                    .with_bare(answers)
+                    .collect(reached)
+            })
+            .await
+            .map_err(|e| Error::Other(format!("collecting the model: {}", e)))??
+        };
 
         for specs in state.packages.values_mut() {
             for spec in specs.iter_mut() {
@@ -1154,7 +1227,7 @@ impl<'a> StateResolver<'a> {
     /// said no is the rest of the chain asked at once, which is the shape where the fan-out was
     /// going to happen anyway.
     ///
-    /// `ask` is read-only (`remote_has`, `search`, `remote_info`), which is what makes the order
+    /// `ask` is read-only (one `lookup` per candidate), which is what makes the order
     /// of asking a question about latency rather than about behaviour.
     async fn ask_the_chain(
         &self,
@@ -1208,33 +1281,24 @@ impl<'a> StateResolver<'a> {
             return Verdict::Lacks;
         };
 
-        let has = match searchable.remote_has(package_name).await {
-            Ok(true) => true,
-            // `false` here is not proof of absence — a backend may not implement it — so
-            // an inconclusive answer falls through to a real search.
-            Ok(false) => match searchable.search(package_name).await {
-                Ok(results) => results.iter().any(|pkg| pkg.name == package_name),
-                Err(e) => return Verdict::CouldNotTell(e.to_string()),
-            },
+        // One query per candidate. Presence and version come out of the same answer, so a
+        // rejected candidate costs one search instead of two and a pinned name one instead of
+        // three.
+        let found = match searchable.lookup(package_name).await {
+            Ok(Some(pkg)) => pkg,
+            Ok(None) => return Verdict::Lacks,
             Err(e) => return Verdict::CouldNotTell(e.to_string()),
         };
-        if !has {
-            return Verdict::Lacks;
-        }
 
         let Some(req) = constraint else {
             return Verdict::Has;
         };
-        match searchable.remote_info(package_name).await {
-            // It has the package but will not say which version. The manager is the one
-            // that enforces the pin at install time; refusing here would send the name to
-            // a manager that merely talks about versions more.
-            Ok(Some(pkg)) => match pkg.version.as_deref() {
-                Some(ver) if !self.satisfies_constraint(ver, req) => Verdict::Lacks,
-                _ => Verdict::Has,
-            },
-            Ok(None) => Verdict::Lacks,
-            Err(e) => Verdict::CouldNotTell(e.to_string()),
+        // It has the package but will not say which version. The manager is the one that
+        // enforces the pin at install time; refusing here would send the name to a manager that
+        // merely talks about versions more.
+        match found.version.as_deref() {
+            Some(ver) if !self.satisfies_constraint(ver, req) => Verdict::Lacks,
+            _ => Verdict::Has,
         }
     }
 

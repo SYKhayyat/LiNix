@@ -189,12 +189,21 @@ pub trait Enumerable: Send + Sync {
 pub trait Searchable: Send + Sync {
     async fn search(&self, query: &str) -> Result<Vec<Package>>;
 
-    async fn remote_has(&self, name: &str) -> Result<bool> {
-        let results = self.search(name).await?;
-        Ok(results.iter().any(|p| p.name == name))
-    }
-
-    async fn remote_info(&self, name: &str) -> Result<Option<Package>> {
+    /// What this manager knows about one exact name — presence and version in one answer.
+    ///
+    /// There were two methods here, `remote_has` returning a `bool` and `remote_info` returning
+    /// the record, both defaulting to a full `search`, and neither ever overridden. The
+    /// resolver asked `remote_has`, could not tell an honest `false` from an unimplemented one,
+    /// and re-ran *the identical search with the identical argument* to find out — then ran a
+    /// third for the version when the line carried an `@version=`. Measured: two `apt-cache
+    /// search` calls for every candidate the priority chain rejects, which is most of them, and
+    /// three for any pinned name. One question, asked once, answers all of it.
+    ///
+    /// A manager with a genuinely cheaper targeted query — `brew info`, `apt-cache show`,
+    /// `pip index versions` — overrides this and pays one round trip instead of a full search.
+    /// `None` means this manager looked and does not have the name; an `Err` means it could not
+    /// tell, which the resolver treats as a different answer from "no".
+    async fn lookup(&self, name: &str) -> Result<Option<Package>> {
         let results = self.search(name).await?;
         Ok(results.into_iter().find(|p| p.name == name))
     }

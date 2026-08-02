@@ -25,10 +25,12 @@ impl VscodeBackendCore {
     pub async fn query_marketplace(&self, query: &str) -> Result<serde_json::Value> {
         self.rate_limiter
             .execute(|| async {
-                let client = reqwest::Client::builder()
-                    .user_agent("linix-manager")
-                    .build()
-                    .map_err(crate::core::Error::from)?;
+                // Inside the rate limiter's retry closure, so a retried request used to build a
+                // whole new client — and with it a whole new TLS handshake to the marketplace.
+                let client = crate::core::http::api(
+                    "linix-manager",
+                    crate::backends::node_registry::http_timeout().as_secs(),
+                )?;
 
                 let body = json!({
                     "filters": [{

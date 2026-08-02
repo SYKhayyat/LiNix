@@ -14,7 +14,6 @@ use crate::model::vars::{Value, VarOrigins, Vars};
 use chrono::{Datelike, Timelike};
 use rhai::{Dynamic, Engine, EvalAltResult, Scope};
 use std::path::Path;
-use std::time::Duration;
 
 /// A runaway script must not hang every `plan` and `sync`. Ten million operations is far more
 /// than any variable computation needs and far less than a wedged infinite loop reaches.
@@ -221,24 +220,43 @@ fn shell_command(cmd: &str) -> std::process::Command {
     c
 }
 
-/// A blocking HTTP GET, run on a fresh thread so it does not need — and cannot clash with — the
-/// tokio runtime the caller sits inside.
+/// An HTTP GET from a synchronous Rhai builtin, over the process-wide connection pool.
+///
+/// Rhai has no async, so the request has to be driven to completion from this thread. The
+/// previous shape spawned an OS thread per call and built a fresh `reqwest::blocking::Client`
+/// inside it — a TLS root store parsed and a connection pool discarded for every `http()`
+/// variable. Handing the future to the runtime that is already there costs neither.
+///
+/// Blocking this thread is safe because model resolution runs behind `spawn_blocking`: this is
+/// never a runtime worker, so nothing is starved while the request is in flight.
 fn http_get(url: &str) -> std::result::Result<String, String> {
+    let client =
+        crate::core::http::api("linix-vars", HTTP_TIMEOUT_SECS).map_err(|e| e.to_string())?;
     let url = url.to_string();
-    std::thread::spawn(move || {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
-            .user_agent("linix-vars")
-            .build()
-            .map_err(|e| e.to_string())?;
-        let resp = client.get(&url).send().map_err(|e| e.to_string())?;
+    let fut = async move {
+        let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
         if !resp.status().is_success() {
             return Err(format!("{} returned {}", url, resp.status()));
         }
-        resp.text().map_err(|e| e.to_string())
-    })
-    .join()
-    .map_err(|_| "http_get: worker thread panicked".to_string())?
+        resp.text().await.map_err(|e| e.to_string())
+    };
+
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            handle.spawn(async move {
+                let _ = tx.send(fut.await);
+            });
+            rx.recv()
+                .map_err(|_| "http_get: the request task disappeared".to_string())?
+        }
+        // `linix eval` on a synchronous path, and the unit tests, have no runtime to borrow.
+        Err(_) => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?
+            .block_on(fut),
+    }
 }
 
 /// JSON into a Rhai value, so `parse_json(body).field` works. This produces a Rhai map for a JSON

@@ -19,16 +19,21 @@ pub struct HostFacts {
     pub vars: crate::model::vars::Vars,
 }
 
+/// Detected once. `distro_family` reads `/etc/os-release` and `get_hostname` asks the OS; the
+/// machine does not change its architecture partway through a command, and this is called on
+/// every one of the resolver's entry points.
+static DETECTED: once_cell::sync::Lazy<HostFacts> = once_cell::sync::Lazy::new(|| HostFacts {
+    os: std::env::consts::OS.to_string(),
+    arch: std::env::consts::ARCH.to_string(),
+    host: crate::config::Config::get_hostname(),
+    family: distro_family().unwrap_or_else(|| std::env::consts::OS.to_string()),
+    vars: Default::default(),
+});
+
 impl HostFacts {
     /// Gather this machine's facts.
     pub fn current() -> Self {
-        Self {
-            os: std::env::consts::OS.to_string(),
-            arch: std::env::consts::ARCH.to_string(),
-            host: crate::config::Config::get_hostname(),
-            family: distro_family().unwrap_or_else(|| std::env::consts::OS.to_string()),
-            vars: Default::default(),
-        }
+        DETECTED.clone()
     }
 
     fn value_for(&self, key: &str) -> Option<Value> {

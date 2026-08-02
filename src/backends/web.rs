@@ -160,7 +160,7 @@ impl Installable for WebInstallable {
                 .map_err(Error::from)?;
 
             if let Some(expected_sha) = spec.options.get("sha256") {
-                verify_checksum(&dl_path, expected_sha)?;
+                verify_checksum(&dl_path, expected_sha).await?;
             }
 
             // D5: a URL that points at a `.deb`/`.rpm` installs itself into a system database.

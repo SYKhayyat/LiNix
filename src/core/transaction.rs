@@ -79,7 +79,6 @@ pub struct TaskResult {
     pub node_index: NodeIndex,
     pub backend_name: String,
     pub package_name: String,
-    pub properties: HashMap<String, String>,
     /// How many times this node was *retried* — 0 on a first-try success. Named for what it
     /// holds: it fed a parameter called `retry_count` while being called `attempt`, so the
     /// arithmetic below reads like an off-by-one to everyone who checks it.
@@ -355,7 +354,6 @@ impl Transaction {
                 node_index,
                 backend_name: b_name,
                 package_name: p_name,
-                properties: HashMap::new(),
                 retries: 0,
                 duration: Duration::ZERO,
                 bytes_downloaded: 0,
@@ -372,7 +370,6 @@ impl Transaction {
                     node_index,
                     backend_name: b_name.clone(),
                     package_name: p_name,
-                    properties: HashMap::new(),
                     retries: 0,
                     duration: Duration::ZERO,
                     bytes_downloaded: 0,
@@ -402,7 +399,6 @@ impl Transaction {
                         node_index,
                         backend_name: b_name,
                         package_name: p_name,
-                        properties: HashMap::new(),
                         retries: 0,
                         duration: Duration::ZERO,
                         bytes_downloaded: 0,
@@ -427,7 +423,6 @@ impl Transaction {
                         node_index,
                         backend_name: b_name,
                         package_name: p_name,
-                        properties: HashMap::new(),
                         retries: 0,
                         duration: start_instant.elapsed(),
                         bytes_downloaded: 0,
@@ -449,7 +444,6 @@ impl Transaction {
                     node_index,
                     backend_name: b_name,
                     package_name: p_name,
-                    properties: HashMap::new(),
                     retries: attempt - 1,
                     duration: start_instant.elapsed(),
                     bytes_downloaded: 0,
@@ -474,17 +468,15 @@ impl Transaction {
                             handler
                                 .install(std::slice::from_ref(spec), backend_cap.sudo_for_write())
                                 .await?;
-                            let mut props = HashMap::new();
-                            if let Some(q) = backend_cap.as_queryable() {
-                                if let Ok(Some(pkg)) = q.info(&spec.name).await {
-                                    props = pkg.properties;
-                                }
-                            }
-                            let bytes = props
-                                .get("download_size")
-                                .and_then(|s| s.parse::<u64>().ok())
-                                .unwrap_or(0);
-                            Ok((props, bytes))
+                            // No post-install `info()`. On a `generic` backend that call is a
+                            // full listing of every package the manager has — `choco list`,
+                            // `winget list` — run once per package just installed, and its only
+                            // consumer was a `download_size` property that **no backend in this
+                            // tree has ever produced**. The docs measured an `install
+                            // choco:bat` at 399s of which 18.75s was the install; this was the
+                            // rest of it. A backend that starts reporting a download size
+                            // reports it from its own install output, not from a re-listing.
+                            Ok(0u64)
                         } else {
                             Err(Error::Transaction(format!(
                                 "Backend '{}' is not installable.",
@@ -501,7 +493,7 @@ impl Transaction {
                             } else {
                                 handler.remove(one, sudo).await?;
                             }
-                            Ok((HashMap::new(), 0))
+                            Ok(0u64)
                         } else {
                             Err(Error::Transaction(format!(
                                 "Backend '{}' is not removable.",
@@ -514,10 +506,10 @@ impl Transaction {
             .await;
 
             match result {
-                Ok(Ok((props, bytes))) => {
+                Ok(Ok(bytes)) => {
                     {
                         let mut j = journal.lock().await;
-                        let _ = j.record_success(&journal_id, props.clone());
+                        let _ = j.record_success(&journal_id);
                     }
                     // Fire `after_install` once the package is physically installed. A
                     // post-hook failure is logged but does not undo a successful install
@@ -534,7 +526,6 @@ impl Transaction {
                         node_index,
                         backend_name: b_name,
                         package_name: p_name,
-                        properties: props,
                         retries: attempt - 1,
                         duration: start_instant.elapsed(),
                         bytes_downloaded: bytes,
@@ -571,7 +562,6 @@ impl Transaction {
             node_index,
             backend_name: b_name,
             package_name: p_name,
-            properties: HashMap::new(),
             retries: attempt - 1,
             duration: start_instant.elapsed(),
             bytes_downloaded: 0,

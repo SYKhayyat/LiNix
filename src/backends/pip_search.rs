@@ -19,11 +19,7 @@ impl Searchable for PipSearchable {
             return Ok(vec![]);
         }
 
-        let client = reqwest::Client::builder()
-            .user_agent("linix-manager")
-            .timeout(http_timeout())
-            .build()
-            .map_err(Error::from)?;
+        let client = crate::core::http::api("linix-manager", http_timeout().as_secs())?;
 
         let url = format!("https://pypi.org/pypi/{}/json", name);
         let res = client.get(&url).send().await.map_err(Error::from)?;

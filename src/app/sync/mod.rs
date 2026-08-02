@@ -193,8 +193,11 @@ impl<'a> SyncEngine<'a> {
         if result.is_ok() {
             debug!("Finalizing transaction state and persistence.");
 
-            let state_to_save = self.state.lock().await.clone();
-            tokio::task::spawn_blocking(move || state_to_save.save())
+            // Serialised under the lock, written after it: the alternative was a deep clone of
+            // every managed package — `properties` HashMap included — purely to cross a thread
+            // boundary with data that was about to become one string anyway.
+            let to_write = self.state.lock().await.snapshot()?;
+            tokio::task::spawn_blocking(move || to_write.write())
                 .await
                 .map_err(|e| {
                     Error::Other(format!("Kernel panic during state persistence: {}", e))
@@ -670,7 +673,7 @@ impl<'a> SyncEngine<'a> {
                                 key, reason
                             );
                             let mut j = self.journal.lock().await;
-                            let _ = j.record_success(&entry.id, std::collections::HashMap::new());
+                            let _ = j.record_success(&entry.id);
                             kept.push(key.clone());
                             continue;
                         }
@@ -693,7 +696,7 @@ impl<'a> SyncEngine<'a> {
                     let verb = if is_install { "reinstalled" } else { "removed" };
                     if remediation_res.is_ok() {
                         let mut j = self.journal.lock().await;
-                        let _ = j.record_success(&entry.id, std::collections::HashMap::new());
+                        let _ = j.record_success(&entry.id);
                         info!(
                             "{} {} (completing an interrupted {}).",
                             verb,

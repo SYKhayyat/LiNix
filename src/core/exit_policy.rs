@@ -60,12 +60,29 @@ impl ExitPolicy {
         }
     }
 
+    /// Whether any question this policy answers looks at what the command printed.
+    ///
+    /// A bare policy decides everything from the exit status, so building the haystack for one
+    /// is pure waste — and a bare policy is the default, which makes it the common case.
+    pub fn reads_output(&self) -> bool {
+        !(self.failure_markers.is_empty()
+            && self.failure_line_prefixes.is_empty()
+            && self.absent_markers.is_empty()
+            && self.transient_markers.is_empty()
+            && self.permanent_markers.is_empty())
+    }
+
     /// A manager that exited 0 while refusing to do the work.
-    pub fn signals_failure(&self, stdout: &[u8], stderr: &[u8]) -> bool {
+    ///
+    /// Takes the [`ExitPolicy::haystack`] rather than the two raw streams because
+    /// `ensure_status` asks this, [`ExitPolicy::retryability`] and
+    /// [`ExitPolicy::names_an_absent_package`] about the same output: building the lowercased
+    /// join once per command instead of once per question is three fewer full copies of an
+    /// `apt install` transcript, per package.
+    pub fn signals_failure(&self, hay: &str) -> bool {
         if self.failure_markers.is_empty() && self.failure_line_prefixes.is_empty() {
             return false;
         }
-        let hay = Self::haystack(stdout, stderr);
         if self.failure_markers.iter().any(|m| hay.contains(m)) {
             return true;
         }
@@ -118,11 +135,10 @@ impl ExitPolicy {
     /// the manager's own declared phrasings rather than from the shape of an error value:
     /// reading `CommandFailed { retry: Permanent }` recognised the two managers whose failure
     /// happened to be classified and left the config wedged on every other one (N-1).
-    pub fn names_an_absent_package(&self, stdout: &[u8], stderr: &[u8]) -> bool {
+    pub fn names_an_absent_package(&self, hay: &str) -> bool {
         if self.absent_markers.is_empty() {
             return false;
         }
-        let hay = Self::haystack(stdout, stderr);
         // A manager that could not reach its index has not looked the name up, and every one
         // of them words that the same way as a name that truly is not there: choco says `The
         // package was not found with the source(s) listed` to an unreachable feed, apt says
@@ -135,14 +151,13 @@ impl ExitPolicy {
     }
 
     /// Whether the same command could succeed on another attempt.
-    pub fn retryability(&self, stdout: &[u8], stderr: &[u8]) -> Retryability {
+    pub fn retryability(&self, hay: &str) -> Retryability {
         if self.permanent_markers.is_empty()
             && self.transient_markers.is_empty()
             && self.absent_markers.is_empty()
         {
             return Retryability::Unknown;
         }
-        let hay = Self::haystack(stdout, stderr);
         if self.permanent_markers.iter().any(|m| hay.contains(m)) {
             return Retryability::Permanent;
         }
@@ -161,7 +176,9 @@ impl ExitPolicy {
         Retryability::Unknown
     }
 
-    fn haystack(stdout: &[u8], stderr: &[u8]) -> String {
+    /// The two output streams as one lowercased string — what every marker question is asked
+    /// against. Built once per command by the caller, because there are three such questions.
+    pub fn haystack(stdout: &[u8], stderr: &[u8]) -> String {
         let mut hay = String::from_utf8_lossy(stdout).into_owned();
         // Without this, a stdout that does not end in a newline welds its last line onto the
         // first line of stderr, and the joined line opens with neither one's prefix.
@@ -565,8 +582,14 @@ mod tests {
     #[test]
     fn a_policy_with_no_markers_classifies_nothing() {
         let p = ExitPolicy::default();
-        assert_eq!(p.retryability(b"anything", b""), Retryability::Unknown);
-        assert!(!p.signals_failure(b"Couldn't find manifest for 'x'.", b""));
+        assert_eq!(
+            p.retryability(&ExitPolicy::haystack(b"anything", b"")),
+            Retryability::Unknown
+        );
+        assert!(!p.signals_failure(&ExitPolicy::haystack(
+            b"Couldn't find manifest for 'x'.",
+            b""
+        )));
         assert!(!p.is_benign(Some(3010)));
     }
 
@@ -595,11 +618,20 @@ mod tests {
     #[test]
     fn scoop_reports_a_missing_manifest_as_a_failure_and_never_retries_it() {
         let p = scoop();
-        assert!(p.signals_failure(b"Couldn't find manifest for 'nope'.", b""));
-        assert!(p.signals_failure(b"", b"couldn't find manifest for 'nope'."));
-        assert!(!p.signals_failure(b"Installing 'jq'...", b""));
+        assert!(p.signals_failure(&ExitPolicy::haystack(
+            b"Couldn't find manifest for 'nope'.",
+            b""
+        )));
+        assert!(p.signals_failure(&ExitPolicy::haystack(
+            b"",
+            b"couldn't find manifest for 'nope'."
+        )));
+        assert!(!p.signals_failure(&ExitPolicy::haystack(b"Installing 'jq'...", b"")));
         assert_eq!(
-            p.retryability(b"Couldn't find manifest for 'nope'.", b""),
+            p.retryability(&ExitPolicy::haystack(
+                b"Couldn't find manifest for 'nope'.",
+                b""
+            )),
             Retryability::Permanent
         );
     }
@@ -607,15 +639,24 @@ mod tests {
     #[test]
     fn a_held_lock_is_transient_and_a_missing_name_is_not() {
         assert_eq!(
-            apt().retryability(b"", b"E: Could not get lock /var/lib/dpkg/lock-frontend"),
+            apt().retryability(&ExitPolicy::haystack(
+                b"",
+                b"E: Could not get lock /var/lib/dpkg/lock-frontend"
+            )),
             Retryability::Transient
         );
         assert_eq!(
-            apt().retryability(b"", b"E: Unable to locate package nosuchpkg"),
+            apt().retryability(&ExitPolicy::haystack(
+                b"",
+                b"E: Unable to locate package nosuchpkg"
+            )),
             Retryability::Permanent
         );
         assert_eq!(
-            apt().retryability(b"", b"E: Something nobody classified"),
+            apt().retryability(&ExitPolicy::haystack(
+                b"",
+                b"E: Something nobody classified"
+            )),
             Retryability::Unknown
         );
     }
@@ -647,12 +688,12 @@ mod tests {
         ];
         for (policy, transient, permanent) in cases {
             assert_eq!(
-                policy.retryability(b"", transient.as_bytes()),
+                policy.retryability(&ExitPolicy::haystack(b"", transient.as_bytes())),
                 Retryability::Transient,
                 "not transient: {transient}"
             );
             assert_eq!(
-                policy.retryability(b"", permanent.as_bytes()),
+                policy.retryability(&ExitPolicy::haystack(b"", permanent.as_bytes())),
                 Retryability::Permanent,
                 "not permanent: {permanent}"
             );
@@ -668,7 +709,10 @@ mod tests {
         // dropped connection delete declarations. That half now has its own test below.
         let p = cargo();
         let both = b"spurious network error\nerror: there are no binaries" as &[u8];
-        assert_eq!(p.retryability(b"", both), Retryability::Permanent);
+        assert_eq!(
+            p.retryability(&ExitPolicy::haystack(b"", both)),
+            Retryability::Permanent
+        );
     }
 
     /// The pairing the test above used to hide: an unreachable index outranks the "not found"
@@ -677,8 +721,11 @@ mod tests {
     fn transient_wins_over_absent() {
         let p = apt();
         let both = b"E: Could not get lock; E: Unable to locate package nope" as &[u8];
-        assert_eq!(p.retryability(b"", both), Retryability::Transient);
-        assert!(!p.names_an_absent_package(b"", both));
+        assert_eq!(
+            p.retryability(&ExitPolicy::haystack(b"", both)),
+            Retryability::Transient
+        );
+        assert!(!p.names_an_absent_package(&ExitPolicy::haystack(b"", both)));
     }
 
     /// Captured from nimble v0.22.2 on this machine. Every one of these exits **0**.
@@ -706,7 +753,7 @@ mod tests {
             ("uninstall missing", NIMBLE_UNINSTALL_MISSING),
         ] {
             assert!(
-                p.signals_failure(out.as_bytes(), b""),
+                p.signals_failure(&ExitPolicy::haystack(out.as_bytes(), b"")),
                 "nimble failure not detected: {case}"
             );
         }
@@ -720,7 +767,7 @@ mod tests {
     #[test]
     fn helm_refusing_an_unsignable_source_is_permanent_not_transient() {
         assert_eq!(
-            helm().retryability(b"", HELM_UNVERIFIABLE.as_bytes()),
+            helm().retryability(&ExitPolicy::haystack(b"", HELM_UNVERIFIABLE.as_bytes())),
             Retryability::Permanent
         );
     }
@@ -729,7 +776,10 @@ mod tests {
     #[test]
     fn helm_losing_the_network_is_worth_another_attempt() {
         assert_eq!(
-            helm().retryability(b"", b"Error: could not resolve host github.com"),
+            helm().retryability(&ExitPolicy::haystack(
+                b"",
+                b"Error: could not resolve host github.com"
+            )),
             Retryability::Transient
         );
     }
@@ -754,7 +804,10 @@ mod tests {
     #[test]
     fn a_luarocks_manifest_that_would_not_download_is_transient_not_a_missing_rock() {
         assert_eq!(
-            luarocks().retryability(b"", LUAROCKS_MANIFEST_UNREACHABLE.as_bytes()),
+            luarocks().retryability(&ExitPolicy::haystack(
+                b"",
+                LUAROCKS_MANIFEST_UNREACHABLE.as_bytes()
+            )),
             Retryability::Transient,
             "the summary line was believed over the three download failures above it"
         );
@@ -766,10 +819,10 @@ mod tests {
     #[test]
     fn a_luarocks_summary_without_a_download_failure_is_not_retried() {
         assert_eq!(
-            luarocks().retryability(
+            luarocks().retryability(&ExitPolicy::haystack(
                 b"",
                 b"Error: No results matching query were found for Lua 5.4."
-            ),
+            )),
             Retryability::Unknown
         );
     }
@@ -778,7 +831,7 @@ mod tests {
     /// must not be read as a failure.
     #[test]
     fn a_successful_nimble_listing_is_not_a_failure() {
-        assert!(!nimble().signals_failure(NIMBLE_LIST.as_bytes(), b""));
+        assert!(!nimble().signals_failure(&ExitPolicy::haystack(NIMBLE_LIST.as_bytes(), b"")));
     }
 
     /// The defect this mechanism exists for: scoop's single phrasing marker caught a missing
@@ -788,11 +841,20 @@ mod tests {
     fn scoop_sees_a_failure_that_is_not_a_missing_manifest() {
         let p = scoop();
         assert!(
-            p.signals_failure(SCOOP_UNINSTALL_MISSING.as_bytes(), b""),
+            p.signals_failure(&ExitPolicy::haystack(
+                SCOOP_UNINSTALL_MISSING.as_bytes(),
+                b""
+            )),
             "scoop uninstall of a package that is not installed read as success"
         );
-        assert!(p.signals_failure(b"Couldn't find manifest for 'nope'.", b""));
-        assert!(!p.signals_failure(b"'jq' (1.7.1) was installed successfully!", b""));
+        assert!(p.signals_failure(&ExitPolicy::haystack(
+            b"Couldn't find manifest for 'nope'.",
+            b""
+        )));
+        assert!(!p.signals_failure(&ExitPolicy::haystack(
+            b"'jq' (1.7.1) was installed successfully!",
+            b""
+        )));
     }
 
     /// An error prefix is a line's opening word, not a substring of prose. A package whose
@@ -800,8 +862,14 @@ mod tests {
     #[test]
     fn a_prefix_marker_anchors_to_a_line_and_does_not_match_prose() {
         let p = nimble();
-        assert!(!p.signals_failure(b"jsony - a library with no error: handling at all", b""));
-        assert!(p.signals_failure(b"building...\n    Error:  Package not found\n", b""));
+        assert!(!p.signals_failure(&ExitPolicy::haystack(
+            b"jsony - a library with no error: handling at all",
+            b""
+        )));
+        assert!(p.signals_failure(&ExitPolicy::haystack(
+            b"building...\n    Error:  Package not found\n",
+            b""
+        )));
     }
 
     const CHOCO_SOURCE_UNREACHABLE: &str =
@@ -820,17 +888,26 @@ mod tests {
     fn an_unreachable_source_is_not_a_missing_package() {
         let p = choco();
         assert!(
-            !p.names_an_absent_package(CHOCO_SOURCE_UNREACHABLE.as_bytes(), b""),
+            !p.names_an_absent_package(&ExitPolicy::haystack(
+                CHOCO_SOURCE_UNREACHABLE.as_bytes(),
+                b""
+            )),
             "an unreachable feed read as `no such package`, which withdraws the line from the \
              user's config files"
         );
         assert_eq!(
-            p.retryability(CHOCO_SOURCE_UNREACHABLE.as_bytes(), b""),
+            p.retryability(&ExitPolicy::haystack(
+                CHOCO_SOURCE_UNREACHABLE.as_bytes(),
+                b""
+            )),
             Retryability::Transient,
             "an unreachable feed is worth another attempt"
         );
         // The failure itself is still a failure — this must not become a silent success.
-        assert!(p.signals_failure(CHOCO_SOURCE_UNREACHABLE.as_bytes(), b""));
+        assert!(p.signals_failure(&ExitPolicy::haystack(
+            CHOCO_SOURCE_UNREACHABLE.as_bytes(),
+            b""
+        )));
     }
 
     /// The other half: the fix must not cost the typo its withdrawal.
@@ -838,11 +915,11 @@ mod tests {
     fn a_name_the_source_does_not_carry_is_still_absent() {
         let p = choco();
         assert!(
-            p.names_an_absent_package(CHOCO_ABSENT_NAME.as_bytes(), b""),
+            p.names_an_absent_package(&ExitPolicy::haystack(CHOCO_ABSENT_NAME.as_bytes(), b"")),
             "a name the feed answered about is absent, and the line should come back out"
         );
         assert_eq!(
-            p.retryability(CHOCO_ABSENT_NAME.as_bytes(), b""),
+            p.retryability(&ExitPolicy::haystack(CHOCO_ABSENT_NAME.as_bytes(), b"")),
             Retryability::Permanent
         );
     }
@@ -860,21 +937,39 @@ mod tests {
     #[test]
     fn no_manager_calls_a_name_absent_while_it_is_also_reporting_a_transient_failure() {
         let cases = [
-            (apt(), "E: Failed to fetch http://deb.debian.org/\nE: Unable to locate package jq"),
-            (dnf(), "Cannot download repomd.xml\nNo match for argument: jq"),
-            (pacman(), "error: failed retrieving file\nerror: target not found: jq"),
-            (apk(), "ERROR: temporary error (try again later)\nERROR: unable to select packages:"),
-            (brew(), "curl: (28) Operation timed out\nNo available formula with the name \"jq\""),
-            (cargo(), "spurious network error\ncould not find `jq` in registry"),
+            (
+                apt(),
+                "E: Failed to fetch http://deb.debian.org/\nE: Unable to locate package jq",
+            ),
+            (
+                dnf(),
+                "Cannot download repomd.xml\nNo match for argument: jq",
+            ),
+            (
+                pacman(),
+                "error: failed retrieving file\nerror: target not found: jq",
+            ),
+            (
+                apk(),
+                "ERROR: temporary error (try again later)\nERROR: unable to select packages:",
+            ),
+            (
+                brew(),
+                "curl: (28) Operation timed out\nNo available formula with the name \"jq\"",
+            ),
+            (
+                cargo(),
+                "spurious network error\ncould not find `jq` in registry",
+            ),
             (pixi(), "failed to fetch\nNo candidates were found for jq"),
         ];
         for (policy, output) in cases {
             assert!(
-                !policy.names_an_absent_package(output.as_bytes(), b""),
+                !policy.names_an_absent_package(&ExitPolicy::haystack(output.as_bytes(), b"")),
                 "a name was called absent although the same output says the fetch failed: {output:?}"
             );
             assert_eq!(
-                policy.retryability(output.as_bytes(), b""),
+                policy.retryability(&ExitPolicy::haystack(output.as_bytes(), b"")),
                 Retryability::Transient,
                 "{output:?}"
             );
@@ -887,7 +982,10 @@ mod tests {
     fn a_permanent_marker_still_outranks_a_transient_one() {
         let p = cargo();
         assert_eq!(
-            p.retryability(b"spurious network error\nerror: there are no binaries", b""),
+            p.retryability(&ExitPolicy::haystack(
+                b"spurious network error\nerror: there are no binaries",
+                b""
+            )),
             Retryability::Permanent
         );
     }

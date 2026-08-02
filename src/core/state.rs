@@ -99,9 +99,15 @@ impl StateRegistry {
     }
 
     /// True if `backend:name` (or its bare `name`) is currently held.
+    ///
+    /// Compares the two halves in place rather than formatting a key to compare against. This
+    /// is asked from inside the planner's fan-out, once per declared package — a `format!`
+    /// there was one heap allocation per declaration to answer a question that needs none.
     pub fn is_held(&self, backend: &str, name: &str) -> bool {
-        let qualified = format!("{}:{}", backend, name);
-        self.held.iter().any(|k| k == name || k == &qualified)
+        self.held.iter().any(|k| match k.split_once(':') {
+            Some((b, n)) => b == backend && n == name,
+            None => k == name,
+        })
     }
 
     pub fn list_held(&self) -> &[String] {
@@ -167,12 +173,42 @@ impl StateRegistry {
     /// A caller says `Held` or `would hold` from the returned answer rather than by asking the
     /// flag a second time.
     pub fn save(&self) -> Result<bool> {
-        trace!("saving state to {:?}", self.path);
+        self.snapshot()?.write()
+    }
 
-        let data = serde_json::to_string_pretty(self)
+    /// The bytes to write, taken while the lock is held, so the writing can happen after it is
+    /// released and off the runtime.
+    ///
+    /// `sync` used to deep-clone the whole registry to hand it to `spawn_blocking` — every
+    /// `ManagedPackage` including its `properties: HashMap`, so a few hundred map allocations
+    /// to cross a thread boundary with data that was about to be serialised anyway.
+    pub fn snapshot(&self) -> Result<StateSnapshot> {
+        trace!("serialising state for {:?}", self.path);
+        // Compact, not pretty: this is a machine-read registry of every managed package,
+        // rewritten in full after every mutation, and `linix` is the only thing that reads it
+        // back. Pretty printing roughly doubles the bytes for a file nobody opens.
+        let data = serde_json::to_string(self)
             .map_err(|e| Error::Other(format!("State Serialization Error: {}", e)))?;
+        Ok(StateSnapshot {
+            path: self.path.clone(),
+            data,
+            packages: self.packages.len(),
+            held: self.held.len(),
+        })
+    }
+}
 
-        let written = persist(&self.path, &data).map_err(|e| {
+/// A registry serialised and ready to write. See [`StateRegistry::snapshot`].
+pub struct StateSnapshot {
+    path: PathBuf,
+    data: String,
+    packages: usize,
+    held: usize,
+}
+
+impl StateSnapshot {
+    pub fn write(&self) -> Result<bool> {
+        let written = persist(&self.path, &self.data).map_err(|e| {
             Error::Persist(format!("Atomic write failed for state registry: {}", e))
         })?;
         if !written {
@@ -185,13 +221,15 @@ impl StateRegistry {
                 "[DRY-RUN] {} was not written — it would have recorded {} managed package(s) \
                  and {} hold(s)",
                 self.path.display(),
-                self.packages.len(),
-                self.held.len()
+                self.packages,
+                self.held
             );
         }
         Ok(written)
     }
+}
 
+impl StateRegistry {
     pub fn add(
         &mut self,
         backend: &str,
@@ -396,6 +434,20 @@ impl StateRegistry {
         self.packages
             .iter()
             .any(|p| p.backend == backend && p.name == name)
+    }
+
+    /// Everything under management, as a set to ask many questions of.
+    ///
+    /// [`StateRegistry::is_managed`] is a linear scan, which is the right shape for one
+    /// question and the wrong one for a crawl: `installed_but_unmanaged` asked it once per
+    /// *installed* package against every *managed* one — on a stock Ubuntu that is ~476 × ~301,
+    /// or about 143,000 double string comparisons, to answer a question a set answers in one
+    /// hash each. Borrowed, so building it allocates the table and not the names.
+    pub fn managed_index(&self) -> std::collections::HashSet<(&str, &str)> {
+        self.packages
+            .iter()
+            .map(|p| (p.backend.as_str(), p.name.as_str()))
+            .collect()
     }
 
     pub fn get_package(&self, backend: &str, name: &str) -> Option<&ManagedPackage> {
