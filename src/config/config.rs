@@ -300,6 +300,24 @@ pub struct Config {
     #[serde(default = "default_network_parallel")]
     pub network_parallel: usize,
 
+    /// How long a manager's installed listing may be reused **across** runs, in seconds.
+    /// `0` — the default — means never: every run asks every manager afresh.
+    ///
+    /// LiNix's whole runtime is waiting on other people's processes, and the same question is
+    /// asked on every invocation: 19.5 s of manager work, overlapped into ~3.2 s, to answer
+    /// "what is installed" for a machine that usually has not changed since the last command.
+    /// A cache is the only remaining way to make that faster, because the alternative — asking
+    /// them concurrently — is already done.
+    ///
+    /// **It is off by default, and that is not timidity.** A stale listing makes LiNix wrong
+    /// about the machine, and being wrong about the machine is how a declarative tool removes
+    /// something it should not have. A package installed by hand with `winget install` is
+    /// invisible until the entry expires. LiNix drops the cache itself whenever it mutates
+    /// anything, so it can only go stale behind LiNix's back — which is exactly the case the
+    /// user is opting into when they set this.
+    #[serde(default = "default_installed_cache_secs")]
+    pub installed_cache_secs: u64,
+
     /// Timeout (seconds) for outbound HTTP requests (registry/PyPI/marketplace search).
     #[serde(default = "default_network_timeout_secs")]
     pub network_timeout_secs: u64,
@@ -482,6 +500,14 @@ fn default_max_parallel() -> usize {
 fn default_network_parallel() -> usize {
     16
 }
+/// Zero — a listing is never reused across runs unless the machine's owner asks for it.
+///
+/// The honest default for a tool whose job is to be right about the machine. Every other
+/// speed-up in II.19 costs nothing but concurrency; this one costs correctness when it is
+/// wrong, so it is the one the user turns on deliberately.
+fn default_installed_cache_secs() -> u64 {
+    0
+}
 /// 30 seconds: long enough to ride out GitHub's secondary-limit backoffs, short enough that
 /// a user watching a held data lock does not conclude the process has hung. The old behaviour
 /// was to sleep until the primary limit reset — up to an hour.
@@ -600,6 +626,7 @@ impl Default for Config {
             quiet: false,
             max_parallel: default_max_parallel(),
             network_parallel: default_network_parallel(),
+            installed_cache_secs: default_installed_cache_secs(),
             network_timeout_secs: default_network_timeout_secs(),
             command_idle_timeout_secs: default_command_idle_timeout_secs(),
             rate_limit_max_wait_secs: default_rate_limit_max_wait_secs(),
@@ -778,16 +805,18 @@ impl Config {
         Ok(())
     }
 
+    /// The `protected_packages` entry that protects `package_name`, or `None` if nothing does.
+    ///
+    /// **The rule, never a bool.** `is_protected` returned one, and its last caller — the
+    /// planner — dropped a removal on the strength of it and had nothing left to print but
+    /// `true`. A caller that cannot say *which rule* cannot report the skip, and a skip nobody
+    /// reports is AU1. It is deleted rather than kept beside this: the answer to "is it
+    /// protected" is `protection_rule(..).is_some()`, at the one call site that wants a bool.
+    ///
     /// Case-insensitive. An entry matches exactly, or as a prefix if it ends in `*`
-    /// (`libperl*`); it is never a substring match. Substring matching was a bug:
-    /// protecting `libc`/`apt`/`kernel` also shielded `libc-bin`, `aptitude` and
-    /// `kernelshark` from removal.
-    pub fn is_protected(&self, package_name: &str) -> bool {
-        self.protection_rule(package_name).is_some()
-    }
-
-    /// The `protected_packages` entry that protects `package_name`, or `None` if nothing
-    /// does. Returning the rule rather than a bare bool lets a refusal say *why*.
+    /// (`libperl*`); it is never a substring match. Substring matching was a bug: protecting
+    /// `libc`/`apt`/`kernel` also shielded `libc-bin`, `aptitude` and `kernelshark` from
+    /// removal.
     pub fn protection_rule(&self, package_name: &str) -> Option<&str> {
         let name_lower = package_name.to_lowercase();
         // An explicit unprotect entry always wins, including over a package the OS itself
@@ -939,7 +968,7 @@ mod tests {
     }
 
     #[test]
-    fn is_protected_is_exact_not_substring() {
+    fn protection_is_exact_not_substring() {
         let cfg = Config {
             guard: GuardSettings {
                 protected_packages: vec!["libc".into(), "apt".into(), "kernel".into()],
@@ -948,17 +977,17 @@ mod tests {
             ..Config::default()
         };
         // exact matches (case-insensitive) are protected
-        assert!(cfg.is_protected("libc"));
-        assert!(cfg.is_protected("APT"));
+        assert!(cfg.protection_rule("libc").is_some());
+        assert!(cfg.protection_rule("APT").is_some());
         // substrings/superstrings are NOT protected (the old bug)
-        assert!(!cfg.is_protected("libc-bin"));
-        assert!(!cfg.is_protected("aptitude"));
-        assert!(!cfg.is_protected("kernelshark"));
+        assert!(cfg.protection_rule("libc-bin").is_none());
+        assert!(cfg.protection_rule("aptitude").is_none());
+        assert!(cfg.protection_rule("kernelshark").is_none());
     }
 
     #[test]
     fn a_trailing_star_protects_by_prefix() {
-        // `is_protected` was documented as "EXACT only" while the code has always honoured
+        // The accessor was documented as "EXACT only" while the code has always honoured
         // `*`, and the shipped defaults rely on it (`libperl*`). Believing the doc means
         // hand-expanding the wildcard and losing protection for whatever the list misses.
         let cfg = Config {
@@ -968,9 +997,9 @@ mod tests {
             },
             ..Config::default()
         };
-        assert!(cfg.is_protected("libperl5.38t64"));
-        assert!(cfg.is_protected("LIBPERL-BASE"));
+        assert!(cfg.protection_rule("libperl5.38t64").is_some());
+        assert!(cfg.protection_rule("LIBPERL-BASE").is_some());
         // A bare entry stays exact: the wildcard has to be asked for.
-        assert!(!cfg.is_protected("libc-bin"));
+        assert!(cfg.protection_rule("libc-bin").is_none());
     }
 }

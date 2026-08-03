@@ -3,13 +3,26 @@ use governor::clock::DefaultClock;
 use governor::state::{InMemoryState, NotKeyed};
 use governor::{Jitter, Quota, RateLimiter as GovRateLimiter};
 use std::num::NonZeroU32;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tracing::{debug, warn};
 
+type Governor = GovRateLimiter<NotKeyed, InMemoryState, DefaultClock>;
+
+/// A permit issuer that does not exist until a permit is asked for.
+///
+/// **Built on first use, not in the constructor.** A backend's `new` runs for every subcommand,
+/// including the ones that touch no network at all — `github`'s ran on `linix path` and cost
+/// 200ms building a clock for an API budget the run never spent (AU3). Anything a rate limiter
+/// costs, it costs the first request; a run with no requests pays nothing.
+///
+/// `Arc<OnceLock<_>>` rather than `OnceLock` inside a clone: the cell is what the clones share,
+/// so two backends holding copies of one quota still hold ONE quota. A per-clone cell would
+/// silently double every limit here.
 #[derive(Clone)]
 pub struct RateLimiter {
-    inner: Arc<GovRateLimiter<NotKeyed, InMemoryState, DefaultClock>>,
+    inner: Arc<OnceLock<Governor>>,
+    quota: Quota,
     description: String,
 }
 
@@ -21,9 +34,24 @@ impl RateLimiter {
         let quota = Quota::per_minute(NonZeroU32::new(rpm).expect("RPM is guaranteed > 0"));
 
         Self {
-            inner: Arc::new(GovRateLimiter::direct(quota)),
+            inner: Arc::new(OnceLock::new()),
+            quota,
             description: description.to_string(),
         }
+    }
+
+    /// The issuer, built now if this is the first permit anyone has asked this limiter for.
+    fn governor(&self) -> &Governor {
+        self.inner
+            .get_or_init(|| GovRateLimiter::direct(self.quota))
+    }
+
+    /// Whether a permit has ever been asked for, and so whether the issuer exists.
+    ///
+    /// Public because the cost this avoids is invisible from the outside — a startup budget can
+    /// measure that the total is small, but only this can say the limiter is the reason.
+    pub fn is_engaged(&self) -> bool {
+        self.inner.get().is_some()
     }
 
     pub fn github() -> Self {
@@ -43,7 +71,7 @@ impl RateLimiter {
 
     pub async fn wait(&self) -> Result<()> {
         debug!("RateLimiter [{}]: Waiting for permit...", self.description);
-        self.inner.until_ready().await;
+        self.governor().until_ready().await;
         Ok(())
     }
 
@@ -56,7 +84,7 @@ impl RateLimiter {
         // permit boundary and burst.
         let jitter = Jitter::up_to(Duration::from_millis(150));
 
-        self.inner.until_ready_with_jitter(jitter).await;
+        self.governor().until_ready_with_jitter(jitter).await;
 
         match f().await {
             Ok(val) => Ok(val),

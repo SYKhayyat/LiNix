@@ -57,7 +57,11 @@ impl PsResourceCore {
             if !self.executor.command_exists_sync(&self.shell) {
                 return false;
             }
-            std::process::Command::new(&self.shell)
+            // Timed like any other child: this is the one availability probe that starts a
+            // process rather than reading PATH, so a `--timings` run that left it out would
+            // show a probe pass costing more than every command in it.
+            let timing = crate::core::timing::begin();
+            let present = std::process::Command::new(&self.shell)
                 .args([
                     "-NoProfile",
                     "-NonInteractive",
@@ -69,7 +73,13 @@ impl PsResourceCore {
                 .stderr(std::process::Stdio::null())
                 .status()
                 .map(|s| s.success())
-                .unwrap_or(false)
+                .unwrap_or(false);
+            crate::core::timing::end(
+                timing,
+                &self.shell,
+                &["-Command Get-InstalledPSResource".to_string()],
+            );
+            present
         })
     }
 

@@ -626,10 +626,29 @@ impl Statement {
     /// statement is already known here, and a second place that splits on `:` and trusts what
     /// it finds is the bug `CLAUDE.md` names and `C13` counted six of.
     pub fn listed_as(&self) -> Option<(&'static str, &str)> {
+        self.listed_with_options().map(|(pair, _)| pair)
+    }
+
+    /// The prefixes [`Statement::listed_as`] can answer with.
+    ///
+    /// Asking "what kind of thing does this backend hold?" cannot go through a round trip:
+    /// `setting:SCHEMA/KEY` is only a legal line once it carries `@value=`, so a name alone
+    /// comes back `Nothing` and the guard would call a perfectly writable setting a name no
+    /// line can hold — the same false sentence `service:` spent a release printing. Kept
+    /// beside `listed_with_options` and pinned to it by a test, because two lists of the same
+    /// three prefixes is how one of them silently stops being a resource.
+    pub const RESOURCE_BACKENDS: &'static [&'static str] = &["service", "link", "setting"];
+
+    /// As [`Statement::listed_as`], with the options the line carried.
+    ///
+    /// Rendering a resource line and reading it back has to check both halves: `adopt` writes
+    /// a service as the state it found it in, and a line whose *options* came back changed
+    /// declares a different state than the one that was observed.
+    pub fn listed_with_options(&self) -> Option<((&'static str, &str), &Options)> {
         match self {
-            Statement::Service(name, _) => Some(("service", name)),
-            Statement::Link(name, _) => Some(("link", name)),
-            Statement::Setting(name, _) => Some(("setting", name)),
+            Statement::Service(name, o) => Some((("service", name), o)),
+            Statement::Link(name, o) => Some((("link", name), o)),
+            Statement::Setting(name, o) => Some((("setting", name), o)),
             // Every other statement's prefix is not a backend name: `shim:`, `schedule:` and
             // `repo:` name things LiNix does rather than things a manager lists, and no
             // registry entry answers to them. Checked, not assumed — `linix list -b shim`
@@ -1016,9 +1035,30 @@ fn option_separator(text: &str) -> Option<usize> {
         .find(|c: char| !c.is_whitespace())
         .map(|off| after_prefix + off)
         .unwrap_or(after_prefix);
-    text.char_indices()
-        .find(|(i, c)| *c == '@' && *i != name_start)
-        .map(|(i, _)| i)
+    // A quoted name is opaque: everything up to the closing quote is the name, `@` included.
+    // Without this, `winget:"Some App@2"` would split inside the quotes and leave an unbalanced
+    // name and an option list made of the rest of somebody's package.
+    match quoted_span(text, name_start) {
+        // The options begin *at* the character after the closing quote, so the `@` that opens
+        // them sits exactly on that index — the one place a strict `>` silently loses it.
+        Some(end) => text[end..].find('@').map(|off| end + off),
+        None => text
+            .char_indices()
+            .find(|(i, c)| *c == '@' && *i != name_start)
+            .map(|(i, _)| i),
+    }
+}
+
+/// The index just past the closing quote, when `at` opens a quoted name.
+///
+/// `None` when there is no quote there or the quote is never closed — an unterminated quote is
+/// left to the name parser, which has the origin needed to say so in a way the user can act on.
+fn quoted_span(text: &str, at: usize) -> Option<usize> {
+    let rest = text.get(at..)?;
+    if !rest.starts_with('"') {
+        return None;
+    }
+    rest[1..].find('"').map(|close| at + close + 2)
 }
 
 fn parse_package(origin: &Origin, text: &str, backends: &dyn BackendNames) -> Result<PackageDecl> {
@@ -1080,17 +1120,98 @@ fn parse_package(origin: &Origin, text: &str, backends: &dyn BackendNames) -> Re
                     "no package name after the backend",
                 ));
             }
-            // A package name is one word. Without this, any unrecognised prose becomes a
-            // package literally named after itself — VI.1's "any typo becomes a package
-            // name", which is what II.2's "an unrecognised line is an error" forbids.
-            if rest.split_whitespace().count() > 1 {
-                return Err(GrammarError::new(
-                    origin.clone(),
-                    format!("`{}` is not a package name", rest),
-                ));
-            }
-            reject_leading_dash(origin, rest)?;
-            Selector::Name(rest.to_string())
+            // A quoted name is taken verbatim, spaces and all. `winget list` answers with
+            // `ARP\Machine\X64\Mozilla Firefox` — the identifier `winget install` takes back —
+            // and a name LiNix lists has to be a name LiNix can be given (V.113). Quoting is
+            // what keeps that from re-opening VI.1: prose is not quoted, so a typo is still an
+            // error rather than a package named after itself.
+            let name = match rest.strip_prefix('"') {
+                Some(inner) => match inner.strip_suffix('"') {
+                    Some(name) => {
+                        if name.trim().is_empty() {
+                            return Err(GrammarError::new(origin.clone(), "`\"\"` names nothing"));
+                        }
+                        // The quotes carry exactly what is between them, so an edge nobody can
+                        // see is a second package that reads as the first: `"Firefox "` and
+                        // `Firefox` are one thing declared twice, and every message about
+                        // either of them prints the same word.
+                        if name.trim() != name {
+                            return Err(GrammarError::new(
+                                origin.clone(),
+                                format!("`{}` has a space at the edge of the name", rest),
+                            )
+                            .with_hint(format!(
+                                "a quoted name is exact, so this is not the same package as \
+                                 `\"{}\"` — which is almost certainly the one you mean.",
+                                name.trim()
+                            )));
+                        }
+                        if name.contains('"') {
+                            return Err(GrammarError::new(
+                                origin.clone(),
+                                format!("`{}` has a quote inside a quoted name", rest),
+                            )
+                            .with_hint(
+                                "a quoted name runs to the next quote; there is no escape for \
+                                 one inside it.",
+                            ));
+                        }
+                        // A manifest is a line per declaration. A name carrying a newline
+                        // round-trips through this parser and then writes two lines — which is
+                        // the wedged-config bug quoting exists to end, re-entering by the door
+                        // quoting opened.
+                        if name.chars().any(char::is_control) {
+                            return Err(GrammarError::new(
+                                origin.clone(),
+                                "a quoted name contains a control character".to_string(),
+                            )
+                            .with_hint(
+                                "a declaration is one line; a name that carries a newline or a \
+                                 tab cannot be written as one.",
+                            ));
+                        }
+                        name
+                    }
+                    // Distinguished, because "you never closed the quote" is unhelpful advice
+                    // about a line that closed it and then kept going.
+                    None => {
+                        return Err(match inner.find('"') {
+                            Some(close) => GrammarError::new(
+                                origin.clone(),
+                                format!("`{}` has more after the closing quote", rest),
+                            )
+                            .with_hint(format!(
+                                "the name ends at the quote — `{}`. Options go after it, as \
+                                 `@key=value`.",
+                                &inner[..close]
+                            )),
+                            None => GrammarError::new(
+                                origin.clone(),
+                                format!("`{}` opens a quote and never closes it", rest),
+                            )
+                            .with_hint("write `winget:\"ARP\\Machine\\X64\\Mozilla Firefox\"`."),
+                        });
+                    }
+                },
+                // A package name is one word. Without this, any unrecognised prose becomes a
+                // package literally named after itself — VI.1's "any typo becomes a package
+                // name", which is what II.2's "an unrecognised line is an error" forbids.
+                None => {
+                    if rest.split_whitespace().count() > 1 {
+                        return Err(GrammarError::new(
+                            origin.clone(),
+                            format!("`{}` is not a package name", rest),
+                        )
+                        .with_hint(
+                            "a name with spaces in it has to be quoted: \
+                             `winget:\"Mozilla Firefox\"`.",
+                        ));
+                    }
+                    rest
+                }
+            };
+            reject_leading_dash(origin, name)?;
+            Selector::Name(name.to_string())
         }
     };
 
@@ -1821,6 +1942,73 @@ mod tests {
         }
     }
 
+    /// A name a manager reports must be a name it can be given back (V.113). `winget list`
+    /// answers `ARP\Machine\X64\Mozilla Firefox`, and "a package name is one word" refused it.
+    ///
+    /// The family, not the finding: the quoted form has to survive the options split, an `@`
+    /// inside the quotes must stay part of the name, the *unquoted* rules must be untouched,
+    /// and prose must still be an error — because quoting is only safe if it does not re-open
+    /// VI.1's "any typo becomes a package named after itself".
+    #[test]
+    fn a_quoted_name_carries_the_spaces_a_manager_reports() {
+        let name = |line: &str| match p(line) {
+            Ok(Statement::Package(d)) => d.selector.as_str().to_string(),
+            Ok(other) => panic!("`{line}` parsed as {other:?}, not a package"),
+            Err(e) => panic!("`{line}` did not parse: {e}"),
+        };
+
+        assert_eq!(
+            name(r#"cargo:"ARP\Machine\X64\Mozilla Firefox""#),
+            r"ARP\Machine\X64\Mozilla Firefox",
+            "the quotes are the syntax; the name is what is inside them"
+        );
+        // An `@` inside the quotes is part of the name, not the start of the options.
+        assert_eq!(name(r#"cargo:"Some App@2""#), "Some App@2");
+
+        // Options still work after a closing quote, and do not become part of the name.
+        match p(r#"cargo:"Some App"@version=1.2"#) {
+            Ok(Statement::Package(d)) => {
+                assert_eq!(d.selector.as_str(), "Some App");
+                assert_eq!(d.options.one("version"), Some("1.2"));
+            }
+            other => panic!("options after a quoted name were lost: {other:?}"),
+        }
+
+        // The unquoted rules are exactly as they were.
+        assert_eq!(name("cargo:ripgrep"), "ripgrep");
+        assert_eq!(
+            name(r"cargo:ARP\Machine\X64\AndroidStudio"),
+            r"ARP\Machine\X64\AndroidStudio"
+        );
+        assert_eq!(name("cargo:@scope/pkg"), "@scope/pkg");
+        match p("cargo:@scope/pkg@version=1.2") {
+            Ok(Statement::Package(d)) => {
+                assert_eq!(d.selector.as_str(), "@scope/pkg");
+                assert_eq!(d.options.one("version"), Some("1.2"));
+            }
+            other => panic!("a scoped npm name stopped pinning: {other:?}"),
+        }
+
+        // And prose is still an error, quoted or not — this is the clause that keeps VI.1 shut.
+        //
+        // The last three are the edge cases quoting itself opens: a name is exact, so a space
+        // where nobody can see it makes a second package that reads as the first, and a name
+        // made only of the invisible part names nothing at all — the same fact `""` states.
+        for bad in [
+            "cargo:this is just prose",
+            r#"cargo:"""#,
+            r#"cargo:"unterminated"#,
+            r#"cargo:"Mozilla Firefox" junk"#,
+            r#"cargo:"Firefox ""#,
+            r#"cargo:" Firefox""#,
+            r#"cargo:"   ""#,
+        ] {
+            assert!(p(bad).is_err(), "`{bad}` was accepted as a package");
+        }
+        // Inside is not an edge: the whole point is that this one is legal.
+        assert_eq!(name(r#"cargo:"Mozilla Firefox""#), "Mozilla Firefox");
+    }
+
     /// A `BackendNames` that also knows one group, `web = cargo, npm`, for the U18 tests.
     struct WithGroup;
     impl BackendNames for WithGroup {
@@ -2243,6 +2431,27 @@ mod tests {
         ] {
             assert!(p(line).is_ok(), "{} was refused", line);
         }
+    }
+
+    /// `RESOURCE_BACKENDS` is the same three prefixes `listed_as` answers with, and the guard
+    /// refuses a sweep by consulting the list rather than the method. Two lists of the same
+    /// three names is how one of them quietly stops being a resource and starts being a
+    /// purge candidate, so they are checked against each other in both directions.
+    #[test]
+    fn the_resource_prefixes_are_one_list() {
+        let listed: Vec<&str> = [
+            "service:nginx",
+            "link:/a/b@target=/c",
+            "setting:org.gnome.x/k@value=dark",
+            // Not resources: their prefixes name things LiNix does, not things a backend lists.
+            "shim:jq@source=cargo:jq",
+            "schedule:nightly@cron=0 2 * * *,run=sync",
+            "apt:jq",
+        ]
+        .iter()
+        .filter_map(|line| p(line).unwrap().listed_as().map(|(prefix, _)| prefix))
+        .collect();
+        assert_eq!(listed, Statement::RESOURCE_BACKENDS);
     }
 
     #[test]

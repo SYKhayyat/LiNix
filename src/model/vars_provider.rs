@@ -137,7 +137,13 @@ pub fn run_external_with_origins(path: &Path, facts: &HostFacts) -> Result<(Vars
         .env("LINIX_HOST", &facts.host)
         .env("LINIX_FAMILY", &facts.family);
 
-    let output = cmd.output().map_err(|e| {
+    // An external provider runs on every resolution, before any manager is asked — so a slow
+    // one looks like LiNix being slow to start until the breakdown names it.
+    let timing = crate::core::timing::begin();
+    let output = cmd.output();
+    crate::core::timing::end(timing, "vars provider", std::slice::from_ref(&name));
+
+    let output = output.map_err(|e| {
         GrammarError::new(
             origin.clone(),
             format!("could not run the `{}` provider: {}", name, e),

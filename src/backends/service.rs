@@ -356,8 +356,25 @@ impl Queryable for ServiceQueryable {
         Ok(init.parse_list(&out))
     }
 
+    /// Every running service. Not "the ones you chose" — no init records that — but a service
+    /// that is running is a state a person can read off the machine and decide about, which is
+    /// what `adopt` offers. `adoption_options` is what keeps the offer to that claim.
     async fn list_manual(&self) -> Result<Vec<Package>> {
         self.list_installed().await
+    }
+
+    fn manual_source(&self) -> String {
+        match self.core.detect_init() {
+            Some(init) => format!(
+                "every service {} reports as running (no init records which you chose)",
+                init.name
+            ),
+            None => "nothing — no init system was detected".to_string(),
+        }
+    }
+
+    fn adoption_options(&self) -> Vec<(String, String)> {
+        vec![("status".to_string(), "running".to_string())]
     }
 
     async fn info(&self, name: &str) -> Result<Option<Package>> {

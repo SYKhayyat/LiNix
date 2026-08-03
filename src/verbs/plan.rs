@@ -20,6 +20,10 @@ pub(crate) fn unverified_packages(state: &linix::core::StateRegistry) -> Vec<(St
 }
 
 pub(crate) async fn handle_status(app: &App, json: bool) -> Result<()> {
+    // This report ends with a crawl of every manager on the machine, so every manager is asked
+    // either way — asked here they answer at once instead of in the order the sections below
+    // happen to need them (`App::warm_installed`).
+    app.warm_installed().await;
     let resolver =
         linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
@@ -62,6 +66,7 @@ pub(crate) async fn handle_status(app: &App, json: bool) -> Result<()> {
             "resources_to_place": resources.place,
             "resources_to_undo": resources.undo,
             "resources_unverifiable": resources.unverifiable,
+            "left_in_place": report.skipped,
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
         return Ok(());
@@ -69,6 +74,7 @@ pub(crate) async fn handle_status(app: &App, json: bool) -> Result<()> {
 
     if report.install.is_empty()
         && report.remove.is_empty()
+        && report.skipped.is_empty()
         && unmanaged.is_empty()
         && unverified.is_empty()
         && resources.is_empty()
@@ -96,6 +102,18 @@ pub(crate) async fn handle_status(app: &App, json: bool) -> Result<()> {
         println!("- drift — `sync` would remove ({}):", report.remove.len());
         for e in &report.remove {
             println!("    {}:{}", e.backend, e.name);
+        }
+    }
+    // Distinct from `unmanaged` below, and the distinction is the point: an unmanaged package
+    // is one LiNix never took responsibility for, and one of these is a package it manages,
+    // that nothing declares, and that it has decided never to remove (AU1).
+    if !report.skipped.is_empty() {
+        println!(
+            "~ drift — `sync` would leave in place ({}):",
+            report.skipped.len()
+        );
+        for s in &report.skipped {
+            println!("    {}  ({})", s.key, s.reason);
         }
     }
     if !unmanaged.is_empty() {
@@ -208,7 +226,21 @@ pub(crate) async fn handle_plan(app: &App, out: &str) -> Result<()> {
     // Freeze the resolved variables so `apply` reproduces this exact resolution (IX.6).
     plan.vars = full.state.vars.clone();
     tokio::fs::write(out, serde_json::to_string_pretty(&plan)?).await?;
-    if plan.is_empty() {
+    // Beside the plan, never inside it: a skip is not an action `apply` can carry out, and a
+    // saved plan is a list of actions. But `plan` is the command for "what would sync do", and
+    // "nothing, to this package, forever" is part of that answer (AU1).
+    crate::verbs::sync::print_skipped(&full.changes.skipped);
+    if plan.is_empty() && !full.changes.skipped.is_empty() {
+        // `already matches` is a claim about the machine, and the lines above have just named
+        // packages it holds that nothing declares. The plan is genuinely empty; the machine is
+        // genuinely not converged, and saying only the first is how AU1 read.
+        println!(
+            "Wrote plan to {} — no actions. {} package(s) are installed, declared nowhere, and \
+             will not be removed (above).",
+            out,
+            full.changes.skipped.len()
+        );
+    } else if plan.is_empty() {
         println!(
             "Wrote plan to {} — system already matches desired state (no changes).",
             out

@@ -25,6 +25,7 @@ pub mod security;
 pub mod size;
 pub mod snapshot;
 pub mod state;
+pub mod timing;
 pub mod tool_help;
 pub mod transaction;
 pub mod validator;

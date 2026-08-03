@@ -179,6 +179,18 @@ pub trait Queryable: Send + Sync {
         "everything this manager installed (it installs no dependencies of its own)".to_string()
     }
 
+    /// The options `adopt` must write beside a name for the declaration to mean what was
+    /// observed. Empty for a package: `apt:jq` already says everything the listing said.
+    ///
+    /// A `service:` line with no options means *enable and start* (`actions_for`), and enabling
+    /// on Windows rewrites the service's start type to automatic. The init only ever reports
+    /// **running** services, so what was observed is `status=running` and the start type was
+    /// never looked at — declaring it anyway would reconfigure the machine's boot on the first
+    /// sync after an adopt whose whole promise is to describe it as it already is.
+    fn adoption_options(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
+
     /// Names the OS itself marks as essential — packages automated removal must refuse to
     /// touch regardless of what a manifest declares. Default: empty (no such concept).
     async fn essential(&self) -> Result<Vec<String>> {

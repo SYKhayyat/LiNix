@@ -15,8 +15,24 @@ static PACKAGE_NAME_REGEX: Lazy<Regex> =
 /// `MSIX\...`, and the ARP rows for MSI installers are GUIDs in braces. Those are the
 /// identifiers `winget install` and `winget uninstall` take, so they are the names LiNix has to
 /// be able to carry (V.113).
-static WINDOWS_IDENTIFIER_NAME_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^[a-zA-Z0-9._@:+/\\{}-]+$").unwrap());
+///
+/// **The space is here for the same reason the backslash is.** `ARP\Machine\X64\Mozilla Firefox`
+/// is what winget answers and what winget accepts back; a rule that admits the backslash and
+/// stops at the space carries most of an identifier and not the one the user has. It is safe
+/// for the reason stated below: a name is argv, never a shell string. The grammar makes such a
+/// name writable by quoting it, and this is the second half of V.113 — a name is admitted by a
+/// grammar **and** a validator, and the two must agree.
+///
+/// **Inside the name, never at its edge.** A trailing space is invisible in a manifest, in a
+/// listing and in every error message, so `Firefox ` and `Firefox` are one package that reads
+/// as itself twice and reconciles as two. The grammar refuses the same shape at the same
+/// boundary; a rule enforced on one side of a round trip is a rule the other side breaks.
+static WINDOWS_IDENTIFIER_NAME_REGEX: Lazy<Regex> = Lazy::new(|| {
+    // The space is the only character legal in the middle and not at either end, so it is the
+    // only one lifted out of the shared class.
+    const INNER: &str = r"a-zA-Z0-9._@:+/\\{}-";
+    Regex::new(&format!("^[{INNER}](?:[ {INNER}]*[{INNER}])?$")).unwrap()
+});
 
 /// Shell metacharacters, minus the three a Windows package identifier is made of.
 ///
@@ -315,10 +331,30 @@ mod tests {
             r"ARP\Machine\X86\ILST_30_2_1",
             r"MSIX\Microsoft.AV1VideoExtension_2.0.24.0_x64__8wekyb3d8bbwe",
             "7zip.7zip",
+            // The space, which is 6 of the 161 names this box could not declare.
+            r"ARP\Machine\X64\Mozilla Firefox",
         ] {
             assert!(
                 Validator::validate_package_name_for(name, "winget").is_ok(),
                 "winget prints `{name}` and cannot be handed it back"
+            );
+        }
+
+        // 0. The space is legal *inside* a name and never at its edge. A trailing space is
+        //    invisible in a manifest, in a listing and in every message about either, so
+        //    `Firefox ` and `Firefox` would be one package that reconciles as two — and a name
+        //    made only of spaces names nothing while looking like a name. The grammar refuses
+        //    the same shapes; a rule kept on one side of a round trip is a rule the other side
+        //    breaks.
+        for edged in [
+            r"ARP\Machine\X64\Mozilla Firefox ",
+            r" ARP\Machine\X64\Mozilla Firefox",
+            " ",
+            "   ",
+        ] {
+            assert!(
+                Validator::validate_package_name_for(edged, "winget").is_err(),
+                "`{edged}` was accepted, so an invisible edge is a second package"
             );
         }
 

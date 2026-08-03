@@ -1599,9 +1599,10 @@ not run that binary at all; `--all-targets`, which this file cited, does, and pa
    `rustfmt`-clean~~ **is fmt-clean and the gate is hard in both places**; ~~`main.rs` is 6,676
    lines~~ **`main.rs` is 902 lines and the verbs live in `src/verbs/`**; ~~F3's comment sweep is
    still openly not done~~ **F3's greppable classes are swept and its residual is stated rather
-   than claimed**. **Still open:** seven scratch artefacts tracked in git at the repo root
+   than claimed**. ~~**Still open:** seven scratch artefacts tracked in git at the repo root
    (`prompt.txt`, `blocks.json`, `docker_log_7_10.txt`, `docker_log_7_23.txt`, `scratch_u9.sh`,
-   `Cargo.txt.txt`, `todo.md`).
+   `Cargo.txt.txt`, `todo.md`).~~ **CLOSED 2026-08-03 (AU12)** — all seven deleted; git keeps
+   them, and `scratch_*.sh` plus `.aider*` were already ignored.
 
 **The verdict, in the terms the question was asked.** Judged as *architecture*, this is closer to
 production than most 1.0s: the removal guard is on every path, there is one parser, one
@@ -2641,7 +2642,9 @@ it*, and none of it was visible from reading the tree or from `cargo test`.
   which answers "what is installed" and which `adopt` does not change, so its before/after
   numbers were identical by construction.
 
-**Measured, 2026-07-23, WSL2 + Docker 29.6.1, full transcript in `docker_log_7_23.txt`:**
+**Measured, 2026-07-23, WSL2 + Docker 29.6.1** (the raw transcript was `docker_log_7_23.txt`,
+deleted from the working tree 2026-08-03 with the other six scratch artefacts and retrievable
+from git history — the numbers it produced are the table below):
 
 | image | result | real lifecycles |
 |---|---|---|
@@ -5572,3 +5575,149 @@ otherwise". Nearly reported a regression that was the stopwatch.
 
 **And one behaviour change found on the way out.** Moving a corrupt WAL aside is a filesystem
 write, and `--dry-run heal` was making one. The preview says what a real run would do instead.
+
+## The overlap round (`Y8`), and three fixes to `Y6`/`Y7` that shipped a day late
+
+**Nine managers started 5.4 seconds into a 9.1-second `check drift`, and the run was idle before
+they did.** `--timings` (`Y5`) is what said so — the first question in this repo answered by
+reading LiNix's own report instead of guessing at it. Nothing was slow. Two stages each asked
+the managers *they* needed at the moment they needed them, and a plan whose fan-out is over
+specs spent twenty concurrency slots on 256 futures waiting for one `winget list` while scoop,
+choco and cargo went unasked. Ask each manager once, at the start, for what the run is going to
+ask it anyway: **9.13 s → 3.9 s, overlap 2.7× → 5.4×, every listing starting inside a 0.26-second
+window instead of spread over 5.4, and the report identical line for line.** `Y8`, `V.122`.
+
+**The registry was a `HashMap`,** so which managers got the first slots was Rust's per-process
+hash seed. Two `linix list` runs a second apart differed by 530 lines and sorted to the same
+file. It is a `BTreeMap` now — which is also the reason any of the numbers above can be
+reproduced. `V.123`.
+
+**Three defects in yesterday's own work, found by auditing it rather than by it failing.**
+
+- **The cache answered every command, including the ones that write the answer down.** A `sync`
+  planned from a listing taken before the user removed something by hand skips the install and
+  reports success — a declared package left absent with nothing saying so. `Y6` says the cache
+  is off by default *because* being wrong about the machine is how a declarative tool removes
+  the wrong thing; letting it be turned on for `sync` bought exactly that. It serves readers
+  now, by allowlist. `V.120a`.
+- **Quoting accepted a name that was only spaces, and a name with a space at its edge.** `""`
+  was refused and `"   "` was not, and `"Firefox "` is a second package that reads as the first
+  in the manifest, in the listing and in every message about either. Refused in the grammar and
+  in the validator both — a rule kept on one side of a round trip is a rule the other side
+  breaks.
+- **Two runs writing one cache shared a temp path.** The rename is only atomic per writer, so a
+  prompt hook and a terminal write into each other's file and rename the interleaving: the torn
+  listing the temp file exists to prevent, arrived at by the mechanism meant to prevent it.
+
+**And the 155 sentences that were false.** `adopt` told every `service:` name that its manager
+reports "a name no package line can hold". `service:AppMgmt` parses. `is_declarable` accepted
+only `Statement::Package`, so a true fact about packages was printed as a false one about names.
+The grammar answers three ways now.
+
+## Services are adopted (`Y7a`)
+
+**The owner ruled: services go in as live lines, like packages.** `service:AppMgmt@status=running`,
+uncommented. His argument was the one that mattered and it was better than the one held against
+it: `purge-unmanaged` builds its list from `list_installed`, so all 155 running services were
+*already* sweep candidates — refused only because `protection_of` opened by asking whether a
+**package** line could hold the name, which for a service is structurally no. A refusal by
+coincidence, printing a sentence that was false. Correcting that sentence — the obvious tidy-up,
+one a later reader would certainly have made — would have handed `purge-unmanaged` permission to
+stop and disable every service on the machine. Declaring them removes the exposure instead of
+depending on it. The guard now refuses an undeclared resource by a rule about resources, because
+a service started *after* an adopt is unmanaged again and must be refused on purpose.
+
+**And the line says only what was seen.** A bare `service:` line means enable **and** start, and
+on Windows enable is `sc config NAME start= auto` — so bare lines would have flipped every
+demand-started running service to automatic-at-boot on the first sync after the command whose
+promise is to describe the machine as it already is. The init reports only *running* services, so
+`status=running` is the whole of the observation and no adopted line names a start type.
+`Queryable::adoption_options` is the seam, empty for every package backend. `V.124`.
+
+**The resource test is asked of the backend, not the name**, because `setting:KEY` is not a legal
+line until it carries `@value=` — round-tripping the name alone would have printed the same false
+sentence one backend over. That is the family, not the finding: `service`, `link` and `setting`
+answer together, from one list pinned to `Statement::listed_as` by a test in both directions.
+
+---
+
+# 2026-08-03 — the readiness audit, and its twelve findings
+
+`docs/GRADE-2026-08-03.md` drove a real binary against five questions — reliable, fast,
+intuitive, extensible, useful — and found twelve defects: three blockers, one high, three medium,
+five low. **Ten were built here. Two are the owner's** and are in the register as `Z1` (no
+LICENSE) and `Z2` (`lock`/`unlock` are not inverses).
+
+**The audit's own diagnosis, and it is the one that matters:** four of the twelve are cases where
+*the correct behaviour already existed in this codebase, with its reasoning written down, and the
+sibling site never received it.*
+
+| | the rule, already written | the site that never got it |
+|---|---|---|
+| `AU1` | `why.md`: "**The skips are printed**" — and `rebuild.rs` prints them | `planner.rs`: `debug!` and `continue` |
+| `AU2` | `locate.rs`: `path --set` refuses a relative path, with the reason | `--config-dir`, `$LINIX_CONFIG_DIR`, `$LINIX_DATA_DIR` |
+| `AU3` | `web.rs`/`appimage.rs` build their client where they download | `github.rs` builds its rate limiter in `new` |
+| `AU9` | `planner.rs`: "a cap that ignores the setting is a cap the user cannot move" | `guard.rs`: `.buffer_unordered(8)` |
+
+Per-site review cannot catch a family — that is what the word means. So each fix is paired with a
+test that quantifies over sites rather than naming one, which is the only part of this round that
+will still be working in six months.
+
+**The blockers.**
+
+- **`AU1` — a protected package vanished from the plan in silence.** `sync`, `uninstall` and
+  `check` all reported success over a machine holding a managed, undeclared package none of them
+  would ever remove, and the state was unrecoverable through any command. Rule in **II.10**,
+  reason in **V.125a**. The second drop site — a backend that left `priority` — was the same
+  shape and got the same treatment.
+- **`AU2` — a relative `--config-dir` was discarded and the documented precedence inverted.**
+  The flag that outranks `$LINIX_CONFIG_DIR` lost to it, silently, while `linix path` printed the
+  flag's value. Rule in **II.1**, reason in **V.125**. `--data-dir` is new, because config had a
+  first-class flag and state had an undocumented environment variable, and a run isolated by half
+  is a trap.
+- **`AU3` — 200 ms of every command was one clock.** `quanta`'s TSC calibration, inside a GitHub
+  rate limiter built in a constructor that runs for every subcommand. Rule in **II.19**, reason in
+  **V.126**. Registry construction: **206.5 ms → under 5 ms**, measured by the test that now
+  budgets it.
+
+**The rest, in one line each.** `AU4` `--data-dir` (with `AU2`). `AU5` the flaky timing test now
+asserts on given durations, not on `thread::sleep` ordering, and `CLAUDE.md`'s verify sequence
+says `--no-fail-fast` like both release scripts and CI already did. `AU6` `path`, `protected`,
+`policy`, `config` and `edit` no longer take the exclusive data lock — `linix path` had been
+measured blocking for the full 120-second timeout, and `edit` held it for as long as somebody had
+a file open in vim. `AU7` the startup `try_join!` polls the non-yielding future last, so the
+overlap it claims is one it performs. `AU9` the guard's fan-out reads `max_parallel`. `AU10` an
+option with nothing after the `=` is refused, in both the short and the block form. `AU11`
+`--help` gained a map of its 61 verbs, and a test that compares the map to clap in both
+directions. `AU12` the seven scratch artefacts are deleted.
+
+**One finding the audit did not make, found while fixing `AU6`.** Twelve of the thirty-three
+entries in `READ_ONLY_COMMANDS` named commands that do not exist — `status`, `doctor`,
+`unmanaged`, `absent`, `insight`, `show`, `audit`, `outdated`, `log`, `locate`, `metrics`,
+`verify`. That is `undo`'s disease, alive in the list that decides whether a command takes an
+exclusive lock, and it was found only because the fix required reading the list rather than
+appending to it. It is asked of clap now, in a test.
+
+**Two things the sweep found that were not the audit's, and only one of them is fixed.**
+
+- **Fixed, and it was worse than a flake.**
+  `core::executor::child_process_tests::a_child_that_keeps_talking_outlives_the_bound` failed
+  under a loaded machine — and the cause was not load. The Windows fixture talked through
+  `Write-Output`, and **PowerShell buffers the pipeline when stdout is redirected**, so the
+  child that exists to prove "a command still printing is not a hang" was frequently *not
+  printing at all*. It passed on whatever flushed by luck; against the 3s idle bound it was
+  being killed. The fixture writes through `[Console]::Out` with an explicit flush now, and the
+  test binary went from 262s to 6.45s — the difference is how long it had been spending being
+  killed. Same family as `AU5`: an assertion that fails when a sleep runs long is an assertion
+  about the host's scheduler.
+- **Not fixed, and stated rather than hidden.** `info_agrees_with_list_about_every_backend`
+  failed once in three full sweeps: `info luarocks:luafilesystem` said *"is not installed on
+  this machine"* about a row `list` had just printed, exit 0. It passed on re-run and I could
+  not reproduce it on demand, so **no fix was attempted** — a change I cannot test against the
+  failing condition is a guess wearing a fix's clothes. The shape is worth writing down because
+  it is the shape of `AU1`: an Ok(None) that means *could not ask* rendered as *not there*.
+  `planner.rs` states the opposite rule for the same question — *"Unknown means yes… Not knowing
+  must never turn into 'so skip it'"* — and `info` may be the sibling that never got it.
+  Round-2's `W27` already recorded luarocks as broken on this host (its downloader resolves
+  `wget` to a scoop shim), which is the likeliest way `luarocks show` returns nothing.
+

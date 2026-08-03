@@ -89,5 +89,9 @@ One reported symptom, two live siblings.
 
 ## Verify
 
-`cargo build --all-targets` → `cargo test` → `cargo clippy --all-targets`. Report honestly:
-unverified is not done, and a skipped step is a said-so, not a done.
+`cargo build --all-targets` → `cargo test --no-fail-fast` → `cargo clippy --all-targets`. Report
+honestly: unverified is not done, and a skipped step is a said-so, not a done.
+
+**`--no-fail-fast`, always.** There are 66 test binaries; without it, one failure in the lib
+abandons the other 65 and the run tells you about one defect out of however many there are. Both
+release scripts and CI already pass it — this line was the only place that did not.

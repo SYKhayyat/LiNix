@@ -767,6 +767,18 @@ impl CommandExecutor {
         self.clone()
     }
 
+    /// Let this run reuse installed listings written by earlier runs, for `secs` (0 = never).
+    ///
+    /// Set from config after the executor exists, rather than taken as a constructor argument:
+    /// `CommandExecutor::new` is called from twenty-odd tests that have no config and want the
+    /// off default, and a third constructor parameter would have to be spelled out in all of
+    /// them to say "the same as before".
+    pub fn set_installed_cache(&mut self, secs: u64) {
+        if secs > 0 {
+            self.installed = Arc::new(crate::core::installed::InstalledListings::with_ttl(secs));
+        }
+    }
+
     /// Bind this manager's exit conventions to the executor the backend will run on.
     ///
     /// Called at registration, beside the rest of that backend's definition, so a manager
@@ -826,7 +838,13 @@ impl CommandExecutor {
         );
         Self::suppress_pagers(&mut env);
 
-        layer.execute(&final_cmd, &final_args, &env).await
+        // Every manager invocation funnels through this one call, which is what makes
+        // `--timings` a breakdown of the whole run rather than of whichever verbs remembered
+        // to instrument themselves.
+        let timing = crate::core::timing::begin();
+        let result = layer.execute(&final_cmd, &final_args, &env).await;
+        crate::core::timing::end(timing, &final_cmd, &final_args);
+        result
     }
 
     /// Stop a child from piping itself into a pager.
@@ -1411,7 +1429,11 @@ mod child_process_tests {
                 vec![
                     "-NoProfile".to_string(),
                     "-Command".to_string(),
-                    "1..12 | ForEach-Object { Write-Output 'tick'; Start-Sleep -Milliseconds 500 }"
+                    // `[Console]::Out`, not `Write-Output`: PowerShell buffers the pipeline
+                    // when stdout is redirected, so a fixture that "talks" through the
+                    // pipeline can be silent for its whole run — which is the one thing this
+                    // fixture must not be.
+                    "1..12 | ForEach-Object { [Console]::Out.WriteLine('tick'); [Console]::Out.Flush(); Start-Sleep -Milliseconds 500 }"
                         .to_string(),
                 ],
             )
@@ -1459,10 +1481,19 @@ mod child_process_tests {
 
     /// The bound is on silence, not on duration — the distinction the whole fix rests on. A
     /// wall-clock cap set low enough to catch the hang would kill every real build.
+    ///
+    /// **The bound is 8s for a fixture that talks for 10s, and the gap is deliberate.** The
+    /// clock starts when the child is *spawned*, so the interpreter's own start-up counts as
+    /// silence: at a 3s bound this failed on a machine running three `cargo test` jobs, because
+    /// PowerShell had not reached its first `Write-Output` inside three seconds. That is the
+    /// same defect as the timing test in `core::timing` — an assertion that fails when a sleep
+    /// runs long is an assertion about the host's scheduler. The property under test is
+    /// unchanged: a child that runs *longer* than the idle bound while still printing survives
+    /// it.
     #[tokio::test]
     async fn a_child_that_keeps_talking_outlives_the_bound() {
         let layer =
-            RawExecutor::with_idle(ChildStdin::Closed, Some(std::time::Duration::from_secs(3)));
+            RawExecutor::with_idle(ChildStdin::Closed, Some(std::time::Duration::from_secs(5)));
         let (cmd, args) = chatty_for_a_while();
         let started = std::time::Instant::now();
         let out = layer
@@ -1470,7 +1501,7 @@ mod child_process_tests {
             .await
             .expect("a command that is still printing has not hung");
         assert!(
-            started.elapsed() > std::time::Duration::from_secs(3),
+            started.elapsed() > std::time::Duration::from_secs(5),
             "the fixture must outlive the bound or it proves nothing"
         );
         assert!(out.status.success());

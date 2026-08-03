@@ -22,6 +22,19 @@ pub(crate) struct Reconcile {
     confirm: bool,
 }
 
+/// What one reconcile pass did — and what it decided not to do.
+///
+/// **Two numbers, because one could not tell the two silences apart.** A pass returning `0` used
+/// to mean "the machine already matches", and its caller printed exactly that; it also meant
+/// "there was a removal and LiNix declined it", which is the opposite claim about the same
+/// machine (AU1).
+pub(crate) struct Reconciled {
+    /// Package and resource changes actually carried out.
+    pub applied: usize,
+    /// Removals the planner declined, each already named on the way past.
+    pub left_in_place: usize,
+}
+
 /// What to call this run in a refusal a user reads — the difference that matters is whether
 /// anybody was there, because an unattended tick is the dangerous one (N7).
 pub(crate) fn scope_label(scope: linix::app::sync::guard::GuardScope) -> &'static str {
@@ -34,10 +47,10 @@ pub(crate) fn scope_label(scope: linix::app::sync::guard::GuardScope) -> &'stati
 /// One reconcile pass: resolve the model, apply repos, plan, apply, then dependents,
 /// schedules and extras — II.7's ordering, in order.
 ///
-/// Returns the number of package changes applied. `sync` and `watch` both call this; the
-/// copy `watch` used to carry drifted from this body every time sync's ordering changed,
+/// Returns what the pass did, and what it declined to do. `sync` and `watch` both call this;
+/// the copy `watch` used to carry drifted from this body every time sync's ordering changed,
 /// which is why it is one function now.
-pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
+pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
     // A reconcile pass is one invocation for IX.6's purposes, and `watch` runs many of them in
     // one process. Without this a `when $hour` would freeze at whatever hour the daemon started.
     linix::app::sync::resolver::new_resolution();
@@ -103,6 +116,20 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
         planner.plan(&desired, None).await?
     };
 
+    // Before the "nothing to do" exit, never inside it: a plan can be empty of ACTIONS and
+    // still have something to say. `sync` printed `already up to date` over a managed,
+    // undeclared, protected package it had just declined to remove — and the exit below is the
+    // line it returned through (AU1).
+    if !opts.json {
+        print_flight_plan(app, &changes);
+        // W13: a `vars` edit can be the cause of a removal, so when the plan removes anything,
+        // name the variables that changed since the last sync — a hundred removals should never
+        // be unexplained.
+        if changes.total_remove() > 0 {
+            print_vars_changed(app, &state.vars).await;
+        }
+    }
+
     // A config can be all dependents/schedules and no package changes (just a `service:` or a
     // `schedule:` line). That is still work, so the "nothing to do" exit has to account for
     // the dependent phase and the schedule phase too.
@@ -117,21 +144,16 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
         // line, so this path can still have a resource to put in place.
         let resources = app.extras().changes(&state).await?;
         let undone = app.extras().reconcile(&state, opts.scope, 0).await?;
-        return Ok(resources.place.len() + undone);
+        return Ok(Reconciled {
+            applied: resources.place.len() + undone,
+            left_in_place: changes.skipped.len(),
+        });
     }
 
     let applied = changes.total_install() + changes.total_remove();
     let mut removed_packages = changes.total_remove();
-
-    if !opts.json && !changes.is_empty() {
-        print_flight_plan(app, &changes);
-        // W13: a `vars` edit can be the cause of a removal, so when the plan removes anything,
-        // name the variables that changed since the last sync — a hundred removals should never
-        // be unexplained.
-        if changes.total_remove() > 0 {
-            print_vars_changed(app, &state.vars).await;
-        }
-    }
+    // Read before the plan is consumed by the engine below.
+    let left_in_place = changes.skipped.len();
 
     // XIII.3: a script's decision is printed before anything happens — the hash, how many
     // times that content has run, and what this run will therefore do. Outside the
@@ -153,7 +175,10 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
         // each honours `dry_run` itself and previews instead of acting.
         let extras_undone =
             apply_non_package_phases(app, &state, opts.scope, changes.total_remove()).await?;
-        return Ok(applied + extras_undone);
+        return Ok(Reconciled {
+            applied: applied + extras_undone,
+            left_in_place: changes.skipped.len(),
+        });
     }
 
     // The package plan runs only when it has something in it — a dependents-only sync skips
@@ -171,7 +196,10 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
             }
             let mut preview = TuiPreview::new(&changes, HashMap::new());
             if !preview.run()? {
-                return Ok(0);
+                return Ok(Reconciled {
+                    applied: 0,
+                    left_in_place: changes.skipped.len(),
+                });
             }
             changes = preview.get_filtered_changes();
         }
@@ -188,7 +216,10 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
 
     let extras_undone = apply_non_package_phases(app, &state, opts.scope, removed_packages).await?;
     perform_maintenance(app).await?;
-    Ok(applied + extras_undone)
+    Ok(Reconciled {
+        applied: applied + extras_undone,
+        left_in_place,
+    })
 }
 
 /// Which managers this plan installs through, each named once.
@@ -351,7 +382,8 @@ pub(crate) async fn handle_rebuild(
             .collect();
         let backends: std::collections::HashSet<String> =
             all_pairs.iter().map(|(b, _)| b.clone()).collect();
-        let essential = guard::essential_names(&app.registry, &backends).await;
+        let essential =
+            guard::essential_names(&app.registry, &backends, app.config.max_parallel).await;
         rebuild::without_protected(&mut plan, &|backend, name| {
             guard::protection_of(&app.config, Some(backend), name, &essential).map(|p| p.reason())
         });
@@ -506,7 +538,7 @@ pub(crate) async fn handle_rebuild(
 }
 
 pub(crate) async fn handle_sync(app: &App, locked: bool, upgrade: bool, json: bool) -> Result<()> {
-    let applied = reconcile(
+    let done = reconcile(
         app,
         Reconcile {
             locked,
@@ -517,7 +549,11 @@ pub(crate) async fn handle_sync(app: &App, locked: bool, upgrade: bool, json: bo
         },
     )
     .await?;
-    if applied == 0 {
+    // Never over a skip. `already up to date` is a claim about the machine, and the machine
+    // holds a package this run decided not to remove — which the lines above have just named
+    // (AU1). The claim was made, in that exact state, three times: here, in `uninstall`, and
+    // in `check`.
+    if done.applied == 0 && done.left_in_place == 0 {
         println!("already up to date");
     }
     Ok(())
@@ -555,7 +591,7 @@ pub(crate) async fn manifest_signature(dir: &std::path::Path) -> Vec<(String, u6
 /// One unattended reconcile pass. `watch` is unattended by definition, so it never asks —
 /// that flag is the only thing separating it from `sync`, which is why both go through the
 /// same [`reconcile`].
-pub(crate) async fn watch_reconcile(app: &App) -> Result<usize> {
+pub(crate) async fn watch_reconcile(app: &App) -> Result<Reconciled> {
     reconcile(
         app,
         Reconcile {
@@ -608,12 +644,16 @@ pub(crate) async fn handle_watch(
                 println!("watch: manifests changed — reconciling.");
             }
             match watch_reconcile(app).await {
-                Ok(0) => {
+                Ok(done) if done.applied == 0 && done.left_in_place == 0 => {
                     if changed || first {
                         println!("watch: already in sync.");
                     }
                 }
-                Ok(n) => println!("watch: applied {} change(s).", n),
+                Ok(done) if done.applied == 0 => println!(
+                    "watch: nothing applied; {} package(s) left in place (listed above).",
+                    done.left_in_place
+                ),
+                Ok(done) => println!("watch: applied {} change(s).", done.applied),
                 Err(e) => warn!("watch: reconcile failed: {}", e),
             }
             last_sig = sig;
@@ -680,7 +720,11 @@ pub(crate) fn print_flight_plan(app: &App, changes: &linix::app::sync::planner::
         return;
     }
     let report = changes.generate_report();
+    // The skips print even when there is nothing else to print, and that is the whole point:
+    // an empty plan over a machine holding a package LiNix declined to remove is the run that
+    // said `already up to date` about a wedge (AU1).
     if report.install.is_empty() && report.remove.is_empty() {
+        print_skipped(&report.skipped);
         return;
     }
     let mut backends: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
@@ -717,6 +761,36 @@ pub(crate) fn print_flight_plan(app: &App, changes: &linix::app::sync::planner::
             service_ops
         );
     }
+    print_skipped(&report.skipped);
+}
+
+/// How many skips are named individually before the rest become a count. The guard uses the
+/// same ceiling for the same reason: a machine that stops listing a backend with two hundred
+/// packages in it would otherwise bury the plan under the list of what is NOT happening.
+const MAX_LISTED_SKIPS: usize = 10;
+
+/// The removals the plan declined, each with the reason that item carries.
+///
+/// Free-standing so that every surface showing a plan shows the same lines — `sync`, its
+/// preview and `prune` all reach it, and a fourth caller added later gets it by calling this
+/// rather than by remembering the rule.
+pub(crate) fn print_skipped(skipped: &[linix::app::sync::planner::Skipped]) {
+    if skipped.is_empty() {
+        return;
+    }
+    println!(
+        "Left in place ({}) — installed, declared nowhere, and not removed:",
+        skipped.len()
+    );
+    for item in skipped.iter().take(MAX_LISTED_SKIPS) {
+        println!("  ~ {}  ({})", item.key, item.reason);
+    }
+    if skipped.len() > MAX_LISTED_SKIPS {
+        println!("  … and {} more", skipped.len() - MAX_LISTED_SKIPS);
+    }
+    println!(
+        "  Declare them to keep them, or run `linix protected <name>` to see what decides this."
+    );
 }
 
 /// W13: name the variables whose value changed since the last successful sync (HEAD), so a

@@ -73,6 +73,10 @@ pub enum Protection {
     /// The manager reports a name that cannot be written as a package line, so LiNix can
     /// never declare it — and what it cannot be asked to keep, it must not take away.
     Undeclarable,
+    /// The name declares a resource, not a package: a `service:`, `link:` or `setting:`.
+    /// `purge-unmanaged` deletes packages nobody declared; a service nobody declared is not
+    /// something that was installed, it is the state the machine is already in.
+    NotAPackage(String),
 }
 
 impl Protection {
@@ -83,10 +87,15 @@ impl Protection {
                 format!("{} reports it as essential to the system", backend)
             }
             Self::Undeclarable => {
-                "its manager reports a name no package line can hold, so LiNix cannot manage \
+                "its manager reports a name no line can hold, so LiNix cannot manage \
                  it — and removing what you cannot declare is not something you asked for"
                     .to_string()
             }
+            Self::NotAPackage(backend) => format!(
+                "`{}:` declares a state, not an installed package — undeclaring one is a \
+                 `sync` of a line you deleted, never a sweep of what you never declared",
+                backend
+            ),
         }
     }
 }
@@ -113,10 +122,27 @@ pub fn protection_of(
     name: &str,
     os_essential: &HashSet<String>,
 ) -> Option<Protection> {
-    // Before the escape hatch, because this one is not a policy: a name no line can hold
+    // Before the escape hatch, because neither of these is a policy: a name no line can hold
     // cannot be declared, so LiNix never manages it and `unprotected_packages` has nothing
     // to release. Saying yes here would let `purge-unmanaged` remove programs that could
     // never have been adopted in the first place.
+    //
+    // A resource is refused for a different reason, said out loud because it used to be an
+    // accident: the declarability test asked whether a *package* line could hold the name,
+    // `service:AppMgmt` is not a package line, and so every running service was refused by a
+    // check that was not about services and printed a sentence that was false of them. The
+    // moment that sentence was corrected — and it was false, `service:AppMgmt` parses — the
+    // refusal would have evaporated and `purge-unmanaged` could stop and disable every
+    // service on the machine. This is that refusal, made on purpose.
+    //
+    // By backend, not by round-tripping the name: a `setting:` needs `@value=` before any line
+    // will hold it, so the name alone would come back undeclarable and print the same false
+    // sentence one backend over.
+    if let Some(b) = backend {
+        if crate::config::grammar::Statement::RESOURCE_BACKENDS.contains(&b) {
+            return Some(Protection::NotAPackage(b.to_string()));
+        }
+    }
     if !crate::config::grammar::is_declarable(backend, name) {
         return Some(Protection::Undeclarable);
     }
@@ -257,6 +283,7 @@ impl GuardReport {
 pub async fn essential_names(
     registry: &Arc<BackendRegistry>,
     backends: &HashSet<String>,
+    max_parallel: usize,
 ) -> HashSet<String> {
     // Each `essential()` is a subprocess and they have nothing to say to one another, so they
     // run at once. This is on every removal path.
@@ -288,7 +315,11 @@ pub async fn essential_names(
                 }
             }
         })
-        .buffer_unordered(8)
+        // `max_parallel`, and a cap that ignores the setting is a cap the user cannot move —
+        // `planner.rs:324` states the rule and this was the one fan-out in the tree that did
+        // not follow it (AU9). It is on every removal path, which is where a user who has
+        // turned the parallelism down most wants it honoured.
+        .buffer_unordered(max_parallel.max(1))
         .filter_map(|r| async move { r })
         .flat_map(futures::stream::iter)
         .collect()
@@ -360,7 +391,7 @@ pub async fn inspect_removals(
     let os_essential = match kind {
         RemovalKind::Package => {
             let backends: HashSet<String> = removals.iter().map(|(b, _)| b.clone()).collect();
-            essential_names(registry, &backends).await
+            essential_names(registry, &backends, config.max_parallel).await
         }
         // `service`/`link`/`setting` are not package managers and have no essential list to
         // ask for; querying them would be a round trip that can only return nothing.
@@ -651,22 +682,101 @@ mod tests {
 
     #[test]
     fn a_name_no_line_can_hold_is_never_removed() {
-        // `winget list` reports Add/Remove-Programs entries as `ARP\Machine\X64\Android
-        // Studio`. A package name is one word, so `adopt` cannot take it — which leaves it
-        // unmanaged forever and therefore a standing `purge-unmanaged` candidate. LiNix must
-        // not remove what it could never have been asked to keep.
+        // LiNix must not remove what it could never have been asked to keep: a name that
+        // cannot be written down cannot be declared, so it is unmanaged forever and a standing
+        // `purge-unmanaged` candidate through no fault of its owner.
+        //
+        // **Y7 moved the boundary, and this test is what says where it is now.** A name with a
+        // space in it — `ARP\Machine\X64\Android Studio`, which is what `winget list` answers —
+        // is declarable today, because it can be quoted. What is still beyond a line is a name
+        // carrying a quote or a control character, and those are what keep this branch alive.
         let cfg = Config::default();
         let empty = HashSet::new();
-        assert!(matches!(
-            protection_of(
-                &cfg,
-                Some("winget"),
-                r"ARP\Machine\X64\Android Studio",
-                &empty
-            ),
-            Some(Protection::Undeclarable)
-        ));
-        assert!(protection_of(&cfg, Some("winget"), "7zip.7zip", &empty).is_none());
+
+        for holdable in [
+            r"ARP\Machine\X64\Android Studio",
+            "7zip.7zip",
+            r"MSIX\Microsoft.BingSearch_1.1.43.0_x64__8wekyb3d8bbwe",
+        ] {
+            assert!(
+                protection_of(&cfg, Some("winget"), holdable, &empty).is_none(),
+                "`{holdable}` can be declared, so it is protected by the ordinary rules and \
+                 not by undeclarability"
+            );
+        }
+
+        for unholdable in ["Some \"Quoted\" Program", "two\nlines"] {
+            assert!(
+                matches!(
+                    protection_of(&cfg, Some("winget"), unholdable, &empty),
+                    Some(Protection::Undeclarable)
+                ),
+                "`{unholdable}` cannot be written as a line and must never be removed"
+            );
+        }
+    }
+
+    /// `purge-unmanaged` sweeps everything LiNix does not manage, and it builds its list from
+    /// `list_installed` — which for `service` is every running service. The only thing that
+    /// ever stopped it was the declarability test asking a question about *package* lines and
+    /// getting the right answer for the wrong reason. Correcting that sentence would have
+    /// handed the sweep 155 Windows services; this is the refusal made on purpose instead.
+    #[test]
+    fn a_resource_is_refused_by_a_rule_and_not_by_an_accident() {
+        let cfg = Config {
+            // Even the escape hatch, wide open. A `service:` is not a package the user could
+            // be declaring they manage themselves; there is nothing here to release.
+            guard: crate::config::GuardSettings {
+                unprotected_packages: vec!["*".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let empty = HashSet::new();
+
+        for (backend, name) in [
+            ("service", "AppMgmt"),
+            ("service", "sshd"),
+            ("link", "/home/u/.vimrc"),
+            ("setting", "org.gnome.desktop.interface/clock-format"),
+        ] {
+            let p = protection_of(&cfg, Some(backend), name, &empty);
+            assert!(
+                matches!(p, Some(Protection::NotAPackage(_))),
+                "`{backend}:{name}` must be refused as a resource, not swept: {p:?}"
+            );
+            let reason = p.unwrap().reason();
+            assert!(
+                !reason.contains("no line can hold"),
+                "`{backend}:{name}` parses — saying no line can hold it is false: {reason}"
+            );
+        }
+
+        // And the refusal is about resources, not about everything: a package is still judged
+        // by the ordinary rules, or the guard has stopped being about the user's intent.
+        assert!(protection_of(&cfg, Some("apt"), "jq", &empty).is_none());
+    }
+
+    /// The other half of the same rule: `sync` undoing a `service:` line the user deleted is a
+    /// teardown (`RemovalKind::Extra`) and must still go through. A guard that refuses both
+    /// directions has made the declaration unremovable, which is the bug `plan.rs` already hit
+    /// once when it ran the package test over resource keys.
+    #[tokio::test]
+    async fn undeclaring_a_resource_is_still_allowed() {
+        let registry = Arc::new(BackendRegistry::default());
+        let report = inspect_removals(
+            &Config::default(),
+            &registry,
+            &[("service".to_string(), "sshd".to_string())],
+            RemovalKind::Extra,
+            0,
+        )
+        .await;
+        assert!(
+            report.is_empty(),
+            "deleting the line is how a service is torn down: {:?}",
+            report.objections
+        );
     }
 
     #[test]
@@ -680,8 +790,17 @@ mod tests {
             },
             ..Default::default()
         };
+        // Quotable now, so `*` really does release it — the escape hatch works on every name
+        // the user could have written.
+        assert!(protection_of(&cfg, Some("winget"), "Some Program 1.0", &HashSet::new()).is_none());
+        // And still refuses on the one class no `*` can reach.
         assert!(matches!(
-            protection_of(&cfg, Some("winget"), "Some Program 1.0", &HashSet::new()),
+            protection_of(
+                &cfg,
+                Some("winget"),
+                "Some \"Program\" 1.0",
+                &HashSet::new()
+            ),
             Some(Protection::Undeclarable)
         ));
     }

@@ -21,6 +21,11 @@ pub struct SyncReport {
     pub install: Vec<ReportEntry>,
     pub remove: Vec<ReportEntry>,
     pub change_count: usize,
+    /// What the plan left out, and why. In the JSON too: a `--json` consumer that can only see
+    /// the actions cannot tell a converged machine from one holding an undeclared package
+    /// nothing will ever remove.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<Skipped>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -157,11 +162,74 @@ fn limit_drifted(want: &str, reported: Option<&String>) -> bool {
     }
 }
 
+/// Something the plan left out, and why.
+///
+/// **The reason travels with the item.** A rollup that counts skips and explains them with one
+/// sentence is a sentence that is wrong for every input it does not describe — `adopt` printed
+/// *"Left alone: 185 (listed in the manifest)"* about items none of which were listed in the
+/// manifest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Skipped {
+    pub key: String,
+    pub reason: String,
+}
+
+/// Why a managed package was not scheduled for removal.
+///
+/// **The type exists so that the question "does the user hear about this?" cannot be answered by
+/// omission.** Two of these were a bare `continue` — the machine kept a package nothing declared,
+/// forever, and `sync`, `uninstall` and `check` all reported success over it (AU1). A variant
+/// added later does not compile until [`Declined::reported`] gains an arm.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Declined {
+    /// Another rule in this plan already scheduled it. Not a decline at all — the removal is
+    /// happening.
+    AlreadyScheduled,
+    /// Something still declares it, so there is no drift. This is convergence working.
+    StillDeclared,
+    /// Its backend is not in this host's `priority` file (II.6), so LiNix does not manage that
+    /// manager here and will never reap through it.
+    BackendNotInPriority(String),
+    /// A `[guard] protected_packages` rule matched, carrying the rule that decided it.
+    Protected(String),
+}
+
+impl Declined {
+    /// The sentence the user is owed, or `None` when there is nothing to tell them.
+    ///
+    /// **The line between the two is whether the machine is left disagreeing with the files.**
+    /// A package that is being removed anyway, or that is still declared, leaves nothing behind
+    /// to report. The other two leave software installed that nothing declares and that no
+    /// future `sync` will touch — which is a standing disagreement, and reporting it is what
+    /// stops `already up to date` being a lie.
+    pub fn reported(&self) -> Option<String> {
+        match self {
+            Self::AlreadyScheduled | Self::StillDeclared => None,
+            Self::BackendNotInPriority(backend) => Some(format!(
+                "`{}` is not in your `priority` file, so LiNix does not manage that backend on \
+                 this host",
+                backend
+            )),
+            Self::Protected(rule) => {
+                Some(crate::app::sync::guard::Protection::Rule(rule.clone()).reason())
+            }
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct SyncChanges {
     pub graph: StableDiGraph<GraphAction, ()>,
     pub install_map: HashMap<String, NodeIndex>,
     pub removal_tracker: HashSet<String>,
+    /// Removals the planner declined to schedule, each with its reason.
+    ///
+    /// A plan that drops something silently reports success over a machine it did not change.
+    /// `rebuild` has said so since it was written (`why.md:551`) and prints its skips; this is
+    /// the same list on the path `rebuild`'s own comment was about — *"the same lie convergence
+    /// was already telling"* (AU1). An empty plan with a non-empty `skipped` is NOT
+    /// `already up to date`.
+    pub skipped: Vec<Skipped>,
 }
 
 impl SyncChanges {
@@ -186,7 +254,13 @@ impl SyncChanges {
     /// Produce a copy containing only the Remove actions, for the `prune` command (which
     /// removes drift but never installs). Removals have no inter-node ordering.
     pub fn removals_only(&self) -> SyncChanges {
-        let mut out = SyncChanges::default();
+        let mut out = SyncChanges {
+            // `prune` removes drift and nothing else, so a removal the planner declined is
+            // precisely what its user needs told. Dropping the list here would give `prune`
+            // the silence this plan just stopped having.
+            skipped: self.skipped.clone(),
+            ..SyncChanges::default()
+        };
         for weight in self.graph.node_weights() {
             if let GraphAction::Remove { name, backend } = weight {
                 let key = format!("{}:{}", backend, name);
@@ -229,6 +303,9 @@ impl SyncChanges {
         report.install.sort_by_key(key);
         report.remove.sort_by_key(key);
         report.change_count = report.install.len() + report.remove.len();
+        // NOT counted as a change: a skip is work that will not happen. It is reported beside
+        // the count, never inside it.
+        report.skipped = self.skipped.clone();
         report
     }
 }
@@ -278,11 +355,55 @@ impl<'a> ChangePlanner<'a> {
         self.enabled.is_empty() || self.enabled.iter().any(|b| b == backend)
     }
 
+    /// Why this managed package is not being scheduled for removal, or `None` to schedule it.
+    ///
+    /// One function, so the drift loop has exactly one place a package can leave it from. The
+    /// reasons split two ways and [`Declined::reported`] is where that split is written down.
+    fn declined(
+        &self,
+        pkg: &crate::core::ManagedPackage,
+        scheduled: &HashSet<String>,
+        desired_keys: &HashSet<String>,
+    ) -> Option<Declined> {
+        let key = format!("{}:{}", pkg.backend, pkg.name);
+        if scheduled.contains(&key) {
+            return Some(Declined::AlreadyScheduled);
+        }
+        if desired_keys.contains(&key) {
+            return Some(Declined::StillDeclared);
+        }
+        if !self.backend_enabled(&pkg.backend) {
+            return Some(Declined::BackendNotInPriority(pkg.backend.clone()));
+        }
+        // Protection applies to EVERY removal reason, not only drift. A lease expiring on
+        // `apt:dpkg`, or a bloatware file naming it, is a mistake in the input — not a licence
+        // to remove it. Checked once here rather than per-branch, which is how the lease and
+        // bloatware paths came to skip it.
+        //
+        // The reason comes from the guard's own vocabulary rather than a sentence written here,
+        // so the inspector (`linix protected`), the refusal and this skip all say the same thing
+        // about the same package.
+        if let Some(rule) = self.config.protection_rule(&pkg.name) {
+            return Some(Declined::Protected(rule.to_string()));
+        }
+        None
+    }
+
     /// What each named backend reports as installed, asked **once per backend**.
     ///
     /// Removal planning needs to know whether a package is actually there, for as many
     /// packages as the manifest and the registry hold between them. Asking per package would
     /// be one subprocess each; asking per backend is one, and the answer is a set.
+    ///
+    /// **This is also the wave that warms every other question the plan asks.** The fan-out in
+    /// [`identify_needed_actions`](Self::identify_needed_actions) is over *specs*, and a spec's
+    /// answer usually comes from its manager's whole listing — so a manifest with 256 winget
+    /// lines puts 256 futures into a queue `max_parallel` slots wide, every one of them waiting
+    /// on the same `winget list`, while scoop, choco and cargo sit unasked because there is no
+    /// slot left to ask them from. Measured on a 298-package config: three managers started at
+    /// 0.3 s and the other six at 1.9 s, waiting for a question that was never about them.
+    /// Asking each manager once, here, is what makes those slots hold work instead of a queue
+    /// of duplicates.
     ///
     /// A backend that cannot be queried, or that fails, is absent from the map — and
     /// [`is_installed`](Self::is_installed) treats that as "assume it is there", preserving
@@ -348,6 +469,22 @@ impl<'a> ChangePlanner<'a> {
         // Precompute desired keys for O(1) lookup
         let desired_keys: HashSet<String> = expanded_desired.keys().cloned().collect();
 
+        // Every manager this plan will consult, asked before anything is asked about a package
+        // — see `installed_sets`. Hoisted out of the removal block below because a scoped plan
+        // skips that block and still asks each of these managers, one spec at a time, for the
+        // listing it could have had at the start.
+        let consulted: std::collections::BTreeSet<String> = expanded_desired
+            .values()
+            .map(|spec| spec.backend.clone())
+            .chain(
+                unwanted
+                    .iter()
+                    .filter(|(_, specs)| !specs.is_empty())
+                    .map(|(backend, _)| backend.clone()),
+            )
+            .collect();
+        let installed = self.installed_sets(&consulted).await;
+
         // Removal planning (drift / bloatware / expired leases) is GLOBAL: it acts on
         // every managed package not present in `desired`. That is only safe for a full,
         // unscoped sync. When the caller narrows to a single profile/module/group
@@ -359,13 +496,6 @@ impl<'a> ChangePlanner<'a> {
             // fails every time it runs. `absent:jq` on a machine that has never had jq made
             // every sync fail, permanently, with an error from the package manager about a
             // package it does not have.
-            let consulted: std::collections::BTreeSet<String> = unwanted
-                .iter()
-                .filter(|(_, specs)| !specs.is_empty())
-                .map(|(backend, _)| backend.clone())
-                .collect();
-            let installed = self.installed_sets(&consulted).await;
-
             // `absent:` — the one thing LiNix removes that it does not manage, because
             // you named it (V.7). Scheduled whether or not LiNix *installed* it, which is
             // the point of the rule; not scheduled when it is not there, which is not a
@@ -392,24 +522,19 @@ impl<'a> ChangePlanner<'a> {
             for pkg in &self.state.packages {
                 let key = format!("{}:{}", pkg.backend, pkg.name);
 
-                // Skip if already scheduled or present in desired state
-                if changes.removal_tracker.contains(&key) || desired_keys.contains(&key) {
-                    continue;
-                }
-
-                // Scope drift by the `priority` file: a managed package whose backend this
-                // host no longer lists is left alone, not reaped. Empty scope = every
-                // backend (the imperative paths, which act on exactly what they were given).
-                if !self.backend_enabled(&pkg.backend) {
-                    continue;
-                }
-
-                // Protection applies to EVERY removal reason, not only drift. A lease
-                // expiring on `apt:dpkg`, or a bloatware file naming it, is a mistake in
-                // the input — not a licence to remove it. Checked once here rather than
-                // per-branch, which is how the lease and bloatware paths came to skip it.
-                if self.config.is_protected(&pkg.name) {
-                    debug!("'{}' is protected — never scheduling removal.", key);
+                // **Every reason not to remove this is a value, not a `continue`.** Both of the
+                // reasons that leave the machine holding something were bare `continue`s with a
+                // `debug!` above them, and a plan that drops a package in silence reports
+                // success over a machine it did not change (AU1). As a returned `Declined` each
+                // one has to say whether the user hears about it, and `Declined::reported`
+                // matches exhaustively — so a reason added later does not compile until someone
+                // answers that question.
+                if let Some(declined) = self.declined(pkg, &changes.removal_tracker, &desired_keys)
+                {
+                    debug!("'{}' will not be removed: {:?}", key, declined);
+                    if let Some(reason) = declined.reported() {
+                        changes.skipped.push(Skipped { key, reason });
+                    }
                     continue;
                 }
 
@@ -462,6 +587,10 @@ impl<'a> ChangePlanner<'a> {
         let target_specs = self.identify_needed_actions(&expanded_desired).await?;
         self.build_execution_graph(&mut changes, &target_specs)
             .await?;
+
+        // Stable order, for the same reason `generate_report` sorts: the crawl that produced
+        // these follows a HashMap, so the same machine printed them differently each run.
+        changes.skipped.sort_by(|a, b| a.key.cmp(&b.key));
 
         if is_cyclic_directed(&changes.graph) {
             return Err(Error::Transaction(format!(
@@ -987,6 +1116,8 @@ mod tests {
         installed: Vec<String>,
         /// Its own, so one fake's answer never reaches another's assertions.
         listings: crate::core::installed::InstalledListings,
+        /// How many times the manager itself was actually run.
+        fetches: Arc<std::sync::atomic::AtomicUsize>,
     }
 
     #[async_trait::async_trait]
@@ -1012,6 +1143,8 @@ mod tests {
         }
 
         async fn fetch_installed(&self) -> Result<Vec<crate::core::Package>> {
+            self.fetches
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(self
                 .installed
                 .iter()
@@ -1035,18 +1168,30 @@ mod tests {
         }
     }
 
-    fn registry_reporting(backend: &str, installed: &[&str]) -> Arc<BackendRegistry> {
+    /// Register one fake manager, handing back the counter of how often it was really run.
+    fn register_fake(
+        registry: &mut BackendRegistry,
+        backend: &str,
+        installed: &[&str],
+    ) -> Arc<std::sync::atomic::AtomicUsize> {
+        let fetches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let fake = Arc::new(FakeInstalled {
             name: backend.to_string(),
             installed: installed.iter().map(|s| s.to_string()).collect(),
             listings: crate::core::installed::InstalledListings::new(),
+            fetches: fetches.clone(),
         });
-        let mut registry = BackendRegistry::new();
         registry.register(Arc::new(
             crate::core::manager::BackendCapabilities::builder(fake.clone())
                 .with_queryable(fake)
                 .build(),
         ));
+        fetches
+    }
+
+    fn registry_reporting(backend: &str, installed: &[&str]) -> Arc<BackendRegistry> {
+        let mut registry = BackendRegistry::new();
+        register_fake(&mut registry, backend, installed);
         Arc::new(registry)
     }
 
@@ -1064,6 +1209,56 @@ mod tests {
             .await
             .unwrap()
             .total_remove()
+    }
+
+    /// Each manager the plan consults is run **once**, and no manager it does not consult is
+    /// run at all.
+    ///
+    /// The first half is what makes the plan's fan-out worth having: the fan-out is over specs,
+    /// so twenty declarations of one backend are twenty futures waiting on one listing, and if
+    /// that listing were fetched per spec the wave would be twenty subprocesses deep. The
+    /// second half is the guard on the fix for it — asking every manager up front is right only
+    /// while "every manager" means the ones this plan was going to ask anyway. Widening it to
+    /// the registry would wake a dozen managers for a one-line manifest, which is the cost this
+    /// was supposed to remove, spent on a different run.
+    #[tokio::test]
+    async fn a_plan_runs_each_manager_it_consults_once_and_the_others_never() {
+        let mut registry = BackendRegistry::new();
+        let declared = register_fake(&mut registry, "declared-mgr", &["jq", "curl"]);
+        let bystander = register_fake(&mut registry, "bystander-mgr", &["vim"]);
+        let registry = Arc::new(registry);
+
+        let specs: Vec<PackageSpec> = ["jq", "curl", "ripgrep", "fd"]
+            .iter()
+            .map(|n| PackageSpec {
+                name: (*n).to_string(),
+                backend: "declared-mgr".to_string(),
+                ..Default::default()
+            })
+            .collect();
+        let desired: HashMap<String, Vec<PackageSpec>> =
+            [("declared-mgr".to_string(), specs)].into_iter().collect();
+
+        let config = Config::default();
+        let state = StateRegistry::new(PathBuf::from("test-state.json"));
+        let changes = ChangePlanner::new(registry, &state, &config)
+            .plan(&desired, None)
+            .await
+            .unwrap();
+
+        use std::sync::atomic::Ordering;
+        assert_eq!(
+            declared.load(Ordering::SeqCst),
+            1,
+            "four declarations asked its manager more than once"
+        );
+        assert_eq!(
+            bystander.load(Ordering::SeqCst),
+            0,
+            "a manager nothing declares was woken by a plan that had no question for it"
+        );
+        // And the plan itself is unchanged by any of that: two installed, two to install.
+        assert_eq!(changes.total_install(), 2);
     }
 
     /// **The bug:** `absent:` scheduled a removal whether or not the package was there, so a

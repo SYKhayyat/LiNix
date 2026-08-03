@@ -68,7 +68,11 @@ struct GithubRelease {
 pub struct GithubBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
-    pub client: reqwest::Client,
+    /// Built on the first request, never in the constructor — `web.rs` and `appimage.rs` build
+    /// theirs inside the function that downloads, and this was the one that did not (AU3's
+    /// family). A backend's `new` runs for every subcommand; a TLS-configured HTTP client is
+    /// 380µs of work for a run that asks GitHub nothing.
+    client: std::sync::OnceLock<reqwest::Client>,
     pub install_dir: PathBuf,
     /// Where the executable is deployed — `[bin_dir]`, the one LiNix's shims use and the one a
     /// sandboxed config moves. Built here from `dirs::home_dir()` until 2026-07-29, which put a
@@ -160,10 +164,7 @@ impl GithubBackendCore {
         Self {
             executor,
             name: "github".to_string(),
-            // No downgrade across redirects (SEC2). GitHub asset URLs redirect to a CDN,
-            // and the hop is where a promised HTTPS download can stop being one.
-            client: crate::core::download::client(false, "linix-manager")
-                .unwrap_or_else(|_| reqwest::Client::new()),
+            client: std::sync::OnceLock::new(),
             install_dir,
             bin_dir,
             state_file,
@@ -213,8 +214,17 @@ impl GithubBackendCore {
             .await
     }
 
+    /// No downgrade across redirects (SEC2). GitHub asset URLs redirect to a CDN, and the hop is
+    /// where a promised HTTPS download can stop being one.
+    fn client(&self) -> &reqwest::Client {
+        self.client.get_or_init(|| {
+            crate::core::download::client(false, "linix-manager")
+                .unwrap_or_else(|_| reqwest::Client::new())
+        })
+    }
+
     async fn send(&self, url: &str) -> Result<reqwest::Response> {
-        let mut request_builder = self.client.get(url).header("User-Agent", "linix-manager");
+        let mut request_builder = self.client().get(url).header("User-Agent", "linix-manager");
         if let Some(token) = &self.github_token {
             request_builder = request_builder.header("Authorization", format!("Bearer {}", token));
         }

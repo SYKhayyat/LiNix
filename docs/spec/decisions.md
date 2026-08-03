@@ -1,4 +1,4 @@
-# The decision register — all 137, and none of them open
+# The decision register — all 144, two of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -15,9 +15,9 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **2** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **1** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **134** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **139** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -73,7 +73,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-**None is open.** All 137 are accounted for: **134 ANSWERED, 2 PARKED, 1 BUILT NEVER RULED, 0 OPEN** — and this line
+**Two are open — `Z1` and `Z2`, both raised 2026-08-03.** All 144 are accounted for: **139 ANSWERED, 2 PARKED, 1 BUILT NEVER RULED, 2 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -273,7 +273,18 @@ and that collision is exactly what this namespace exists to avoid.*
 *Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
 this file exists to prevent, found on 2026-07-30 by adding a row to it.*
 
-### Y — the efficiency pass — 4
+### Z — the readiness audit — 2
+
+*`docs/GRADE-2026-08-03.md` drove a real binary against the five questions the audit was
+commissioned to answer and found twelve defects. Ten were internal correctness and were built
+without asking. Two are not mine: one is a legal choice and one changes a published verb name.*
+
+| | question | answered |
+|---|---|---|
+| **Z1** | There is no `LICENSE` file and no `license` key in `Cargo.toml`, for a tool with an install script and a `self-upgrade` verb. Which licence? | **OPEN** |
+| **Z2** | `lock` and `unlock` touch unrelated files and are not inverses; `unlock` can cause package churn. Rename it, or give `lock` a real inverse? | **OPEN** |
+
+### Y — the efficiency pass — 8
 
 *Not a proposal part. `docs/INEFFICIENCIES.md` audited every place in the tree slower than it has
 to be and marked the findings a user would notice as needing a ruling; the owner ruled the lot on
@@ -287,6 +298,10 @@ II.19 and the reasons in V.115–V.118.*
 | **Y2** | `max_parallel` bounded sockets by core count — one knob or two? — RULED: **two.** `network_parallel` (16), and `upgrade` fans out across the managers that contend with nothing. | 2026-08-02 |
 | **Y3** | `search` had no per-backend deadline, so one slow registry set the whole runtime — may a read give up? — RULED: **yes, and it says which backend.** | 2026-08-02 |
 | **Y4** | A ~51-second Windows restore point ran as a silent barrier before every mutation — RULED: it **starts first, is joined last, and announces itself.** | 2026-08-02 |
+| **Y5** | Nothing said *which* manager a run waited on, so "why was that slow" could only be answered by timing the managers by hand outside LiNix — RULED: **`--timings`**, off by default, on stderr, reporting wall clock against summed child time. | 2026-08-03 |
+| **Y6** | Every run re-asked every manager the same question about a machine nothing had touched — may an answer outlive its run? — RULED: **yes, opt-in.** `installed_cache_secs`, 0 by default, dropped on every mutation and by `clean-cache`, bypassed by `--no-cache`. | 2026-08-03 |
+| **Y7** | `winget list` reports names with spaces in them and "a package name is one word" refused them, so a name LiNix printed was a name LiNix could not be given — RULED: **quote it.** `winget:"ARP\Machine\X64\Mozilla Firefox"`. | 2026-08-03 |
+| **Y8** | Nine managers started 5.4 s into a 9.1 s `check drift` and the run was idle before they did — why did it not overlap? — RULED: **ask every manager the run will ask, at once.** Not slower children: unasked ones. 9.1 s → 3.9 s, 2.7× → 5.4×, same report. | 2026-08-03 |
 
 ---
 
@@ -4518,3 +4533,295 @@ change. Rule in **II.19**, reason in **V.118**.
 
 **What could reverse it:** a snapshot provider whose work is not safe to overlap with reads. All
 three built-in providers and the config-driven one only read while creating.
+
+---
+
+## Y5
+
+**Status: ANSWERED — ruled 2026-08-03.** Raised by the owner while asking whether LiNix was fast
+enough to adopt, and the question could not be answered from inside LiNix.
+
+**Y5 — Does LiNix say where its own time went?** It did not. `latency.rs` measured the *total*
+and warned when a class crossed its budget — enough to notice the 98-second `info` (E14), and
+not enough to act on one, because the next question is always *which manager*. Answering it
+meant timing each manager by hand outside LiNix and subtracting, which is how an afternoon gets
+spent proving that a 3.2-second `list` is 2.35 seconds of `winget list` and 0.8 seconds of
+everything else. `-vv` printed a running commentary with no durations in it.
+
+**RULED: `--timings`, off by default, on stderr.** It reports the wall clock, the summed child
+time, and the ratio between them, then every child command slowest first. Rule in **II.19**,
+reason in **V.119**.
+
+**What the ruling binds:**
+
+- **The ratio is the point, not the list.** LiNix's whole design is overlapping other people's
+  processes, so 19.52s of child time inside a 3.15s wall clock — 6.2× — is the claim `Y1`–`Y3`
+  make, stated as a number the user can check on their own machine. A breakdown printing only
+  a sorted list would show the same seconds and hide whether any of them were overlapped.
+- **Recording is off unless asked for.** A measurement nobody requested is the eager work this
+  whole round exists to delete.
+- **stderr, never stdout.** `linix eval --timings | jq` still gets JSON.
+- **Instrumented at the choke point**, `CommandExecutor::run_on` — the one call every manager
+  invocation funnels through — rather than per verb. A budget every verb has to remember to
+  check is the shape `latency.rs` already rejected.
+- **The one automatic probe that spawns outside that choke point is instrumented too**
+  (`psresource`'s PowerShell cmdlet check, and the external `vars` providers). Interactive
+  children are deliberately left out: `linix shell`, the history pager, `bisect`'s test command
+  and `setup`'s installer are the user's own program in the foreground, and a duration for
+  "how long you sat in your shell" is not a fact about LiNix.
+- The label is the program and its **first argument** — `winget list`. Keyed by full argv, an
+  install would produce one row per package instead of one row per thing the run waited on.
+
+**What could reverse it:** a per-child JSON emission (a `--timings=json`) if anything ever wants
+to gate on these numbers in CI. Deliberately not built now — nothing consumes it, and
+`lifecycle-floor.txt` is the standing argument against a threshold nobody measured.
+
+---
+
+## Y6
+
+**Status: ANSWERED — ruled 2026-08-03.** Raised by the owner: *"it should cache optionally."*
+
+**Y6 — May a manager's answer outlive the run that asked for it?** `Y1`–`Y5` took every
+question LiNix asks in one run down to one ask, overlapped: `linix list` puts 19.5 s of manager
+work into ~3.2 s, 6.2×, and the floor is `winget list` at 2.35 s. There is nothing left to
+overlap. The next `linix list` then asks all 24 managers the same question again, about a
+machine that in the ordinary case nothing has touched since.
+
+**RULED: yes, and off by default.** `installed_cache_secs` (0 = never) reuses a manager's
+installed listing across runs. Measured on this Windows box: **3.99 s → 0.68 s**, with one child
+command surviving instead of 24. Rule in **II.19**, reason in **V.120**.
+
+**What the ruling binds:**
+
+- **Off by default, and that is the ruling, not caution.** Every other speed-up in II.19 costs
+  nothing but concurrency. This one costs *correctness* when it is wrong, and being wrong about
+  the machine is how a declarative tool removes something it should not have. The user turns it
+  on for their machine, knowing their machine.
+- **Any mutation drops it**, on disk as well as in memory. `forget_all` clears both, because an
+  invalidation that clears the memo and leaves the file is an invalidation that does nothing —
+  the next question re-reads the pre-mutation answer straight off disk. Third time this repo has
+  found that shape (the guard's tenth removal path, the run-scoped memos, this).
+- **`--no-cache` bypasses it for one run**, and `linix clean-cache` forgets it outright — the
+  latter unconditionally, since the files may have been written by a run that had it on.
+- **It answers a command that reports, and never one that writes its answer down.** `list`,
+  `search`, `check`, `outdated`, `info`, `why` — an allowlist, so a command added later has to
+  say it is a reader. The setting says how long a *reading* may be reused; it never said a plan
+  or an adoption may be built on one. A `sync` planned from a listing taken before the user
+  removed something by hand skips the install and reports success, which is a declared package
+  left absent with nothing saying so — the exact class the "off by default" clause above is
+  about, and turning the setting on must not buy it. **V.120a.**
+- **Written per manager, through a temp file and renamed, and the temp name carries the pid.**
+  A half-flushed listing read back is a *shorter* machine, and a shorter machine is a list of
+  things to remove. The rename is only atomic per writer: two runs sharing one temp path — a
+  shell prompt hook and a terminal — write into each other's file and rename the interleaving,
+  which is that same torn listing arrived at by the mechanism meant to prevent it.
+- **Every read failure is a miss, never an error.** Corrupt, unreadable, or a clock that moved
+  backwards all mean "ask the manager", never "this machine is empty".
+
+**What could reverse it:** a cheap per-manager change token — `dpkg` status mtime, winget's
+own database timestamp — which would let a listing be validated rather than merely aged, and
+would make an on-by-default cache defensible. Not built: it is one investigation per manager,
+and the TTL is the honest version of what is actually known today.
+
+---
+
+## Y7
+
+**Status: ANSWERED — ruled 2026-08-03.** Raised by the owner: *"we need a way to declare all of
+winget's things."*
+
+**Y7 — How is a package name with a space in it written?** It was not. `winget list` answers
+with `ARP\Machine\X64\Mozilla Firefox` — the identifier `winget install` takes back — and the
+grammar's *a package name is one word* refused it. `adopt` held such names back and said *"its
+manager reports a name no package line can hold"*, which was true and was a wall.
+
+**The measurement corrected the diagnosis twice.** The backslashes were already accepted —
+`2c51968` had taught the grammar and the validator about them. On this machine the names LiNix
+could not write were **161: six winget names, every one of them a name with a space, and 155
+`service:` names that are not a package-line question at all** (see below). The 185-backslash
+figure in `GRADE-2026-07-31.md` §5 G-2 describes a defect that no longer exists.
+
+**RULED: quote it.** `winget:"ARP\Machine\X64\Mozilla Firefox"`. Rule in **II.19**, reason in
+**V.121**. After it, **zero** names winget reports on this machine are undeclarable, and the
+manifest `adopt` writes parses.
+
+**What the ruling binds:**
+
+- **Quoting is what keeps VI.1 shut.** *An unrecognised line is an error* (II.2) rests on prose
+  not being a package name. Prose is not quoted, so `apt:this is just prose` is still an error
+  while `winget:"Mozilla Firefox"` is a name.
+- **The quotes are syntax, not name.** What round-trips is what was inside them.
+- **An `@` inside the quotes belongs to the name**; the options still open at the first `@`
+  after the closing quote. `npm:@scope/pkg@version=1.2` is untouched.
+- **One function decides both whether a name can be written and how it is spelled**
+  (`grammar::declarable_line`). They were the same question asked in two places — a check that
+  round-tripped `backend:name` and a writer that rendered it by hand — which is exactly how the
+  grammar could learn to quote while `adopt` went on emitting the unquoted form and producing a
+  manifest that does not parse. That is `2c51968`'s bug in the other direction, closed before it
+  could happen rather than after.
+- **The validator learned the space with the grammar.** V.113 is that a name is admitted by a
+  grammar *and* a validator; a rule that admits the backslash and stops at the space carries
+  most of an identifier and not the one the user has.
+
+**The message is fixed; what it was hiding is still open.** 155 of the 161 held-back names were
+`service:` lines, and the reason printed for them was wrong: `service:AppMgmt` parses perfectly.
+`is_declarable` accepted only `Statement::Package`, and `service:` is its own statement kind, so
+every service failed a test about package lines and was reported as an unwritable *name*. The
+grammar answers three ways now — `Declared::Package` / `Resource` / `Nothing` — and `adopt` gives
+each held-back name the reason that is true of it.
+
+**The question under it is `Y7a`, ruled below.**
+
+**What could reverse it:** nothing found. The alternative — taking everything after the colon
+as the name — was rejected: it re-opens VI.1, and it makes `@` unusable as the option separator
+on the most common line in the language.
+
+---
+
+## Y7a
+
+**Status: ANSWERED — ruled 2026-08-03.** *Should `adopt` take Windows services at all?* Owner:
+*"services too get put in with no comment, just like packages. You can guard it, but you need
+not."*
+
+**RULED: adopt them as live lines.** Rules in **II.19**, reason in **V.124**.
+
+**What the ruling binds:**
+
+- **A service is a line like any other.** `service:AppMgmt@status=running`, uncommented, next to
+  the packages. Deleting it stops and disables the service, and the manifest header says that in
+  those words rather than in the word *uninstall*, which was true of every line before this.
+- **The owner's argument was the load-bearing one, and it is now written down as V.124.**
+  `purge-unmanaged` builds its list from `list_installed`, which for `service` is every running
+  service — so all 155 were already sweep candidates, refused only because `protection_of` opened
+  with *could a package line hold this name?* and a service line is not a package line. Declaring
+  them makes them managed, and the sweep only takes what is not. The guard need not carry them.
+- **It carries them anyway, on purpose.** A service started after an adopt is unmanaged again.
+  `Protection::NotAPackage` refuses that by a rule about resources instead of by an accident about
+  package names — the accident being one honest tidy-up away from handing the sweep 155 services.
+- **The line carries what was observed, and no more.** A bare `service:` line means *enable and
+  start*, and enable on Windows rewrites the start type to automatic. The init reports only
+  *running* services, so `status=running` is the whole of what was seen. `adoption_options` is the
+  seam; it is empty for every package backend.
+- **The register's other half stays as it is.** `service::list_manual` still answers with the
+  running set and `tracks_manual()` stays `true`. That is what this ruling makes correct: the
+  question `adopt` asks a resource backend is *what state is this machine in*, not *what did you
+  choose*, and `manual_source` now says so in the manifest instead of claiming user intent.
+
+**What could reverse it:** the asymmetry between what an adopted line declares
+(`status=running`) and what deleting it does (stop **and** disable). It predates the ruling and is
+disclosed rather than narrowed; narrowing removal to match the declared options would be a change
+to Q7's teardown rule and is the owner's, not this ruling's.
+
+---
+
+## Y8
+
+**Status: ANSWERED — ruled 2026-08-03.** Raised by the owner: *"identify why it did not
+parallelize properly and fix that."*
+
+**Y8 — Why did a run with 33 child commands and 20 slots still go in waves?** Not because
+anything was slow. `check drift` on a 298-package config took **9.13 s** to do about 2.3 s of
+critical path, and the `--timings` breakdown named the reason directly: nine managers — gem,
+pip, emacs, luarocks, dotnet, dart, nimble, bun, service — **started at 5.4 s**, and nothing at
+all was running for the second before they did. Y5 built the instrument that could say that; it
+is the first question here answered by reading LiNix's own report rather than by guessing.
+
+**Two faults, one shape.**
+
+- **The report asks each manager when its section gets to it.** `check` plans drift, then crawls
+  for unmanaged packages, then probes health. The crawl wants every manager on the machine; the
+  plan wants the nine that are declared. So fifteen managers waited out a plan that had no
+  question for them — and every one was going to be asked before the command could answer.
+- **The plan's fan-out is over specs, not managers.** A spec's answer comes from its manager's
+  whole listing, so 256 winget declarations put 256 futures in a queue `max_parallel` slots
+  wide, every one waiting on the same `winget list`, while scoop, choco and cargo went unasked
+  for want of a slot. Measured: three managers at 0.3 s, the other six at 1.9 s.
+
+**RULED: ask every manager the run will ask, at once.** Rule in **II.19**, reason in **V.122**.
+A command that crawls the whole machine warms every listing before its first section runs
+(`App::warm_installed`); a plan asks each manager it consults once, before it asks anything
+about a package. **9.13 s → 3.9 s, overlap 2.7× → 5.4×, every listing starting inside a 0.26 s
+window instead of spread over 5.4 s, and the report identical line for line.**
+
+**What the ruling binds:**
+
+- **Neither half adds a question.** The once-per-run memo already collapsed the duplicates, so
+  what changed is *when*, not *how many*: same 33 children, same answers.
+- **Only for commands that already ask everyone.** `warm_installed` is called by name at the two
+  call sites that crawl the machine, never from `App::new`. A command that consults three
+  managers must still wake three — pinned by a test that fails if a plan touches a manager
+  nothing declares.
+- **A concurrency budget spent on duplicate questions is spent on nothing.** `max_parallel` was
+  never the limit here; twenty slots holding twenty futures that want one answer is a width of
+  one, and no knob the user can turn says so.
+- **Ordering, alongside.** The registry was a `HashMap`, so which managers got the first slots
+  was Rust's per-process hash seed — two `linix list` runs differed by 530 lines and sorted the
+  same. It is a `BTreeMap` now (**V.123**), which is also what makes any of these measurements
+  reproducible.
+
+**Left standing, and measured rather than assumed:** two managers still start late — `npm
+prefix` and `pipx environment` at ~3.2 s — because their `info` needs a *second* question that
+cannot be asked until their listing lands. That is a per-backend follow-up, not a wave, and it
+is what the remaining ratio is made of.
+
+**What could reverse it:** a machine where warming costs more than it saves — a manager whose
+listing is expensive and whose section is usually skipped. None of the two call sites has one:
+both end in a crawl of every manager.
+
+---
+
+## Z1
+
+**Status: OPEN.** Raised by the readiness audit, 2026-08-03 (`AU12`). Not blocking: nothing in
+the tree reads it. Blocking for *distribution*, which is a different question and the one that
+matters — `scripts/install.sh` and `linix self-upgrade` both hand this program to other people.
+
+**Z1 — Under what licence is LiNix published?** There is no `LICENSE` file at the repo root and
+no `license` key in `Cargo.toml`. Under the Berne Convention that is not "free to use" — it is
+*all rights reserved by default*, so a user who runs the install script has no licence to the
+copy they now hold, and `crates.io` will refuse the package outright.
+
+**This is the owner's to answer and nobody else's.** It is a legal choice about someone else's
+work, it cannot be inferred from the code, and picking one silently would be the worst possible
+version of "the builder made the call": every later contribution inherits it and un-picking it
+needs every contributor's agreement.
+
+**What an answer has to say:** the licence, and whether `Cargo.toml` gains `license = "..."`
+(needed for a crates.io release) or `license-file`. The two conventional answers for a Rust CLI
+are `MIT OR Apache-2.0` (the Rust ecosystem default, permissive) and `GPL-3.0-or-later` (the
+package-manager tradition — dpkg, dnf, pacman). No recommendation is offered here, because a
+recommendation on this one is a decision wearing a suggestion's clothes.
+
+---
+
+## Z2
+
+**Status: OPEN.** Raised by the readiness audit, 2026-08-03 (`AU8`). Low severity, sharp edge.
+
+**Z2 — `lock` and `unlock` are not inverses, and the mis-pairing can move packages.**
+
+| command | what it touches |
+|---|---|
+| `lock` | `locks/versions.json`, and approves hooks and adapters at their current hash |
+| `unlock` | `locks/bare.HOST.toml` — which *manager* an unpinned bare name resolved to |
+
+Different files, unrelated jobs. Someone who runs `linix lock`, changes their mind and types
+`linix unlock` does not undo the pin: they discard the recorded backend resolution, and
+`unlock`'s own help states the consequence — *"sync uninstalls the cargo copy, because two of
+the same package is what this avoids."* So the obvious undo for a harmless command can uninstall
+software.
+
+**Why it is not built already:** it renames a published verb, which II.8 makes an owner ruling,
+and `NO LEGACY` means the old name goes in the same change rather than lingering as an alias.
+
+**The options, in the owner's terms:**
+
+1. **Rename `unlock`** to what it does — `forget-backend`, or `unresolve`. `lock` then has no
+   inverse, which is honest: approving a hash and pinning a version are not things you routinely
+   undo, and `lock --force` re-approves.
+2. **Give `lock` a real inverse** and rename `unlock` as well — two verbs where there is now one
+   confusing one.
+3. **Leave it.** The names are wrong and the help text is right; a user who reads it is not
+   misled, and every rename costs everyone's muscle memory.

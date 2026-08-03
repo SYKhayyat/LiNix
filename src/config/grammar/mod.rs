@@ -39,16 +39,122 @@ use std::path::Path;
 /// before a single rule was read and the answer to *which rule protects this* was a sentence
 /// about package lines.
 pub fn is_declarable(backend: Option<&str>, name: &str) -> bool {
-    let line = match backend {
-        Some(b) => format!("{}:{}", b, name),
-        None => name.to_string(),
+    declarable_line(backend, name).is_some()
+}
+
+/// What the grammar makes of `backend:name` — and, when it is a package, how it is spelled.
+///
+/// Three answers rather than two, because the two-answer version told a lie that a user then
+/// read: `service:AppMgmt` parses, and every caller asked "is this a package line?" and reported
+/// the `false` as *no line can hold this name*. On a stock Windows box that was 155 services
+/// held back from adoption with a reason that was not true of a single one of them.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Declared {
+    /// A package, and this is the line that declares it.
+    Package(String),
+    /// A legal declaration that is not a package, and this is the line that declares it.
+    /// `service:`, `link:` and `setting:` are their own statement kinds (II.2).
+    Resource(String),
+    /// No line of any kind can carry this name.
+    Nothing,
+}
+
+/// Ask the grammar, once, and let the caller decide what to do with each answer.
+pub fn declared(backend: Option<&str>, name: &str) -> Declared {
+    declared_as(backend, name, &[])
+}
+
+/// As [`declared`], for a line that must also carry `options`.
+///
+/// `adopt` declares a service as the state it observed — `service:sshd@status=running` — and the
+/// options get the same round trip the name does. A line that comes back carrying a different
+/// state is not the line that was asked for, and writing it would declare something nobody saw.
+pub fn declared_as(backend: Option<&str>, name: &str, options: &[(&str, &str)]) -> Declared {
+    // A `$` in a written name is a variable reference (IX.3), and the resolver refuses an
+    // undefined one — so `service:MSSQL$SQLEXPRESS`, written verbatim, is a file that parses
+    // and then fails to resolve, wedging every later command. `$$` is the one escape. Applied
+    // here rather than at the writer, because this is the function that decides how a name is
+    // spelled, and the round trip below is against the spelling that will actually be read
+    // back: quoting does not protect a `$`, and no amount of parser agreement would have
+    // caught this, since expansion happens after the parse.
+    let escaped = |s: &str| s.replace('$', "$$");
+    let name_on_the_line = escaped(name);
+    let suffix: String = options
+        .iter()
+        .map(|(k, v)| format!("@{}={}", k, escaped(v)))
+        .collect();
+    let asked_for = |parsed: &Options| {
+        parsed.keys().count() == options.len()
+            && options
+                .iter()
+                .all(|(k, v)| parsed.one(k) == Some(escaped(v).as_str()))
     };
-    let is_this_backend = |n: &str| Some(n) == backend;
-    matches!(
-        statement::parse(&Origin::argument(), &line, &is_this_backend),
-        Ok(Statement::Package(d))
-            if d.backend.as_deref() == backend && d.selector.as_str() == name
-    )
+    // Bare first, quoted only if the bare form will not carry it. A manifest full of
+    // needlessly quoted `winget:Mozilla.Firefox` is noise, and the quotes would then be the
+    // thing a reader has to decide is meaningful.
+    let mut resource = None;
+    for candidate in [
+        name_on_the_line.clone(),
+        format!("\"{}\"", name_on_the_line),
+    ] {
+        let line = match backend {
+            Some(b) => format!("{}:{}{}", b, candidate, suffix),
+            None => format!("{}{}", candidate, suffix),
+        };
+        let is_this_backend = |n: &str| Some(n) == backend;
+        match statement::parse(&Origin::argument(), &line, &is_this_backend) {
+            Ok(Statement::Package(d))
+                if d.backend.as_deref() == backend
+                    && d.selector.as_str() == name_on_the_line
+                    && asked_for(&d.options) =>
+            {
+                return Declared::Package(line);
+            }
+            // A package whose name came back changed is not this package — that is what the
+            // round trip is for, and it is not evidence that some other statement kind would
+            // carry it either.
+            Ok(Statement::Package(_)) | Err(_) => {}
+            Ok(st) => {
+                // A resource is listed under its own prefix, so the prefix has to be the
+                // backend the caller asked about: `winget:something` that happens to parse as
+                // some other statement kind is not a `winget` resource, and offering it as one
+                // would put a line in the manifest that declares a different thing entirely.
+                if let Some(((prefix, back), opts)) = st.listed_with_options() {
+                    if Some(prefix) == backend && back == name_on_the_line && asked_for(opts) {
+                        resource = Some(line);
+                    }
+                }
+            }
+        }
+    }
+    resource.map_or(Declared::Nothing, Declared::Resource)
+}
+
+/// The exact line that declares this package, or `None` if no line can.
+///
+/// **One function decides both whether a name can be written and how it is spelled.** They were
+/// the same question asked in two places: `is_declarable` round-tripped `backend:name` while
+/// `adopt` rendered `backend:name` by hand, so the day the grammar learned to quote a name with
+/// a space in it, the check would have said yes and the writer would still have emitted the
+/// unquoted form — a manifest that fails to parse, written by the command whose whole job is to
+/// produce one that does. That is the bug `2c51968` already fixed once in the other direction.
+///
+/// Round-tripped rather than assumed: whatever comes back out has to be the name that went in.
+pub fn declarable_line(backend: Option<&str>, name: &str) -> Option<String> {
+    match declared(backend, name) {
+        Declared::Package(line) => Some(line),
+        Declared::Resource(_) | Declared::Nothing => None,
+    }
+}
+
+impl Declared {
+    /// The line that declares this, whichever kind it turned out to be.
+    pub fn line(&self) -> Option<&str> {
+        match self {
+            Declared::Package(line) | Declared::Resource(line) => Some(line),
+            Declared::Nothing => None,
+        }
+    }
 }
 
 /// A `{ }` block, already classified by its header. II.2: the header decides what the body
@@ -667,6 +773,105 @@ mod tests {
         // read it and turned it into a real expiry (S19).
         let err = doc("apt:jq {\n  lease = 2h\n}\n").unwrap_err().to_string();
         assert!(err.contains("lease"), "{}", err);
+    }
+
+    /// Three answers, because the two-answer version reported a true thing about packages as a
+    /// false thing about names: `service:AppMgmt` is a perfectly good declaration, and `adopt`
+    /// told 155 of them their manager reports "a name no package line can hold".
+    ///
+    /// The family, not the finding: every statement kind that is not a package answers the same
+    /// way, a name nothing can carry still answers `Nothing`, and `Package` still carries the
+    /// exact spelling — which is what `adopt` writes, so the three answers cannot drift from the
+    /// one line.
+    #[test]
+    fn a_name_that_declares_something_other_than_a_package_says_so() {
+        use super::{declarable_line, declared, is_declarable, Declared};
+
+        // Its own statement kind (II.2) — writable, just not as a package. The whole family,
+        // because `adopt` writes all three and a spelling that drifts writes a manifest that
+        // declares something other than what was found.
+        for (backend, name) in [
+            ("service", "AppMgmt"),
+            ("service", "sshd"),
+            ("link", "/home/u/.vimrc"),
+        ] {
+            assert_eq!(
+                declared(Some(backend), name),
+                Declared::Resource(format!("{}:{}", backend, name)),
+                "`{}:{}` parses, and was being reported as unwritable",
+                backend,
+                name
+            );
+        }
+
+        // Options round-trip alongside the name: a line that came back declaring a different
+        // state is not the line that was asked for.
+        assert_eq!(
+            super::declared_as(Some("service"), "sshd", &[("status", "running")]),
+            Declared::Resource("service:sshd@status=running".to_string())
+        );
+        assert_eq!(
+            super::declared_as(Some("service"), "sshd", &[("nonsense", "1")]),
+            Declared::Nothing,
+            "an option the grammar refuses must not be written into the manifest"
+        );
+        // A `setting:` is a resource whose line is illegal until it carries its value, so the
+        // name alone is genuinely unwritable — which is why the guard asks about the backend
+        // and not about the name.
+        let key = "org.gnome.desktop.interface/clock-format";
+        assert_eq!(declared(Some("setting"), key), Declared::Nothing);
+        assert_eq!(
+            super::declared_as(Some("setting"), key, &[("value", "24h")]),
+            Declared::Resource(format!("setting:{}@value=24h", key))
+        );
+
+        // A `$` in a name is a variable reference, and an undefined one is refused at resolve
+        // time — after the parse, so no amount of parser agreement catches it. `MSSQL$SQLEXPRESS`
+        // is a real service on a stock SQL Server box, and written verbatim it produced a file
+        // that parsed and then wedged every later command. The family: a package name can carry
+        // one too, and did so through `declarable_line` before this.
+        assert_eq!(
+            declared(Some("service"), "MSSQL$SQLEXPRESS"),
+            Declared::Resource("service:MSSQL$$SQLEXPRESS".to_string())
+        );
+        assert_eq!(
+            declared(Some("winget"), "Foo$Bar"),
+            Declared::Package("winget:Foo$$Bar".to_string())
+        );
+
+        // A resource name gets the same round trip a package name does. `sshd@status=running`
+        // as a *name* parses as the service `sshd` carrying an option, and answering with
+        // `service:sshd` would hand the manifest a line about a different declaration than the
+        // one asked about — the exact failure the round trip exists to catch.
+        assert_ne!(
+            declared(Some("service"), "sshd@status=running"),
+            Declared::Resource("service:sshd".to_string()),
+            "a name that came back changed is not that name"
+        );
+
+        // A package is still a package, and still spelled exactly one way.
+        assert_eq!(
+            declared(Some("cargo"), "ripgrep"),
+            Declared::Package("cargo:ripgrep".to_string())
+        );
+        assert_eq!(
+            declared(Some("winget"), r"ARP\Machine\X64\Mozilla Firefox"),
+            Declared::Package(r#"winget:"ARP\Machine\X64\Mozilla Firefox""#.to_string()),
+            "a name needing quotes must come back quoted, or adopt writes a line that will \
+             not parse"
+        );
+
+        // And a name no line of any kind can carry is still exactly that.
+        assert_eq!(declared(Some("winget"), "two\nlines"), Declared::Nothing);
+        assert_eq!(
+            declared(Some("winget"), "Some \"Quoted\" Program"),
+            Declared::Nothing
+        );
+
+        // The two older questions are the same question, so they cannot disagree with it.
+        assert!(!is_declarable(Some("service"), "AppMgmt"));
+        assert_eq!(declarable_line(Some("service"), "AppMgmt"), None);
+        assert!(is_declarable(Some("cargo"), "ripgrep"));
     }
 
     #[test]

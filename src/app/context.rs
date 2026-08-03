@@ -63,8 +63,18 @@ impl App {
         // straight line of independent I/O — the backend registrations, a state-file read, the
         // snapshot provider probe, the WAL open — run for `linix list` as much as for `linix
         // sync`. The state load and the WAL open are file reads; the snapshot probe asks the
-        // machine what it can snapshot with; the registry builds ~61 backends. `try_join!`
-        // costs nothing and takes the longest instead of the sum.
+        // machine what it can snapshot with; the registry builds ~48 backends.
+        //
+        // **`build_registry` is polled LAST, and the order is the whole mechanism.** It is an
+        // `async fn` with no `.await` in it — 103 lines of straight-line construction — so it
+        // never yields, and nothing after it in this tuple can be polled until it returns.
+        // Placed first, it held `probe_snapshots` unpolled for its entire duration and the
+        // "overlap" was decoration: the instrumented run reported four futures all finishing at
+        // 213.6ms, which was one future's cost wearing four labels (AU7). Placed last, every
+        // future that can hand its work to another thread has already done so.
+        //
+        // The registry costs ~5ms now that no backend calibrates a clock in its constructor
+        // (AU3) — which is why this is an ordering note and not a `spawn_blocking`.
         let load_state = async {
             match state_path {
                 Some(path) => tokio::task::spawn_blocking(move || StateRegistry::load_from(&path)),
@@ -91,8 +101,8 @@ impl App {
         let probe_snapshots =
             async { Ok::<_, Error>(SnapshotManager::new(executor.duplicate(), &config).await) };
 
-        let (state_registry, journal, registry, snapshot_manager) =
-            tokio::try_join!(load_state, open_journal, build_registry, probe_snapshots)?;
+        let (state_registry, journal, snapshot_manager, registry) =
+            tokio::try_join!(load_state, open_journal, probe_snapshots, build_registry)?;
 
         let registry = Arc::new(registry);
         let progress = create_progress_reporter(config.show_progress);
@@ -129,7 +139,8 @@ impl App {
     }
 
     pub async fn new(config: Config) -> Result<Self> {
-        let executor = CommandExecutor::new(config.dry_run, config.verbose);
+        let mut executor = CommandExecutor::new(config.dry_run, config.verbose);
+        executor.set_installed_cache(config.installed_cache_secs);
         Self::new_with_executor_and_state_path(config, executor, None).await
     }
 
@@ -714,6 +725,29 @@ impl App {
     /// questions with very different answers: on a stock Ubuntu this is ~476 packages and
     /// `adopt` is ~103. Only `purge-unmanaged` wants this one, and its whole job is deleting
     /// all of it (II.11) — which is why the ratio check exists.
+    /// Ask every ready manager what it has installed, all at once, before anything needs it.
+    ///
+    /// For a command that reports on the whole machine this changes no question and no answer —
+    /// every one of these listings is asked during the run regardless, and the memo means each
+    /// is fetched once either way. What changes is *when*: `check` plans drift, then crawls for
+    /// unmanaged packages, then probes health, and each stage asks the managers it needs at the
+    /// moment it needs them. Measured on a 298-package config, that put nine managers — gem,
+    /// pip, emacs, luarocks, dotnet, dart, nimble, bun, service — at the starting line 5.4 s
+    /// into a 9.1 s run, idle until then, because the crawl that wanted them was queued behind
+    /// a plan that did not.
+    ///
+    /// **Only for commands that already ask everyone.** A command that consults three managers
+    /// must not be made to wake twenty-four; that is why this is called by name at those call
+    /// sites rather than folded into `App::new`.
+    pub async fn warm_installed(&self) {
+        let backends = self.registry.available();
+        let _ =
+            self.query_backends_concurrently(backends, |q| async move {
+                q.list_installed().await.is_ok()
+            })
+            .await;
+    }
+
     pub async fn installed_but_unmanaged(&self) -> Result<Vec<Package>> {
         let backends = self.registry.available();
         let listed = self

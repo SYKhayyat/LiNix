@@ -64,6 +64,10 @@ async fn main() -> Result<()> {
             .init();
     }
 
+    // 1.5 Where LiNix's own data lives — before the shim hijack, which builds an `App` and so
+    // reads it.
+    settle_data_dir(&argv)?;
+
     // 2. Shim hijack
     if let Some(res) = attempt_shim_hijack().await? {
         return res;
@@ -105,6 +109,12 @@ async fn main() -> Result<()> {
             raw_argv, &aliases, &known,
         )))
     };
+    // Before the config is read, because loading it can already run an external vars provider
+    // — and a breakdown that starts after the first child has nothing to say about it.
+    if cli.timings {
+        linix::core::timing::enable();
+    }
+
     let mut config = load_and_merge_config(&cli).await?;
     // T4: `watch` runs unattended, so nobody is present to touch a hardware key. Set on the
     // config BEFORE the registry is built, because the link backend takes an `Arc<Config>` at
@@ -146,6 +156,9 @@ async fn main() -> Result<()> {
         &linix::core::latency::subcommand_name(&cli.command),
         started.elapsed(),
     );
+    // Before `finish`, which maps a refusal or a failure onto an exit code and leaves: a run
+    // that ended badly is the one whose timing a user most wants to see.
+    linix::core::timing::report(linix::core::timing::elapsed());
     finish(&app, outcome).await
 }
 
@@ -508,6 +521,37 @@ pub(crate) fn flag_from_argv(argv: &[String], names: &[&str]) -> Option<String> 
     None
 }
 
+/// `--data-dir`, and the two environment variables, settled once before anything reads them.
+///
+/// **The flag sets the variable rather than becoming a second answer.** Six places ask "where is
+/// LiNix's data" — `safe_data_dir`, `Layout::from_env`, `StateRegistry::load_default`, the
+/// config default, the rehearsal sandbox, the test fixtures — and every one of them reads
+/// `$LINIX_DATA_DIR`. A flag threaded through as a separate value would have to reach all six,
+/// and the one it missed would be the one that wrote to the developer's real registry. Config
+/// got a first-class flag and state got an undocumented variable, and that asymmetry is what
+/// turned `--config-dir` from a testing affordance into a trap (AU4): a fresh sandbox planned
+/// seven removals against the real machine's managed state.
+///
+/// Read from argv rather than from the parsed `Cli` because the shim hijack builds an `App`
+/// before clap runs — the same reason the log level is read here.
+///
+/// Both variables are checked for absoluteness at this one point, because the readers above
+/// return a `PathBuf` and cannot refuse anything (AU2).
+fn settle_data_dir(argv: &[String]) -> Result<()> {
+    use linix::config::settings::absolute_or_refuse;
+
+    if let Some(flag) = flag_from_argv(argv, &["--data-dir"]) {
+        let dir = absolute_or_refuse(std::path::PathBuf::from(flag), "`--data-dir`")?;
+        std::env::set_var("LINIX_DATA_DIR", dir);
+    } else if let Some(dir) = std::env::var_os("LINIX_DATA_DIR").filter(|v| !v.is_empty()) {
+        absolute_or_refuse(std::path::PathBuf::from(dir), "`$LINIX_DATA_DIR`")?;
+    }
+    if let Some(dir) = std::env::var_os("LINIX_CONFIG_DIR").filter(|v| !v.is_empty()) {
+        absolute_or_refuse(std::path::PathBuf::from(dir), "`$LINIX_CONFIG_DIR`")?;
+    }
+    Ok(())
+}
+
 /// Where `preferences.toml` is, for the pre-clap alias load.
 ///
 /// `--config` names the file; otherwise `locate` answers with `--config-dir`,
@@ -567,33 +611,35 @@ pub(crate) fn preferences_path_from_argv(argv: &[String]) -> Option<std::path::P
 /// that proved it mattered was a `--dry-run sync` that entered recovery.
 pub(crate) const READ_ONLY_COMMANDS: &[&str] = &[
     "plan",
-    "status",
     "check",
     "list",
     "search",
-    "doctor",
     "diff",
-    "unmanaged",
-    "absent",
     "vars",
     "export",
     "sbom",
-    "insight",
     "why",
     "info",
-    "show",
-    "audit",
-    "outdated",
     "history",
-    "log",
     "completions",
     "help",
-    "locate",
-    "metrics",
-    "verify",
     "eval",
     "try",
     "repl",
+    // AU6: these five read the machine's state and never write it, and `path` is the command
+    // documented for `cd $(linix path)` — measured blocking for the full 120-second timeout
+    // while the test suite held the lock. The two that write (`path --set` writes LiNix's
+    // settings file, `config init` writes `preferences.toml`) write into the CONFIG repo, and
+    // through `utils::file::persist`, which is atomic; this lock is the DATA lock, and it is
+    // held so that nothing loses an entry out of `registry.json`.
+    //
+    // `edit` is the sharpest of them: it blocks on $EDITOR. Locked, one person reading a
+    // manifest in vim stopped every other LiNix on the machine for as long as they read it.
+    "path",
+    "protected",
+    "policy",
+    "config",
+    "edit",
 ];
 
 /// Take the lock for a mutating command. The command is read from argv rather than matched
@@ -857,6 +903,18 @@ pub(crate) async fn load_and_merge_config(cli: &Cli) -> Result<linix::config::Co
     if cli.quiet {
         config.quiet = true;
     }
+    // `--no-cache` is the whole off-switch: the TTL is what the disk layer is built from, so
+    // zeroing it here means nothing downstream has a second way to be on. The same zero is
+    // what keeps a cached listing out of every command that writes its answer down
+    // (`cache_may_answer`) — the setting says how long a reading may be reused, never that a
+    // plan or an adoption may be built on one.
+    if cli.no_cache
+        || !linix::core::installed::InstalledListings::cache_may_answer(
+            &linix::core::latency::subcommand_name(&cli.command),
+        )
+    {
+        config.installed_cache_secs = 0;
+    }
     // `uninstall --purge` is a `[remove] purge` for this run only. Read here, where CLI flags
     // become config, because `config` is shared read-only by the time a command runs.
     if let Commands::Uninstall { purge: true, .. } = cli.command {
@@ -867,10 +925,6 @@ pub(crate) async fn load_and_merge_config(cli: &Cli) -> Result<linix::config::Co
     if cli.no_progress {
         config.show_progress = false;
     }
-    // Fold the user-editable keep-list into the protected set. It lives in the GLOBAL
-    // groups folder, which `-g` no longer moves — previously `-g /tmp/foo` made this look
-    // for /tmp/foo/keep.txt, found nothing, returned early, and every keep-list protection
-    // silently evaporated for that command. Every `is_protected` consumer honors it.
     Ok(config)
 }
 
@@ -1073,7 +1127,7 @@ mod alias_tests {
 
 #[cfg(test)]
 mod log_level_tests {
-    use super::log_level_from_argv;
+    use super::{known_subcommands, log_level_from_argv, READ_ONLY_COMMANDS};
 
     fn argv(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|s| s.to_string()).collect()
@@ -1182,5 +1236,52 @@ mod log_level_tests {
             log_level_from_argv(&argv(&["/home/q/Videos/linix", "list"])),
             "warn"
         );
+    }
+
+    /// Every name exempted from the data lock is a command that exists.
+    ///
+    /// **The `undo` disease, found in the lock list.** Twelve of the thirty-three entries here
+    /// named commands the program does not have — `status` (now `check drift`), `doctor`,
+    /// `unmanaged` and `absent` (sections of `check`), `insight`, `show`, `audit`, `outdated`,
+    /// `log`, `locate`, `metrics`, `verify`. A list of names beside the enum drifts from it,
+    /// silently, and this one decided whether a command takes an exclusive lock.
+    ///
+    /// Asked of clap rather than of a second list, for exactly that reason.
+    #[test]
+    fn every_read_only_command_is_a_real_command() {
+        let known = known_subcommands();
+        let ghosts: Vec<&&str> = READ_ONLY_COMMANDS
+            .iter()
+            // clap generates `help` itself, after `command()` is built, so it is absent from
+            // the factory's list and present in the program. Named here rather than dropped
+            // from the exemption list, because `linix help sync` really does only read.
+            .filter(|name| **name != "help" && !known.contains(**name))
+            .collect();
+        assert!(
+            ghosts.is_empty(),
+            "READ_ONLY_COMMANDS exempts names that are not commands: {:?}",
+            ghosts
+        );
+    }
+
+    /// The direction that matters for correctness: a command LiNix cannot run without writing
+    /// must not be on the list. Stated as the two it would break first.
+    #[test]
+    fn the_commands_that_write_are_not_exempt() {
+        for writer in [
+            "sync",
+            "install",
+            "uninstall",
+            "adopt",
+            "heal",
+            "rollback",
+            "init",
+        ] {
+            assert!(
+                !READ_ONLY_COMMANDS.contains(&writer),
+                "`{}` writes state and must take the data lock",
+                writer
+            );
+        }
     }
 }

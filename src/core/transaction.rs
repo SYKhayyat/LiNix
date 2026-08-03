@@ -832,8 +832,12 @@ impl Transaction {
                 GraphAction::Remove { .. } => None,
             })
             .collect();
-        let os_essential =
-            crate::app::sync::guard::essential_names(&self.registry, &backends).await;
+        let os_essential = crate::app::sync::guard::essential_names(
+            &self.registry,
+            &backends,
+            self.config.max_concurrent,
+        )
+        .await;
 
         for (idx, prior) in history.iter().rev() {
             match self.graph[*idx].clone() {

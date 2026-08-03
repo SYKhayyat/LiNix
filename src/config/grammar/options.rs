@@ -88,6 +88,9 @@ pub fn parse_short(origin: &Origin, text: &str) -> Result<Options> {
                 if !is_key(k) {
                     return Err(comma_in_value(origin, text));
                 }
+                if v.is_empty() {
+                    return Err(empty_value(origin, k));
+                }
                 out.insert(k, v);
             }
             // No `=`. A bare flag (`@hold`), the `@2.0` mistake, or the tail of a value
@@ -108,6 +111,25 @@ pub fn parse_short(origin: &Origin, text: &str) -> Result<Options> {
         }
     }
     Ok(out)
+}
+
+/// `@version=` with nothing after it (AU10).
+///
+/// A key written with an `=` and no value is a half-typed line, not a request for an empty
+/// string: `cargo:ripgrep@version=` parsed, yielded `"version": ""`, and exited 0 — while
+/// `npm:` with an empty NAME was correctly refused three lines away. The same shape, refused on
+/// one side of the `@` and accepted on the other.
+///
+/// A flag is how you say "no value": `@hold`, not `@hold=`.
+fn empty_value(origin: &Origin, key: &str) -> GrammarError {
+    GrammarError::new(
+        origin.clone(),
+        format!("`@{}=` has nothing after the `=`", key),
+    )
+    .with_hint(format!(
+        "write a value (`@{}=1.2.3`), or drop the `=` if you meant the flag `@{}`.",
+        key, key
+    ))
 }
 
 /// II.2's specific refusal. Reached when a comma-separated part is not `key=value` and not
@@ -181,6 +203,12 @@ pub fn parse_block_line(origin: &Origin, line: &str) -> Result<(String, String)>
         )
         .with_hint("block values are verbatim — did you mean a comment? Put it on its own line."));
     }
+    // The block form's half of AU10. The short form is where the typo was measured, but this
+    // is the same line with different punctuation, and a refusal that covers one spelling of a
+    // mistake teaches the other one.
+    if value.is_empty() {
+        return Err(empty_value(origin, key));
+    }
     Ok((key.to_string(), value.to_string()))
 }
 
@@ -190,6 +218,34 @@ mod tests {
 
     fn o() -> Origin {
         Origin::new("modules/dev.txt", 3)
+    }
+
+    /// AU10: `@version=` parsed, produced `"version": ""`, and exited 0 — while `npm:` with an
+    /// empty name was refused. Both spellings of the mistake, and the flag form that still has
+    /// to work, because a refusal that also catches `@hold` would have broken every pin.
+    #[test]
+    fn an_option_with_nothing_after_the_equals_is_refused() {
+        for line in ["version=", "version=  ", "hold=", "arch=x86,extra="] {
+            let Err(err) = parse_short(&o(), line) else {
+                panic!("`@{}` was accepted", line);
+            };
+            assert!(
+                err.what.contains("nothing after the `=`"),
+                "`{}` was refused for the wrong reason: {}",
+                line,
+                err.what
+            );
+        }
+
+        let err = parse_block_line(&o(), "after_install =").unwrap_err();
+        assert!(err.what.contains("nothing after the `=`"), "{:?}", err);
+
+        // Controls: the flag form and a real value are untouched.
+        assert_eq!(parse_short(&o(), "hold").unwrap().one("hold"), Some("true"));
+        assert_eq!(
+            parse_short(&o(), "version=1.6").unwrap().one("version"),
+            Some("1.6")
+        );
     }
 
     #[test]

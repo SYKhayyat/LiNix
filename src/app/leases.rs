@@ -30,7 +30,12 @@ impl Leases<'_> {
         // lease stays expired, which is the safe direction.
         let backends: std::collections::HashSet<String> =
             expired.iter().map(|(b, _)| b.clone()).collect();
-        let os_essential = crate::app::sync::guard::essential_names(self.registry, &backends).await;
+        let os_essential = crate::app::sync::guard::essential_names(
+            self.registry,
+            &backends,
+            self.config.max_parallel,
+        )
+        .await;
         let (protected, expired): (Vec<_>, Vec<_>) = expired.into_iter().partition(|(b, n)| {
             crate::app::sync::guard::protection_of(self.config, Some(b), n, &os_essential).is_some()
         });

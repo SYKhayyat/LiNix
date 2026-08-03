@@ -1,13 +1,54 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
+/// The 61 verbs, grouped by what a person is trying to do (AU11).
+///
+/// **After the flat list, not instead of it.** clap prints one `Commands:` block in
+/// alphabetical-by-declaration order and has no per-subcommand heading, so the choice was a wall
+/// with no map or a wall with one. Every verb still appears above, exactly once, where
+/// `completions` and the coverage gates look for it — this adds orientation and removes nothing.
+///
+/// A verb missing from this map is caught by `tests/help_map_tests.rs`, which reads the map and
+/// `--help` and compares them. A hand-maintained list of sixty names beside the enum is the
+/// shape that let `undo` sit in two exemption lists for months after it stopped existing.
+const COMMAND_MAP: &str = "\
+The map (every command above, by what you are doing):
+
+  Make the machine match your files
+    sync · watch · plan · apply · check · rebuild · heal · try · run · shell
+
+  Change what you declare
+    install · uninstall · add · remove-orphans · unmanage · adopt · hold · unhold
+    update · upgrade · repo · service
+
+  Look at things
+    list · search · info · why · diff · eval · history · protected
+    policy · vars · sbom · export · repl
+
+  Undo and time travel
+    snapshot · rollback · bisect · teleport · restore · bundle · git
+
+  Files, profiles and modules
+    init · path · edit · config · module · profile · activate · deactivate
+    lock · unlock · schedule · hooks
+
+  Cleaning up
+    clean-cache · purge-unmanaged · reset
+
+  Fleet and LiNix itself
+    fleet · completions · self-upgrade
+
+Start with `linix init`, then `linix edit modules/starter.txt`, then `linix sync`.
+`linix <command> --help` explains any one of them.";
+
 /// LiNix - a declarative package manager: you edit a file listing the packages you
 /// want, and `sync` makes the machine match it.
 #[derive(Parser, Debug)]
 #[command(
     name = "linix",
     version = env!("CARGO_PKG_VERSION"),
-    about = "A declarative package manager: edit a file, sync the machine to match"
+    about = "A declarative package manager: edit a file, sync the machine to match",
+    after_help = COMMAND_MAP,
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -40,6 +81,14 @@ pub struct Cli {
     /// `linix path` says which of the four sources won.
     #[arg(long, global = true, value_name = "DIR")]
     pub config_dir: Option<PathBuf>,
+
+    /// Use this directory for LiNix's own state — the registry, journal and snapshots.
+    ///
+    /// The flag form of $LINIX_DATA_DIR, and the other half of isolating a run: --config-dir
+    /// moves your files, this moves what LiNix records about them. Without both, a fresh
+    /// sandbox plans against the real machine's managed state. Must be absolute.
+    #[arg(long, global = true, value_name = "DIR")]
+    pub data_dir: Option<PathBuf>,
 
     /// Carry out a removal the guard refuses: one over `max_removals`, or touching a
     /// protected/essential package. Global because every command that can delete needs
@@ -76,6 +125,24 @@ pub struct Cli {
     /// warning. Errors still print, and `-q` beats `-v` if both are given.
     #[arg(short, long, global = true)]
     pub quiet: bool,
+
+    /// Ask every manager afresh, ignoring any cached installed listing.
+    ///
+    /// The escape hatch for `installed_cache_secs`. A cache that cannot be bypassed for one
+    /// run is a cache the user has to turn off in a file and remember to turn back on, and
+    /// the moment they need it is the moment they already suspect LiNix is wrong about the
+    /// machine. Does nothing when the cache is off, which is the default.
+    #[arg(long, global = true)]
+    pub no_cache: bool,
+
+    /// Print where the run's time went: every command LiNix ran, slowest first.
+    ///
+    /// LiNix spends its life waiting on other people's processes, so "why was that slow" is
+    /// almost always "which manager was slow". The report says the wall clock, the summed
+    /// child time and the ratio between them — that ratio is how much of the waiting was
+    /// overlapped. It goes to stderr, so `--timings` never disturbs output being parsed.
+    #[arg(long, global = true)]
+    pub timings: bool,
 }
 
 #[derive(Subcommand, Debug)]

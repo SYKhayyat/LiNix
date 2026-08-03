@@ -208,7 +208,8 @@ impl Adopter {
         // the OS itself calls essential is not something to hand someone as a line whose
         // deletion means "uninstall".
         let backends: HashSet<String> = candidates.iter().map(|p| p.backend.clone()).collect();
-        let os_essential = guard::essential_names(&self.registry, &backends).await;
+        let os_essential =
+            guard::essential_names(&self.registry, &backends, self.config.max_parallel).await;
         let declared = self.declared_outside_the_adoption_manifest().await;
 
         for pkg in candidates {
@@ -309,7 +310,8 @@ impl Adopter {
         .priority_for_host()
         .await?;
         let vocab = crate::app::vocab::Vocab::new(&self.registry, &self.config, &priority);
-        Self::hold_back_what_cannot_be_written(&mut found);
+        let options = self.adoption_options();
+        Self::hold_back_what_cannot_be_written(&mut found, &options);
 
         if found.adopt.is_empty() {
             info!("nothing new to adopt");
@@ -325,7 +327,7 @@ impl Adopter {
         info!("{} candidate(s) for adoption.", found.adopt.len());
 
         let layout = self.config.layout();
-        let manifest = self.render_manifest(&found);
+        let manifest = self.render_manifest(&found, &options);
         let facts =
             crate::app::sync::StateResolver::new(&self.config, self.registry.clone(), false)
                 .await
@@ -354,6 +356,16 @@ impl Adopter {
             let source_meta = Some("adopt".to_string());
 
             for pkg in &found.adopt {
+                // Packages only. A `service:` line resolves to a resource statement, so it is
+                // never in the model's package set — recording one here makes it managed with
+                // nothing declaring it, and the very next `plan` schedules all 154 for removal
+                // and then refuses itself. Resources enter the ledger when `sync` places them.
+                if matches!(
+                    Self::declared_for(&options, pkg),
+                    crate::config::grammar::Declared::Resource(_)
+                ) {
+                    continue;
+                }
                 state_mut.add(
                     &pkg.backend,
                     &pkg.name,
@@ -388,14 +400,17 @@ impl Adopter {
             return Ok(());
         }
 
-        println!("\nAdopted {} package(s).", found.adopt.len());
+        println!("\nAdopted {} declaration(s).", found.adopt.len());
         println!("{:-<64}", "");
         println!("Manifest:  {}", manifest_path.display());
         print_left_alone(&found.skipped);
         println!("{:-<64}", "");
         println!("This list is an ESTIMATE of what you chose to install — read it.");
-        println!("Deleting a line UNINSTALLS that package on the next sync.");
-        println!("To stop managing one without uninstalling: linix unmanage <backend>:<name>");
+        println!("Deleting a line UNDOES it on the next sync: a package is uninstalled,");
+        println!("a service is stopped and disabled.");
+        println!(
+            "To stop managing a package without uninstalling: linix unmanage <backend>:<name>"
+        );
 
         Ok(())
     }
@@ -412,21 +427,34 @@ impl Adopter {
     ///
     /// Asked through `statement::parse`, not a second copy of the naming rule: whatever the
     /// grammar accepts is exactly what may be written.
-    fn hold_back_what_cannot_be_written(found: &mut Discovery) {
+    fn hold_back_what_cannot_be_written(
+        found: &mut Discovery,
+        options: &HashMap<String, Vec<(String, String)>>,
+    ) {
+        use crate::config::grammar::Declared;
         let mut kept = Vec::with_capacity(found.adopt.len());
         for pkg in std::mem::take(&mut found.adopt) {
-            if crate::config::grammar::is_declarable(Some(&pkg.backend), &pkg.name) {
-                kept.push(pkg);
-            } else {
-                warn!(
-                    "`{}:{}` cannot be written as a package line.",
-                    pkg.backend, pkg.name
-                );
-                found.skipped.push(Skipped {
-                    package: pkg,
-                    reason: "its manager reports a name no package line can hold".to_string(),
-                });
-            }
+            // A resource is adopted like a package, because it is the same offer: a line you
+            // can read, keep or delete. It was held back for a whole release with the reason
+            // "a name no package line can hold" — a sentence that was false of all 155 of
+            // them, and that only sounded like a policy because it was a parser answer.
+            let reason = match Self::declared_for(options, &pkg) {
+                Declared::Package(_) | Declared::Resource(_) => {
+                    kept.push(pkg);
+                    continue;
+                }
+                Declared::Nothing => {
+                    warn!(
+                        "`{}:{}` cannot be written as a line.",
+                        pkg.backend, pkg.name
+                    );
+                    "its manager reports a name no line can hold".to_string()
+                }
+            };
+            found.skipped.push(Skipped {
+                package: pkg,
+                reason,
+            });
         }
         found.adopt = kept;
         found.skipped.sort_by(|a, b| {
@@ -434,7 +462,38 @@ impl Adopter {
         });
     }
 
-    fn render_manifest(&self, found: &Discovery) -> String {
+    /// Each backend's `adoption_options`, by backend name. Asked once: it is a constant per
+    /// backend, and the crawl calls it for every candidate.
+    fn adoption_options(&self) -> HashMap<String, Vec<(String, String)>> {
+        self.registry
+            .available()
+            .iter()
+            .filter_map(|b| {
+                let opts = b.as_queryable()?.adoption_options();
+                (!opts.is_empty()).then(|| (b.name().to_string(), opts))
+            })
+            .collect()
+    }
+
+    /// What the grammar makes of this candidate, asked with the options its backend needs
+    /// written beside it. One call decides both whether it can be declared and how.
+    fn declared_for(
+        options: &HashMap<String, Vec<(String, String)>>,
+        pkg: &Package,
+    ) -> crate::config::grammar::Declared {
+        let owned = options.get(&pkg.backend).map(Vec::as_slice).unwrap_or(&[]);
+        let refs: Vec<(&str, &str)> = owned
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        crate::config::grammar::declared_as(Some(&pkg.backend), &pkg.name, &refs)
+    }
+
+    fn render_manifest(
+        &self,
+        found: &Discovery,
+        options: &HashMap<String, Vec<(String, String)>>,
+    ) -> String {
         let mut out = String::new();
 
         out.push_str(&format!(
@@ -446,6 +505,11 @@ impl Adopter {
 #   install, as opposed to packages that were pulled in automatically to satisfy
 #   something else. Their answers are below.
 #
+#   Not every line is a package. A `service:` line is a running service, and it
+#   carries the state it was found in: `@status=running` means keep it running,
+#   and says nothing about whether it starts at boot. That is deliberate — the
+#   init was asked which services are running, not how they are configured.
+#
 # THIS IS AN ESTIMATE
 #   Managers vary in how well they track that difference, and some cannot track it
 #   at all. This list may name things you never asked for, and may miss things you
@@ -453,9 +517,10 @@ impl Adopter {
 #   can run the command yourself and disagree.
 #
 # WHAT HAPPENS NEXT
-#   LiNix now manages every package on an uncommented line below.
-#   Deleting a line UNINSTALLS that package on the next sync.
-#   To stop managing one WITHOUT uninstalling it:
+#   LiNix now manages everything on an uncommented line below.
+#   Deleting a line UNDOES it on the next sync: a package is UNINSTALLED, and a
+#   service is STOPPED AND DISABLED.
+#   To stop managing a package WITHOUT uninstalling it:
 #       linix unmanage <backend>:<name>
 #
 ",
@@ -473,7 +538,17 @@ impl Adopter {
         }
         out.push('\n');
         for pkg in &found.adopt {
-            out.push_str(&format!("{}:{}\n", pkg.backend, pkg.name));
+            // The grammar spells the line, so a name that needed quoting is written quoted and
+            // a service carries the state it was found in.
+            // `hold_back_what_cannot_be_written` has already dropped anything this cannot
+            // render, so the fallback is unreachable — and it is the unquoted form rather than
+            // a panic, because a manifest missing one line is recoverable and a crash in the
+            // middle of writing one is not.
+            match Self::declared_for(options, pkg).line() {
+                Some(line) => out.push_str(line),
+                None => out.push_str(&format!("{}:{}", pkg.backend, pkg.name)),
+            }
+            out.push('\n');
         }
 
         if !found.skipped.is_empty() {
@@ -799,10 +874,10 @@ mod tests {
             Arc::new(Mutex::new(StateRegistry::default())),
             &Config::default(),
         );
-        let text = m.render_manifest(&m.discover().await.unwrap());
+        let text = m.render_manifest(&m.discover().await.unwrap(), &m.adoption_options());
 
         assert!(text.contains("THIS IS AN ESTIMATE"), "{}", text);
-        assert!(text.contains("UNINSTALLS"), "{}", text);
+        assert!(text.contains("UNINSTALLED"), "{}", text);
         assert!(text.contains("linix unmanage"), "{}", text);
         // The source of the estimate, so a reader can reproduce it.
         assert!(text.contains("apt-mark showmanual"), "{}", text);
@@ -820,26 +895,86 @@ mod tests {
         // model, one such name wedged the whole config until it was hand-edited. Found by
         // the live Windows sweep, where `rollback` died on adopted.txt:69.
 
+        // **Y7 moved the boundary.** A name with a space is written quoted now, so the ARP row
+        // that once wedged the config is adopted rather than held back. What is still beyond a
+        // line is a name carrying a quote — one line cannot express it, and this is the case
+        // that keeps the hold-back alive.
+        // A resource is adopted like a package now (ruled 2026-08-03): the whole family, so a
+        // `link:` or `setting:` cannot quietly keep the old behaviour after `service:` lost it.
+        let options = HashMap::from([(
+            "service".to_string(),
+            vec![("status".to_string(), "running".to_string())],
+        )]);
         let mut found = Discovery {
             adopt: vec![
                 Package::new("7zip.7zip", "winget"),
                 Package::new(r"ARP\Machine\X64\Android Studio", "winget"),
+                Package::new("Some \"Quoted\" Program", "winget"),
+                Package::new("AppMgmt", "service"),
+                Package::new("/home/u/.vimrc", "link"),
             ],
             ..Default::default()
         };
-        Adopter::hold_back_what_cannot_be_written(&mut found);
+        Adopter::hold_back_what_cannot_be_written(&mut found, &options);
 
-        assert_eq!(found.adopt.len(), 1, "only the writable name is adopted");
-        assert_eq!(found.adopt[0].name, "7zip.7zip");
+        assert_eq!(found.adopt.len(), 4, "every writable name is adopted");
+        for adopted in [
+            "7zip.7zip",
+            r"ARP\Machine\X64\Android Studio",
+            "AppMgmt",
+            "/home/u/.vimrc",
+        ] {
+            assert!(
+                found.adopt.iter().any(|p| p.name == adopted),
+                "`{adopted}` can be written, so it is a line and not a comment"
+            );
+        }
         assert_eq!(
             found.skipped.len(),
             1,
-            "and the other is reported, not dropped"
+            "and what could not be taken is reported, not dropped"
         );
         assert!(
-            found.skipped[0].package.name.contains("Android Studio"),
-            "the manifest has to name what it could not take"
+            found.skipped[0].reason.contains("no line can hold"),
+            "the manifest has to name what it could not take: {}",
+            found.skipped[0].reason
         );
+    }
+
+    #[test]
+    fn a_service_is_declared_as_the_state_it_was_found_in() {
+        // A bare `service:AppMgmt` means enable AND start, and enabling on Windows rewrites the
+        // start type to automatic. The init only reports RUNNING services, so that is the only
+        // half that was observed — adopting the other half would reconfigure boot on the first
+        // sync after a command whose promise is to describe the machine as it already is.
+        let options = HashMap::from([(
+            "service".to_string(),
+            vec![("status".to_string(), "running".to_string())],
+        )]);
+        let found = Discovery {
+            adopt: vec![
+                Package::new("AppMgmt", "service"),
+                Package::new("jq", "apt"),
+            ],
+            ..Default::default()
+        };
+        let m = Adopter::new(
+            Arc::new(BackendRegistry::default()),
+            Arc::new(Mutex::new(StateRegistry::default())),
+            &Config::default(),
+        );
+        let text = m.render_manifest(&found, &options);
+
+        assert!(
+            text.contains("\nservice:AppMgmt@status=running\n"),
+            "the observed state, and only the observed state:\n{text}"
+        );
+        assert!(
+            !text.contains("enabled="),
+            "the start type was never looked at, so no line may claim it:\n{text}"
+        );
+        // A package carries no options, because its name already said everything the listing did.
+        assert!(text.contains("\napt:jq\n"), "{text}");
     }
 
     #[tokio::test]
@@ -877,7 +1012,7 @@ mod tests {
             Arc::new(Mutex::new(StateRegistry::default())),
             &Config::default(),
         );
-        let text = m.render_manifest(&m.discover().await.unwrap());
+        let text = m.render_manifest(&m.discover().await.unwrap(), &m.adoption_options());
 
         assert!(text.contains("\napt:jq\n"), "jq is a live line:\n{}", text);
         assert!(

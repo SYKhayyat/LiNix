@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 /// Where the repo is, and which of the four sources said so.
 pub fn locate(flag: Option<&Path>) -> Result<ResolvedRoot> {
-    Ok(resolve_root(flag, &Settings::load()?))
+    resolve_root(flag, &Settings::load()?)
 }
 
 /// Plain output is exactly one line — the directory — so `cd $(linix path)` works. Anything
@@ -34,15 +34,9 @@ pub fn render_path(resolved: &ResolvedRoot, explain: bool) -> String {
 ///
 /// The settings file, and whether it was written — a preview names it and leaves it alone.
 pub fn set_root(dir: &Path) -> Result<(PathBuf, bool)> {
-    if !dir.is_absolute() {
-        return Err(Error::Config(format!(
-            "`{}` is not an absolute path.\n  A relative path would mean a different \
-             directory depending on where you ran LiNix from.",
-            dir.display()
-        )));
-    }
+    let dir = crate::config::settings::absolute_or_refuse(dir.to_path_buf(), "`linix path --set`")?;
     let mut settings = Settings::load()?;
-    settings.config_root = Some(dir.to_path_buf());
+    settings.config_root = Some(dir);
     let stored = settings.save()?;
     Ok((Settings::path(), stored))
 }

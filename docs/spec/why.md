@@ -2546,3 +2546,295 @@ third of three. And the write-ahead journal is `journal.jsonl`, one JSON value p
 to re-serialise the whole map, pretty printed, through a temp file and a rename, on **every**
 state change — O(n²) bytes in the number of actions, under the one mutex every concurrent DAG
 worker has to take. The more parallel the graph became, the more that cost.)*
+
+**V.119 — Why LiNix reports its own breakdown.** *(Owner ruling, 2026-08-03 — `Y5`. Rule in
+II.19.)*
+
+`latency.rs` measured the total and warned when a class crossed its budget. That is enough to
+*notice* a 98-second `info` (E14) and not enough to *act* on one, because the next question is
+always which manager took the time — and LiNix could not answer it. The only method available
+was to run each manager by hand outside LiNix, time it, and subtract, which is how an afternoon
+was spent establishing that a 3.2-second `list` is 2.35 seconds of `winget list` plus 0.8
+seconds of everything else. `-vv` printed a running commentary with no durations in it.
+
+**The ratio is the finding, not the list.** Every other rule in II.19 is a claim about
+overlapping other people's processes, and none of them was checkable from outside. `list`
+measured on this Windows box: **19.52s of child time inside a 3.15s wall clock — 6.2×**, with
+`winget list` at 2.35s the floor. That single line says the parallelism is real, says what the
+floor is, and says the floor belongs to Microsoft rather than to LiNix. A breakdown printing
+only a sorted list of durations would show the same seconds and settle none of it.
+
+It is off unless asked for, because a measurement nobody requested is precisely the eager work
+this round exists to delete; and it is on stderr, because `linix eval --timings | jq` must still
+get JSON.
+
+**Instrumented at the choke point** — `CommandExecutor::run_on`, which every manager invocation
+funnels through — rather than per verb. A measurement each verb has to remember to take is the
+shape `latency.rs` had already rejected for budgets, and it fails the same way: silently, in
+whichever verb was written last. The one automatic probe that spawns outside that choke point is
+instrumented at its own call site (`psresource`'s PowerShell cmdlet check), because a probe pass
+that cost more than every command inside it would be the first thing a reader disbelieved.
+
+**Interactive children are deliberately absent.** `linix shell`, the history pager, `bisect`'s
+test command and `setup`'s installer are the user's own program running in the foreground; how
+long somebody sat in their shell is not a fact about LiNix, and a row claiming otherwise would
+make the sum meaningless.
+
+**V.120a — And why it only answers a command that just reports.** *(Rule in II.19.)*
+
+A cached listing may inform a report; it may never source a decision that outlives the run. The
+whole bargain of `installed_cache_secs` is that a stale answer costs you a stale *reading*, and
+the next run corrects it. That bargain stops holding the moment the answer is written down: a
+plan built from a listing taken before the user removed something by hand skips the install and
+reports success — a declared package left absent with nothing saying so; `adopt` writes a
+declaration for a package that is no longer there, and the next `sync` installs it back;
+`plan` freezes that same mistake into a file `apply` runs later. So the disk layer serves
+`list`, `search`, `check`, `outdated`, `info` and `why`, and nothing else. It is an allowlist
+rather than a list of the unsafe ones, because the next command added to LiNix should have to
+say it is a reader — not discover that it was assumed to be one.
+
+**V.120 — Why the cache is optional, and off.** *(Owner ruling, 2026-08-03 — `Y6`. Rule in
+II.19.)*
+
+`Y1`–`Y5` removed every question LiNix asks twice and overlapped what was left. Measured with
+`--timings` on this Windows box: `linix list` is **19.5 s of manager work inside a 3.2 s wall
+clock, 6.2×**, and the slowest child is `winget list` at 2.35 s. There is nothing left to
+overlap — the floor is a Microsoft binary. The only remaining way to go faster is **not to ask**,
+and the next `linix list` asks all 24 managers the same question about a machine that, in the
+ordinary case, nothing has touched since. With the cache on: **3.99 s → 0.68 s**, 24 child
+commands down to one.
+
+**So why is it off?** Because every other rule in II.19 buys speed with concurrency, and this one
+buys it with correctness. A stale listing makes LiNix wrong about the machine, and being wrong
+about the machine is precisely how a declarative tool removes something it should not have.
+`I-4` had already deleted a TTL'd cache once and recorded the right reason — process-lifetime is
+the correct semantics for a one-shot CLI. That reasoning is still right *as a default*; what it
+is not is a reason nobody may ever choose otherwise on a machine they know.
+
+The bound on how wrong it can be is stated rather than hoped for. LiNix drops the cache itself
+on every mutation — in memory **and on disk**, because clearing the memo while the file survives
+means the very next question re-reads the pre-mutation answer, which is the same
+invalidation-on-one-of-two-doors shape this repo has now found three times. So it can only go
+stale behind LiNix's back: a `winget install` typed by hand, bounded by the TTL, bypassable with
+`--no-cache`, and forgettable with `clean-cache`.
+
+*(Two smaller properties, both load-bearing. A listing is written through a temp file and
+renamed, because a half-flushed one read back is a **shorter** machine and a shorter machine is
+a list of things to remove. And every read failure — corrupt, unreadable, a clock that moved
+backwards — is a miss that asks the manager, never an error and never an empty machine.)*
+
+**V.121 — Why a package name may be quoted.** *(Owner ruling, 2026-08-03 — `Y7`. Rule in
+II.19.)*
+
+V.113 says a name a manager reports has to be a name that manager can be given back. `winget
+list` reports `ARP\Machine\X64\Mozilla Firefox`; `winget install` takes it; LiNix could not
+write it, because *a package name is one word*. `adopt` held such rows back and said so
+honestly, and the honesty did not make the name declarable.
+
+**The measurement corrected the diagnosis twice, and both corrections matter.** The backslashes
+were never the problem — `2c51968` had already taught the grammar and the validator about them,
+so `winget:ARP\Machine\X64\AndroidStudio` parsed all along. On this machine the undeclarable
+names were **161: six winget names, every one containing a space, and 155 `service:` names that
+are not a package-line question at all.** `GRADE-2026-07-31.md` §5 G-2 describes 185 backslash
+names as unwritable; that defect is closed, and the number was re-cited afterwards without being
+re-run. This is the second time in two rounds that a *count* outlived the bug it counted.
+
+**Quoting rather than "everything after the colon".** The one-word rule is what makes II.2's
+*an unrecognised line is an error* true: without it, VI.1's "any typo becomes a package named
+after itself" comes straight back, and `@` stops working as the option separator on the most
+common line in the language. Prose is not quoted. So `apt:this is just prose` is still an error,
+`winget:"Mozilla Firefox"` is a name, and the two are told apart by something the user typed on
+purpose rather than by a heuristic.
+
+**One function spells the line.** `is_declarable` round-tripped `backend:name` while `adopt`
+rendered `backend:name` by hand — the same question in two places. The day the grammar learned
+to quote, the check would have said *yes, writable* and the writer would still have emitted the
+unquoted form: a manifest that does not parse, produced by the command whose entire job is to
+produce one that does. That is `2c51968`'s bug with the arrows reversed, and it is closed by
+making the check ask the writer rather than by keeping the two in step.
+
+**The lie is fixed; the question under it was the owner's, and V.124 answers it.** 155 of those
+161 were `service:` lines, and `service:AppMgmt` parses perfectly. `is_declarable` accepted only
+`Statement::Package`, so every service failed a test about **package** lines and was reported as
+a name no line can hold — 155 sentences, none of them true of the name they described. The
+grammar now answers three ways instead of two (`Declared::Package` / `Resource` / `Nothing`).
+
+**V.124 — Why a service is adopted, and why nothing sweeps one.** *(Owner ruling, 2026-08-03 —
+`Y7a`. Rules in II.19.)*
+
+A `service:` line is not a package. It means *this service should be running*, and the two halves
+are `install → enable + start` and `remove → stop + disable`. So a manifest holding 155 service
+lines holds 155 triggers, and losing one in a bad merge disables a Windows service on the next
+sync. That is the argument that kept them commented out, and it is a real cost.
+
+**It is also the smaller cost, because the alternative was already worse.** `purge-unmanaged`
+does not read the manifest to find victims — it asks every manager what is installed and sweeps
+what the model does not name. The service backend answers with every running service, so all 155
+were already on that list. The only thing between the list and `sc stop` was `protection_of`'s
+opening question, *could a package line ever have held this name?*, which for `service:AppMgmt`
+is structurally no — a service line is not a package line. A refusal by coincidence, printing a
+sentence that was false. **Correcting that sentence, which was the obvious tidy-up and is exactly
+what a later reader would have done, would have handed the sweep every service on the machine.**
+Declaring them is what removes the exposure rather than papering over it: a declared service is
+managed, and `purge-unmanaged` only sweeps what is not. The refusal is still written down —
+V.124's second rule — because a service started *after* an adopt is unmanaged again, and that one
+must be refused on purpose rather than by luck.
+
+**The observed state, and not one bit more.** `actions_for(None, None)` is enable **and** start,
+and on Windows enable is `sc config NAME start= auto`. Plenty of running services are demand- or
+manual-started; a bare adopted line would have flipped every one of them to automatic-at-boot on
+the first sync after a command whose entire promise is to describe the machine as it already is.
+The init only ever reports *running* services — `sc query type= service` and systemd's
+`--state=running` — so `status=running` is what was seen and the start type was never looked at.
+`Queryable::adoption_options` is where a backend says what must be written beside a name for the
+declaration to mean what was observed; it is empty for a package, because `apt:jq` already says
+everything `apt` said.
+
+**Asked of the backend, not of the name.** The guard's resource test consults
+`Statement::RESOURCE_BACKENDS`, because a `setting:` is illegal as a line until it carries
+`@value=` — so round-tripping the name alone would call a perfectly writable setting a name no
+line can hold, which is the same false sentence one backend over. Two lists of the same three
+prefixes is how one of them silently stops being a resource, so a test checks the constant against
+`Statement::listed_as` in both directions.
+
+**What this leaves.** Deleting an adopted `service:` line still stops *and* disables, which is
+more than the inverse of a line that only declared `status=running`. That asymmetry predates this
+ruling — it is what `ServiceInstallable::remove` has always done to a hand-written line — and it
+is stated in the manifest header rather than quietly narrowed here.
+
+**V.122 — Why every manager the run will ask is asked at once.** *(Rule in II.19.)*
+
+`check drift` on a 298-package config took 9.1 s to do 2.3 s of critical path, and the reason
+was not that anything was slow. Nine managers — gem, pip, emacs, luarocks, dotnet, dart, nimble,
+bun, service — **started 5.4 seconds into the run**, and the run was idle for the second before
+they did. Nothing had asked them yet. Two separate faults, both of the same shape:
+
+- **The report asks each manager when its section needs it.** `check` plans drift, then crawls
+  for unmanaged packages, then probes health. The crawl wants every manager on the machine and
+  the plan wants nine, so fifteen managers waited out a plan that had no question for them —
+  and every one of them was going to be asked before the command could finish.
+- **The plan's fan-out is over *specs*, not managers.** A spec's answer usually comes from its
+  manager's whole listing, so 256 winget declarations put 256 futures into a queue
+  `max_parallel` slots wide, all waiting on one `winget list`, while scoop, choco and cargo sat
+  unasked for want of a slot. Measured: three managers at 0.3 s, the other six at 1.9 s.
+
+**A concurrency budget spent on duplicate questions is a budget spent on nothing.** Both fixes
+are the same sentence — ask each manager once, at the start, for what the run is going to ask it
+anyway — and neither adds a question: the memo already collapsed the duplicates, so what changed
+is *when*, not *how many*. Measured after: every listing starts within 0.26 s of the first, wall
+clock 9.13 s → 3.9 s, overlap 2.7× → 5.4×, and the report is identical line for line.
+
+**Only for commands that already ask everyone.** `App::warm_installed` is called by name at the
+two call sites that crawl the whole machine, never from `App::new`. A command that consults three
+managers must not be made to wake twenty-four; that would be this same cost, moved to a different
+run and charged to a user who asked for less.
+
+**V.123 — Why the registry comes out in a predictable order.** *(Rule in II.19.)*
+
+The backend registry was a `HashMap`, and Rust randomises hash iteration per process. So
+`available()` and `all()` returned the managers in a different sequence on every run, and
+everything downstream that walks them called the result an order:
+
+- two `linix list` runs a second apart differed by **530 lines** and sorted to the same file, so
+  the one thing a listing promises — that you can compare it to yesterday's — did not hold;
+- the fan-outs handed their first slots to whichever managers the seed named first, so no timing
+  measurement was reproducible and every wave was a different wave;
+- anything taking the *first* backend that can answer was tossing a coin.
+
+A map keyed by a name people read should come out in an order people can predict. It is a
+`BTreeMap` now: alphabetical, stable, and asserted against a sorted copy rather than a recorded
+list, so the test says *in an order somebody can predict* rather than pinning today's backends.
+
+---
+
+**V.125 — Why every answer to "where is the repo" must be absolute, and refused if it is not.**
+*(Rule in II.1.)*
+
+`linix --config-dir ./sandbox init` read `preferences.toml` **from the sandbox** and `modules/`,
+`profiles/`, `active` and `priority` **from the real repo**. Not a race and not a subtle
+ordering: `main.rs` set `config_root` to the raw flag, and `Config::config_root()` — the accessor
+`Layout` is built from — discarded any path that was not absolute and fell back to
+`safe_config_dir()`, which re-reads `$LINIX_CONFIG_DIR`.
+
+So the flag that `--help` says *"outranks `$LINIX_CONFIG_DIR`"* **lost to it**, silently, and
+`linix path` printed `./sandbox` while `linix init` scaffolded into the real platform config
+directory. An inspector contradicting the enforcer is worse than no inspector, because it is
+believed — `guard.rs:108` says exactly that about a different pair, and here it was the same
+defect one door over.
+
+**The fix already existed and was installed at one door out of four.** `linix path --set ./cfg`
+had refused a relative path since it was written, with a message explaining why one is wrong.
+`--config-dir`, `$LINIX_CONFIG_DIR` and `$LINIX_DATA_DIR` did not. One refusal function now, and
+a test per door — because the interesting question was never "is this door right?" but "how many
+doors are there?", and the answer was four when the code had been reviewed as though it were one.
+
+Refused rather than corrected: resolving a relative path against the current directory would make
+the same command mean different repos from different shells, which is the property that makes it
+wrong in the first place. Refused rather than *ignored*, which is what it was doing.
+
+**And why `--data-dir` exists at all.** Config had a first-class flag and state had an
+undocumented environment variable, so `--config-dir <fresh sandbox> plan` planned **seven
+removals** against the real machine's managed state and no flag could stop it. An isolation
+affordance that isolates half a run is a trap rather than a feature: it is exactly convincing
+enough to be used.
+
+---
+
+**V.125a — Why a plan that drops something names it.** *(Rule in II.10.)*
+
+With `[guard] protected_packages = ["hello"]` and `hello` managed but declared nowhere:
+`uninstall` deleted the manifest line and printed `already up to date`; `sync` printed
+`already up to date`; `check` reported `the machine matches your files`. All three were false, all
+three exited 0, and the state they left is **permanently wedged** — the manifest does not declare
+it, the machine has it, the registry manages it, and every later `sync` drops it again for the
+same silent reason. No command reported the disagreement.
+
+The planner's protection check was a `debug!` and a `continue`, invisible at default verbosity.
+
+**This repo had already written the rule down, about the identical situation.** From the entry
+above on `rebuild`: *"The skips are printed: a rebuild that silently dropped half its scope would
+report success over a machine it never repaired, which is the same lie convergence was already
+telling."* `rebuild.rs` implements it and has a test called
+`a_protected_package_is_dropped_and_reported`. The convergence path — the one that clause was
+*about* — never received it.
+
+**Dropped, not refused, and that half was right.** Making a protected drift removal a hard
+refusal would mean one protected package undeclared on a machine stops every sync on it forever.
+The defect was never the drop; it was that a user could not find out about it.
+
+**One user-facing concept behaved three ways** before this: a config rule was a silent skip, an
+OS-essential flag reached `guard::enforce` and became a loud refusal with a good message, and
+only `linix protected` was correct. The skip now carries `Protection::reason()` — the guard's own
+sentence — so the inspector, the refusal and the plan say the same thing about the same package.
+
+The second drop site got the same treatment, and it is the reason this is a rule rather than a
+patch: a managed package whose backend has left `priority` is also left alone, also correctly,
+and was also silent.
+
+---
+
+**V.126 — Why nothing expensive is built at registration.** *(Rule in II.19.)*
+
+`linix path` took **272 ms** against a 61 ms process-spawn baseline on the same host, and
+`--timings` said `no child commands — this run asked no package manager anything`. All of it was
+fixed overhead: **200.4 ms** of it was one `quanta::Clock` calibrating the TSC, once, inside a
+`governor::RateLimiter` that `GithubBackendCore::new` built in its constructor — for a GitHub API
+rate limit that an offline run, or a run with `github` absent from `priority`, never spends.
+
+`create_default_registry` runs for every subcommand. So does every backend constructor in it.
+
+**Two neighbours in the same directory already did it correctly**: `web.rs` and `appimage.rs`
+build their HTTP clients inside the function that downloads, and their registrations measure
+2.1 us and 5.9 us. `github.rs` was the odd one out, twice over — the rate limiter and the client
+both. The fix is `OnceLock` on the type itself rather than on the call site, so the sibling in
+`vscode.rs` could not be missed and a third caller cannot reintroduce it.
+
+The clock went further than laziness: `governor` is built without its `quanta` feature, so the
+calibration is not deferred but *gone* — the fastest quota here is 80 requests **per minute**, and
+`std::time::Instant` resolves to nanoseconds.
+
+**Why it survived every gate.** `latency.rs` budgets a whole command in *seconds*, which a fifth
+of a second never crosses; every other instrument measures child processes, and this run spawned
+none. The part of a run that asks nobody anything was the one part nothing measured. It has a
+budget now, and the budget is what the rule is: the registry, for all 48 backends, in 120 ms.
+

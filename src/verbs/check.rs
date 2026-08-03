@@ -136,6 +136,11 @@ async fn probe_all_health(app: &App) -> Vec<(String, linix::core::HealthReport)>
 pub(crate) async fn check_summary(app: &App, json: bool) -> Result<()> {
     use linix::app::check::{Finding, Section};
 
+    // The unmanaged section crawls every manager, so this run asks all of them whatever
+    // happens; asking them together is what keeps the ones only that section wants from
+    // waiting out the drift plan first (`App::warm_installed`).
+    app.warm_installed().await;
+
     let mut findings: Vec<Finding> = Vec::new();
 
     // config — does everything the active profiles reach resolve?
@@ -177,6 +182,24 @@ pub(crate) async fn check_summary(app: &App, json: bool) -> Result<()> {
         // disk — and again after one LiNix had placed was deleted behind its back.
         let resources = app.extras().changes(state).await;
         match (changes, resources) {
+            // A skip is drift the planner declined to act on, so it belongs here and not in a
+            // clean bill of health: `check` reported `the machine matches your files` about a
+            // machine holding a managed, undeclared, protected package (AU1). The command
+            // named is the one that explains the decision, because `sync` is precisely the
+            // command that will not act on it.
+            (Ok(c), Ok(_)) if !c.skipped.is_empty() => findings.push(Finding::attention(
+                Section::Drift,
+                format!(
+                    "{} package(s) installed and declared nowhere that `sync` will not remove: {}",
+                    c.skipped.len(),
+                    c.skipped
+                        .iter()
+                        .map(|s| format!("{} ({})", s.key, s.reason))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                ),
+                "linix protected",
+            )),
             (Ok(c), Ok(r)) if c.is_empty() && r.is_empty() => {
                 findings.push(Finding::ok(
                     Section::Drift,

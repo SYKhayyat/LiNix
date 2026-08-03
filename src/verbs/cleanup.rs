@@ -130,10 +130,21 @@ pub(crate) fn confirm_orphan_removal(app: &App) -> Result<bool> {
 pub(crate) async fn handle_clean_cache(app: &App, all: bool) -> Result<()> {
     if app.config.dry_run {
         println!("[DRY-RUN] Would clear the package cache for every backend that has one.");
+        println!("[DRY-RUN] Would forget the installed listings LiNix has cached.");
         if all {
             println!("[DRY-RUN] Would also clear LiNix's own download cache.");
         }
         return Ok(());
+    }
+
+    // The listings go first, and unconditionally. This is the command a user reaches for when
+    // something outside LiNix changed the machine and they know it before `installed_cache_secs`
+    // does — so it must work even on a machine where the cache is turned off, since the files
+    // could have been written by a run that had it on.
+    match linix::core::installed::InstalledListings::forget_on_disk() {
+        Ok(0) => {}
+        Ok(n) => println!("Forgot {} cached installed listing(s).", n),
+        Err(e) => warn!("could not clear the installed-listing cache: {}", e),
     }
     // Independent per manager — each clears its own cache directory and they contend for
     // nothing. `run_exclusive` still serialises anything that shares a manager lock.
@@ -564,8 +575,12 @@ pub(crate) async fn handle_protected(app: &App, packages: &[String], json: bool)
                     .0
             })
             .collect();
-        let all_essential =
-            linix::app::sync::guard::essential_names(&app.registry, &named_backends).await;
+        let all_essential = linix::app::sync::guard::essential_names(
+            &app.registry,
+            &named_backends,
+            app.config.max_parallel,
+        )
+        .await;
 
         let mut rows = Vec::new();
         for spec in packages {

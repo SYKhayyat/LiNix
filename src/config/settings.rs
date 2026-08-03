@@ -107,20 +107,10 @@ impl Settings {
                         path.display()
                     ))
                 })?;
-                let candidate = PathBuf::from(raw);
-                // A relative root would resolve against whatever directory the user happened
-                // to be standing in, which is a different repo per invocation.
-                if !candidate.is_absolute() {
-                    return Err(Error::Config(format!(
-                        "`{} = \"{}\"` in {} is not an absolute path.\n  A relative path \
-                         would mean a different directory depending on where you ran LiNix \
-                         from.",
-                        ONLY_KEY,
-                        raw,
-                        path.display()
-                    )));
-                }
-                Some(candidate)
+                Some(absolute_or_refuse(
+                    PathBuf::from(raw),
+                    &format!("`{}` in {}", ONLY_KEY, path.display()),
+                )?)
             }
         };
 
@@ -134,33 +124,56 @@ impl Settings {
     }
 }
 
+/// The one refusal, so every door that names a directory says the same sentence.
+///
+/// It said it in one place — `linix path --set` — and the other three doors said nothing, which
+/// is how `--config-dir ./sandbox` came to read `preferences.toml` from the sandbox and
+/// `modules/` from the real repo (AU2). `source` names the door, because "which of these four
+/// did I get wrong" is the next question after "one of them is relative".
+pub fn absolute_or_refuse(path: PathBuf, source: &str) -> Result<PathBuf> {
+    if !path.is_absolute() {
+        return Err(Error::Config(format!(
+            "{} is `{}`, which is not an absolute path.\n  A relative path would mean a \
+             different directory depending on where you ran LiNix from.",
+            source,
+            path.display()
+        )));
+    }
+    Ok(path)
+}
+
 /// Command line beats environment beats stored beats default.
 ///
 /// `flag` is `--config-dir`. The environment variable is read here rather than by the caller
 /// so that every path answering "where is the repo" answers it the same way.
-pub fn resolve_root(flag: Option<&Path>, settings: &Settings) -> ResolvedRoot {
+///
+/// **Fallible, because a relative answer is refused rather than replaced.** Discarding it and
+/// carrying on is what inverted the documented precedence: the flag was dropped downstream and
+/// `$LINIX_CONFIG_DIR` — which `--help` says the flag outranks — was picked back up in its
+/// place, silently, by the fallback.
+pub fn resolve_root(flag: Option<&Path>, settings: &Settings) -> Result<ResolvedRoot> {
     if let Some(path) = flag {
-        return ResolvedRoot {
-            path: path.to_path_buf(),
+        return Ok(ResolvedRoot {
+            path: absolute_or_refuse(path.to_path_buf(), "`--config-dir`")?,
             source: RootSource::Flag,
-        };
+        });
     }
     if let Some(dir) = std::env::var_os("LINIX_CONFIG_DIR").filter(|v| !v.is_empty()) {
-        return ResolvedRoot {
-            path: PathBuf::from(dir),
+        return Ok(ResolvedRoot {
+            path: absolute_or_refuse(PathBuf::from(dir), "`$LINIX_CONFIG_DIR`")?,
             source: RootSource::Environment,
-        };
+        });
     }
     if let Some(stored) = &settings.config_root {
-        return ResolvedRoot {
+        return Ok(ResolvedRoot {
             path: stored.clone(),
             source: RootSource::SettingsFile,
-        };
+        });
     }
-    ResolvedRoot {
+    Ok(ResolvedRoot {
         path: crate::utils::safe_config_dir(),
         source: RootSource::Default,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -245,7 +258,7 @@ mod tests {
             config_root: Some(at(&absolute("stored"))),
         };
         let flagged = at(&absolute("flagged"));
-        let resolved = resolve_root(Some(&flagged), &settings);
+        let resolved = resolve_root(Some(&flagged), &settings).unwrap();
         assert_eq!(resolved.path, flagged);
         assert_eq!(resolved.source, RootSource::Flag);
     }
@@ -256,14 +269,14 @@ mod tests {
         let settings = Settings {
             config_root: Some(stored.clone()),
         };
-        let resolved = resolve_root(None, &settings);
+        let resolved = resolve_root(None, &settings).unwrap();
         assert_eq!(resolved.path, stored);
         assert_eq!(resolved.source, RootSource::SettingsFile);
     }
 
     #[test]
     fn with_nothing_set_the_source_is_the_default() {
-        let resolved = resolve_root(None, &Settings::default());
+        let resolved = resolve_root(None, &Settings::default()).unwrap();
         assert_eq!(resolved.source, RootSource::Default);
     }
 
