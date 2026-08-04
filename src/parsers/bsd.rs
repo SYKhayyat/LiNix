@@ -7,7 +7,7 @@
 //! the wrong prefix on the packages.
 
 use crate::core::Package;
-use crate::parsers::utils::sanitize;
+use crate::utils::text::sanitize;
 
 /// Split a `name-version` token into `(name, version)`. `None` when no dash is followed by a
 /// digit (a line with no version, e.g. a legend line).

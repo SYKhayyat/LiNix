@@ -1,3 +1,4 @@
+use crate::core::LockFile;
 use crate::app::vocab::Vocab;
 use crate::backends::BackendRegistry;
 use crate::config::grammar::{statement, Candidates, Gates, GrammarError, Origin, Statement};
@@ -611,7 +612,7 @@ impl<'a> StateResolver<'a> {
             // Parse the output through the ONE grammar parser, so a generated line is a line —
             // same statements, same errors, same downstream treatment. Origins name the
             // generator, so `eval`/`why` can say a declaration came from one.
-            let out = String::from_utf8_lossy(&output.stdout);
+            let out = crate::utils::text::sanitize(&String::from_utf8_lossy(&output.stdout));
             let synthetic = std::path::PathBuf::from(format!("generate:{}", cmd));
             let doc = crate::config::grammar::parse_document(&synthetic, &out, known)?;
             for (s, o, own) in doc.statements_with_gating(facts)? {
@@ -1546,6 +1547,8 @@ mod tests {
                 needs_root: false,
                 is_exclusive: false,
                 install_source_option: None,
+                extra_probes: None,
+                upgrade_reinstalls_each: false,
                 flag_map: Map::new(),
             };
             let core = Arc::new(GenericBackendCore {

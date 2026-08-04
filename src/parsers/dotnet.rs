@@ -6,7 +6,7 @@
 //! never contain spaces, so whitespace splitting is safe here.
 
 use crate::core::Package;
-use crate::parsers::utils::sanitize;
+use crate::utils::text::sanitize;
 
 fn parse_tool_table(output: &str) -> Vec<Package> {
     sanitize(output)

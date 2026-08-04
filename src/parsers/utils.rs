@@ -1,26 +1,6 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-static ANSI_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"[\u001b\u009b]\[[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]")
-        .unwrap()
-});
-
-/// Collapses CRLF only; a lone `\r` (winget's progress spinner) survives and must be
-/// handled by the caller.
-///
-/// Runs on every command's output. The common case on Linux is text with no escapes and no
-/// CRLF, where this still allocated three `String`s — one for `replace_all`, one for
-/// `replace`, one for `trim().to_string()`. That case allocates one now, and only because the
-/// signature promises an owned value.
-pub fn sanitize(input: &str) -> String {
-    let cleaned = ANSI_REGEX.replace_all(input, "");
-    match cleaned {
-        std::borrow::Cow::Borrowed(s) if !s.contains("\r\n") => s.trim().to_string(),
-        other => other.replace("\r\n", "\n").trim().to_string(),
-    }
-}
-
 /// Quoted runs stay one token: Windows managers emit names/versions containing spaces
 /// ("7.3.4 (x64)"), which bare whitespace splitting would tear into separate columns.
 pub fn split_columns(line: &str) -> Vec<String> {
@@ -59,12 +39,6 @@ pub fn extract_version_bracketed(input: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_sanitize_ansi() {
-        let input = "\u{1b}[32mSuccessfully installed\u{1b}[0m package-1.2.3\r\n";
-        assert_eq!(sanitize(input), "Successfully installed package-1.2.3");
-    }
 
     #[test]
     fn test_split_columns_quoted() {

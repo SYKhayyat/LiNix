@@ -56,10 +56,19 @@ point is why this paragraph was wrong for a week: it cited `cargo test --lib`, w
 the binary where S33 lived.
 
 **Build state is not readiness, and this file should stop implying it is.** The register is at
-zero unbuilt items; the *validation* surface is far narrower than the build surface. **52 backends
-are registered and exactly 22 have ever been run against a real package manager** — 7 per distro
-image, 18 in the `tools` image, `scoop` on the native Windows sweep, **45 plan-smoked** on any one
-image. Since 2026-07-26 `tools` and `gentoo` run nightly rather than on manual dispatch and
+zero unbuilt items; the *validation* surface is far narrower than the build surface. **62 backends
+exist across all platforms** and exactly 22 have ever been run against a real package manager — 7
+per distro image, 18 in the `tools` image, `scoop` on the native Windows sweep, **45 plan-smoked**
+on any one image.
+
+*"Registered" meant two things and three documents counted two different ones.* This file said 52
+while the grades said 48 (Windows) and 56 (Ubuntu), and no two agreed because the word did not
+mean the same thing twice: **62 backends are compiled into the build; how many *register* is
+host-dependent**, because `create_default_registry` gates the OS-native ones behind
+`cfg!(target_os = …)`. 48 on Windows and 56 on Ubuntu are both correct answers to the second
+question. The 62 is asserted against the code by
+`tests/backend_count_matches_the_spec_tests.rs` — a number in prose is a copy, and this one had
+been wrong long enough that nobody could say which of the three was stale. Since 2026-07-26 `tools` and `gentoo` run nightly rather than on manual dispatch and
 `fedora` joined the per-push matrix, so the widest run happens without anyone pressing a button —
 **but the count of backends that have ever run for real is unchanged.** macOS is compiled and
 unit-tested and has never been *run*; a nightly `macos-native` job now exists and has not yet gone

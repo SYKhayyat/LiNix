@@ -1,5 +1,5 @@
 use crate::core::Package;
-use crate::parsers::utils::sanitize;
+use crate::utils::text::sanitize;
 
 pub fn parse_installed(backend: &str, output: &str) -> Vec<Package> {
     match backend {

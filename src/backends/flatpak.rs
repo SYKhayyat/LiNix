@@ -2,7 +2,7 @@ use crate::core::{
     BackendCore, CommandExecutor, Installable, MetadataProvider, Package, PackageSpec, Queryable,
     Result, Searchable, Upgradable,
 };
-use crate::parsers::utils::sanitize;
+use crate::utils::text::sanitize;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;

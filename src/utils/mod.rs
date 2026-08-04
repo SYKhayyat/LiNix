@@ -3,6 +3,7 @@ pub mod file;
 pub mod progress;
 pub mod regex_cache;
 pub mod style;
+pub mod text;
 
 use std::path::PathBuf;
 

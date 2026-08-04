@@ -20,7 +20,7 @@
 //! (calling `verdict` before a hook runs and turning `Changed`/`New` into a refusal) is the
 //! caller's job — see `LuaHooks::verify_all_approved`.
 
-use crate::core::{Error, Result};
+use crate::core::ledger::LockFile;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -127,40 +127,14 @@ pub struct HookLedger {
     approvals: BTreeMap<String, String>,
 }
 
-impl HookLedger {
-    pub fn new() -> Self {
-        Self::default()
-    }
+impl LockFile for HookLedger {
+    const WHAT: &'static str = "the hook ledger";
+}
 
+impl HookLedger {
     /// The ledger's path under the repo's `locks/` directory (II.6).
     pub fn path_in(locks_dir: &Path) -> std::path::PathBuf {
         locks_dir.join("hooks.toml")
-    }
-
-    /// Load the ledger from `path`. A missing file is not an error — it means nothing has
-    /// been approved yet, which is the correct starting state (everything reads as `New`).
-    pub fn load(path: &Path) -> Result<Self> {
-        match std::fs::read_to_string(path) {
-            Ok(s) => toml::from_str(&s)
-                .map_err(|e| Error::Toml(format!("reading {}: {}", path.display(), e))),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::new()),
-            Err(e) => Err(Error::Io(format!("reading {}: {}", path.display(), e))),
-        }
-    }
-
-    /// Write the ledger to `path`, creating the `locks/` directory if needed.
-    /// Through `persist`, so a preview does not write an approval or a pin. `linix
-    /// --dry-run lock` used to leave `locks/versions.json` and `locks/hooks.toml` behind.
-    pub fn save(&self, path: &Path) -> Result<()> {
-        if !crate::core::dry_run::active() {
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir)
-                    .map_err(|e| Error::Io(format!("creating {}: {}", dir.display(), e)))?;
-            }
-        }
-        let body = toml::to_string_pretty(self)
-            .map_err(|e| Error::Toml(format!("serializing hook ledger: {}", e)))?;
-        crate::utils::file::persist(path, &body).map(|_| ())
     }
 
     /// The verdict for a hook whose script currently hashes to `current_hash`.

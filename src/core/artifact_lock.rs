@@ -14,10 +14,9 @@
 //! visible in `linix diff` and a re-download that differs is an error. It does not demand that
 //! the user pre-declare anything.
 
-use crate::core::{Error, Result};
+use crate::core::ledger::LockFile;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::Path;
 
 /// One resolved artifact. Every field is generated — nothing here is typed by a user.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -64,36 +63,11 @@ pub struct ArtifactLedger {
     entries: BTreeMap<String, Vec<ArtifactLock>>,
 }
 
+impl LockFile for ArtifactLedger {
+    const WHAT: &'static str = "the artifact ledger";
+}
+
 impl ArtifactLedger {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// A missing file means nothing has been locked yet — the correct starting state, and
-    /// never an error.
-    pub fn load(path: &Path) -> Result<Self> {
-        match std::fs::read_to_string(path) {
-            Ok(s) => toml::from_str(&s)
-                .map_err(|e| Error::Toml(format!("reading {}: {}", path.display(), e))),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::new()),
-            Err(e) => Err(Error::Io(format!("reading {}: {}", path.display(), e))),
-        }
-    }
-
-    /// Through `persist`, so a preview does not write an approval or a pin. `linix
-    /// --dry-run lock` used to leave `locks/versions.json` and `locks/hooks.toml` behind.
-    pub fn save(&self, path: &Path) -> Result<()> {
-        if !crate::core::dry_run::active() {
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir)
-                    .map_err(|e| Error::Io(format!("creating {}: {}", dir.display(), e)))?;
-            }
-        }
-        let body = toml::to_string_pretty(self)
-            .map_err(|e| Error::Toml(format!("serializing artifact ledger: {}", e)))?;
-        crate::utils::file::persist(path, &body).map(|_| ())
-    }
-
     /// What a declaration resolved to, in selection order. Empty when nothing is locked.
     pub fn locked(&self, name: &str) -> &[ArtifactLock] {
         self.entries.get(name).map(Vec::as_slice).unwrap_or(&[])

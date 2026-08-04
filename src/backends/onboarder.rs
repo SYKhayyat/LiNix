@@ -42,7 +42,7 @@ use crate::backends::generic::{
 };
 use crate::backends::BackendRegistry;
 use crate::core::{BackendCapabilities, CommandExecutor, Package};
-use crate::parsers::utils::sanitize;
+use crate::utils::text::sanitize;
 use crate::parsers::OutputParser;
 use serde::Deserialize;
 use serde_json::Value;
@@ -651,6 +651,8 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
         needs_root: def.needs_root,
         is_exclusive: def.is_exclusive,
         install_source_option: None,
+        extra_probes: None,
+        upgrade_reinstalls_each: false,
         flag_map: HashMap::new(),
     };
 
@@ -691,6 +693,7 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::LockFile;
 
     #[test]
     fn a_name_the_prefix_grammar_already_spends_is_refused() {
@@ -1115,6 +1118,7 @@ list_args = ["-Qm"]
     #[test]
     fn a_repo_definition_registers_once_it_is_approved() {
         use crate::core::hook_lock::{adapter_id, hash_script, HookLedger};
+    use crate::core::LockFile;
         let tmp = tempfile::tempdir().unwrap();
         let (_, exec) = mock_exec();
         write_repo(tmp.path(), PARU_TOML);
@@ -1191,6 +1195,7 @@ list_args = ["-Qm"]
 mod adapter_folder_tests {
     use super::*;
     use crate::core::hook_lock::{adapter_id, hash_script, HookLedger};
+    use crate::core::LockFile;
 
     const BACKENDS: &str =
         "[[backend]]\nname = \"paru\"\ninstall_args = [\"-S\"]\nlist_args = [\"-Qm\"]\n";

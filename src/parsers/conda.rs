@@ -5,7 +5,7 @@
 //! candidate builds (ascending, so the last entry is the newest).
 
 use crate::core::Package;
-use crate::parsers::utils::sanitize;
+use crate::utils::text::sanitize;
 use serde_json::Value;
 
 /// Parses `conda env export -n <env> --from-history --json` — the packages a person

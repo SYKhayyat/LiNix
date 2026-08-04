@@ -22,7 +22,7 @@
 //! recorded is about a *name*, and a name that moves backends would otherwise be two writes —
 //! a delete from one file and an insert into another — for one fact changing.
 
-use crate::core::{Error, Result};
+use crate::core::ledger::LockFile;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -34,11 +34,11 @@ pub struct BareLock {
     resolved: BTreeMap<String, String>,
 }
 
-impl BareLock {
-    pub fn new() -> Self {
-        Self::default()
-    }
+impl LockFile for BareLock {
+    const WHAT: &'static str = "the bare-name lock";
+}
 
+impl BareLock {
     /// This machine's file. Every other machine sharing the config has its own, so a sync
     /// here can never overwrite the answer another host depends on.
     pub fn path_in(locks_dir: &Path) -> PathBuf {
@@ -81,31 +81,6 @@ impl BareLock {
     /// Every frozen name and the manager it is frozen to, for `linix lock backends --list`.
     pub fn entries(&self) -> impl Iterator<Item = (&str, &str)> {
         self.resolved.iter().map(|(n, b)| (n.as_str(), b.as_str()))
-    }
-
-    /// A missing file means nothing has been resolved yet — the correct starting state on a
-    /// fresh repo, and never an error.
-    pub fn load(path: &Path) -> Result<Self> {
-        match std::fs::read_to_string(path) {
-            Ok(s) => toml::from_str(&s)
-                .map_err(|e| Error::Toml(format!("reading {}: {}", path.display(), e))),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::new()),
-            Err(e) => Err(Error::Io(format!("reading {}: {}", path.display(), e))),
-        }
-    }
-
-    /// Through `persist`, so a preview does not write an approval or a pin. `linix
-    /// --dry-run lock` used to leave `locks/versions.json` and `locks/hooks.toml` behind.
-    pub fn save(&self, path: &Path) -> Result<()> {
-        if !crate::core::dry_run::active() {
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir)
-                    .map_err(|e| Error::Io(format!("creating {}: {}", dir.display(), e)))?;
-            }
-        }
-        let body = toml::to_string_pretty(self)
-            .map_err(|e| Error::Toml(format!("serializing the bare-name lock: {}", e)))?;
-        crate::utils::file::persist(path, &body).map(|_| ())
     }
 
     /// The backend this name is frozen to, if any.

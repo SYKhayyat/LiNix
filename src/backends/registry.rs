@@ -166,8 +166,8 @@ pub async fn create_default_registry(
 
     // --- Ecosystem backends implemented as dedicated modules (subcommand binary / fs) ---
     crate::backends::go::register(&mut reg, &executor, config);
-    crate::backends::pubdart::register(&mut reg, &executor, config);
-    crate::backends::krew::register(&mut reg, &executor, config);
+    register_pubdart(&mut reg, &executor);
+    register_krew(&mut reg, &executor);
 
     // --- Linux-distro ecosystem backends (Gentoo, Guix, Solus, Slackware) ---
     if cfg!(target_os = "linux") {
@@ -255,6 +255,8 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
+        extra_probes: None,
+        upgrade_reinstalls_each: false,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(crate::parsers::apt::AptParser),
@@ -354,6 +356,8 @@ fn register_aur_helper(
             needs_root: false,
             is_exclusive: true,
             install_source_option: None,
+        extra_probes: None,
+        upgrade_reinstalls_each: false,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -431,6 +435,8 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
+        extra_probes: None,
+        upgrade_reinstalls_each: false,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -500,6 +506,8 @@ fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
+        extra_probes: None,
+        upgrade_reinstalls_each: false,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -574,6 +582,8 @@ fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: false,
             is_exclusive: false,
             install_source_option: None,
+        extra_probes: None,
+        upgrade_reinstalls_each: false,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -633,6 +643,8 @@ fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: false,
             is_exclusive: false,
             install_source_option: None,
+        extra_probes: None,
+        upgrade_reinstalls_each: false,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -708,6 +720,8 @@ fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
+        extra_probes: None,
+        upgrade_reinstalls_each: false,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -761,6 +775,8 @@ fn register_mas(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: false,
             is_exclusive: false,
             install_source_option: None,
+        extra_probes: None,
+        upgrade_reinstalls_each: false,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -816,6 +832,8 @@ fn register_pip(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: false,
             is_exclusive: false,
             install_source_option: None,
+        extra_probes: None,
+        upgrade_reinstalls_each: false,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -869,6 +887,8 @@ fn register_gem(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: false,
             is_exclusive: false,
             install_source_option: None,
+        extra_probes: None,
+        upgrade_reinstalls_each: false,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -921,6 +941,8 @@ fn register_bun(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: false,
             is_exclusive: false,
             install_source_option: None,
+        extra_probes: None,
+        upgrade_reinstalls_each: false,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -979,6 +1001,8 @@ fn register_macports(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
+        extra_probes: None,
+        upgrade_reinstalls_each: false,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -1033,6 +1057,8 @@ fn register_pkgin(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
+        extra_probes: None,
+        upgrade_reinstalls_each: false,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -1094,6 +1120,8 @@ fn register_pkg_freebsd(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
+        extra_probes: None,
+        upgrade_reinstalls_each: false,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -1156,6 +1184,8 @@ fn register_pkg_add_openbsd(reg: &mut BackendRegistry, executor: &CommandExecuto
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
+        extra_probes: None,
+        upgrade_reinstalls_each: false,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -1218,6 +1248,8 @@ fn register_dotnet(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: false,
             is_exclusive: false,
             install_source_option: None,
+        extra_probes: None,
+        upgrade_reinstalls_each: false,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -1278,6 +1310,8 @@ fn base_config(name: &str) -> ManagerConfig {
         needs_root: false,
         is_exclusive: false,
         install_source_option: None,
+        extra_probes: None,
+        upgrade_reinstalls_each: false,
         flag_map: HashMap::new(),
     }
 }
@@ -1571,6 +1605,71 @@ fn register_stack(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 
 /// asdf version manager (`asdf`). Cross-platform; gated by the `asdf` binary. A tool/plugin
 /// is the "package"; installing pins a version via the trailing positional.
+/// krew, the kubectl plugin manager. Its verbs are subcommands of `kubectl`.
+///
+/// Was 193 lines of hand-written Rust. The one thing that file knew and this table did not is
+/// its availability check: krew is a *plugin*, so `kubectl` alone is not enough — a host with
+/// kubectl and no krew reported READY and then failed every command with `unknown command
+/// "krew"`, including `linix update`, which refreshes every backend at once. That is
+/// `extra_probes` now, so the next plugin-shaped manager inherits the fix rather than
+/// rediscovering it.
+fn register_krew(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("krew");
+    cfg.binary = Some("kubectl".into());
+    cfg.extra_probes = Some(vec!["kubectl-krew".into()]);
+    // Every krew plugin is one somebody asked for; krew installs no dependencies.
+    cfg.manual = ManualListing::AllInstalled;
+    // krew installs the index's current version and has no per-install version pin.
+    cfg.install_args = vec!["krew".into(), "install".into()];
+    cfg.remove_args = vec!["krew".into(), "uninstall".into()];
+    cfg.list_args = vec!["krew".into(), "list".into()];
+    cfg.search_args = vec!["krew".into(), "search".into()];
+    cfg.upgrade_args = vec!["krew".into(), "upgrade".into()];
+    cfg.update_args = Some(vec!["krew".into(), "update".into()]);
+    let core = Arc::new(GenericBackendCore {
+        name: "krew".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            // `kubectl krew list` prints `PLUGIN  VERSION` (older versions: bare names);
+            // `search` prints `NAME  DESCRIPTION  INSTALLED`, so only the first column is a name.
+            installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "krew"),
+            search_fn: |o| crate::parsers::ecosystem::names_only(o, "krew"),
+        }),
+    });
+    register_generic(reg, core, true, true, true);
+}
+
+/// Dart / pub, reached through `dart pub global`.
+///
+/// Was 197 lines. Nothing in it was outside the table: two-word verbs under a different binary.
+fn register_pubdart(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("pub");
+    cfg.binary = Some("dart".into());
+    // `dart pub global list` reports exactly what was activated — all user-chosen.
+    cfg.manual = ManualListing::AllInstalled;
+    // pub pins with a trailing positional version (`activate <pkg> <version>`) — an operand,
+    // so the `--` terminator stays in front of both it and the name.
+    cfg.version_pin = Some(VersionPin::TrailingPositional(vec!["{version}".into()]));
+    cfg.install_args = vec!["pub".into(), "global".into(), "activate".into()];
+    cfg.remove_args = vec!["pub".into(), "global".into(), "deactivate".into()];
+    cfg.list_args = vec!["pub".into(), "global".into(), "list".into()];
+    // pub.dev has no upgrade-all verb: re-activating each package unpinned is the upgrade.
+    cfg.upgrade_reinstalls_each = true;
+    let core = Arc::new(GenericBackendCore {
+        name: "pub".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "pub"),
+            search_fn: |_| vec![],
+        }),
+    });
+    // Upgradable, not searchable: pub.dev has no CLI search, and upgrade is the re-activate
+    // loop above rather than a verb.
+    register_generic(reg, core, true, false, true);
+}
+
 fn register_asdf(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("asdf");
     // asdf lists the tool versions someone explicitly installed; it has no dep concept.
@@ -2412,13 +2511,13 @@ mod tests {
             ),
             ArgvCase::pkg(
                 "pub",
-                &|r, e| crate::backends::pubdart::register(r, e, &Config::default()),
+                &register_pubdart,
                 Runs("dart pub global activate -- jq"),
                 Runs("dart pub global deactivate -- jq"),
             ),
             ArgvCase::pkg(
                 "krew",
-                &|r, e| crate::backends::krew::register(r, e, &Config::default()),
+                &register_krew,
                 Runs("kubectl krew install -- jq"),
                 Runs("kubectl krew uninstall -- jq"),
             ),
@@ -2712,6 +2811,43 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A pinned version rides where that manager puts it, and still behind the terminator.
+    ///
+    /// The argv table drives one declaration per backend and that declaration is unpinned, so
+    /// the pinned shape has no row. `pubdart.rs` asserted it before it became data and this is
+    /// that assertion, kept rather than lost with the module: `dart pub global activate --
+    /// webdev 2.7.0` is a trailing positional, not `webdev@2.7.0`, and the two are one
+    /// `VersionPin` variant apart.
+    #[tokio::test]
+    async fn a_trailing_positional_version_lands_after_the_name() {
+        use crate::core::executor::MockExecutor;
+        use dashmap::DashMap;
+
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let exec =
+            CommandExecutor::with_layer(true, false, mock.clone(), vfs, Arc::new(DashMap::new()));
+        let mut reg = BackendRegistry::new();
+        register_pubdart(&mut reg, &exec);
+
+        let inst = reg.get("pub").unwrap().as_installable().unwrap().clone();
+        let mut spec = crate::core::PackageSpec {
+            name: "webdev".into(),
+            backend: "pub".into(),
+            ..Default::default()
+        };
+        spec.options.insert("version".into(), "2.7.0".into());
+        let _ = inst.install(&[spec], false).await;
+
+        let calls = mock.get_calls().await;
+        assert!(
+            calls
+                .iter()
+                .any(|c| c.contains("dart pub global activate -- webdev 2.7.0")),
+            "the pinned version did not land as a trailing positional: {calls:?}"
+        );
     }
 
     /// The table must not name one backend twice: the second row would silently replace the

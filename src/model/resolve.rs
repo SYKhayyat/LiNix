@@ -1,3 +1,4 @@
+use crate::core::LockFile;
 use super::conflict::{reconcile, Declared};
 use super::dated::dating_of;
 use super::layout::Layout;

@@ -633,6 +633,8 @@ mod tests {
             needs_root: false,
             is_exclusive: false,
             install_source_option: None,
+            extra_probes: None,
+            upgrade_reinstalls_each: false,
             flag_map: HashMap::new(),
         };
         config.manual = manual;

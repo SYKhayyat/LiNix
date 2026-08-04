@@ -1,5 +1,5 @@
 use crate::core::Package;
-use crate::parsers::utils::sanitize;
+use crate::utils::text::sanitize;
 
 /// Parses output from 'pacman -Q' for installed packages.
 /// Expected input format: "name version"

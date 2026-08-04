@@ -48,9 +48,10 @@ fn help_text(program: &str, chain: &[String]) -> Option<String> {
         .ok()
         .map(|o| {
             format!(
-                "{}{}",
-                String::from_utf8_lossy(&o.stdout),
-                String::from_utf8_lossy(&o.stderr)
+                "{}
+{}",
+                crate::utils::text::sanitize(&String::from_utf8_lossy(&o.stdout)),
+                crate::utils::text::sanitize(&String::from_utf8_lossy(&o.stderr))
             )
         });
 

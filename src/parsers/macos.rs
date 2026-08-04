@@ -1,5 +1,5 @@
 use crate::core::Package;
-use crate::parsers::utils::sanitize;
+use crate::utils::text::sanitize;
 
 /// Parses the output from the 'mas list' command.
 /// 'mas' (Mac App Store CLI) output format: "identifier Name (Version)"

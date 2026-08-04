@@ -5,6 +5,7 @@
 //! happens. Plus the two rules that are easy to get wrong — II.12 approval is required, and a
 //! failed script is not recorded as having run.
 
+use linix::core::LockFile;
 use linix::core::hook_lock::{exec_id, hash_script, HookLedger};
 use linix::core::ExecLedger;
 

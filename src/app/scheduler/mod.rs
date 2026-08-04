@@ -243,7 +243,9 @@ impl TaskProvisioner for LinuxSystemdProvisioner {
             )
             .await
         {
-            Ok(out) => String::from_utf8_lossy(&out.stdout).trim() == "active",
+            Ok(out) => {
+                crate::utils::text::sanitize(&String::from_utf8_lossy(&out.stdout)) == "active"
+            }
             Err(_) => false,
         }
     }

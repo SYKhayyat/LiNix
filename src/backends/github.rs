@@ -1,3 +1,4 @@
+use crate::core::LockFile;
 use crate::backends::artifact::{
     self, default_formats, system_pkg, ArtifactOptions, Asset as ArtifactAsset, AssetPattern,
     Entry as ArchiveEntry, Format, FormatOrder, Platform, Request as SelectRequest,

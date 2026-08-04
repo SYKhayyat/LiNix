@@ -107,23 +107,10 @@ mod tests {
         assert_eq!(Probe::load(&path).unwrap(), p);
     }
 
-    /// The rule the seventh ledger exists to inherit. A ledger that wrote during a preview
-    /// would make `--dry-run` change what the next real run does.
-    #[test]
-    fn a_dry_run_writes_nothing() {
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("locks").join("probe.toml");
-        let mut p = Probe::new();
-        p.entries.insert("a".into(), "b".into());
-
-        let _guard = crate::core::dry_run::scoped_for_test();
-        p.save(&path).unwrap();
-        assert!(
-            !path.exists(),
-            "a dry run wrote {} — the preview left a pin behind",
-            path.display()
-        );
-    }
+    // The dry-run rule is asserted in `tests/ledger_file_rules_tests.rs`, not here.
+    // `dry_run` is a process-wide atomic set once from `main`, so a unit test that flips it
+    // would flip it for every other test sharing this binary — and the tests it would break
+    // are the ones that write files, which is most of them. Its own process, its own answer.
 
     /// An unreadable file is an error, not silently empty. The missing-file rule is about
     /// *absence*; a file that exists and cannot be parsed is a fact the user needs told, and

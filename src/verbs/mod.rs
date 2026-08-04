@@ -41,6 +41,9 @@ pub(crate) mod prelude {
     pub(crate) use anyhow::{Context, Result};
     pub(crate) use linix::app::sync::planner::Scope as PlannerScope;
     pub(crate) use linix::app::{ui::TuiPreview, App};
+    // The ledger file rules are a trait, so `HookLedger::load` needs it in scope. In the
+    // prelude rather than per verb for the reason the prelude exists.
+    pub(crate) use linix::core::LockFile;
     pub(crate) use linix::cli::{
         Cli, ConfigCommand, GitCommand, HooksCommand, LockAxis, ModuleCommand, ProfileCommand,
         RepoCommand, ScheduleCommand, ServiceCommand, SnapshotCommand,

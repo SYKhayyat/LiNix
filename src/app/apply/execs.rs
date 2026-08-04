@@ -1,3 +1,4 @@
+use crate::core::LockFile;
 use crate::core::{Error, Result};
 use tracing::{debug, info, warn};
 

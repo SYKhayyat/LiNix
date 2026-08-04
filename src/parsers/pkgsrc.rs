@@ -6,7 +6,7 @@
 //! LAST dash whose right-hand side starts with a digit — the classic pkgsrc heuristic.
 
 use crate::core::Package;
-use crate::parsers::utils::sanitize;
+use crate::utils::text::sanitize;
 
 /// Splits a pkgsrc `name-version` token into `(name, version)`. Returns `None` when no
 /// dash is followed by a digit (i.e. the token carries no version).

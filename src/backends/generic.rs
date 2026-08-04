@@ -17,7 +17,27 @@ pub enum VersionPin {
     Inline(String),
     /// The bare name followed by flag args, e.g. winget/choco `--version {version}`,
     /// gem `-v {version}`.
+    ///
+    /// **A `Flag` pin suppresses the `--` terminator**, because behind `--` a `-v` is a package
+    /// name rather than an option. That is right for a real flag and wrong for a version that
+    /// is a bare positional — see [`TrailingPositional`](VersionPin::TrailingPositional).
     Flag(Vec<String>),
+    /// The bare name followed by the version as a **positional**, e.g. pub
+    /// `activate webdev 2.7.0`.
+    ///
+    /// Distinct from [`Flag`](VersionPin::Flag) for one reason: a positional is not an option,
+    /// so the `--` terminator is still safe and still wanted. `pubdart.rs` put both the name
+    /// and the version behind `--` and asserted it; folding that shape into `Flag` during the
+    /// 2026-08-04 conversion silently dropped the terminator, and the assertion kept from the
+    /// deleted module is what caught it.
+    ///
+    /// `luarocks` and `asdf` have the same positional shape and are still on `Flag`/
+    /// `RequiredFlag`, so an unpinned `luarocks install -- jq` carries the terminator and a
+    /// pinned one does not. **Deliberately not changed here**: neither tool is installed on
+    /// this machine, so whether they accept `--` before a positional cannot be measured, and
+    /// `argv_drift_tests` can only ask a manager that is present. Left as a measurement for an
+    /// image that has them rather than a guess that reaches a user.
+    TrailingPositional(Vec<String>),
     /// Like [`Flag`](VersionPin::Flag), for a manager that **refuses to install without a
     /// version at all**, carrying what to ask for when the line pins none.
     ///
@@ -45,7 +65,9 @@ impl VersionPin {
             VersionPin::Inline(tmpl) => {
                 vec![tmpl.replace("{name}", name).replace("{version}", version)]
             }
-            VersionPin::Flag(flags) | VersionPin::RequiredFlag { args: flags, .. } => {
+            VersionPin::Flag(flags)
+            | VersionPin::TrailingPositional(flags)
+            | VersionPin::RequiredFlag { args: flags, .. } => {
                 let mut out = vec![name.to_string()];
                 out.extend(
                     flags
@@ -186,6 +208,14 @@ pub struct ManagerConfig {
     pub install_source_option: Option<String>,
     pub needs_root: bool,
     pub is_exclusive: bool,
+    /// This manager has no upgrade-all verb, and upgrades by re-installing each installed
+    /// package unpinned. `upgrade_args` is then unused and must be empty — see
+    /// [`GenericUpgradable::upgrade`].
+    pub upgrade_reinstalls_each: bool,
+    /// Programs that must ALSO be present for this backend to be usable, beyond `binary`.
+    /// `None` = the binary is the whole requirement, which is true of every manager that is a
+    /// program rather than a plugin of one. See [`BackendCore::is_available`].
+    pub extra_probes: Option<Vec<String>>,
     pub flag_map: HashMap<String, String>,
 }
 
@@ -238,12 +268,27 @@ impl BackendCore for GenericBackendCore {
         &self.name
     }
 
+    /// Every probe must be present, not just the first.
+    ///
+    /// A manager reached as a *plugin* of another program needs both halves: `kubectl krew …`
+    /// works only because krew installed `kubectl-krew` on PATH, and a host with kubectl and no
+    /// krew reported this backend READY and then failed every command with `unknown command
+    /// "krew"` — including `linix update`, which refreshes every backend at once. That was
+    /// found and fixed once, in a hand-written backend; expressing it here is what lets the
+    /// hand-written one be deleted instead of kept for the one thing it knew.
     fn is_available(&self) -> bool {
-        self.executor.command_exists_sync(self.binary())
+        self.probes()
+            .iter()
+            .all(|p| self.executor.command_exists_sync(p))
     }
 
     fn probes(&self) -> Vec<String> {
-        vec![self.binary().to_string()]
+        match &self.config.extra_probes {
+            Some(extra) => std::iter::once(self.binary().to_string())
+                .chain(extra.iter().cloned())
+                .collect(),
+            None => vec![self.binary().to_string()],
+        }
     }
 
     fn needs_root(&self) -> bool {
@@ -446,6 +491,8 @@ impl GenericInstallable {
                 (Some(ver), Some(pin)) if is_concrete_version(ver) => {
                     trailing_flags |=
                         matches!(pin, VersionPin::Flag(_) | VersionPin::RequiredFlag { .. });
+                    // `TrailingPositional` is deliberately absent from that list: it emits an
+                    // operand, not an option, so the terminator stays and still protects it.
                     names.extend(pin.apply(&spec.name, ver));
                 }
                 // A manager that will not install without a version gets the one it accepts
@@ -775,6 +822,32 @@ impl Upgradable for GenericUpgradable {
     }
 
     async fn upgrade(&self, sudo: bool) -> Result<()> {
+        // A manager with no upgrade-all verb upgrades by re-installing what is there. `dart pub
+        // global activate <name>` with no version moves that package to latest, and running it
+        // over the installed list is the whole of "upgrade everything" for pub. Expressed here
+        // rather than in a module, because the shape is the manager's, not the module's.
+        if self.core.config.upgrade_reinstalls_each {
+            let installed = GenericQueryable {
+                core: self.core.clone(),
+            }
+            .fetch_installed()
+            .await?;
+            for pkg in installed {
+                let spec = PackageSpec {
+                    name: pkg.name,
+                    backend: self.core.name.clone(),
+                    ..Default::default()
+                };
+                // Deliberately not `?`: one package that will not re-activate must not stop the
+                // other forty. The executor has already reported which one and why.
+                let _ = GenericInstallable {
+                    core: self.core.clone(),
+                }
+                .install(&[spec], sudo)
+                .await;
+            }
+            return Ok(());
+        }
         let args: Vec<&str> = self
             .core
             .config
@@ -1178,6 +1251,8 @@ mod tests {
                 needs_root: true, // apt needs root for writes — but reads must NOT escalate
                 is_exclusive: true,
                 install_source_option: None,
+                extra_probes: None,
+                upgrade_reinstalls_each: false,
                 flag_map: HashMap::new(),
             },
             parser: Arc::new(LambdaParser {

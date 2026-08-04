@@ -168,7 +168,7 @@ pub fn run_external_with_origins(path: &Path, facts: &HostFacts) -> Result<(Vars
         ));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = crate::utils::text::sanitize(&String::from_utf8_lossy(&output.stdout));
     parse_output(&stdout, &origin)
 }
 

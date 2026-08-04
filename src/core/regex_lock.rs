@@ -12,7 +12,7 @@
 //! **Residual hole, accepted (II.15):** a package renamed out of the pattern silently drops
 //! one package. One package, recoverable, and the snapshot has your back.
 
-use crate::core::{Error, Result};
+use crate::core::ledger::LockFile;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -29,37 +29,13 @@ pub fn key(backend: &str, pattern: &str) -> String {
     format!("{}:{}", backend, pattern)
 }
 
-impl RegexLock {
-    pub fn new() -> Self {
-        Self::default()
-    }
+impl LockFile for RegexLock {
+    const WHAT: &'static str = "the regex lock";
+}
 
+impl RegexLock {
     pub fn path_in(locks_dir: &Path) -> PathBuf {
         locks_dir.join("regex.toml")
-    }
-
-    /// A missing file means nothing is frozen yet — the correct starting state, never an error.
-    pub fn load(path: &Path) -> Result<Self> {
-        match std::fs::read_to_string(path) {
-            Ok(s) => toml::from_str(&s)
-                .map_err(|e| Error::Toml(format!("reading {}: {}", path.display(), e))),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::new()),
-            Err(e) => Err(Error::Io(format!("reading {}: {}", path.display(), e))),
-        }
-    }
-
-    /// Through `persist`, so a preview does not write an approval or a pin. `linix
-    /// --dry-run lock` used to leave `locks/versions.json` and `locks/hooks.toml` behind.
-    pub fn save(&self, path: &Path) -> Result<()> {
-        if !crate::core::dry_run::active() {
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir)
-                    .map_err(|e| Error::Io(format!("creating {}: {}", dir.display(), e)))?;
-            }
-        }
-        let body = toml::to_string_pretty(self)
-            .map_err(|e| Error::Toml(format!("serializing the regex lock: {}", e)))?;
-        crate::utils::file::persist(path, &body).map(|_| ())
     }
 
     pub fn get(&self, backend: &str, pattern: &str) -> Option<&[String]> {

@@ -1,5 +1,6 @@
 use linix::app::sync::planner::{ChangePlanner, Scope};
 use linix::app::sync::resolver::StateResolver;
+use linix::core::LockFile;
 use linix::core::{Error, PackageSpec};
 use std::collections::HashMap;
 use tokio::fs;

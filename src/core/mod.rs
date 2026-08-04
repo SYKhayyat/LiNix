@@ -12,6 +12,7 @@ pub mod exit_policy;
 pub mod extras_lock;
 pub mod git;
 pub mod hook_lock;
+pub mod ledger;
 pub mod http;
 pub mod installed;
 pub mod journal;
@@ -56,6 +57,7 @@ pub use security::verify_checksum;
 pub use size::{format_size, parse_size, same_size};
 
 pub use hook_lock::{hook_id, HookLedger, Verdict};
+pub use ledger::LockFile;
 
 pub use artifact_lock::{verify_set, ArtifactLedger, ArtifactLock};
 pub use bare_lock::BareLock;

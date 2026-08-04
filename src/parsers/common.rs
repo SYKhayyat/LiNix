@@ -1,5 +1,5 @@
 use crate::core::Package;
-use crate::parsers::utils::sanitize;
+use crate::utils::text::sanitize;
 
 /// A generic parser for backends that return a simple space-separated list.
 /// Format: "package-name version" or just "package-name"

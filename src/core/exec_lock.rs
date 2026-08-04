@@ -14,7 +14,7 @@
 //! the condition swung back true, because the count would have been forgotten. The count means
 //! *"this content has run n times on this machine"*, full stop.
 
-use crate::core::{Error, Result};
+use crate::core::ledger::LockFile;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -91,37 +91,13 @@ impl std::fmt::Display for Ceiling {
     }
 }
 
-impl ExecLedger {
-    pub fn new() -> Self {
-        Self::default()
-    }
+impl LockFile for ExecLedger {
+    const WHAT: &'static str = "the exec ledger";
+}
 
+impl ExecLedger {
     pub fn path_in(locks_dir: &Path) -> PathBuf {
         locks_dir.join("exec.toml")
-    }
-
-    /// A missing file means nothing has run yet — the correct starting state, never an error.
-    pub fn load(path: &Path) -> Result<Self> {
-        match std::fs::read_to_string(path) {
-            Ok(s) => toml::from_str(&s)
-                .map_err(|e| Error::Toml(format!("reading {}: {}", path.display(), e))),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::new()),
-            Err(e) => Err(Error::Io(format!("reading {}: {}", path.display(), e))),
-        }
-    }
-
-    /// Through `persist`, so a preview does not write an approval or a pin. `linix
-    /// --dry-run lock` used to leave `locks/versions.json` and `locks/hooks.toml` behind.
-    pub fn save(&self, path: &Path) -> Result<()> {
-        if !crate::core::dry_run::active() {
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir)
-                    .map_err(|e| Error::Io(format!("creating {}: {}", dir.display(), e)))?;
-            }
-        }
-        let body = toml::to_string_pretty(self)
-            .map_err(|e| Error::Toml(format!("serializing the exec ledger: {}", e)))?;
-        crate::utils::file::persist(path, &body).map(|_| ())
     }
 
     /// How many times this content has run here. An unknown hash has run zero times, which is

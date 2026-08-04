@@ -1,5 +1,5 @@
 use crate::core::Package;
-use crate::parsers::utils::sanitize;
+use crate::utils::text::sanitize;
 use serde_json::Value;
 
 pub fn parse_installed(backend: &str, output: &str) -> Vec<Package> {

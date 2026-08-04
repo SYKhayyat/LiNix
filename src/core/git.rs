@@ -153,7 +153,9 @@ impl GitManager {
                 String::from_utf8_lossy(&out.stderr).trim()
             )));
         }
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        Ok(crate::utils::text::sanitize(&String::from_utf8_lossy(
+            &out.stdout,
+        )))
     }
 
     /// A non-fast-forward or missing remote surfaces as an error the caller can downgrade
@@ -242,9 +244,9 @@ impl GitManager {
         }
         let out = self.run(&["rev-parse", "HEAD"])?;
         if out.status.success() {
-            Ok(Some(
-                String::from_utf8_lossy(&out.stdout).trim().to_string(),
-            ))
+            Ok(Some(crate::utils::text::sanitize(
+                &String::from_utf8_lossy(&out.stdout),
+            )))
         } else {
             Ok(None) // no commits yet
         }

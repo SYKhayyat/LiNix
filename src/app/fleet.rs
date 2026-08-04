@@ -49,7 +49,9 @@ async fn ssh_capture(host: &str, remote_cmd: &str) -> Result<String> {
             String::from_utf8_lossy(&out.stderr).trim()
         )));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    Ok(crate::utils::text::sanitize(&String::from_utf8_lossy(
+        &out.stdout,
+    )))
 }
 
 /// Per-host drift summary from a remote `linix status --json`.

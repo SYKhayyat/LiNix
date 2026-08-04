@@ -1,3 +1,4 @@
+use crate::core::LockFile;
 use crate::app::diagnostics::FailureDiagnosticEngine;
 use crate::app::{LuaHooks, MetricsCollector};
 use crate::backends::BackendRegistry;

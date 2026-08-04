@@ -14,6 +14,110 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Session 2026-08-04 — the ratchets, and what they found
+
+**The direction doc's seven steps, taken in order.** Steps 1 and 7 were already done; the
+remaining five were, and three of them turned out to be *already built and unrecorded* rather
+than unbuilt. That distinction is the session's real finding, and it is the same one the header
+of this file is about: **work that is done but not written down gets re-planned.**
+
+### What was built
+
+**The `KEYWORDS` ↔ Part II ratchet (step 2).** Part II's Statements table and its reserved-word
+block are now asserted against the parser's own `KEYWORDS`, in both directions, grouped by role.
+It immediately found `generate:` missing from the Statements table — the *fourth* prefix to ship
+unlisted, sitting directly beneath the paragraph recording that three others had. Q29's
+resource-kind half was ruled the same day (**open — more prefixes may be added**), which is what
+makes this the load-bearing half of that ruling. `KEYWORDS` gained `KeywordRole`, because it
+could not previously tell `use` from `if`.
+
+**The registrar scan, widened (step 4).** `os_native_argv_coverage_tests.rs` demanded every
+backend have an argv row or a reasoned exemption, and read one file, and matched one shape. It
+saw the 32 registrars written in `registry.rs` and none of the 28 that register from their own
+modules. **The gate against an uncovered backend was itself covering half the family.** All 28
+have rows now — measured by driving each backend through a mock and reading the argv, not
+guessed — and the table gained per-row subjects so `setting:` and `lvm:` are driven with
+declarations they can accept rather than with `"jq"`, which tested their refusals. helm's
+exemption is retired, and a registrar with *both* a row and an exemption is now itself a failure.
+
+**`LockFile` (step 6a).** Six ledgers, six character-identical copies of `new`/`load`/`save`,
+down to the same comment. They all agreed — this was one rule found once and written out six
+times, not copy-and-edit — so the cost was never the ~170 lines; it was that the seventh ledger
+inherits the missing-file rule and the dry-run rule only if somebody remembers. It is a trait
+with provided methods now, and `ledger_file_rules_tests.rs` fails the build if a `*_lock.rs`
+hand-rolls its own.
+
+**Sanitizing moved to the boundary.** All sixteen table-driven backends stripped ANSI; the
+parsers hand-rolled inside `src/backends/` mostly did not. `run_output`/`search_output` do it
+now — the shape `dry_run` already argued for in its own module — and `sanitize` moved from
+`parsers/utils.rs` down to `utils/text.rs`, the layer `core` may depend on. The scan for raw
+stdout reads found **five more sites the direction doc never listed**, two of them production:
+the diagnostic built when a manager's complaint lands on stdout instead of stderr, and
+`tool_help.rs`, which reads a tool's `--help` — the output most likely of all to be coloured.
+`git show HEAD:path` is exempt and says why: it returns a *file*, and trimming a file changes it.
+
+**The backend count (`52` vs `48` vs `56`).** Nobody was lying; **"registered" meant two
+things.** 62 backends are compiled into the build; how many *register* is host-dependent, because
+the OS-native ones sit behind `cfg!(target_os = …)`. 48 on Windows and 56 on Ubuntu were both
+right answers to the second question, and `SPEC.md`'s 52 was an answer to neither. The 62 is
+asserted against the argv table now, which works because every registrar is already required to
+have a row there — the two hold each other up.
+
+**The `ManagerConfig` ratchet, and the first two conversions (step 6b).** The direction doc is
+explicit that the ratchet is worth more than the conversions and must come first, so it does:
+every backend module is built from data or named with **what the generic machinery cannot
+express**. "Not converted yet" is rejected as a reason. The list started at 29 and the two
+easiest came off the same day — `krew` and `pubdart`, 390 lines of Rust replaced by two data
+rows. Each required extending the machinery by one field rather than accepting a loss:
+`extra_probes`, because krew is a *plugin* and a host with `kubectl` and no krew once reported
+READY and then failed every command; and `upgrade_reinstalls_each`, because pub has no
+upgrade-all verb and upgrades by re-activating each package. **Both extensions are now available
+to every backend**, which is the difference between converting a backend and deleting one.
+
+**The conversions are verified by the argv table**, which did not exist in this form when the
+direction doc warned that *"a converted backend nothing ran is a rewrite nobody verified."* A
+conversion that changes behaviour changes the argv, and the argv is asserted for all 62.
+
+### What was already built, and is now recorded
+
+**The `why` chain (step 3) is done.** The doc asked for a measurement before any design. Measured
+by building a sandbox config, adopting this machine into it, committing, and running the verb:
+`why` already prints the file and line, the module, the profile, the introducing commit with its
+date and message, how the package entered management, the artifact-selection rule, the lease, and
+the reverse dependencies — and a `because:` row carrying each `when` predicate *with the current
+value of every variable it tests and where that value was set*. The chain the doc sketched is the
+output it already produces. **Nothing was missing; the measurement was.**
+
+**The plan object (step 5) already exists.** `SyncReport` is `Serialize`, is the object the code
+passes around, and carries `skipped` so a `--json` consumer can tell a converged machine from one
+holding a package nothing will remove. What step 5 wanted it *for* — argv coverage for the
+backends that will never get a container image — is delivered by the widened argv table, at 62
+backends rather than the 52 asked for, on any machine, in milliseconds, with nothing installed.
+**Adding argv to `SyncReport` is deliberately not done**: it would change `--json`, which is
+user-visible, and Q26 (publishing the format) is still deferred.
+
+### Line count (step 7)
+
+`src` went 89,592 → 89,849 across the same 204 files; `tests` went 15,759 → 16,893 across 67 →
+72. **Net +1,391, and the sentence the standing practice asks for:** it bought argv assertions
+for 62 backends where 32 had them, five ratchets that did not exist, and the deletion of ~560
+lines of duplicated carrier and hand-written backend. Four of the five ratchets found a live
+defect on the day they were written, which is the only evidence that matters for whether a gate
+is worth its lines.
+
+### The shape of every finding here
+
+Five ratchets were written and **four of them found something immediately**: a missing
+`generate:` row, 28 uncovered backends, five unsanitized reads, and a spec number that matched
+neither host. The fifth — the `ManagerConfig` list — found nothing because it *is* the finding.
+
+The common cause is not carelessness. Every one of these rules was found once, stated correctly,
+and then enforced by people remembering it: a paragraph in Part II saying the table "must be
+checked against" the code, six correct copies of a dry-run rule, sixteen backends that sanitize.
+**A prose instruction to check a copy against its authority is not a check** — it is a copy of
+the authority's address, and it decays faster than what it protects, because it reads as though
+the work has been done.
+
 ## Session 2026-08-03 (second) — `Z2`: the axis goes in the grammar, and an upgrade sticks
 
 **Ruled and built the same day.** `lock` and `unlock` acted on different ledgers, so the obvious

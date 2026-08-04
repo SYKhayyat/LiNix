@@ -147,7 +147,9 @@ fn register_stdlib(engine: &mut Engine) {
                     stderr.trim()
                 )));
             }
-            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+            Ok(crate::utils::text::sanitize(&String::from_utf8_lossy(
+                &out.stdout,
+            )))
         },
     );
     engine.register_fn("sh_ok", |cmd: &str| {

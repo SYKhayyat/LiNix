@@ -131,9 +131,20 @@ place, then printing the tier per row in `plan`. **The owner declined it on 2026
 is ruled **no**. Recorded here so the next audit that notices `setting:`'s read-before-write does
 not re-propose it.
 
-### Q29 — freezing the statement set — STILL OPEN
+### Q29 — freezing the statement set — HALF RULED 2026-08-04
 
-Not ruled, and it is written down because the file it came from is being replaced.
+> **The resource-kind half is ruled: the set stays OPEN.** *"i dont think it is closed, no. we
+> still might add."* So the recommendation below was right about that half and the ratchet is no
+> longer an alternative to the ban — it is the **price** of not banning, and it is built
+> (`tests/grammar_table_matches_the_spec_tests.rs`). On its first run it found `generate:`
+> missing from Part II's Statements table: **the fourth prefix to ship unlisted, and it had been
+> sitting directly beneath the paragraph written about the other three.**
+>
+> **The computation half is still open** and is not implied by the ruling next to it. Nobody has
+> said whether a fourth `vars` provider or another logic keyword may be added.
+
+Not ruled when this was written, and it is written down because the file it came from is being
+replaced.
 
 The proposal was to declare the config language closed and route all future computation through
 `generate:`. **The question has a hole in it:** `generate:` output is merged *"as if typed"*, so
@@ -163,6 +174,9 @@ the twelfth keyword impossible to ship undocumented without banning it. An after
 
 ### `why` grows a chain
 
+> **Answered 2026-08-04: it is already built.** Measured by running the verb, not by reading
+> it — see §6 step 3. What follows is the question as it was asked.
+
 **The owner asked for this to be investigated.** `linix why curl` should answer with the whole
 story, not a fact: declared at `modules/dev.txt:12`, in module `dev`, pulled in by profile
 `Workstation`, active because this host is `thinkpad`, added in commit `a3f9c`, and here is the
@@ -182,6 +196,10 @@ This is rule 1 of the legibility ruling pointed at a single verb, which is why t
 piece of work seen from two ends.
 
 ### Compaction — DRY and SOLID, measured
+
+> **Begun 2026-08-04.** Move 1 (`Ledger<T>`) is done as the `LockFile` trait. Move 2 is begun:
+> the ratchet exists and 2 of 29 backends are converted. Move 3's re-measure is §6 step 7. The
+> honest number below (~1,950 lines, ~3%) is unchanged and still the wrong reason to do it.
 
 **The owner asked for this to be investigated.** Not "make it smaller" — **89,592 lines across
 204 files** as of this commit, and a codebase that got shorter by collapsing its seams would be
@@ -228,6 +246,13 @@ a converted backend nothing ran is a rewrite nobody verified.
 
 ### Should the hand-rolled parsers sanitize?
 
+> **Answered 2026-08-04: yes, and at the boundary rather than per parser.** `run_output` and
+> `search_output` sanitize now, so a backend inherits it by reading output the way everything
+> else does. The scan written to prove it found **five more sites this section never listed**,
+> two of them production — including `tool_help.rs`, which reads a tool's `--help`, the output
+> most likely of all to be coloured. `sanitize` moved to `utils/text.rs`, the layer `core` may
+> depend on.
+
 Fell out of deleting the dead parsers. They called `sanitize()` — ANSI-escape stripping — and the
 live code does not. Not a brew or nix issue: **all sixteen table-driven backends sanitize, and
 the ~14 parsers hand-rolled inside `src/backends/` mostly do not** (`cargo.rs`, `go.rs`,
@@ -244,9 +269,16 @@ dissolves it as a side effect: a converted backend has nowhere to put a parser e
 
 ### The backend count nobody agrees on
 
-`SPEC.md` says 52 registered and 22 ever run; the grade says 48 registered and 24 live on this
-host. Neither is obviously stale and no one has adjudicated them. Three places count the same
-thing and no two agree — the §2 disease, in the documentation register.
+> **Adjudicated 2026-08-04, and nobody was wrong.** *"Registered" meant two different things.*
+> **62 backends are compiled into the build**; how many *register* is host-dependent, because
+> the OS-native ones sit behind `cfg!(target_os = …)`. 48 (Windows) and 56 (Ubuntu) are both
+> correct answers to the second question and belong in a grade, which is a dated measurement of
+> one machine. `SPEC.md`'s 52 answered neither and is corrected; the 62 is now asserted against
+> the argv table, which works because every registrar is already required to have a row there.
+
+`SPEC.md` said 52 registered and 22 ever run; the grade said 48 registered and 24 live on this
+host. Neither was obviously stale and no one had adjudicated them. Three places counted the same
+thing and no two agreed — the §2 disease, in the documentation register.
 
 ---
 
@@ -281,15 +313,47 @@ makes everything above safe. **They get bigger, not smaller.**
 
 ## 6. Sequencing
 
-1. **Done here:** the option lookup, the dead parsers, the coverage test.
-2. **The `KEYWORDS` ↔ Part II ratchet.** An afternoon, and it retires the motivation for **Q29**'s
-   harder half before anyone has to rule on it.
-3. **Measure the `why` chain** — how much is already reachable. Measurement, not design.
-4. **The `ManagerConfig` exception ratchet.** Before any conversion.
-5. **The plan object**, and argv assertions per backend against it.
-6. **`Ledger<T>`**, then the ten language backends, one at a time against the harness.
-7. **Re-measure and report the line count.** Standing practice from here: a phase that increases
-   it owes one sentence saying what was bought. Not a budget — a number somebody has to write
-   down.
+*Status added 2026-08-04. The full account is the `2026-08-04` entry in
+[`spec/history.md`](spec/history.md); this is the scoreboard.*
+
+1. **Done 2026-08-03:** the option lookup, the dead parsers, the coverage test.
+2. **The `KEYWORDS` ↔ Part II ratchet** — **DONE.** It found `generate:` missing from Part II's
+   Statements table on its first run: the *fourth* prefix to ship unlisted, directly beneath the
+   paragraph recording the other three. Q29's resource-kind half was ruled the same day —
+   **open, more prefixes may be added** — so this is the load-bearing half of that ruling rather
+   than a way to retire the question.
+3. **Measure the `why` chain** — **DONE, and the answer is that it is already built.** Measured
+   by running the verb against an adopted sandbox config, not by reading it: file and line,
+   module, profile, introducing commit with date and message, provenance, artifact rule, lease,
+   reverse dependencies, and each `when` with the current value of every variable it tests.
+   Nothing was missing. The measurement was.
+4. **The `ManagerConfig` exception ratchet** — **DONE**, and it is
+   `tests/backend_is_data_not_code_tests.rs`. Every backend module is data or is named with what
+   the generic machinery cannot express; "not converted yet" is rejected as a reason. Started at
+   29 entries.
+5. **The plan object, and argv assertions per backend** — **the object already existed**
+   (`SyncReport`: serializable, passed around, carries `skipped`). The argv coverage it was
+   wanted for is **done and larger than asked**: 62 backends rather than 52, any machine,
+   milliseconds, nothing installed — through the widened argv table in §4's ratchet rather than
+   through a serialized plan. Putting argv *into* `SyncReport` is not done: that changes
+   `--json`, which is user-visible, and **Q26** is still deferred.
+6. **`Ledger<T>`** — **DONE** as the `LockFile` trait, with a ratchet against a seventh ledger
+   hand-rolling its own carrier. **The backend conversions are begun, not finished:** `krew` and
+   `pubdart` are data now (390 lines of Rust → two rows), 6 remain marked `TO CONVERT`. Each
+   conversion cost one new `ManagerConfig` field rather than a lost behaviour — `extra_probes`
+   and `upgrade_reinstalls_each` — and both are now available to every backend.
+7. **Re-measure and report the line count** — **DONE, and standing.** `src` 89,592 → 89,849 (same
+   204 files); `tests` 15,759 → 16,893 (67 → 72 files). Net **+1,391**, and what it bought: argv
+   assertions for 62 backends where 32 had them, five ratchets that did not exist, and ~560 lines
+   of duplicated carrier and hand-written backend deleted.
+
+**What the scoreboard is actually recording.** Three of the five open steps were already built
+and simply unwritten, and five new ratchets were written of which **four found a live defect the
+day they were written**. Neither of those is about carelessness. Every rule involved had been
+found once and stated correctly — a paragraph instructing that a table "must be checked against"
+the code, six correct copies of a dry-run rule, sixteen backends that sanitize — and then left to
+be enforced by memory. *A prose instruction to check a copy against its authority is not a
+check.* It is a copy of the authority's address, and it decays faster than the thing it protects,
+because it reads as though the work has been done.
 
 The legibility rules in §2 are not a step; they are a standard the steps are held to.

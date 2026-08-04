@@ -890,7 +890,9 @@ impl CommandExecutor {
         // Reads tolerate a non-zero exit on purpose (empty results, missing packages),
         // so this goes through the unchecked primitive, never `run`.
         let output = self.read_raw(cmd, args, sudo).await?;
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        Ok(crate::utils::text::sanitize(&String::from_utf8_lossy(
+            &output.stdout,
+        )))
     }
 
     /// A read whose emptiness is an *answer*, so a command that could not produce one must
@@ -915,7 +917,9 @@ impl CommandExecutor {
                 cmd, first
             )));
         }
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        Ok(crate::utils::text::sanitize(&String::from_utf8_lossy(
+            &output.stdout,
+        )))
     }
 
     /// The file behind `run_exclusive`'s cross-process lock, in LiNix's own data directory.
@@ -1096,7 +1100,7 @@ impl CommandExecutor {
         // scoop's failure marker lands on stdout, not stderr, so fall back to stdout for
         // the diagnostic when stderr is empty (e.g. a `status_ok` malignant-success case).
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stdout = crate::utils::text::sanitize(&String::from_utf8_lossy(&output.stdout));
         let stream = {
             let e = stderr.trim();
             if e.is_empty() {

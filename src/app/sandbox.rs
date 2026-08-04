@@ -75,7 +75,8 @@ impl Sandbox {
                 .await;
 
             if let Ok(out) = output {
-                return String::from_utf8_lossy(&out.stdout).trim() == "Enabled";
+                return crate::utils::text::sanitize(&String::from_utf8_lossy(&out.stdout))
+                    == "Enabled";
             }
         }
         false

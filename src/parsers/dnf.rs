@@ -1,5 +1,5 @@
 use crate::core::Package;
-use crate::parsers::utils::sanitize;
+use crate::utils::text::sanitize;
 
 /// Standard RPM query parser used by DNF and Zypper.
 /// Command: rpm -qa --queryformat '%{NAME}|%{VERSION}\n'

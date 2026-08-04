@@ -1,5 +1,5 @@
 use crate::core::Package;
-use crate::parsers::utils::sanitize;
+use crate::utils::text::sanitize;
 use crate::parsers::OutputParser;
 
 /// apt's parser. A dedicated struct rather than a `LambdaParser` because apt is the one

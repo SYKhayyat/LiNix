@@ -42,7 +42,7 @@ pub trait OutputParser: Send + Sync {
 /// installed-listing ever reports — permanent phantom drift, and a removal candidate that
 /// can never be satisfied.
 pub fn parse_bare_names(output: &str, backend: &str) -> Vec<Package> {
-    utils::sanitize(output)
+    crate::utils::text::sanitize(output)
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('!'))

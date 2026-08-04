@@ -7,7 +7,7 @@
 // skip blank lines, obvious table headers, and decorative rows rather than erroring.
 
 use crate::core::Package;
-use crate::parsers::utils::sanitize;
+use crate::utils::text::sanitize;
 
 /// Header tokens that commonly lead a table's first column and must not be mistaken for a
 /// package name.
