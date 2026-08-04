@@ -27,9 +27,19 @@ use std::path::PathBuf;
 
 /// Compile-time, not the working directory: a test that reads `./docs` passes or fails
 /// depending on where `cargo test` was invoked from.
+///
+/// **Line endings are normalised where the text enters the parser**, which is Q22's ruling one
+/// file over: a byte-order mark is stripped at the same boundary rather than refused. The
+/// scanner below splits on ` ``` ` followed by a newline, a sequence that does not occur in a
+/// CRLF file — so on a Windows checkout this whole gate died with *"no fenced block follows
+/// ..."*, a message that blames the heading for moving. `.gitattributes` now pins `*.md` to LF,
+/// and this line is the half that does not depend on the reader's git config: **a coverage gate
+/// that only runs on a correctly-configured clone is a gate that reports on the clone.**
 fn spec() -> String {
     let p: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/spec/target-state.md");
-    std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("cannot read {}: {e}", p.display()))
+    std::fs::read_to_string(&p)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", p.display()))
+        .replace("\r\n", "\n")
 }
 
 /// The fenced block that follows `heading` in the spec.

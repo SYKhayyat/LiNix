@@ -14,7 +14,10 @@
 //! Every one of the eight cost the machinery a field rather than a compromise: `extra_probes`
 //! (a manager reached as a plugin of another program), `upgrade_reinstall_args` (no upgrade-all
 //! verb), `property_probes` (where the manager put it, asked with a second command),
-//! `SearchSource` (a search that is an HTTP call), and `VersionPin::TrailingPositional`. All
+//! `SearchSource` (a search that is an HTTP call), and a version pin that is a trailing operand
+//! rather than a flag — which arrived as its own `VersionPin` variant and is now read off the
+//! token, because three variants that built identical argv let two backends disagree about the
+//! `--` terminator (Q30). All
 //! five are now available to every backend, which is the difference between converting a
 //! backend and deleting one. `npm.rs` and
 //! `pnpm.rs` are ~85% identical once you rename; the real differences are three subcommand words

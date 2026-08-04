@@ -10,140 +10,437 @@
 //! install into a failure, which is worse than the leading-dash refusal the grammar already
 //! made. The default is therefore "does not terminate", and a manager joins the terminating
 //! set when someone has checked its argument parser.
+//!
+//! **One table, and every row carries its evidence.** There were two — `TERMINATES` and a
+//! `#[cfg(test)]` `DOES_NOT_TERMINATE`, with a test whose whole job was to catch them
+//! contradicting each other, and with half the production facts compiled only into tests. Two
+//! tables that can disagree is the shape this repo keeps paying for. The rows are now one list
+//! of `(binary, terminates, evidence)`, disagreement is unrepresentable, and the evidence
+//! field is the rule at the top of this file made mechanical: a row says either what the tool
+//! *said* when someone ran it, or that nobody has asked. The second kind is counted, and the
+//! count may fall but never rise.
 
-/// Managers whose CLI ends option parsing at `--`.
+/// Why a row says what it says.
+///
+/// An exemption is a claim (E29), so the two kinds are distinct in the type rather than in a
+/// comment somebody may not write. `Measured` carries the tool's own words — not a citation,
+/// not a date, the sentence it printed. `Unasked` is an honest confession, and
+/// [`UNASKED_CEILING`] is what stops the confessions accumulating.
+#[derive(Debug, Clone, Copy)]
+enum Evidence {
+    /// Run, and this is what it answered.
+    Measured(&'static str),
+    /// Never run. Why it is nonetheless listed this way.
+    Unasked(&'static str),
+}
+
+/// Whether a binary's CLI ends option parsing at `--`, and how that is known.
 ///
 /// Keyed on the binary actually invoked, not the LiNix backend name, because that is what
 /// parses the arguments (apt's installs run `apt-get`, its queries run `dpkg-query`).
-const TERMINATES: &[&str] = &[
-    // Coreutils/GNU-style parsers.
-    "apt",
-    "apt-get",
-    "apt-cache",
-    "apt-mark",
-    "dpkg",
-    "dpkg-query",
-    "aptitude", //
-    "dnf",
-    "dnf5",
-    "yum",
-    "microdnf",
-    "rpm", //
-    "pacman",
-    "yay",
-    "paru",
-    "pamac", //
-    "apk",
-    "xbps-install",
-    "xbps-remove",
-    "xbps-query", //
-    "zypper",
-    "emerge",
-    "eix",
-    "equery", //
-    "nix-env",
-    "nix",
-    "guix",
-    "flatpak",
-    "snap", //
-    "pip",
-    "pip3",
-    "pipx",
-    "cargo",
-    "npm",
-    "pnpm",
-    "yarn",
-    "bun", //
-    "go",
-    "composer",
-    "luarocks",
-    "opam",
-    "mix",
-    "cabal",
-    "stack", //
-    "conda",
-    "mamba",
-    "micromamba",
-    "uv",
-    "pixi",
-    "mise", //
-    "brew",
-    "port",
-    "pkgin",
-    "pkg",
-    "pkg_add",
-    "pkg_delete",
-    "eopkg",
-    "slackpkg", //
-    "helm",
-    "kubectl",
-    "krew",
-    "dart",
-    "flutter",
-    "emacs",
-    "systemctl", //
-    // Go-flag parsers: `age` and `sops` are handed a source path a declaration chose.
-    "age",
-    "sops",
+struct Terminator {
+    binary: &'static str,
+    terminates: bool,
+    evidence: Evidence,
+}
+
+/// A parser whose `--` handling comes from the C library rather than from the tool.
+const GETOPT: Evidence = Evidence::Unasked(
+    "delegates option parsing to getopt(3)/argp, where `--` is the terminator by definition. \
+     Inferred from the parser it links against, not asked of the tool itself.",
+);
+
+const TERMINATORS: &[Terminator] = &[
+    // ---- Debian/Ubuntu.
+    row("apt", true, GETOPT),
+    row("apt-get", true, GETOPT),
+    row("apt-cache", true, GETOPT),
+    row("apt-mark", true, GETOPT),
+    row("dpkg", true, GETOPT),
+    row("dpkg-query", true, GETOPT),
+    row("aptitude", true, GETOPT),
+    // ---- Red Hat.
+    row("dnf", true, GETOPT),
+    row("dnf5", true, GETOPT),
+    row("yum", true, GETOPT),
+    row("microdnf", true, GETOPT),
+    row("rpm", true, GETOPT),
+    // ---- Arch.
+    row("pacman", true, GETOPT),
+    row("yay", true, GETOPT),
+    row("paru", true, GETOPT),
+    row("pamac", true, GETOPT),
+    // ---- Alpine, Void, SUSE, Gentoo.
+    row("apk", true, GETOPT),
+    row("xbps-install", true, GETOPT),
+    row("xbps-remove", true, GETOPT),
+    row("xbps-query", true, GETOPT),
+    row("zypper", true, GETOPT),
+    row("emerge", true, GETOPT),
+    row("eix", true, GETOPT),
+    row("equery", true, GETOPT),
+    // ---- Functional / sandboxed.
+    row("nix-env", true, GETOPT),
+    row(
+        "nix",
+        true,
+        Evidence::Measured(
+            "`nix profile remove -- <bogus>` answers `warning: Package name '<bogus>' does not \
+             match any packages in the profile` — the name, not the terminator (tools image, \
+             2026-08-04)",
+        ),
+    ),
+    row("guix", true, GETOPT),
+    row(
+        "flatpak",
+        true,
+        Evidence::Measured(
+            "`flatpak install -y -- <bogus>` answers `error: No remote refs found for '<bogus>'` \
+             (tools image, 2026-08-04)",
+        ),
+    ),
+    row("snap", true, GETOPT),
+    // ---- Language ecosystems.
+    row(
+        "pip",
+        true,
+        Evidence::Measured(
+            "`pip uninstall -y -- <bogus>` answers `WARNING: Skipping <bogus> as it is not \
+             installed.` (tools image, 2026-08-04)",
+        ),
+    ),
+    row("pip3", true, GETOPT),
+    row(
+        "pipx",
+        true,
+        Evidence::Measured(
+            "`pipx install -- <bogus>` gets as far as `installing <bogus>...` (tools image, \
+             2026-08-04)",
+        ),
+    ),
+    row("cargo", true, GETOPT),
+    row(
+        "npm",
+        true,
+        Evidence::Measured(
+            "`npm uninstall -g -- <bogus>` answers `up to date` and exits 0, which is what \
+             removing an absent package looks like (tools image, 2026-08-04)",
+        ),
+    ),
+    row("pnpm", true, GETOPT),
+    row("yarn", true, GETOPT),
+    row(
+        "bun",
+        true,
+        Evidence::Measured(
+            "`bun add -g -- <bogus>` answers `error: GET \
+             https://registry.npmjs.org/<bogus> - 404` (tools image, 2026-08-04)",
+        ),
+    ),
+    row(
+        "go",
+        true,
+        Evidence::Measured(
+            "`go install -- <bogus>` answers `Try 'go install <bogus>@latest'` (tools image, \
+             2026-08-04)",
+        ),
+    ),
+    row(
+        "composer",
+        true,
+        Evidence::Measured(
+            "`composer global require -- <bogus>` is byte-identical to the same line without the \
+             terminator, both answering `Could not find a matching version of package <bogus>`; \
+             its own usage line documents `[--] [<packages>...]` (tools image, 2026-08-04)",
+        ),
+    ),
+    row(
+        "luarocks",
+        true,
+        Evidence::Measured(
+            "`luarocks install --` answers `Error: missing argument 'rock'` over usage \
+             `<rock> [<version>]`, and `luarocks install -- <rock> <version>` is identical to \
+             the same line without the terminator (tools image, 2026-08-04)",
+        ),
+    ),
+    row(
+        "opam",
+        true,
+        Evidence::Measured(
+            "`opam install -y -- <bogus>` answers `[ERROR] No package named <bogus> found.` \
+             (tools image, 2026-08-04)",
+        ),
+    ),
+    row(
+        "mix",
+        true,
+        Evidence::Measured(
+            "`mix archive.install hex --force -- <bogus>` is identical to the same line without \
+             the terminator, both naming the operand (tools image, 2026-08-04)",
+        ),
+    ),
+    row(
+        "cabal",
+        true,
+        Evidence::Measured(
+            "`cabal install -- <bogus>` answers `cabal: Unknown package \"<bogus>\".` (tools \
+             image, 2026-08-04)",
+        ),
+    ),
+    row(
+        "stack",
+        true,
+        Evidence::Measured(
+            "a hand run died in an HTTP call to s3.amazonaws.com before reaching stack's own \
+             argument handling and answered nothing; the differential probe then ran its real \
+             argv both ways and the two agreed in every signal \
+             (tests/terminator_probe_tests.rs, tools image, 2026-08-04)",
+        ),
+    ),
+    // ---- Conda-likes.
+    row(
+        "conda",
+        true,
+        Evidence::Unasked(
+            "`conda install -y -- <bogus>` spent its output on channel and platform banners and \
+             was cut off before any verdict on the operand (tools image, 2026-08-04).",
+        ),
+    ),
+    row("mamba", true, GETOPT),
+    row("micromamba", true, GETOPT),
+    row(
+        "uv",
+        true,
+        Evidence::Measured(
+            "`uv tool install -- <bogus>` answers `Because <bogus> was not found in the package \
+             registry` (tools image, 2026-08-04)",
+        ),
+    ),
+    row(
+        "pixi",
+        true,
+        Evidence::Measured(
+            "`pixi global install -- <bogus>` answers `Couldn't install environment <bogus>` \
+             (tools image, 2026-08-04)",
+        ),
+    ),
+    row(
+        "mise",
+        true,
+        Evidence::Measured(
+            "`mise use -g -- <bogus>` answers `Failed to install <bogus>@latest: <bogus> not \
+             found in mise tool registry` (tools image, 2026-08-04)",
+        ),
+    ),
+    // ---- macOS / BSD / other distro managers.
+    row("brew", true, GETOPT),
+    row("port", true, GETOPT),
+    row("pkgin", true, GETOPT),
+    row("pkg", true, GETOPT),
+    row("pkg_add", true, GETOPT),
+    row("pkg_delete", true, GETOPT),
+    row("eopkg", true, GETOPT),
+    row("slackpkg", true, GETOPT),
+    // ---- Kubernetes, Dart, editors, init.
+    row(
+        "helm",
+        true,
+        Evidence::Measured(
+            "`helm plugin uninstall -- <bogus>` answers `Error: Plugin: <bogus> not found` \
+             (tools image, 2026-08-04)",
+        ),
+    ),
+    row(
+        "kubectl",
+        true,
+        Evidence::Measured(
+            "the differential probe ran kubectl's real argv both ways in the tools image and the \
+             two runs agreed in every signal — same exit code, same operand echo, no stray `--` \
+             (tests/terminator_probe_tests.rs, 2026-08-04)",
+        ),
+    ),
+    row("krew", true, GETOPT),
+    row(
+        "dart",
+        true,
+        Evidence::Measured(
+            "`dart pub global activate -- <pkg> <version>` is identical to the same line \
+             without the terminator, and usage reads `activate <package> \
+             [version-constraint]` (tools image, 2026-08-04)",
+        ),
+    ),
+    row("flutter", true, GETOPT),
+    row("emacs", true, GETOPT),
+    row(
+        "systemctl",
+        true,
+        Evidence::Measured(
+            "the differential probe ran systemctl's real argv both ways in the tools image and \
+             the two runs agreed in every signal (tests/terminator_probe_tests.rs, 2026-08-04)",
+        ),
+    ),
+    // ---- Go-flag parsers: `age` and `sops` are handed a source path a declaration chose.
+    row("age", true, GETOPT),
+    row("sops", true, GETOPT),
+    // ---- Measured NOT to terminate. Every one of these was in the terminating set at some
+    // point, put there by family resemblance, and every one of them broke something.
+    row(
+        "asdf",
+        false,
+        Evidence::Measured(
+            "`asdf install -- <bogus>`, `asdf uninstall -- <bogus>` and `asdf list -- <bogus>` \
+             all answer `No such plugin: --`: it dispatches on $1 as the plugin name. Every \
+             verb, not just install (tools image, 2026-07-28 and 2026-08-04)",
+        ),
+    ),
+    row(
+        "spack",
+        false,
+        Evidence::Measured(
+            "`spack find -- <bogus>` answers `No package matches the query: -- <bogus>` and \
+             `spack uninstall -y -- <bogus>` mangles it to `~~<bogus>`: the terminator is read \
+             into the spec (tools image, 2026-07-28 and 2026-08-04)",
+        ),
+    ),
+    row(
+        "gem",
+        false,
+        Evidence::Measured(
+            "RubyGems' `--` separates gem names from BUILD arguments, so it consumes the \
+             operand on every verb: `gem install -- <bogus>` and `gem uninstall -- <bogus>` \
+             answer `Please specify at least one gem name`, and `gem list -- <bogus>` silently \
+             lists every gem instead of filtering — a wrong answer, not an error (tools image, \
+             2026-08-04)",
+        ),
+    ),
+    row(
+        "nimble",
+        false,
+        Evidence::Measured(
+            "nimble's `--` is RubyGems', not GNU's: on install it reaches the Nim compiler, \
+             which answers `arguments can only be given if the '--run' option is selected` and \
+             fails every build that produces a binary; on uninstall, list and search it answers \
+             `Unknown option: --` outright (tools image, 2026-08-04)",
+        ),
+    ),
+    // ---- Not asked here: Windows- and macOS-native tools, and the init wrappers. The
+    // reasons are the parser's shape, which is why they were listed before anyone could run
+    // them; the ratchet counts them until someone does.
+    row(
+        "winget",
+        false,
+        Evidence::Unasked("takes the package id positionally and reads a bare `--` as one."),
+    ),
+    row(
+        "choco",
+        false,
+        Evidence::Unasked("takes the package id positionally and reads a bare `--` as one."),
+    ),
+    row(
+        "scoop",
+        false,
+        Evidence::Unasked("a PowerShell script dispatching on $args[0]; `--` becomes an app name."),
+    ),
+    row(
+        "mas",
+        false,
+        Evidence::Unasked("takes a numeric App Store id positionally, with no option terminator."),
+    ),
+    // Listed as NOT terminating on the reasoning that .NET takes the tool id positionally and
+    // would read `--` as one. It does not: `System.CommandLine` ends option parsing there like
+    // any GNU-style CLI, and the guess cost every `dotnet:` install the protection this file
+    // exists to give. Found by `tests/terminator_probe_tests.rs` on its first real run — an
+    // unmeasured row, wrong, which is the entire reason the probe was written.
+    row(
+        "dotnet",
+        true,
+        Evidence::Measured(
+            "`dotnet tool uninstall --global -- <bogus>` is identical to the same line without \
+             the terminator, both answering `A tool with the package Id '<bogus>' could not be \
+             found.` (.NET 8.0.129, tools image, 2026-08-04)",
+        ),
+    ),
+    row(
+        "pwsh",
+        false,
+        Evidence::Unasked("is handed a `-Command` script, so there is no operand to protect."),
+    ),
+    row(
+        "powershell",
+        false,
+        Evidence::Unasked("is handed a `-Command` script, so there is no operand to protect."),
+    ),
+    row(
+        "code",
+        false,
+        Evidence::Unasked(
+            "takes an extension id as the *value* of `--install-extension`, never as a \
+             positional, so a `--` in front of it would become the value.",
+        ),
+    ),
+    row(
+        "gsettings",
+        false,
+        Evidence::Unasked(
+            "dispatches on argv[1] by hand — no getopt, so a bare `--` is read as the command \
+             name and the call fails before it reaches the schema.",
+        ),
+    ),
+    row(
+        "sc",
+        false,
+        Evidence::Unasked(
+            "dispatches on argv[1] by hand with no getopt; `sc query --help` tries to query a \
+             service literally named `--help`.",
+        ),
+    ),
+    row(
+        "launchctl",
+        false,
+        Evidence::Unasked("takes the service positionally with no option terminator."),
+    ),
+    row(
+        "rc-service",
+        false,
+        Evidence::Unasked(
+            "a shell script reading $1 as the service, and it puts the name *between* two \
+             positionals (`rc-service <name> start`), which leaves no place a terminator could \
+             go.",
+        ),
+    ),
+    row(
+        "rc-update",
+        false,
+        Evidence::Unasked("an OpenRC shell script reading $1 as the verb and $2 as the service."),
+    ),
+    row(
+        "update-rc.d",
+        false,
+        Evidence::Unasked("a SysVinit shell script reading $1 as the service."),
+    ),
+    row(
+        "service",
+        false,
+        Evidence::Unasked("a SysVinit shell script putting the name between two positionals."),
+    ),
 ];
 
-/// Managers whose CLI has no `--`, checked and recorded so the absence is a fact and not an
-/// oversight. Windows-native tools and .NET's parser take the name positionally and read a
-/// bare `--` as a package.
-#[cfg(test)]
-const DOES_NOT_TERMINATE: &[&str] = &[
-    "winget",
-    "choco",
-    "scoop",
-    "mas",
-    "dotnet",
-    "pwsh",
-    "powershell", //
-    // RubyGems' `--` is not an option terminator: it is the separator between the gem
-    // names and the BUILD arguments handed to a C extension
-    // (`gem install nokogiri -- --with-xml2-dir=…`). So `gem install -- colorize` names
-    // no gem at all and fails with "Please specify at least one gem name" — which is
-    // exactly what listing it as terminating did to every `gem` install and removal.
-    "gem",
-    // nimble's `--` is RubyGems' `--`, not GNU's: `nimble install --help` says of it "arg
-    // are passed to the binary when it is run … to the Nim compiler". So `nimble install -y
-    // -- nimjson` reaches the compiler as an argument and the build dies with "arguments can
-    // only be given if the '--run' option is selected". Every install of a nimble package
-    // that produces a binary failed this way; a package that only ships a library never
-    // invokes the compiler with arguments, which is why it went unnoticed.
-    "nimble",
-    // asdf dispatches on `$1` as the plugin name — measured in the `tools` image, `asdf
-    // install -- jq` answers `No such plugin: --`, and `asdf install jq latest` installs it.
-    // It was listed as terminating without anyone asking it, which is the thing the header
-    // of this file warns about, done to this file.
-    "asdf",
-    // spack reads `--` into the spec it is given: `spack spec -- zlib` dies with `string
-    // index out of range`, `spack find -- <name>` reports `No package matches the query: --
-    // <name>`, and both work without it. The grader saw the same parser mangle it into
-    // `Spec ~~zlib has no name`.
-    "spack",
-    // `code` takes an extension id as the *value* of `--install-extension`, never as a
-    // positional, so a `--` in front of it would become the value.
-    "code",
-    // `gsettings` dispatches on argv[1] by hand — no getopt, so a bare `--` is read as the
-    // command name and the call fails before it reaches the schema.
-    "gsettings",
-    // Init systems other than systemd. `sc` and `launchctl` take the service positionally
-    // with no option terminator; the OpenRC and SysVinit wrappers are shell scripts that
-    // read `$1` as the service, and all of them put the name *between* two positionals
-    // (`rc-service <name> start`), which leaves no place a terminator could go.
-    "sc",
-    "launchctl",
-    "rc-service",
-    "rc-update",
-    "update-rc.d",
-    "service",
-];
+/// A `const fn` so the table above reads as data rather than as struct literals.
+const fn row(binary: &'static str, terminates: bool, evidence: Evidence) -> Terminator {
+    Terminator {
+        binary,
+        terminates,
+        evidence,
+    }
+}
 
 /// Whether `binary` ends its option parsing at `--`.
 pub fn terminates_options(binary: &str) -> bool {
     let base = base_name(binary);
-    TERMINATES.contains(&base)
+    TERMINATORS
+        .iter()
+        .find(|t| t.binary == base)
+        .is_some_and(|t| t.terminates)
 }
 
 /// The bare program name, so an absolute path (`/usr/bin/apt-get`, `C:\...\scoop.exe`) is
@@ -151,6 +448,32 @@ pub fn terminates_options(binary: &str) -> bool {
 fn base_name(binary: &str) -> &str {
     let after_dir = binary.rsplit(['/', '\\']).next().unwrap_or(binary);
     after_dir.strip_suffix(".exe").unwrap_or(after_dir)
+}
+
+/// Every binary this table has an answer for, with that answer. For the probe, which exists to
+/// ask the tools themselves whether the answers are still true.
+pub fn known_terminator_claims() -> Vec<(&'static str, bool)> {
+    TERMINATORS
+        .iter()
+        .map(|t| (t.binary, t.terminates))
+        .collect()
+}
+
+/// Why this row says what it says, and whether anyone has run the tool to find out.
+///
+/// Read by the probe, so a disagreement between the table and the tool is reported next to the
+/// reason the table believed itself — which is usually the whole diagnosis. A stored fact that
+/// nothing reads is the shape this file exists to remove; storing evidence and never printing
+/// it would have been the same mistake in a new place.
+pub fn terminator_evidence(binary: &str) -> Option<(bool, &'static str)> {
+    let base = base_name(binary);
+    TERMINATORS
+        .iter()
+        .find(|t| t.binary == base)
+        .map(|t| match t.evidence {
+            Evidence::Measured(w) => (true, w),
+            Evidence::Unasked(w) => (false, w),
+        })
 }
 
 /// Append package names to an argument list, ending the manager's options first where the
@@ -176,6 +499,16 @@ pub fn push_names<S: AsRef<str>>(
 mod tests {
     use super::*;
 
+    /// How many rows may still say "nobody asked".
+    ///
+    /// **A ratchet, not a threshold.** It may be lowered when a row is measured; raising it is
+    /// adding a manager on a family resemblance, which is the one move that has broken this
+    /// file four times — `asdf`, `spack`, `gem` and `nimble` were each listed as terminating by
+    /// someone who recognised the shape, and each one broke every install that went through it.
+    /// `tests/terminator_probe_tests.rs` is the thing that asks; run it in an image that has
+    /// the tool, take the names it prints, and lower this.
+    const UNASKED_CEILING: usize = 61;
+
     #[test]
     fn a_gnu_style_manager_terminates_and_a_windows_one_does_not() {
         assert!(terminates_options("apt-get"));
@@ -187,12 +520,12 @@ mod tests {
         assert!(!terminates_options("choco"));
     }
 
-    /// Measured in the `tools` container on 2026-07-28, not inferred from a family resemblance.
+    /// Measured in the `tools` container, not inferred from a family resemblance.
     ///
-    /// Both were in `TERMINATES` and neither had been asked. asdf answered `No such plugin:
-    /// --`; spack answered `No package matches the query: -- <name>` and, on a spec, `string
-    /// index out of range`. The grader saw the second one arrive as `Spec ~~zlib has no name`
-    /// after a real install, which is the same parser and a less legible message.
+    /// Both were listed as terminating and neither had been asked. asdf answered `No such
+    /// plugin: --`; spack answered `No package matches the query: -- <name>` and, on a spec,
+    /// `string index out of range`. The grader saw the second one arrive as `Spec ~~zlib has
+    /// no name` after a real install, which is the same parser and a less legible message.
     ///
     /// The header of this file already states the rule this broke: the default is "does not
     /// terminate", and a manager joins the terminating set **when someone has checked its
@@ -210,13 +543,66 @@ mod tests {
         assert!(terminates_options("luarocks"));
     }
 
+    /// One binary, one row. The old shape was two tables and a test asserting they did not
+    /// contradict each other; a duplicate row is the same contradiction in one table.
     #[test]
-    fn the_two_tables_never_disagree() {
-        for b in DOES_NOT_TERMINATE {
+    fn no_binary_is_listed_twice() {
+        let mut seen: Vec<&str> = Vec::new();
+        for t in TERMINATORS {
             assert!(
-                !TERMINATES.contains(b),
-                "`{}` is in both tables — one invocation cannot both end its options and not",
-                b
+                !seen.contains(&t.binary),
+                "`{}` has two rows — one invocation cannot both end its options and not",
+                t.binary
+            );
+            seen.push(t.binary);
+        }
+    }
+
+    /// The ratchet. Rows that nobody has asked may only become fewer.
+    #[test]
+    fn the_unasked_rows_may_only_become_fewer() {
+        let unasked: Vec<&str> = TERMINATORS
+            .iter()
+            .filter(|t| matches!(t.evidence, Evidence::Unasked(_)))
+            .map(|t| t.binary)
+            .collect();
+        eprintln!(
+            "terminator table: {} rows, {} measured, {} never asked",
+            TERMINATORS.len(),
+            TERMINATORS.len() - unasked.len(),
+            unasked.len()
+        );
+        assert!(
+            unasked.len() <= UNASKED_CEILING,
+            "{} rows say nobody asked, and the ceiling is {}: {:?}\n\n\
+             A new row on a family resemblance is how this file broke four times. Measure it \
+             — `tests/terminator_probe_tests.rs` in an image that has the tool — and lower \
+             the ceiling.",
+            unasked.len(),
+            UNASKED_CEILING,
+            unasked
+        );
+    }
+
+    /// An exemption is a claim, and a claim has content. Both kinds of evidence say something
+    /// about the parser; neither may be a shrug or a date.
+    #[test]
+    fn every_row_says_something_a_reader_could_check() {
+        for t in TERMINATORS {
+            let (kind, text) = match t.evidence {
+                Evidence::Measured(w) => ("measured", w),
+                Evidence::Unasked(w) => ("unasked", w),
+            };
+            assert!(
+                text.len() > 40,
+                "`{}`'s {kind} evidence has no substance: {text:?}",
+                t.binary
+            );
+            let lower = text.to_lowercase();
+            assert!(
+                !lower.contains("not yet") && !lower.contains("todo"),
+                "`{}`'s evidence is a schedule, not a claim about its parser: {text:?}",
+                t.binary
             );
         }
     }
@@ -226,6 +612,13 @@ mod tests {
         assert!(terminates_options("/usr/bin/apt-get"));
         assert!(terminates_options(r"C:\tools\cargo.exe"));
         assert!(!terminates_options(r"C:\Users\me\scoop\shims\scoop.exe"));
+    }
+
+    #[test]
+    fn a_binary_this_table_has_never_heard_of_does_not_terminate() {
+        // The default the header states, asserted rather than remembered: an unlisted manager
+        // is one nobody checked, and the safe reading of "nobody checked" is "no terminator".
+        assert!(!terminates_options("some-manager-invented-tomorrow"));
     }
 
     #[test]

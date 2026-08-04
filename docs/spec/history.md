@@ -119,6 +119,43 @@ none when pinned), and are **deliberately left alone**: neither is installed her
 can only ask a manager that is present, and whether they accept `--` before an operand is a
 measurement rather than a guess.
 
+**Answered the next day, and the answer deleted the variant that raised it (Q30, 2026-08-04).**
+The image with the tools was already built - `linix-it-tools` carries luarocks, mix, asdf, spack,
+nimble and dart - so the measurement was a container run, not a project. luarocks and mix both
+honour `--` in front of a name *and* a version (`luarocks install --` answers
+`Error: missing argument 'rock'` over usage `<rock> [<version>]`), so both had been losing the
+terminator on every pinned install for no reason at all. **mix was the instance nobody had
+noticed**: the write-up named two backends and there were three.
+
+The fix is not a fourth variant. `Flag`, `TrailingPositional` and `RequiredFlag` had
+character-for-character identical bodies and differed only in what their *names* told the caller
+about the `--` terminator, which is a fact the tokens already state - an option starts with `-`
+and a version does not. Three variants collapse to `After { args, unpinned }`, `LeadingFlag`
+becomes `Before`, and `emits_trailing_option()` looks at the first token instead of at a label.
+
+**The measurement also killed the feature that was proposed alongside it.** The plan included
+keying the terminator table on `(binary, verb)` rather than `binary`, on the theory that gem's
+`--` breaks `install` and would be safe on `list`. Measured: `gem list -- <name>` lists every gem
+instead of filtering - it does not error, it answers wrongly - and nimble, spack and asdf reject
+or mangle the terminator on every verb too. A dimension with zero true entries, cut before it was
+written.
+
+**And the gate written to check the table found a row wrong on its first real run.** The two
+tables (one of them `#[cfg(test)]`, so half the production facts compiled only into tests) became
+one list where every row carries the tool's own sentence or an admission that nobody asked, with
+a ratchet on the admissions. `tests/terminator_probe_tests.rs` runs each manager's real argv with
+and without the terminator and compares exit code, whole-token operand echo, and the presence of
+a bare `--`. Pointed at the tools image it said `dotnet` terminates - contradicting a row that
+had been guessed from ".NET takes the tool id positionally". It does not: `dotnet tool uninstall
+--global -- <name>` is identical to the same line without the terminator. Every `dotnet:` install
+had been going out unprotected.
+
+Two of the probe's three initial findings were the probe's own fault, and both taught it
+something: `spack` renders a swallowed `--` as `~~<name>`, which a substring test reads as
+success (so the operand check counts whole tokens), and `nimble` accepts `--` on `install` while
+answering `Unknown option: --` on `uninstall` (so every argv is checked, not the first, and a
+binary terminates only when all its verbs do).
+
 ### What was already built, and is now recorded
 
 **The `why` chain (step 3) is done.** The doc asked for a measurement before any design. Measured

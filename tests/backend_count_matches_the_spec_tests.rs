@@ -19,9 +19,19 @@
 
 use std::path::PathBuf;
 
+/// Read a file of the repo, with line endings normalised where the text enters the scanner.
+///
+/// **This one passes today by luck.** Its marker spans a line break — `" backends\nexist across
+/// all platforms"` — and a CRLF copy of `SPEC.md` contains no such sequence, so the scan would
+/// panic that the sentence had been reworded. `SPEC.md` happened to be LF in the working tree
+/// where four of its neighbours in `docs/spec/` were CRLF, which is the only reason this gate
+/// ran while `grammar_table_matches_the_spec_tests` sat dark. Same fix, same boundary, before
+/// the coin lands the other way.
 fn read(rel: &str) -> String {
     let p: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel);
-    std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("cannot read {}: {e}", p.display()))
+    std::fs::read_to_string(&p)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", p.display()))
+        .replace("\r\n", "\n")
 }
 
 /// Backends the build contains, counted from the argv table's rows.

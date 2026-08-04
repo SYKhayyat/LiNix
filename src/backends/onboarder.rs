@@ -265,20 +265,36 @@ impl OutputParser for ConfiguredParser {
 
 /// A user's version-pin choice, mirrored for `serde` (the runtime [`VersionPin`] is not
 /// `Deserialize`).
+///
+/// The three placements the runtime has, all three reachable from a definition. `after` was
+/// called `flag` and was the only one of the two that existed, which left a custom backend
+/// unable to say either of the things `cargo` and `asdf` say — a version *before* the name,
+/// and a manager that refuses to install without one.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum VersionPinDef {
-    /// A single token, e.g. `{name}=={version}`.
+    /// One token, e.g. `{name}=={version}`.
     Inline { template: String },
-    /// The bare name followed by flag args, e.g. `["--version", "{version}"]`.
-    Flag { args: Vec<String> },
+    /// Args before the name, e.g. `["--version", "{version}"]` for a cargo-shaped tool.
+    Before { args: Vec<String> },
+    /// Args after the name: `["-v", "{version}"]` (an option, which gives up the `--`
+    /// terminator) or `["{version}"]` (an operand, which keeps it). Which one it is comes
+    /// from the token, not from a key the definition has to get right.
+    After {
+        args: Vec<String>,
+        /// For a manager that refuses to install without a version: what to ask for when the
+        /// line pins none. Absent means "no version" already means "current".
+        #[serde(default)]
+        unpinned: Option<String>,
+    },
 }
 
 impl From<VersionPinDef> for VersionPin {
     fn from(d: VersionPinDef) -> Self {
         match d {
             VersionPinDef::Inline { template } => VersionPin::Inline(template),
-            VersionPinDef::Flag { args } => VersionPin::Flag(args),
+            VersionPinDef::Before { args } => VersionPin::Before(args),
+            VersionPinDef::After { args, unpinned } => VersionPin::After { args, unpinned },
         }
     }
 }

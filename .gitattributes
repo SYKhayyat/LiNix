@@ -25,3 +25,13 @@ scripts/lifecycle-floor.txt text eol=lf
 # is `scripts/lifecycle-floor.txt`'s, one directory over, and the file that made it apply here
 # was committed with `warning: LF will be replaced by CRLF the next time Git touches it`.
 tests/fixtures/** text eol=lf
+
+# Markdown, because the spec is read by tests as well as by people. Four files in `docs/spec/`
+# were CRLF in a working tree whose `docs/SPEC.md` was LF, and the difference decided which
+# gates ran: `grammar_table_matches_the_spec_tests` splits target-state.md on "```\n", a
+# sequence that does not occur in "```\r\n", so it failed with *"no fenced block follows ..."*
+# — a message that blames the heading for moving. Its sibling
+# `backend_count_matches_the_spec_tests` reads SPEC.md, was LF, and passed. Two gates over the
+# same spec, one of them dark, and nothing said so. CI is Linux and never saw it, which is the
+# `*.sh` entry's story exactly: broken only on the machine the project is written on.
+*.md text eol=lf

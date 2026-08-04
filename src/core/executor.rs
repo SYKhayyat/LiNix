@@ -1423,15 +1423,16 @@ mod child_process_tests {
     }
 
     /// Runs far longer than the bound, but is never quiet for it. A build, a big download.
-    fn chatty_for_a_while() -> (&'static str, Vec<String>) {
+    fn chatty_for_a_while(ticks: usize) -> (&'static str, Vec<String>) {
         #[cfg(unix)]
         {
             (
                 "sh",
                 vec![
                     "-c".to_string(),
-                    "i=0; while [ $i -lt 12 ]; do echo tick; i=$((i+1)); sleep 0.5; done"
-                        .to_string(),
+                    format!(
+                        "i=0; while [ $i -lt {ticks} ]; do echo tick; i=$((i+1)); sleep 0.5; done"
+                    ),
                 ],
             )
         }
@@ -1446,11 +1447,30 @@ mod child_process_tests {
                     // when stdout is redirected, so a fixture that "talks" through the
                     // pipeline can be silent for its whole run — which is the one thing this
                     // fixture must not be.
-                    "1..12 | ForEach-Object { [Console]::Out.WriteLine('tick'); [Console]::Out.Flush(); Start-Sleep -Milliseconds 500 }"
-                        .to_string(),
+                    format!(
+                        "1..{ticks} | ForEach-Object {{ [Console]::Out.WriteLine('tick'); \
+                         [Console]::Out.Flush(); Start-Sleep -Milliseconds 500 }}"
+                    ),
                 ],
             )
         }
+    }
+
+    /// What this host charges to start the interpreter and get one line out of it.
+    ///
+    /// **The idle clock starts at spawn, so start-up is silence.** That is right for the product
+    /// — an interpreter that never starts *is* a hang — and it makes any fixed bound in a test
+    /// below an assertion about the host's scheduler rather than about the code. The bound was
+    /// 3s and failed on a machine running three `cargo test` jobs; it was raised to 5s and
+    /// failed again on 2026-08-04, under a `cargo test` sharing the box with a container build.
+    /// Raising a constant that has already been raised once is not a fix. So the cost is
+    /// measured on the machine the test is running on, and the bound is set from it.
+    async fn interpreter_start_up_cost() -> std::time::Duration {
+        let layer = RawExecutor::with_idle(ChildStdin::Closed, None);
+        let (cmd, args) = chatty_for_a_while(1);
+        let started = std::time::Instant::now();
+        let _ = layer.execute(cmd, &args, &HashMap::new()).await;
+        started.elapsed()
     }
 
     /// The bug: `linix uninstall choco:bat` sat 76 minutes on a `Checkpoint-Computer` that had
@@ -1495,27 +1515,33 @@ mod child_process_tests {
     /// The bound is on silence, not on duration — the distinction the whole fix rests on. A
     /// wall-clock cap set low enough to catch the hang would kill every real build.
     ///
-    /// **The bound is 8s for a fixture that talks for 10s, and the gap is deliberate.** The
-    /// clock starts when the child is *spawned*, so the interpreter's own start-up counts as
-    /// silence: at a 3s bound this failed on a machine running three `cargo test` jobs, because
-    /// PowerShell had not reached its first `Write-Output` inside three seconds. That is the
-    /// same defect as the timing test in `core::timing` — an assertion that fails when a sleep
-    /// runs long is an assertion about the host's scheduler. The property under test is
-    /// unchanged: a child that runs *longer* than the idle bound while still printing survives
-    /// it.
+    /// **The bound is measured, not written down.** It is this host's interpreter start-up cost
+    /// plus three seconds, because the idle clock starts at spawn and start-up therefore counts
+    /// as silence — see [`interpreter_start_up_cost`]. A constant here is an assertion about the
+    /// machine: 3s failed under three concurrent `cargo test` jobs, 5s failed under one sharing
+    /// the box with a container build, and the next constant fails on the next busier day. The
+    /// property under test never changed: a child that runs *longer* than the idle bound while
+    /// still printing survives it. Twelve ticks at 500ms is six seconds of talking against a
+    /// three-second margin, so the fixture outlives the bound whatever start-up cost.
     #[tokio::test]
     async fn a_child_that_keeps_talking_outlives_the_bound() {
-        let layer =
-            RawExecutor::with_idle(ChildStdin::Closed, Some(std::time::Duration::from_secs(5)));
-        let (cmd, args) = chatty_for_a_while();
+        let margin = std::time::Duration::from_secs(3);
+        let bound = interpreter_start_up_cost().await + margin;
+
+        let layer = RawExecutor::with_idle(ChildStdin::Closed, Some(bound));
+        let (cmd, args) = chatty_for_a_while(12);
         let started = std::time::Instant::now();
         let out = layer
             .execute(cmd, &args, &HashMap::new())
             .await
-            .expect("a command that is still printing has not hung");
+            .unwrap_or_else(|e| {
+                panic!("a command that is still printing has not hung (bound {bound:?}): {e}")
+            });
         assert!(
-            started.elapsed() > std::time::Duration::from_secs(5),
-            "the fixture must outlive the bound or it proves nothing"
+            started.elapsed() > bound,
+            "the fixture ran {:?} against a {bound:?} bound — it must outlive it or it proves \
+             nothing",
+            started.elapsed()
         );
         assert!(out.status.success());
         assert_eq!(

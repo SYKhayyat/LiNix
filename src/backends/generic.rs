@@ -11,81 +11,75 @@ use tracing::info;
 
 /// How a backend expresses an exact version at install time, for reproducible
 /// (locked) installs. `{name}` / `{version}` are substituted.
+///
+/// **The variants say where the version goes, and nothing else.** Whether it is an *option* —
+/// the one property that decides if the `--` terminator can precede it — is read off the
+/// tokens by [`emits_trailing_option`](VersionPin::emits_trailing_option), because an option
+/// starts with `-` and a version does not. It was a third variant for a while, and the third
+/// variant is what went wrong: `Flag`, `TrailingPositional` and `RequiredFlag` had
+/// character-for-character the same body, so the argv they built was identical and only the
+/// *label* decided the terminator. Three backends carrying a bare positional — `luarocks`,
+/// `mix`, `pub` — were spread across two of those labels, and the two that guessed wrong
+/// dropped the terminator on pinned installs and kept it on unpinned ones. A fact the data
+/// already states cannot be restated by hand without eventually disagreeing with itself.
 #[derive(Debug, Clone)]
 pub enum VersionPin {
-    /// A single token, e.g. apt `name=version`, pip `name==version`, bun `name@version`.
+    /// One token: apt `name=version`, pip `name==version`, bun `name@version`.
     Inline(String),
-    /// The bare name followed by flag args, e.g. winget/choco `--version {version}`,
-    /// gem `-v {version}`.
-    ///
-    /// **A `Flag` pin suppresses the `--` terminator**, because behind `--` a `-v` is a package
-    /// name rather than an option. That is right for a real flag and wrong for a version that
-    /// is a bare positional — see [`TrailingPositional`](VersionPin::TrailingPositional).
-    Flag(Vec<String>),
-    /// The version as a flag placed **before** the name, which therefore stays behind the `--`
-    /// terminator: cargo `install --version 13.0.0 -- ripgrep`.
-    ///
-    /// Distinct from [`Flag`](VersionPin::Flag), which puts the flag *after* the name and so
-    /// has to give the terminator up. Cargo does not need to: its `--version` is an option of
-    /// the subcommand, not of the operand, so the safer form is available and is the one it
-    /// has always used.
+    /// Args placed **before** the name, which therefore stays behind the `--` terminator:
+    /// cargo `install --version 13.0.0 -- ripgrep`. Available whenever the flag belongs to the
+    /// subcommand rather than to the operand, and it is the safer of the two placements.
     ///
     /// **A leading flag cannot be batched.** `cargo install --version 1.0 --version 2.0 -- a b`
     /// is not two pinned installs, it is nonsense — so a backend using this installs one spec
-    /// per command. `Flag` and `Inline` carry their version inside the operand and batch fine.
-    LeadingFlag(Vec<String>),
-    /// The bare name followed by the version as a **positional**, e.g. pub
-    /// `activate webdev 2.7.0`.
-    ///
-    /// Distinct from [`Flag`](VersionPin::Flag) for one reason: a positional is not an option,
-    /// so the `--` terminator is still safe and still wanted. `pubdart.rs` put both the name
-    /// and the version behind `--` and asserted it; folding that shape into `Flag` during the
-    /// 2026-08-04 conversion silently dropped the terminator, and the assertion kept from the
-    /// deleted module is what caught it.
-    ///
-    /// `luarocks` and `asdf` have the same positional shape and are still on `Flag`/
-    /// `RequiredFlag`, so an unpinned `luarocks install -- jq` carries the terminator and a
-    /// pinned one does not. **Deliberately not changed here**: neither tool is installed on
-    /// this machine, so whether they accept `--` before a positional cannot be measured, and
-    /// `argv_drift_tests` can only ask a manager that is present. Left as a measurement for an
-    /// image that has them rather than a guess that reaches a user.
-    TrailingPositional(Vec<String>),
-    /// Like [`Flag`](VersionPin::Flag), for a manager that **refuses to install without a
-    /// version at all**, carrying what to ask for when the line pins none.
-    ///
-    /// asdf is the one: `asdf install nodejs` answers `No versions specified for nodejs in
-    /// config files or environment`, because it expects a `.tool-versions` file to have named
-    /// one; `asdf install nodejs latest` installs. Measured in the `tools` image, where it was
-    /// hidden behind the `--` defect until that was fixed.
-    ///
-    /// A variant rather than a config field because it is a property of *how this manager
-    /// spells a version*, which is what this enum is, and because luarocks shares the
-    /// positional shape without sharing the requirement — an unpinned `luarocks install`
-    /// resolves the newest itself. One backend needing it is not a reason to give thirty
-    /// initialisers a field they will all leave `None`.
-    RequiredFlag {
+    /// per command. [`After`](VersionPin::After) and [`Inline`](VersionPin::Inline) carry their
+    /// version beside or inside the operand and batch fine.
+    Before(Vec<String>),
+    /// Args placed **after** the name: gem `jq -v 1.6` (an option), luarocks `jq 1.6`,
+    /// mix `phx_new 1.6.16`, pub `webdev 2.7.0` (all three operands).
+    After {
         args: Vec<String>,
-        /// What "no version named" means to this manager.
-        unpinned: String,
+        /// What to ask for when the declaration pins no version, for a manager that
+        /// **refuses to install without one**.
+        ///
+        /// `None` for every ordinary manager: "no version" means "whatever is current", which
+        /// is what an unadorned install already does. asdf is the one that needs it —
+        /// `asdf install nodejs` answers `No versions specified for nodejs in config files or
+        /// environment` and `asdf install nodejs latest` installs (measured, `tools` image
+        /// 2026-07-29) — and `luarocks` shares the shape without the requirement.
+        unpinned: Option<String>,
     },
 }
 
 impl VersionPin {
+    /// A version that follows the name and is optional — the common case.
+    pub fn after(args: Vec<String>) -> Self {
+        VersionPin::After {
+            args,
+            unpinned: None,
+        }
+    }
+
+    /// A version that follows the name and without which the manager will not install.
+    pub fn after_required(args: Vec<String>, unpinned: &str) -> Self {
+        VersionPin::After {
+            args,
+            unpinned: Some(unpinned.to_string()),
+        }
+    }
+
     /// Produce the install argument(s) for `name` pinned to `version`.
     fn apply(&self, name: &str, version: &str) -> Vec<String> {
         match self {
             VersionPin::Inline(tmpl) => {
                 vec![tmpl.replace("{name}", name).replace("{version}", version)]
             }
-            // The flags go into the subcommand args, not beside the name — see the caller.
-            VersionPin::LeadingFlag(_) => vec![name.to_string()],
-            VersionPin::Flag(flags)
-            | VersionPin::TrailingPositional(flags)
-            | VersionPin::RequiredFlag { args: flags, .. } => {
+            // The args go into the subcommand args, not beside the name — see the caller.
+            VersionPin::Before(_) => vec![name.to_string()],
+            VersionPin::After { args, .. } => {
                 let mut out = vec![name.to_string()];
                 out.extend(
-                    flags
-                        .iter()
+                    args.iter()
                         .map(|f| f.replace("{name}", name).replace("{version}", version)),
                 );
                 out
@@ -93,10 +87,10 @@ impl VersionPin {
         }
     }
 
-    /// The flags this pin contributes *before* the name, if any.
-    fn leading_flags(&self, version: &str) -> Vec<String> {
+    /// The args this pin contributes *before* the name, if any.
+    fn leading_args(&self, version: &str) -> Vec<String> {
         match self {
-            VersionPin::LeadingFlag(flags) => flags
+            VersionPin::Before(args) => args
                 .iter()
                 .map(|f| f.replace("{version}", version))
                 .collect(),
@@ -104,18 +98,30 @@ impl VersionPin {
         }
     }
 
+    /// Whether this pin puts an **option** after the name.
+    ///
+    /// The one shape `--` cannot precede: behind a terminator, gem's `-v` stops being an
+    /// option and becomes a gem name. Answered by looking at the token rather than by asking
+    /// the backend author to declare it, because `-` is what "option" means to every argument
+    /// parser and a declaration can be wrong.
+    fn emits_trailing_option(&self) -> bool {
+        match self {
+            VersionPin::After { args, .. } => args.first().is_some_and(|a| a.starts_with('-')),
+            _ => false,
+        }
+    }
+
     /// Whether this pin forbids batching several specs into one command.
     fn is_one_per_command(&self) -> bool {
-        matches!(self, VersionPin::LeadingFlag(_))
+        matches!(self, VersionPin::Before(_))
     }
 
     /// What this manager should be asked for when the declaration names no version.
-    ///
-    /// `None` for every ordinary manager: "no version" means "whatever is current", and that
-    /// is what an unadorned install already does.
     fn unpinned(&self) -> Option<&str> {
         match self {
-            VersionPin::RequiredFlag { unpinned, .. } => Some(unpinned),
+            VersionPin::After {
+                unpinned: Some(u), ..
+            } => Some(u),
             _ => None,
         }
     }
@@ -532,9 +538,9 @@ impl GenericInstallable {
 
         let mut final_args: Vec<String> = self.core.config.install_args.clone();
         let mut names: Vec<String> = Vec::with_capacity(specs.len());
-        // A `Flag` pin puts an option *after* the name it pins (`gem install jq -v 1.6`), so
-        // the terminator cannot precede it — behind `--` that `-v` is a package.
-        let mut trailing_flags = false;
+        // A pin that puts an option *after* the name it pins (`gem install jq -v 1.6`) is the
+        // one shape the terminator cannot precede — behind `--` that `-v` is a package.
+        let mut trailing_option = false;
         let mut leading: Vec<String> = Vec::new();
         for spec in specs {
             if let Some(key) = &self.core.config.install_source_option {
@@ -545,14 +551,11 @@ impl GenericInstallable {
             // backend's native syntax, when both a pin syntax and a concrete version exist.
             match (spec.options.get("version"), &self.core.config.version_pin) {
                 (Some(ver), Some(pin)) if is_concrete_version(ver) => {
-                    // A leading flag goes into the subcommand args, ahead of the terminator,
+                    // A leading arg goes into the subcommand args, ahead of the terminator,
                     // and the name stays behind it — which is the safer of the two shapes and
                     // is available whenever the flag is an option of the verb, not the operand.
-                    leading.extend(pin.leading_flags(ver));
-                    trailing_flags |=
-                        matches!(pin, VersionPin::Flag(_) | VersionPin::RequiredFlag { .. });
-                    // `TrailingPositional` is deliberately absent from that list: it emits an
-                    // operand, not an option, so the terminator stays and still protects it.
+                    leading.extend(pin.leading_args(ver));
+                    trailing_option |= pin.emits_trailing_option();
                     names.extend(pin.apply(&spec.name, ver));
                 }
                 // A manager that will not install without a version gets the one it accepts
@@ -561,7 +564,11 @@ impl GenericInstallable {
                 // which is E13's family.
                 (_, Some(pin)) if pin.unpinned().is_some() => {
                     let fallback = pin.unpinned().unwrap_or_default().to_string();
-                    trailing_flags |= true;
+                    // Asked of the pin, not asserted: this branch used to set the flag
+                    // unconditionally, so a *fallback* version dropped the terminator even
+                    // when the fallback was an operand (`asdf install nodejs latest`). Both
+                    // branches now answer the same question the same way.
+                    trailing_option |= pin.emits_trailing_option();
                     names.extend(pin.apply(&spec.name, &fallback));
                 }
                 _ => names.push(spec.name.clone()),
@@ -602,7 +609,7 @@ impl GenericInstallable {
             }
         }
 
-        if trailing_flags {
+        if trailing_option {
             final_args.extend(names);
         } else {
             crate::core::argv::push_names(&mut final_args, self.core.binary(), names);
@@ -1635,9 +1642,45 @@ mod tests {
         );
         // flag forms (winget/choco/gem)
         assert_eq!(
-            VersionPin::Flag(vec!["--version".into(), "{version}".into()])
+            VersionPin::after(vec!["--version".into(), "{version}".into()])
                 .apply("Git.Git", "2.54.0"),
             vec!["Git.Git", "--version", "2.54.0"]
+        );
+    }
+
+    /// Whether the `--` terminator survives is read off the tokens, never off a label.
+    ///
+    /// The bug this replaces: `Flag`, `TrailingPositional` and `RequiredFlag` built identical
+    /// argv and only their names decided the terminator, so `luarocks` and `mix` — both
+    /// carrying a bare positional version — lost it on pinned installs while keeping it on
+    /// unpinned ones. Same command, same tool, protection that came and went with whether
+    /// someone had written a version on the line.
+    #[test]
+    fn an_option_after_the_name_is_recognised_by_its_dash_and_not_by_its_variant() {
+        // Options: the terminator cannot precede these.
+        assert!(VersionPin::after(vec!["-v".into(), "{version}".into()]).emits_trailing_option());
+        assert!(
+            VersionPin::after(vec!["--version".into(), "{version}".into()]).emits_trailing_option()
+        );
+        // Operands: it can, and does. luarocks, mix and pub all measured in the `tools` image
+        // on 2026-08-04 — `luarocks install -- <rock> <version>` and
+        // `dart pub global activate -- <pkg> <version>` produce output identical to the same
+        // command without the terminator, and `luarocks install --` answers
+        // `Error: missing argument 'rock'` with usage `<rock> [<version>]`.
+        assert!(!VersionPin::after(vec!["{version}".into()]).emits_trailing_option());
+        assert!(
+            !VersionPin::after_required(vec!["{version}".into()], "latest").emits_trailing_option()
+        );
+        // A required version does not change the answer — only the token does.
+        assert!(
+            VersionPin::after_required(vec!["-v".into(), "{version}".into()], "latest")
+                .emits_trailing_option()
+        );
+        // Neither of the other placements puts anything after the name.
+        assert!(!VersionPin::Inline("{name}@{version}".into()).emits_trailing_option());
+        assert!(
+            !VersionPin::Before(vec!["--version".into(), "{version}".into()])
+                .emits_trailing_option()
         );
     }
 
@@ -1779,10 +1822,7 @@ mod tests {
     /// which is exactly what E11's fix did, and why it came back as G-8.
     #[tokio::test]
     async fn a_manager_that_demands_a_version_is_given_one() {
-        let unpinned = VersionPin::RequiredFlag {
-            args: vec!["{version}".into()],
-            unpinned: "latest".into(),
-        };
+        let unpinned = VersionPin::after_required(vec!["{version}".into()], "latest");
         assert_eq!(
             unpinned.apply("nodejs", "latest"),
             vec!["nodejs".to_string(), "latest".to_string()],
@@ -1798,7 +1838,7 @@ mod tests {
         // The control: the ordinary positional pin is unchanged and asks for nothing when the
         // line pins nothing. luarocks shares asdf's shape and resolves the newest itself, so
         // giving it a fallback would put a token on its command line that nobody asked for.
-        let ordinary = VersionPin::Flag(vec!["{version}".into()]);
+        let ordinary = VersionPin::after(vec!["{version}".into()]);
         assert_eq!(ordinary.unpinned(), None);
         assert_eq!(
             ordinary.apply("luafilesystem", "1.8.0"),

@@ -197,6 +197,20 @@ jobs:
           -v "$PWD/scripts/lifecycle-floor.txt:/src/scripts/lifecycle-floor.txt:ro" \
           linix-it-${{ matrix.distro }} ${{ matrix.backend }} ${{ matrix.pkg }}
 
+    # The argv gates, run where the managers are. Both of them can only ask a manager that is
+    # present, and a GitHub runner has about eight — this image has thirty. That gap is the
+    # whole reason `luarocks`, `mix` and `asdf` went years without anyone asking them a
+    # question: not that the gates were missing, but that they had never been pointed at a
+    # machine that could answer. The image already carries a Rust toolchain.
+    - name: Ask this image's thirty managers about subcommands, flags and `--`
+      if: matrix.distro == 'tools'
+      run: |
+        docker run --rm --entrypoint bash \
+          -e TERMINATOR_PROBE=1 -e CARGO_TARGET_DIR=/tmp/target \
+          -v "$PWD:/src" \
+          linix-it-tools -c \
+          "cd /src && cargo test --test argv_drift_tests --test terminator_probe_tests -- --nocapture"
+
   # The storage effectors, on real block devices. `btrfs`, `lvm` and `zfs` operate on volumes
   # and cannot be exercised by any amount of mocking; before 2026-07-30 none of them had ever
   # been run at all. This is the only job that gets `--privileged`, and the only one that needs
@@ -299,6 +313,16 @@ jobs:
     - uses: dtolnay/rust-toolchain@stable
     - name: Ask every installed manager whether it still has these subcommands
       run: cargo test --release --test argv_drift_tests -- --nocapture
+
+    # The same question one layer down: not "does this subcommand exist" but "does `--` still
+    # mean options-end-here to this parser". Four rows of that table have been wrong, each one
+    # added by someone who recognised the family, and each one broke every install that went
+    # through it. These runners carry apt/dpkg (ubuntu), brew (macos) and winget/choco
+    # (windows), so seven rows get asked here for the price of a job that already exists.
+    - name: Ask them whether `--` still ends their options
+      env:
+        TERMINATOR_PROBE: '1'
+      run: cargo test --release --test terminator_probe_tests -- --nocapture
 
   # A harness is trustworthy because its checks CAN go red, not because they are green. This
   # replaces `linix` with a binary that does nothing and exits 0: every check that still

@@ -542,7 +542,7 @@ fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             name: "winget".into(),
             binary: None,
             remove_binary: None,
-            version_pin: Some(VersionPin::Flag(vec![
+            version_pin: Some(VersionPin::after(vec![
                 "--version".into(),
                 "{version}".into(),
             ])),
@@ -680,7 +680,7 @@ fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             name: "choco".into(),
             binary: None,
             remove_binary: None,
-            version_pin: Some(VersionPin::Flag(vec![
+            version_pin: Some(VersionPin::after(vec![
                 "--version".into(),
                 "{version}".into(),
             ])),
@@ -873,7 +873,7 @@ fn register_gem(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             name: "gem".into(),
             binary: None,
             remove_binary: None,
-            version_pin: Some(VersionPin::Flag(vec!["-v".into(), "{version}".into()])),
+            version_pin: Some(VersionPin::after(vec!["-v".into(), "{version}".into()])),
             install_args: vec!["install".into()],
             remove_args: vec!["uninstall".into()],
             purge_args: None,
@@ -1239,7 +1239,7 @@ fn register_dotnet(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             name: "dotnet".into(),
             binary: None,
             remove_binary: None,
-            version_pin: Some(VersionPin::Flag(vec![
+            version_pin: Some(VersionPin::after(vec![
                 "--version".into(),
                 "{version}".into(),
             ])),
@@ -1452,7 +1452,13 @@ fn register_luarocks(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     // luarocks installs a rock's dependencies alongside it and records no explicit
     // marker to tell them apart.
     cfg.manual = ManualListing::Unsupported;
-    cfg.version_pin = Some(VersionPin::Flag(vec!["{version}".into()]));
+    // The version is a bare operand, not an option: `luarocks install --` answers
+    // `Error: missing argument 'rock'` over usage `<rock> [<version>]`, and
+    // `luarocks install -- <rock> <version>` is identical to the same line without the
+    // terminator (measured, `tools` image 2026-08-04). So the terminator stays on both the
+    // pinned and the unpinned path, which is the whole point of saying `after` rather than
+    // reaching for a variant named after flags.
+    cfg.version_pin = Some(VersionPin::after(vec!["{version}".into()]));
     cfg.install_args = vec!["install".into()];
     cfg.remove_args = vec!["remove".into()];
     cfg.list_args = vec!["list".into(), "--porcelain".into()];
@@ -1556,7 +1562,7 @@ fn register_mix(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     // Not optional in practice — an archive declares which Elixir it supports, so on Elixir
     // 1.14 the newest `phx_new` fetches, builds and then refuses to run, and pinning is the
     // only way to install one at all (measured, `tools` image 2026-07-29).
-    cfg.version_pin = Some(VersionPin::Flag(vec!["{version}".into()]));
+    cfg.version_pin = Some(VersionPin::after(vec!["{version}".into()]));
     cfg.install_args = vec!["archive.install".into(), "hex".into(), "--force".into()];
     // `--force` on the removal too, and this is not symmetry for its own sake: measured, a
     // bare `mix archive.uninstall phx_new` with no terminal prints `Are you sure…? [Yn]`,
@@ -1796,7 +1802,7 @@ fn register_cargo(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     cfg.manual = ManualListing::AllInstalled;
     // `--version` is an option of `install`, not of the crate name, so it goes ahead of the
     // terminator and the name stays protected behind it.
-    cfg.version_pin = Some(VersionPin::LeadingFlag(vec![
+    cfg.version_pin = Some(VersionPin::Before(vec![
         "--version".into(),
         "{version}".into(),
     ]));
@@ -1922,7 +1928,7 @@ fn register_pubdart(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     cfg.manual = ManualListing::AllInstalled;
     // pub pins with a trailing positional version (`activate <pkg> <version>`) — an operand,
     // so the `--` terminator stays in front of both it and the name.
-    cfg.version_pin = Some(VersionPin::TrailingPositional(vec!["{version}".into()]));
+    cfg.version_pin = Some(VersionPin::after(vec!["{version}".into()]));
     cfg.install_args = vec!["pub".into(), "global".into(), "activate".into()];
     cfg.remove_args = vec!["pub".into(), "global".into(), "deactivate".into()];
     cfg.list_args = vec!["pub".into(), "global".into(), "list".into()];
@@ -1949,10 +1955,10 @@ fn register_asdf(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     // asdf refuses to install without a version, so an unpinned line asks for `latest`.
     // Removal needs none: measured, `asdf uninstall nodejs` returns 0 and the version leaves
     // `asdf list`.
-    cfg.version_pin = Some(VersionPin::RequiredFlag {
-        args: vec!["{version}".into()],
-        unpinned: "latest".into(),
-    });
+    cfg.version_pin = Some(VersionPin::after_required(
+        vec!["{version}".into()],
+        "latest",
+    ));
     cfg.install_args = vec!["install".into()];
     cfg.remove_args = vec!["uninstall".into()];
     cfg.list_args = vec!["list".into()];
@@ -3122,6 +3128,139 @@ mod tests {
         );
     }
 
+    /// Both sides of the rule, on the four backends that put a version after the name.
+    ///
+    /// **This is the assertion `pub` had and its three siblings did not.** `pub` was the only
+    /// one of the family pinned end-to-end, and the other three were carrying a variant named
+    /// after flags while emitting a bare operand — so `luarocks` and `mix` dropped the `--` on
+    /// every pinned install and kept it on every unpinned one, invisibly, because the argv table
+    /// only drives the unpinned shape (Q30). A test that pins one member of a family is a test
+    /// that lets the other three drift.
+    ///
+    /// `gem` is here as the control that must NOT terminate, for two independent reasons: its
+    /// version is a real option (`-v 1.6`), and RubyGems reads `--` as the start of build
+    /// arguments on every verb. If this test only asserted the operand cases, emptying the
+    /// terminator table would pass it.
+    #[tokio::test]
+    async fn a_version_after_the_name_keeps_the_terminator_unless_it_is_an_option() {
+        use crate::core::executor::MockExecutor;
+        use dashmap::DashMap;
+
+        struct Case {
+            register: fn(&mut BackendRegistry, &CommandExecutor),
+            backend: &'static str,
+            pkg: &'static str,
+            version: &'static str,
+            /// The argv fragment that must appear — terminator included, or deliberately not.
+            expected: &'static str,
+        }
+        let cases = [
+            // Operands, measured in the `tools` image 2026-08-04: the terminator survives.
+            Case {
+                register: register_luarocks,
+                backend: "luarocks",
+                pkg: "luafilesystem",
+                version: "1.8.0",
+                expected: "luarocks install -- luafilesystem 1.8.0",
+            },
+            Case {
+                register: register_mix,
+                backend: "mix",
+                pkg: "phx_new",
+                version: "1.6.16",
+                expected: "mix archive.install hex --force -- phx_new 1.6.16",
+            },
+            Case {
+                register: register_pubdart,
+                backend: "pub",
+                pkg: "webdev",
+                version: "2.7.0",
+                expected: "dart pub global activate -- webdev 2.7.0",
+            },
+            // An option after the name. Behind `--`, `-v` would be a gem.
+            Case {
+                register: register_gem,
+                backend: "gem",
+                pkg: "colorize",
+                version: "1.1.0",
+                expected: "gem install colorize -v 1.1.0",
+            },
+        ];
+
+        for Case {
+            register,
+            backend,
+            pkg,
+            version,
+            expected,
+        } in cases
+        {
+            let vfs = Arc::new(DashMap::new());
+            let mock = Arc::new(MockExecutor::new(vfs.clone()));
+            let exec = CommandExecutor::with_layer(
+                true,
+                false,
+                mock.clone(),
+                vfs,
+                Arc::new(DashMap::new()),
+            );
+            let mut reg = BackendRegistry::new();
+            register(&mut reg, &exec);
+            let inst = reg.get(backend).unwrap().as_installable().unwrap().clone();
+
+            let mut spec = crate::core::PackageSpec {
+                name: pkg.into(),
+                backend: backend.into(),
+                ..Default::default()
+            };
+            spec.options.insert("version".into(), version.into());
+            let _ = inst.install(&[spec], false).await;
+
+            let calls = mock.get_calls().await;
+            assert!(
+                calls.iter().any(|c| c.contains(expected)),
+                "{backend} pinned to {version} should build `{expected}`, got {calls:?}"
+            );
+        }
+    }
+
+    /// asdf's fallback is an operand too, and used to be treated as a flag.
+    ///
+    /// The unpinned branch set "there is a trailing option" unconditionally, so `latest` — a
+    /// bare word — suppressed the terminator by a rule meant for `-v`. asdf still gets no `--`,
+    /// because the terminator table measured it (`No such plugin: --`); what changed is that the
+    /// two layers now say so for two correct reasons instead of agreeing by luck.
+    #[tokio::test]
+    async fn a_required_version_fallback_is_an_operand_not_a_flag() {
+        use crate::core::executor::MockExecutor;
+        use dashmap::DashMap;
+
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let exec =
+            CommandExecutor::with_layer(true, false, mock.clone(), vfs, Arc::new(DashMap::new()));
+        let mut reg = BackendRegistry::new();
+        register_asdf(&mut reg, &exec);
+        let inst = reg.get("asdf").unwrap().as_installable().unwrap().clone();
+
+        let _ = inst
+            .install(
+                &[crate::core::PackageSpec {
+                    name: "nodejs".into(),
+                    backend: "asdf".into(),
+                    ..Default::default()
+                }],
+                false,
+            )
+            .await;
+
+        let calls = mock.get_calls().await;
+        assert!(
+            calls.iter().any(|c| c == "asdf install nodejs latest"),
+            "an unpinned asdf line must ask for `latest`, with no terminator: {calls:?}"
+        );
+    }
+
     /// Every manager the exit-policy table knows carries its policy into the registry.
     ///
     /// **An exit policy is not argv, so the argv table cannot see it.** Converting `cargo` and
@@ -3301,10 +3440,15 @@ mod tests {
         inst.remove(&["phx_new".to_string()], false).await.unwrap();
 
         let calls = mock.get_calls().await;
+        // **Behind the terminator, both of them.** mix's version is a bare operand, so `--`
+        // protects it exactly as it protects the name; the pin used to be labelled a *flag*,
+        // which gave the terminator up on every pinned install and kept it on every unpinned
+        // one. Measured, `tools` image 2026-08-04: `mix archive.install hex --force --
+        // <name> <version>` is identical to the same line without the terminator (Q30).
         assert!(
             calls
                 .iter()
-                .any(|c| c == "mix archive.install hex --force phx_new 1.6.16"),
+                .any(|c| c == "mix archive.install hex --force -- phx_new 1.6.16"),
             "the pinned version never reached mix: {:?}",
             calls
         );

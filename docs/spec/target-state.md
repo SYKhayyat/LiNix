@@ -1638,6 +1638,19 @@ holds, because the set of flags belongs to the manager and changes without us.
 **A name that starts with `-` is refused at parse time**, wherever it appears — not only in the
 `Subtract` position at the start of a line, which is the one place it was ever checked.
 
+**A binary terminates its options when someone has run it and written down what it said.** Not
+every CLI has a `--`, and a `--` a manager reads as a package name turns every install into a
+failure — worse than the leading-dash refusal the grammar already made. So the default is *does
+not terminate*, one table holds every binary with its answer, and each row carries either the
+tool's own words or an admission that nobody asked. **The admissions are counted and the count
+may fall, never rise.**
+
+**Whether the terminator survives a version pin is read off the tokens, never off a label.** A
+version that is an option (`-v 1.6`) is the one thing `--` cannot precede; a version that is an
+operand (`1.6`) is protected by it like any other. Which one it is comes from the token — an
+option starts with `-` — because a pin's *placement* and its *option-ness* are two facts, and
+asking a backend author to declare the second is asking for the two to disagree.
+
 **A validator with no caller is not a validator.** Every check the tree carries is called on the
 path it names, or it is deleted. Two of everything is bad; one of everything, unwired, is worse
 — it reads as a defence in the source and is absent at runtime.

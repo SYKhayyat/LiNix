@@ -861,6 +861,38 @@ than name-filtering because the flag set belongs to the manager, not to us — a
 dangerous options is a promise to track every manager's option parser forever, and `--` is a
 promise the managers already keep.
 
+**Terminating is a promise the managers keep, and four of them do not.** `--` is not universal:
+`asdf` dispatches on `$1` and answers `No such plugin: --`; `spack` reads it into the spec;
+RubyGems' `--` separates gem names from C-extension build arguments, so `gem install -- colorize`
+names no gem at all; `nimble`'s reaches the Nim compiler and breaks every build that produces a
+binary. All four were listed as terminating by someone who recognised the family, and each one
+broke every install that went through it. Hence the default in `core/argv.rs` is **does not
+terminate**, and a binary joins the terminating set when someone has *run* it.
+
+**And "someone has run it" is now a field, not a memory** (2026-08-04). The table was two lists —
+one of them `#[cfg(test)]`, so half the production facts compiled only into tests — with a test
+whose whole job was to catch them contradicting each other. It is one list, each row carrying
+either the tool's own sentence or an admission that nobody asked, and the admissions are counted
+by a ratchet that may fall and never rise. `tests/terminator_probe_tests.rs` is what lowers it:
+it runs each manager's real argv twice, once with the terminator and once without, and believes
+the tool honours `--` only when the two runs agree on exit code, on whether the operand was
+echoed back, and on there being no bare `--` anywhere in the output. Differential, so it never
+has to understand any tool's error prose — and it reads the argvs out of the registry, because a
+hand-written table of "the verb to probe each manager with" would be the second copy of the truth
+that this rule is about.
+
+**The mirror-image bug: a name that is safe until someone pins a version.** `VersionPin` had
+three variants — `Flag`, `TrailingPositional`, `RequiredFlag` — with character-for-character the
+same body. They built identical argv; only the *label* decided whether the terminator survived,
+because a version spelled `-v 1.6` is an option and one spelled `1.6` is an operand. Three
+backends carry a bare operand version — `luarocks`, `mix`, `pub` — and they were spread across
+two labels, so `luarocks install -- jq` kept the terminator and `luarocks install jq 1.6` dropped
+it. Same tool, same command, protection that came and went with whether the line named a version.
+The variants now say only *where* the version goes, and whether it is an option is read off the
+token, because an option starts with `-` and a version does not. A fact the data already states
+cannot be restated by hand without eventually disagreeing with itself — which is V.62's own shape
+one layer in, and the same lesson as the two tables above.
+
 **The same audit found the mirror image**: `Validator::validate_command` and `validate_path` —
 carrying the `rm -rf /` / `mkfs` / fork-bomb denylist, a trusted-binary-path list, and a
 forbidden-path list including `/etc/shadow` and the SAM hive — have **zero callers** outside

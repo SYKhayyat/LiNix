@@ -273,6 +273,7 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q26** | Is the plan a public versioned artifact with a hard refusal on schema mismatch? — **DEFERRED.** The *internal* plan object is ruled **build it**; publishing the format is not. | 2026-08-03 |
 | **Q27** | Does Part II gain a tier-1 / tier-2 distinction, printed per row by `plan`? — RULED: **no.** | 2026-08-03 |
 | **Q28** | Is a command that reports success while leaving the user with a false picture of their machine a *defect class*, with rules of its own? — RULED: **yes.** | 2026-08-03 |
+| **Q30** | Should the `--` terminator be decided by which `VersionPin` variant a backend picked, and should the terminator table be keyed per verb? — RULED: **read it off the tokens; one key per binary.** Per-verb rejected on measurement. | 2026-08-04 |
 | **Q29** | Is the statement set closed, with all future computation routed through `generate:`? — **HALF RULED.** The *resource-kind* set is ruled **open — more prefixes may be added**; a ratchet holds Part II to `KEYWORDS` instead. The *computation* half is still open. | 2026-08-04 |
 
 *Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
@@ -5046,3 +5047,74 @@ the single list (its comment records that three copies had drifted until
 `setting:`). **A test asserting `KEYWORDS` matches Part II's statement table** makes the twelfth
 keyword impossible to ship undocumented, without closing anything. That is an afternoon and it is
 sequenced ahead of this ruling in `DIRECTIONS-2026-08-03.md` §6.
+
+**Q30 — Is the `--` terminator a property of a label, and is the table keyed on the wrong thing?**
+**RULED 2026-08-04: read the terminator off the tokens; keep one key per binary.**
+
+Two questions, one measured answer each.
+
+**The label.** `VersionPin` had three variants whose `apply` bodies were character-for-character
+identical — `Flag`, `TrailingPositional`, `RequiredFlag`. They built the same argv; only the
+variant *name* decided whether `push_names` was allowed to emit `--`, because a version spelled
+`-v 1.6` is an option and one spelled `1.6` is an operand. Three backends carry a bare operand
+version and were spread across two of the labels:
+
+| backend | pin args | labelled | terminator |
+|---|---|---|---|
+| `gem` | `["-v", "{version}"]` | `Flag` | dropped — correct, `-v` is an option |
+| `pub` | `["{version}"]` | `TrailingPositional` | kept — correct |
+| `luarocks` | `["{version}"]` | `Flag` | **dropped — wrong** |
+| `mix` | `["{version}"]` | `Flag` | **dropped — wrong** |
+| `asdf` | `["{version}"]` | `RequiredFlag` | dropped — right answer, wrong reason |
+
+So `luarocks install -- jq` carried the terminator and `luarocks install jq 1.6` did not: same
+tool, same command, protection that came and went with whether the line named a version.
+
+**The ruling is that nobody labels it.** An option starts with `-`; that is what "option" means
+to every argument parser ever written. The three variants collapse to one `After { args,
+unpinned }`, `Before` is the old `LeadingFlag`, and `emits_trailing_option()` looks at the first
+token. Exactly two argvs in the tree change — `luarocks` and `mix` gain their `--` on pinned
+installs — and both were measured before the change, not after.
+
+Measured in the `tools` image, 2026-08-04:
+
+```text
+$ luarocks install --                       Error: missing argument 'rock'
+                                            usage: luarocks install [...] <rock> [<version>]
+$ luarocks install -- <rock> <version>      identical to the same line without `--`
+$ mix archive.install hex --force -- <name> identical, both naming the operand
+$ dart pub global activate -- <pkg> <ver>   identical; usage `activate <package> [version-…]`
+```
+
+`asdf` keeps its answer and loses its excuse: its `latest` fallback is an operand too, so the
+pin no longer claims a trailing option — and `asdf` still gets no `--`, from the binary table,
+which is the layer that measured it (`No such plugin: --`). Two layers, each honest, agreeing by
+accident no longer.
+
+**The key.** The proposal was to key the terminator table on `(binary, verb)` rather than on
+`binary`, on the theory that `gem`'s `--` breaks `install` but would be safe on `list` — which
+would give `gem` and `nimble` back the terminator on the paths that do not break. **Rejected: the
+theory is false.** Measured, same image, same day:
+
+```text
+$ gem list -- <bogus>        lists EVERY gem — the filter is swallowed, a wrong answer not an error
+$ gem uninstall -- <bogus>   Please specify at least one gem name
+$ nimble -y uninstall -- x   Error: Unknown option: --
+$ nimble -y list -- x        Error: Unknown option: --
+$ spack find -- <bogus>      No package matches the query: -- <bogus>
+$ spack uninstall -y -- x    ~~<bogus> does not match any installed packages
+$ asdf list -- <bogus>       No such plugin: --
+```
+
+All four blanket bans are correct on every verb tested, and `gem list` is the worst case in the
+set — it does not fail, it answers wrongly. A per-verb dimension would have shipped with zero
+true entries and one more table to keep honest. The premise was a guess; the guess was wrong.
+
+**What ships with the ruling.** One terminator table instead of two (the second was
+`#[cfg(test)]`, so half the production facts compiled only into tests), every row carrying the
+tool's own sentence or an admission that nobody asked, a ratchet on the admissions, and
+`tests/terminator_probe_tests.rs` — a differential probe that runs each manager's real argv with
+and without the terminator and compares exit code, operand echo and the presence of a bare `--`.
+It reads its argvs from the registry rather than a list, and CI points it at the `tools` image,
+where thirty managers live instead of a runner's eight. That gap is why `luarocks`, `mix` and
+`asdf` went unasked: not a missing gate, a gate never pointed at a machine that could answer.
