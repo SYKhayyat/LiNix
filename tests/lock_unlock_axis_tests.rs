@@ -131,7 +131,11 @@ fn unlock_versions_drops_the_pins_and_leaves_the_other_two_alone() {
     let (out, code) = fresh.run(&["unlock", "versions"]);
     assert_eq!(code, 0, "{out}");
 
-    assert!(!fresh.versions().contains("apt:curl"), "{}", fresh.versions());
+    assert!(
+        !fresh.versions().contains("apt:curl"),
+        "{}",
+        fresh.versions()
+    );
     assert!(
         !fresh.versions().contains("cargo:ripgrep"),
         "{}",
@@ -153,7 +157,11 @@ fn unlock_backends_forgets_resolutions_and_leaves_the_other_two_alone() {
     let (out, code) = fresh.run(&["unlock", "backends"]);
     assert_eq!(code, 0, "{out}");
 
-    assert!(!fresh.backends().contains("ripgrep"), "{}", fresh.backends());
+    assert!(
+        !fresh.backends().contains("ripgrep"),
+        "{}",
+        fresh.backends()
+    );
     assert_eq!(fresh.versions(), before_versions, "the version pins moved");
     assert_eq!(fresh.scripts(), before_scripts, "the approvals moved");
 }
@@ -188,8 +196,16 @@ fn a_bare_unlock_releases_all_three() {
     let fresh = Fresh::new("axis-unlock-all");
     let (out, code) = fresh.run(&["unlock"]);
     assert_eq!(code, 0, "{out}");
-    assert!(!fresh.versions().contains("apt:curl"), "{}", fresh.versions());
-    assert!(!fresh.backends().contains("ripgrep"), "{}", fresh.backends());
+    assert!(
+        !fresh.versions().contains("apt:curl"),
+        "{}",
+        fresh.versions()
+    );
+    assert!(
+        !fresh.backends().contains("ripgrep"),
+        "{}",
+        fresh.backends()
+    );
     assert!(
         !fresh.scripts().contains("after_install:nginx"),
         "{}",
@@ -218,7 +234,11 @@ fn a_scope_takes_the_named_entry_and_leaves_its_neighbour() {
 
     let (out, code) = fresh.run(&["unlock", "versions", "curl"]);
     assert_eq!(code, 0, "{out}");
-    assert!(!fresh.versions().contains("apt:curl"), "{}", fresh.versions());
+    assert!(
+        !fresh.versions().contains("apt:curl"),
+        "{}",
+        fresh.versions()
+    );
     assert!(
         fresh.versions().contains("cargo:ripgrep"),
         "a scoped unpin took its neighbour too:\n{}",
@@ -227,7 +247,11 @@ fn a_scope_takes_the_named_entry_and_leaves_its_neighbour() {
 
     let (out, code) = fresh.run(&["unlock", "backends", "ripgrep"]);
     assert_eq!(code, 0, "{out}");
-    assert!(!fresh.backends().contains("ripgrep"), "{}", fresh.backends());
+    assert!(
+        !fresh.backends().contains("ripgrep"),
+        "{}",
+        fresh.backends()
+    );
     assert!(
         fresh.backends().contains("jq"),
         "a scoped forget took its neighbour too:\n{}",
@@ -255,7 +279,11 @@ fn a_scope_accepts_the_whole_key_too() {
     let fresh = Fresh::new("axis-scope-full-key");
     let (out, code) = fresh.run(&["unlock", "versions", "apt:curl"]);
     assert_eq!(code, 0, "{out}");
-    assert!(!fresh.versions().contains("apt:curl"), "{}", fresh.versions());
+    assert!(
+        !fresh.versions().contains("apt:curl"),
+        "{}",
+        fresh.versions()
+    );
     assert!(fresh.versions().contains("cargo:ripgrep"));
 }
 
@@ -282,8 +310,14 @@ fn list_reports_every_axis_and_writes_nothing() {
 
     let (out, code) = fresh.run(&["lock", "--list"]);
     assert_eq!(code, 0, "{out}");
-    assert!(out.contains("apt:curl"), "the version pins are missing:\n{out}");
-    assert!(out.contains("ripgrep"), "the backend lock is missing:\n{out}");
+    assert!(
+        out.contains("apt:curl"),
+        "the version pins are missing:\n{out}"
+    );
+    assert!(
+        out.contains("ripgrep"),
+        "the backend lock is missing:\n{out}"
+    );
     assert!(
         out.contains("after_install:nginx"),
         "the approvals are missing:\n{out}"

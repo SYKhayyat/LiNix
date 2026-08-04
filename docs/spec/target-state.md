@@ -2044,3 +2044,33 @@ the same change as the source, or it is not done.
 
 ---
 
+
+## II.20 Legibility (V.128)
+
+**A command that reports success while leaving the user with a false picture of their machine
+has failed.** Not crashed, not exited non-zero — failed. This is a defect class with the same
+standing as fail-loud, and it is measured by one question: *did the person understand their
+machine more accurately after the command than before?*
+
+Three rules carry it.
+
+**1. "Nothing to do" is a claim about the world, and has to be earned.** `already up to date`,
+`the machine matches your files`, `no changes` — these are the most confident sentences the tool
+says, and silence is the only output nobody writes a test for. A path that drops something from
+consideration appends to a reported list; **an empty plan with a non-empty skip list is not
+convergence.** `Declined::reported` in `app/sync/planner.rs` is this rule for removals — the type
+exists so "does the user hear about this?" cannot be answered by omission, and a variant added
+later does not compile until it says its sentence. Every reporting path owes the same.
+
+**2. Every mutation states where, not just what.** `created` and `kept` are true about a file and
+say nothing about which directory received it. A path a command acted on is part of what the
+command did.
+
+**3. Absence is reported like presence.** Skipped, not found, declined, and not applicable are
+output. A `--json` consumer that can only see the actions cannot tell a converged machine from
+one holding a package nothing will ever remove.
+
+The error messages already meet this standard — file, line, what is wrong, what to do, and what
+the concept means. **This rule is that standard applied to success, to absence, and to history.**
+
+---

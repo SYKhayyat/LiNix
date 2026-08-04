@@ -5759,3 +5759,63 @@ appending to it. It is asked of clap now, in a test.
   Round-2's `W27` already recorded luarocks as broken on this host (its downloader resolves
   `wget` to a scoop shim), which is the likeliest way `luarocks show` returns nothing.
 
+
+---
+
+## 2026-08-03 — the direction file is ruled, and two of its three shifts are dead
+
+`DIRECTIONS-2026-08-03.md` was written the same day as the grade, against `ee5adf3`, proposing
+three architecture shifts and two dreams. It opened by saying *"do not build from this file"* and
+listed six unregistered questions. The owner took them one at a time. The file has been rewritten
+from scratch to hold only what survived, and the questions are registered as **Q25–Q29**.
+
+**Its first two sequencing steps had already shipped.** The file was written against `ee5adf3`
+and called AU1/AU2/AU3 plus the four site-quantifying invariant tests *"the entry fee for this
+document"*. `be52374` had landed both — `config_root_is_absolute_tests.rs`,
+`fanout_cap_reads_the_setting_tests.rs`, `grade7_protected_skip_is_reported_tests.rs` and
+`startup_budget_tests.rs`. A direction document two commits stale about its own precondition is
+worth noting: the entry fee was paid before anyone asked whether the thing it bought was wanted.
+
+**Shift 1 — ownership derived from git history — is dead (Q25), and it died on a premise.** The
+file argued from *"II.1 already requires the config directory to be a git repo"*. II.1 says the
+words; **X.5 and `core/git.rs` do not enforce them.** Git is an optional shell-out whose own
+refusal reads *"everything else works without it"*, and a git-less machine gets `bundle` in place
+of history. The shift would have made git load-bearing for `sync` — not for `history` — on a
+platform where it is absent by default. The owner's question, not the builder's: *"we need git
+now? isn't this supposed to be a tool with no dependencies?"*
+
+The weaker corroborating-source form was designed out in full — three-valued, abstaining, removal
+governed by the intersection — and then killed by measurement rather than by taste: **it misses
+AU4**, the most recent real instance of the failure it exists to catch, because a fresh config
+sandbox has no history to be authoritative with. That is the whole entry. A design that is
+coherent, safe, and blind to the last bug of its own kind is not worth its abstention gate.
+
+**Shift 3 — the tier-1/tier-2 boundary — declined (Q27).** Recorded rather than dropped, because
+`setting:`'s read-before-write will make somebody re-propose it.
+
+**Shift 2 is halved (Q26).** The internal plan object is ruled build-it; publishing the schema is
+deferred. Twenty-two backends have run for real and thirty never have, and argv is a string that
+does not need a container to check.
+
+**The two dreams survived and one became a rule.** Legibility is **II.20** / **V.128** — a
+command that reports success over a false picture of the machine has failed. The other, `why`
+answering with a chain, is the surviving half of Shift 1: git as enrichment, never as authority.
+
+**Done in the same commit**, both from the file's own compaction map:
+
+- The option-key lookup matched the statement kind as a `&str` and ended `_ => SCHEDULE_OPTION_KEYS`.
+  No live bug — every caller passed a spelling with an arm — but the tenth kind would have
+  inherited schedule's options in silence, and the `"exec"` arm was already unreachable. It is an
+  enum now, exhaustive, no default. `validate_exec` and `validate_generate` read the same table
+  through it (`GENERATE_OPTION_KEYS` is empty, and empty is a table, not a special case).
+  **Each validator kept its own hint** — folding three refusals into one generic *"takes: runs,
+  undo"* would trade the sentence that says what the options *mean* for ten lines, and the error
+  messages are the best thing in this repo.
+- `parsers/brew.rs` and `parsers/nix.rs` deleted: zero callers, passing tests, 174 lines. Checked
+  for lost behaviour first and there was none — the live `parse_brew_search` skips the same
+  `==> Formulae` headers, and the live nix code is far ahead of the dead one.
+
+**One family question fell out of that deletion and is open.** The dead parsers called
+`sanitize()`; the live ones do not. Not a brew issue — everything in `src/parsers/` sanitizes,
+and inside `src/backends/` **only `flatpak.rs` and `snap.rs` do.** No case found where it bites,
+and it is recorded in the direction file rather than fixed on a hunch.

@@ -1,5 +1,4 @@
 pub mod apt;
-pub mod brew;
 pub mod bsd;
 pub mod common;
 pub mod conda;
@@ -8,7 +7,6 @@ pub mod dotnet;
 pub mod ecosystem;
 pub mod language;
 pub mod macos;
-pub mod nix;
 pub mod pacman;
 pub mod pkgsrc;
 pub mod utils;

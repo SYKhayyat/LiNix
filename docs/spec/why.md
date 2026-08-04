@@ -2884,3 +2884,47 @@ fight; pinning it would make every `upgrade` a silent `lock` — a decision the 
 found weeks later as a machine that quietly stopped tracking `latest`. The repair is exactly the
 size of the defect.
 
+
+**V.128 — Why a true-sounding success is a defect.** *(Owner ruling, 2026-08-03 — `Q28`. Rule in
+II.20.)*
+
+Two commands, one session, both exit 0, neither a crash:
+
+| command | LiNix said | what was true |
+|---|---|---|
+| `linix check` | `ok  drift  the machine matches your files` | **false** — a managed package nothing declared was left installed, forever (AU1) |
+| `linix --config-dir X init` | `created`, `kept` | true about *what*, wrong about *where*: `--config-dir` was ignored and the scaffold landed in the live config directory |
+
+Read the first row again, because it is the frightening one and it is easy to read past. The bug
+underneath was that a package survived a removal — recoverable, visible, and the sort of thing a
+test catches. **The damage was the sentence.** A tool that says your machine matches your files
+when it does not has not merely failed to act; it has left you with a confident and wrong model
+of your own computer, and taken away the reason you would ever go and check. The second row is
+the same defect in a different costume: every word accurate, the one fact that mattered absent,
+and a user who now believes their sandbox is a sandbox.
+
+Neither instance was caught by a test, and the reason is structural rather than an oversight.
+Tests assert what a command *did*. Both of these did the right thing and then described it
+wrongly — and the output nobody asserts on is the boring one, the `already up to date`, the
+`created`, the empty result. **Silence and success are the least-tested outputs in any tool and
+the most confident things it ever says.** AU1 was a false `already up to date` and nothing but a
+hand-run reproduction found it.
+
+`Declined::reported` was the fix for the removal path, and its own comment explains the shape:
+the type exists so that "does the user hear about this?" cannot be answered by omission, and a
+new variant does not compile until it supplies its sentence. That is one path. The rule is what
+stops the next one from having to be found the same way, by a grader running the original
+reproduction rather than reading the report.
+
+The reason this belongs in Part II rather than in a style guide: the best thing in this codebase
+is already its error messages — file, line, what is wrong, what to do, *and what the concept
+means*. That standard was never written down as a rule and it was applied only where something
+went wrong. **The whole of II.20 is that existing standard, pointed at the paths that succeed.**
+
+And the reason it is worth a rule at all, rather than good intentions: reproducibility answers a
+question most people never ask. **Legibility answers the one they live with** — what accumulated
+on this machine, what is safe to remove, what breaks if I touch it. A config a person can read
+and recognise as a description of their own computer is worth more than one that can rebuild it,
+and every sentence LiNix prints either builds that recognition or quietly corrodes it.
+
+---

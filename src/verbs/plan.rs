@@ -978,7 +978,12 @@ async fn lock_scripts(app: &App, names: &[String]) -> Result<()> {
     // Put back everything the names did not pick out. A preview wrote nothing, so there is
     // nothing on disk to put back and nothing to count — it says what it would do and stops.
     if linix::core::dry_run::active() {
-        println!("{} {} the entries matching {}", tag, approved, quoted(names));
+        println!(
+            "{} {} the entries matching {}",
+            tag,
+            approved,
+            quoted(names)
+        );
         return Ok(());
     }
     let mut ledger = HookLedger::load(&ledger_path)?;
@@ -1353,7 +1358,10 @@ async fn unlock_backends(app: &App, names: &[String]) -> Result<()> {
             } else {
                 // Not an error: a name with a manager written on its line was never frozen,
                 // and saying so is more use than a failure the caller has to interpret.
-                warn!("`{}` was not frozen on this host — nothing to unlock.", name);
+                warn!(
+                    "`{}` was not frozen on this host — nothing to unlock.",
+                    name
+                );
             }
         }
         any
@@ -1469,7 +1477,10 @@ mod lock_axis_tests {
             ("exec:./setup.sh", "./setup.sh"),
             ("event:before_sync@repo", "before_sync@repo"),
             ("generate:./pick.sh", "./pick.sh"),
-            ("health:systemctl is-active nginx", "systemctl is-active nginx"),
+            (
+                "health:systemctl is-active nginx",
+                "systemctl is-active nginx",
+            ),
         ] {
             assert!(scoped_by(key, &names(&[key])), "the whole key: {key}");
             assert!(scoped_by(key, &names(&[tail])), "the tail: {key}");
@@ -1511,7 +1522,12 @@ mod lock_axis_tests {
             &pins(&[("apt:curl", "7.81.0"), ("cargo:ripgrep", "14.1.0")]),
         );
         assert_eq!(moved, 0, "nothing moved");
-        assert_eq!(locks.len(), 1, "an unpinned package was pinned: {:?}", locks);
+        assert_eq!(
+            locks.len(),
+            1,
+            "an unpinned package was pinned: {:?}",
+            locks
+        );
     }
 
     /// A manager that could not be read is not evidence that its package moved (V.7c's rule,

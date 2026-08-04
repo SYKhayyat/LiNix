@@ -1234,14 +1234,20 @@ pub fn validate(origin: &Origin, stmt: &Statement) -> Result<()> {
     match stmt {
         Statement::Package(decl) => validate_options(origin, decl, false),
         Statement::Absent(decl) => validate_options(origin, decl, true),
-        Statement::Shim(name, o) => validate_extra_options(origin, "shim", name, o),
-        Statement::Service(name, o) => validate_extra_options(origin, "service", name, o),
-        Statement::Link(name, o) => validate_extra_options(origin, "link", name, o),
-        Statement::Schedule(name, o) => validate_extra_options(origin, "schedule", name, o),
+        Statement::Shim(name, o) => validate_extra_options(origin, OptionKind::Shim, name, o, None),
+        Statement::Service(name, o) => {
+            validate_extra_options(origin, OptionKind::Service, name, o, None)
+        }
+        Statement::Link(name, o) => validate_extra_options(origin, OptionKind::Link, name, o, None),
+        Statement::Schedule(name, o) => {
+            validate_extra_options(origin, OptionKind::Schedule, name, o, None)
+        }
         Statement::Setting(name, o) => validate_setting(origin, name, o),
         Statement::Exec(name, o) => validate_exec(origin, name, o),
         Statement::Generate(name, o) => validate_generate(origin, name, o),
-        Statement::Dotfiles(name, o) => validate_extra_options(origin, "dotfiles", name, o),
+        Statement::Dotfiles(name, o) => {
+            validate_extra_options(origin, OptionKind::Dotfiles, name, o, None)
+        }
         Statement::Firewall(name, o) => validate_firewall(origin, name, o),
         Statement::Repo { .. }
         | Statement::Use(..)
@@ -1263,6 +1269,56 @@ pub fn validate(origin: &Origin, stmt: &Statement) -> Result<()> {
 /// (U19). A `service:` is the init system's business and a `repo:` is the manager's, so
 /// neither takes it — a key that means nothing on a statement is a key that will be written
 /// there and silently ignored.
+/// A statement kind that carries `@options`, as the option tables are keyed.
+///
+/// An enum and not the `&str` from [`Statement::kind`]: the lookup below used to match on the
+/// string with `_ => SCHEDULE_OPTION_KEYS` as its fall-through, so a kind added without a table
+/// silently inherited schedule's — `@cron` accepted on something that has no schedule, its own
+/// options refused, and no complaint from anywhere. The compiler asks the question now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OptionKind {
+    Shim,
+    Service,
+    Link,
+    Schedule,
+    Setting,
+    Exec,
+    Generate,
+    Dotfiles,
+    Firewall,
+}
+
+impl OptionKind {
+    /// The keyword as written, for the refusal that names it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Shim => "shim",
+            Self::Service => "service",
+            Self::Link => "link",
+            Self::Schedule => "schedule",
+            Self::Setting => "setting",
+            Self::Exec => "exec",
+            Self::Generate => "generate",
+            Self::Dotfiles => "dotfiles",
+            Self::Firewall => "firewall",
+        }
+    }
+
+    /// Every kind that carries options — what a test quantifies over, so a kind added without
+    /// a case in one of them is a failure and not an omission.
+    pub const ALL: &'static [Self] = &[
+        Self::Shim,
+        Self::Service,
+        Self::Link,
+        Self::Schedule,
+        Self::Setting,
+        Self::Exec,
+        Self::Generate,
+        Self::Dotfiles,
+        Self::Firewall,
+    ];
+}
+
 pub const SHIM_OPTION_KEYS: &[&str] = &["source", "scope"];
 pub const SERVICE_OPTION_KEYS: &[&str] = &["enabled", "status"];
 pub const LINK_OPTION_KEYS: &[&str] = &[
@@ -1277,6 +1333,10 @@ pub const SETTING_OPTION_KEYS: &[&str] = &["value", "scope"];
 /// inventing one would be LiNix claiming to undo something it cannot: without it, removing an
 /// `exec:` drops the record and nothing else, and `plan` says so in those words.
 pub const EXEC_OPTION_KEYS: &[&str] = &["runs", "undo"];
+/// Empty, and stated as a table rather than as a special case in the validator: "what may
+/// `generate:` carry" is then answered in the same place as it is for every other kind. It runs
+/// every resolution to compute the current answer, so there is no `@runs` ceiling to set.
+pub const GENERATE_OPTION_KEYS: &[&str] = &[];
 /// `target` is where the tree is mirrored to; absent means the home directory, which is what a
 /// dotfiles tree mirrors by definition. There is deliberately no per-file option: the tree has
 /// no place to write one, which is why it never decrypts (U24).
@@ -1287,7 +1347,7 @@ pub const FIREWALL_OPTION_KEYS: &[&str] = &["value"];
 
 /// A firewall line names a rule the grammar can read, and a default policy says which one.
 fn validate_firewall(origin: &Origin, name: &str, options: &Options) -> Result<()> {
-    validate_extra_options(origin, "firewall", name, options)?;
+    validate_extra_options(origin, OptionKind::Firewall, name, options, None)?;
     let rule = crate::model::firewall::Rule::parse(name)
         .map_err(|e| GrammarError::new(origin.clone(), e))?;
     match rule {
@@ -1318,16 +1378,25 @@ fn validate_firewall(origin: &Origin, name: &str, options: &Options) -> Result<(
     }
 }
 
-fn keys_for(prefix: &str) -> &'static [&'static str] {
-    match prefix {
-        "shim" => SHIM_OPTION_KEYS,
-        "service" => SERVICE_OPTION_KEYS,
-        "link" => LINK_OPTION_KEYS,
-        "setting" => SETTING_OPTION_KEYS,
-        "exec" => EXEC_OPTION_KEYS,
-        "dotfiles" => DOTFILES_OPTION_KEYS,
-        "firewall" => FIREWALL_OPTION_KEYS,
-        _ => SCHEDULE_OPTION_KEYS,
+/// [`keys_for`] for a test in another binary: the table a kind reads, so a kind wired to the
+/// wrong one — which still compiles — can be caught by quantifying over [`OptionKind::ALL`].
+pub fn keys_for_kind(kind: OptionKind) -> &'static [&'static str] {
+    keys_for(kind)
+}
+
+/// The options one kind may carry. **Exhaustive, with no default arm** — a tenth kind does not
+/// compile until it says which options it takes.
+fn keys_for(kind: OptionKind) -> &'static [&'static str] {
+    match kind {
+        OptionKind::Shim => SHIM_OPTION_KEYS,
+        OptionKind::Service => SERVICE_OPTION_KEYS,
+        OptionKind::Link => LINK_OPTION_KEYS,
+        OptionKind::Schedule => SCHEDULE_OPTION_KEYS,
+        OptionKind::Setting => SETTING_OPTION_KEYS,
+        OptionKind::Exec => EXEC_OPTION_KEYS,
+        OptionKind::Generate => GENERATE_OPTION_KEYS,
+        OptionKind::Dotfiles => DOTFILES_OPTION_KEYS,
+        OptionKind::Firewall => FIREWALL_OPTION_KEYS,
     }
 }
 
@@ -1364,20 +1433,16 @@ fn validate_generate(origin: &Origin, name: &str, options: &Options) -> Result<(
             ),
         );
     }
-    if let Some(key) = options.keys().next() {
-        return Err(GrammarError::new(
-            origin.clone(),
-            format!(
-                "`generate:{}` has an option `{}`, but generate takes none",
-                name, key
-            ),
-        )
-        .with_hint(
+    validate_extra_options(
+        origin,
+        OptionKind::Generate,
+        name,
+        options,
+        Some(
             "a generator runs every resolution to compute the current set, so there is no \
              `@runs` ceiling to set.",
-        ));
-    }
-    Ok(())
+        ),
+    )
 }
 
 fn validate_exec(origin: &Origin, name: &str, options: &Options) -> Result<()> {
@@ -1385,18 +1450,16 @@ fn validate_exec(origin: &Origin, name: &str, options: &Options) -> Result<()> {
         return Err(GrammarError::new(origin.clone(), "`exec:` names no script")
             .with_hint("write `exec:./bin/setup.sh` — a path to a script the config carries."));
     }
-    for key in options.keys() {
-        if !EXEC_OPTION_KEYS.contains(&key) {
-            return Err(GrammarError::new(
-                origin.clone(),
-                format!("`exec:{}` has an unknown option `{}`", name, key),
-            )
-            .with_hint(
-                "an exec takes `runs` (a positive number, or `always`) and `undo` (a command \
-                 to run when the line is removed).",
-            ));
-        }
-    }
+    validate_extra_options(
+        origin,
+        OptionKind::Exec,
+        name,
+        options,
+        Some(
+            "an exec takes `runs` (a positive number, or `always`) and `undo` (a command \
+             to run when the line is removed).",
+        ),
+    )?;
     if let Some(runs) = options.one("runs") {
         let runs = runs.trim();
         if runs != "always" && runs.parse::<u32>().map(|n| n == 0).unwrap_or(true) {
@@ -1428,7 +1491,7 @@ pub fn split_setting(name: &str) -> Option<(&str, &str)> {
 /// of the three describes no state, and applying it would mean choosing on the user's behalf
 /// which key they meant.
 fn validate_setting(origin: &Origin, name: &str, options: &Options) -> Result<()> {
-    validate_extra_options(origin, "setting", name, options)?;
+    validate_extra_options(origin, OptionKind::Setting, name, options, None)?;
 
     if split_setting(name).is_none() {
         return Err(
@@ -1458,27 +1521,38 @@ fn validate_setting(origin: &Origin, name: &str, options: &Options) -> Result<()
     Ok(())
 }
 
+/// Refuse any option this kind does not take, then check `@scope=` if it took one.
+///
+/// `hint` is the kind's own sentence about what its options *mean*. The generic
+/// "takes: a, b, c" lists the keys and explains none of them, and a refusal that only names
+/// the legal spellings makes the reader go and look up what they do — so each caller keeps the
+/// sentence it had, and only the *table* is shared.
 fn validate_extra_options(
     origin: &Origin,
-    prefix: &str,
+    kind: OptionKind,
     name: &str,
     options: &Options,
+    hint: Option<&str>,
 ) -> Result<()> {
-    let legal = keys_for(prefix);
+    let prefix = kind.as_str();
+    let legal = keys_for(kind);
     for key in options.keys() {
         if legal.contains(&key) {
             continue;
         }
-        return Err(GrammarError::new(
-            origin.clone(),
-            format!("`@{}` is not an option on `{}:`", key, prefix),
-        )
-        .with_hint(format!(
-            "`{}:{}` takes: {}.",
-            prefix,
-            name,
-            legal.join(", ")
-        )));
+        let what = if legal.is_empty() {
+            format!(
+                "`{}:{}` has an option `{}`, but it takes none",
+                prefix, name, key
+            )
+        } else {
+            format!("`@{}` is not an option on `{}:`", key, prefix)
+        };
+        let hint = match hint {
+            Some(h) => h.to_string(),
+            None => format!("`{}:{}` takes: {}.", prefix, name, legal.join(", ")),
+        };
+        return Err(GrammarError::new(origin.clone(), what).with_hint(hint));
     }
     validate_scope(origin, prefix, name, options)
 }
@@ -3156,11 +3230,17 @@ mod exec_tests {
         assert!(p("exec:").is_err());
     }
 
+    /// The refusal is the one every other kind gives — `exec:` used to phrase this itself,
+    /// which is why its arm in the option table was unreachable. What must survive the sharing
+    /// is the *hint*: "runs, undo" lists the spellings and explains neither, so exec keeps its
+    /// own sentence about what they mean.
     #[test]
     fn an_unknown_exec_option_is_refused_and_names_the_real_one() {
         let err = pv("exec:./s.sh@run=2").unwrap_err();
-        assert!(err.what.contains("unknown option `run`"), "{}", err);
-        assert!(err.to_string().contains("runs"), "{}", err);
+        assert!(err.what.contains("`@run`"), "{}", err);
+        assert!(err.what.contains("exec:"), "{}", err);
+        assert!(err.to_string().contains("`runs`"), "{}", err);
+        assert!(err.to_string().contains("`undo`"), "{}", err);
     }
 
     /// `runs=0` would mean "never runs", which is what deleting the line means. A ceiling that

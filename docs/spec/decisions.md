@@ -269,6 +269,11 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q22** | A config file saved by a Windows editor starts with a byte-order mark, which became part of the first name — refuse it, or read the file? — RULED 2026-07-31: **read it.** The mark is stripped where text enters a parser. | 2026-07-31 |
 | **Q23** | A package name that begins with `@` — every scoped npm package — was read as an option list and could not be written at all. — RULED 2026-07-31: **the leading `@` is part of the name.** | 2026-07-31 |
 | **Q24** | An uninstall sat 76 minutes on a child that had finished its work and never returned; nothing outside the DAG bounded a command at all. BUILT 2026-08-02: a bound on **silence**, `command_idle_timeout_secs = 900`. The number is unruled. | — |
+| **Q25** | May ownership be derived from the config repo's git history, demoting `registry.json` to a cache? — RULED: **no**, in both the git-required and the corroborating-source form. | 2026-08-03 |
+| **Q26** | Is the plan a public versioned artifact with a hard refusal on schema mismatch? — **DEFERRED.** The *internal* plan object is ruled **build it**; publishing the format is not. | 2026-08-03 |
+| **Q27** | Does Part II gain a tier-1 / tier-2 distinction, printed per row by `plan`? — RULED: **no.** | 2026-08-03 |
+| **Q28** | Is a command that reports success while leaving the user with a false picture of their machine a *defect class*, with rules of its own? — RULED: **yes.** | 2026-08-03 |
+| **Q29** | Is the statement set closed, with all future computation routed through `generate:`? — **OPEN**, and it splits in two; see the entry. | — |
 
 *Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
 this file exists to prevent, found on 2026-07-30 by adding a row to it.*
@@ -4864,3 +4869,167 @@ belongs in the grammar rather than in a verb name, because there were three ledg
 two and a per-ledger verb name would have needed six. `NO LEGACY` applies — there is no `unlock`
 that takes a bare name any more, and a name where the axis goes is refused with the three axes
 listed rather than guessed at.
+
+---
+
+## Q25
+
+**Status: ANSWERED — ruled 2026-08-03.** Raised in `DIRECTIONS-2026-08-03.md` as `Q-A`/`Q-B`/`Q-F`
+before that file was rewritten; the letters are recorded here so the old references resolve.
+
+**Q25 — May ownership be derived from the config repo's git history?** `registry.json` records
+what LiNix owns, and it is the only one of the three sources of truth nothing else can
+reconstruct: the config says what you want, the machine says what is there, and the ledger says
+what LiNix put there. Six subsystems exist to serve it — `core/state.rs`, `core/datalock.rs`,
+`app/bundle.rs`, `app/snapshot_restore.rs`, `main.rs`'s `READ_ONLY_COMMANDS`, and much of
+`app/adopt.rs`. The proposal was to derive ownership from II.1's git history instead and demote
+the ledger to a deletable cache.
+
+**RULED: no, in both forms.**
+
+**The strong form makes git required for `sync`, not for `history`.** Git is optional today and
+that is deliberate: `core/git.rs` is a dependency-free shell-out (no `git2`, no `gix`, no
+libgit2 build cost), and its own refusal says *"install it to use LiNix's manifest history —
+`linix git`, `diff`, `rollback` and `bundle`. Everything else works without it."* X.5 gives a
+git-less machine `bundle` in place of history. Deriving ownership from history inverts that: the
+verb that touches the machine hardest becomes the one that stops working, and git is absent by
+default on Windows, in a minimal container, and on a small server. *Install git before you can
+uninstall a package* is not a sentence this tool gets to say.
+
+**The weak form was designed out and then measured, which is what killed it.** Git as a
+corroborating second source: intersection governs removal, union governs reporting, three-valued
+so a machine that cannot answer abstains rather than voting "foreign". It is a coherent design.
+It also **misses AU4** — the most recent real instance of the failure it exists to catch — because
+a fresh config sandbox with a stale data dir has no history to be authoritative with, so git
+abstains on all seven phantom removals. It misses the over-broad `adopt` case that `adopt.rs`'s
+own header warns about, because adopt writes its lines into the manifest and commits them, so git
+agrees with the wrong ledger. What remains is "a registry from another machine or another time" —
+real, but narrow, against a four-condition abstention gate, a history walk on the removal path,
+and a reconcile mode. **`guard.rs` is already the general brake on a plan that removes too much,
+and it does not care why the registry is wrong.**
+
+**What survives.** Git as *enrichment* where it happens to be present — the commit, the date, the
+message you wrote, in `linix why`. Nothing votes on ownership, nothing needs reconciling, and its
+absence costs a clause rather than a verb. That is the surviving half and it is tracked in
+`DIRECTIONS-2026-08-03.md` §4.
+
+`registry.json` remains the source of truth for ownership. No rule in Part II changes.
+
+---
+
+## Q26
+
+**Status: DEFERRED — 2026-08-03.**
+
+**Q26 — Is the plan a public versioned artifact?** Twenty-two backends have ever run against a
+real package manager; **thirty never have.** But most of what a backend is comes down to "given
+`pipx:black`, what argv do you run" — a string, checkable with the manager absent. `plan` already
+computes those strings, which is why plan-smoking covers 45 backends while execution covers 22.
+
+**Two halves, ruled apart.**
+
+**The internal object: build it.** A stable, serializable plan the code passes around, with argv
+assertions per backend against it — all 52, any machine, milliseconds, nothing installed. This is
+coverage for the thirty backends that will never get a container image, and it is the only
+verification strategy in sight that scales faster than one image at a time. It changes no
+user-visible behaviour and needs no further ruling.
+
+**The public schema: deferred.** A published format with a hard refusal on mismatch is a
+permanent compatibility surface under NO-LEGACY — there is no dual-reader when it changes. It
+buys fleet deployment (compute here, apply there) and plan-diffs in code review, and neither has
+been asked for. Deferred rather than refused: the internal object is its precondition, so nothing
+is foreclosed by waiting.
+
+**Constraint this places on everything else:** `model::Resolver` must stay pure. It is the only
+component testable without a machine, and the argv assertions rest entirely on that. Merging it
+with `app::sync::StateResolver` — which the name similarity invites — would put I/O inside it and
+destroy this.
+
+---
+
+## Q27
+
+**Status: ANSWERED — ruled 2026-08-03.** Raised as `Q-E`.
+
+**Q27 — Does Part II gain a tier-1 / tier-2 distinction?** The proposal was to state in Part II
+that some declarations are ones LiNix owns end to end and can undo exactly — `link:`,
+`dotfiles:`, `setting:`, `@bin` artifacts, `exec:` with `@undo=` — while every package backend,
+`service:`, `firewall:` and `repo:` delegate to a manager that mutates global state in place; and
+to print which tier each row is in during `plan`, since "this can be undone exactly" and "this is
+guarded and snapshotted but undoing it is a restore" are different promises printed identically
+today.
+
+**RULED: no.** The owner declined it.
+
+Recorded rather than dropped, because the observation that produced it recurs: `setting:` already
+does read-before-write per II.2, which is tier-1 behaviour arrived at locally for one statement
+without any general rule being stated. An auditor who notices that will re-propose this. It has
+been asked and answered.
+
+---
+
+## Q28
+
+**Status: ANSWERED — ruled 2026-08-03.**
+
+**Q28 — Is a command that reports success over a false picture of the machine a defect class?**
+There are two ways this tool can be wrong: it can do the wrong thing, or it can do the right
+thing and tell you something false about it. **The second is worse** — after the first you can go
+and look at your machine, and after the second you stop looking, because you were told it was
+fine.
+
+Two instances, one session, neither a crash and both exit 0:
+
+| command | LiNix said | what was true |
+|---|---|---|
+| `linix check` | `ok  drift  the machine matches your files` | **false** (AU1) |
+| `linix --config-dir X init` | `created`, `kept` | true about *what*, wrong about *where* |
+
+**RULED: yes.** The rule is in **II.20**; the reason is in **V.128**.
+
+The three sub-rules: *"nothing to do" is a claim about the world and has to be earned*; *every
+mutation states where, not just what*; *absence is reported like presence*. `Declined::reported`
+(`app/sync/planner.rs`) is the first of them already built for one path — its own comment says
+the type exists so that *"does the user hear about this?" cannot be answered by omission*, and an
+empty plan with a non-empty `skipped` is not `already up to date`. The rule generalises what that
+type does for removals to every path that reports.
+
+This is the standard the error messages already meet — file, line, what is wrong, what to do, and
+what the concept means — applied to success, to absence, and to history rather than only to
+failure.
+
+---
+
+## Q29
+
+**Status: OPEN.** Recorded here because the file that raised it (as `Q-C`) has been rewritten and
+an unregistered question in a replaced file is exactly the drift this register exists to prevent.
+
+**Q29 — Is the statement set closed?** `config/grammar/statement.rs` is 3,406 lines, the largest
+file in `src/`, and it has grown `when`, `param`, `vars` with three providers, `generate:`,
+`exec:` and user verbs. The proposal was to declare the config language **data**, freeze the
+keyword list, and route all future computation through `generate:` — a command whose stdout is
+declarations, written in a real language.
+
+**The question as posed has a hole in it.** `generate:` output is merged *"as if typed"*, so it
+re-enters this same grammar: a generator can emit a thousand computed `apt:` lines and **cannot
+emit a statement kind that does not exist**. Generators expand *quantity*, not *kind*. It is also
+off by default behind `allow_generators` and runs through the II.12 ledger, which makes it a
+sound escape hatch and a weak policy for absorbing the future.
+
+**So it splits, and the halves want different answers:**
+
+- **Is computation closed** — no more logic keywords, no fourth `vars` provider, no `repl`?
+  `generate:` genuinely covers this. *Recommended: yes.*
+- **Is the resource-kind set closed** — never another `foo:` prefix? Nothing absorbs the twelfth
+  kind if that is wrong, and extensibility grades A− precisely because the backend mechanism is
+  open. *Recommended: no.*
+
+**Either way, the motivation has a better cure than a ban.** Part II has three times failed to
+list a statement it shipped — `exec:`, `dotfiles:` and `firewall:` — and Q16 later had to refuse
+nine more bare keywords that fell through the same hole. `KEYWORDS` in `statement.rs` is already
+the single list (its comment records that three copies had drifted until
+`setting:HKCU\Software\Foo` was read as a set difference by the only one that had never heard of
+`setting:`). **A test asserting `KEYWORDS` matches Part II's statement table** makes the twelfth
+keyword impossible to ship undocumented, without closing anything. That is an afternoon and it is
+sequenced ahead of this ruling in `DIRECTIONS-2026-08-03.md` §6.
