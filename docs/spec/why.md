@@ -2928,3 +2928,43 @@ and recognise as a description of their own computer is worth more than one that
 and every sentence LiNix prints either builds that recognition or quietly corrodes it.
 
 ---
+
+**V.129 — Why the grammar stays open, and why a test pays for it.** *(Owner ruling, 2026-08-04 —
+`Q29`, resource-kind half. Rule in II.2.)*
+
+The proposal was to close the language: freeze the keyword list, declare the config **data**, and
+route everything future through `generate:`. It was killed by the owner in one sentence — *"i
+dont think it is closed, no. we still might add"* — and the sentence is right for a reason the
+proposal did not reach. `generate:` output is merged *as if typed*, so it re-enters this same
+grammar; a generator can emit a thousand computed `apt:` lines and **cannot emit a statement kind
+that does not exist**. Generators expand quantity, never kind. Freezing the kinds would therefore
+have closed the one door the escape hatch does not reopen, in exchange for a problem the freeze
+was not actually solving.
+
+Because what the freeze was solving is a *documentation* failure wearing a language-design
+costume. Part II has now shipped four statement prefixes it failed to list: `exec:`, `dotfiles:`
+and `firewall:` were caught after two days, and a paragraph was written into Part II recording
+that they had been missed and instructing that the table "must be checked against" the code.
+`generate:` then shipped, went unlisted, and sat **directly beneath that paragraph for months** —
+read past by every session that read the warning, including the ones that quoted it.
+
+That is the finding, and it generalises past this table: **a prose instruction to check a copy
+against its authority is not a check.** It is a copy of the authority's *address*, and it decays
+at the same rate as the copy it is supposed to protect — faster, because it reads as though the
+work has been done. Four prefixes went missing under a rule that told people to look.
+
+So the ratchet is the price of the open grammar and is cheaper than the ban: Part II's Statements
+table and its reserved-word block are asserted against `KEYWORDS` in both directions, grouped by
+`KeywordRole`. Both directions, because they fail differently — a word in the code and not the
+docs is an undocumented feature, while a word in the docs and not the code sends a reader to
+write a line the parser will refuse, which is worse. Grouped by role, because `KEYWORDS`
+previously could not distinguish `use` (a directive this grammar has) from `if` (a word it
+refuses so that `gem:if` cannot be installed by a typo); without that distinction, promoting a
+foreign word into the language would have passed a check that only counted words.
+
+The half that is **not** ruled: whether *computation* is closed — a fourth `vars` provider,
+another logic keyword. It is a separate question with a different answer available, and it is not
+implied by this one. It stays open in `decisions.md` rather than being quietly settled by the
+ruling next to it.
+
+---

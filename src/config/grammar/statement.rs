@@ -302,6 +302,25 @@ impl<F: Fn(&str) -> bool> BackendNames for F {
     }
 }
 
+/// What a reserved word *is*, as opposed to how it is spelled.
+///
+/// [`Foreign`](KeywordRole::Foreign) is the distinction the table could not previously make:
+/// `use` and `if` were both "no colon, no `build`", so nothing could tell a directive this
+/// grammar has from a word it deliberately refuses. Anything quantifying over the language —
+/// the spec ratchet in `tests/grammar_table_matches_the_spec_tests.rs` above all — would then
+/// have to re-derive the split from a second list, which is how the three copies this table
+/// replaced went out of step in the first place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum KeywordRole {
+    /// Introduces a typed statement and is written `word:` — `link:`, `absent:`.
+    Prefix,
+    /// A directive of this grammar, written bare — `use`, `when`, `param`.
+    Directive,
+    /// Not this grammar's word at all. Reserved only so that arriving from another config
+    /// language does not install a package: `gem:if` and `npm:else` are real packages.
+    Foreign,
+}
+
 /// A word this grammar reserves: the statement it introduces, and the form to write instead
 /// when it turns up alone on a line (Q16).
 struct Keyword {
@@ -311,6 +330,7 @@ struct Keyword {
     spelling: &'static str,
     /// The form the user probably meant, shown in the refusal.
     means: &'static str,
+    role: KeywordRole,
     /// Builds the statement from `(name, options)`. `None` for the prefixes parsed above the
     /// dispatch loop (`absent:`, `repo:` have payloads of their own shape) and for the
     /// directives, which are not resources at all.
@@ -324,8 +344,11 @@ impl Keyword {
     }
 
     /// Whether the word is written `word:` — a resource prefix rather than a directive.
+    ///
+    /// Asks the role, not the spelling: the colon is how a prefix is *written* and the role is
+    /// what it *is*. `keyword_roles_and_spellings_agree` holds the two together.
     fn takes_colon(&self) -> bool {
-        self.spelling.ends_with(':')
+        matches!(self.role, KeywordRole::Prefix)
     }
 }
 
@@ -340,56 +363,67 @@ const KEYWORDS: &[Keyword] = &[
     Keyword {
         spelling: "absent:",
         means: "absent:apt:libreoffice",
+        role: KeywordRole::Prefix,
         build: None,
     },
     Keyword {
         spelling: "repo:",
         means: "repo:apt:ppa:deadsnakes/ppa",
+        role: KeywordRole::Prefix,
         build: None,
     },
     Keyword {
         spelling: "shim:",
         means: "shim:NAME @target=/path/to/binary",
+        role: KeywordRole::Prefix,
         build: Some(Statement::Shim),
     },
     Keyword {
         spelling: "schedule:",
         means: "schedule:NAME @run=… @every=…",
+        role: KeywordRole::Prefix,
         build: Some(Statement::Schedule),
     },
     Keyword {
         spelling: "service:",
         means: "service:nginx @state=running",
+        role: KeywordRole::Prefix,
         build: Some(Statement::Service),
     },
     Keyword {
         spelling: "link:",
         means: "link:/path/to/source @target=/path/to/destination",
+        role: KeywordRole::Prefix,
         build: Some(Statement::Link),
     },
     Keyword {
         spelling: "setting:",
         means: "setting:SCHEMA/KEY @value=…",
+        role: KeywordRole::Prefix,
         build: Some(Statement::Setting),
     },
     Keyword {
         spelling: "exec:",
         means: "exec:./scripts/setup.sh",
+        role: KeywordRole::Prefix,
         build: Some(Statement::Exec),
     },
     Keyword {
         spelling: "generate:",
         means: "generate:/path/to/output @from=…",
+        role: KeywordRole::Prefix,
         build: Some(Statement::Generate),
     },
     Keyword {
         spelling: "dotfiles:",
         means: "dotfiles:./dotfiles @target=~",
+        role: KeywordRole::Prefix,
         build: Some(Statement::Dotfiles),
     },
     Keyword {
         spelling: "firewall:",
         means: "firewall:443/tcp @value=allow",
+        role: KeywordRole::Prefix,
         build: Some(Statement::Firewall),
     },
     // The directives. No colon, no `build` — each has its own parser above the package
@@ -398,31 +432,37 @@ const KEYWORDS: &[Keyword] = &[
     Keyword {
         spelling: "use",
         means: "use editors",
+        role: KeywordRole::Directive,
         build: None,
     },
     Keyword {
         spelling: "param",
         means: "param gpu = nvidia",
+        role: KeywordRole::Directive,
         build: None,
     },
     Keyword {
         spelling: "exclude",
         means: "exclude heavy",
+        role: KeywordRole::Directive,
         build: None,
     },
     Keyword {
         spelling: "intersect",
         means: "intersect Work",
+        role: KeywordRole::Directive,
         build: None,
     },
     Keyword {
         spelling: "module",
         means: "module editors { … }",
+        role: KeywordRole::Directive,
         build: None,
     },
     Keyword {
         spelling: "when",
         means: "when os == linux { … }",
+        role: KeywordRole::Directive,
         build: None,
     },
     // Words this grammar does not have, which arrive from the config languages people come
@@ -432,26 +472,31 @@ const KEYWORDS: &[Keyword] = &[
     Keyword {
         spelling: "if",
         means: "when os == linux { … }",
+        role: KeywordRole::Foreign,
         build: None,
     },
     Keyword {
         spelling: "else",
         means: "a second `when` with the opposite condition",
+        role: KeywordRole::Foreign,
         build: None,
     },
     Keyword {
         spelling: "end",
         means: "`}` — blocks close with a brace",
+        role: KeywordRole::Foreign,
         build: None,
     },
     Keyword {
         spelling: "import",
         means: "use editors",
+        role: KeywordRole::Foreign,
         build: None,
     },
     Keyword {
         spelling: "include",
         means: "use editors",
+        role: KeywordRole::Foreign,
         build: None,
     },
 ];
@@ -1981,6 +2026,16 @@ pub fn known_prefixes() -> Vec<&'static str> {
         .collect()
 }
 
+/// Every reserved word and what it is, for anything that has to quantify over the language.
+///
+/// The bare word, never the spelling: a caller asking "what words does this grammar reserve"
+/// wants `link`, and one asking "what prefixes are there" wants [`known_prefixes`]. Two
+/// questions, two functions, one table — so the answer cannot drift the way the three copies
+/// this table replaced did.
+pub fn reserved_words() -> Vec<(&'static str, KeywordRole)> {
+    KEYWORDS.iter().map(|k| (k.word(), k.role)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1992,6 +2047,51 @@ mod tests {
     /// Stands in for the live BackendRegistry.
     fn known(name: &str) -> bool {
         matches!(name, "apt" | "cargo" | "snap" | "npm")
+    }
+
+    /// The role is what a word is; the colon is how it is written. Nothing stops an entry
+    /// declaring one and spelling the other, and the dispatch loop strips `spelling` while
+    /// every quantifier asks `role` — so a mismatch would make a prefix invisible to the spec
+    /// ratchet while it kept on parsing.
+    #[test]
+    fn keyword_roles_and_spellings_agree() {
+        for kw in KEYWORDS {
+            assert_eq!(
+                kw.takes_colon(),
+                kw.spelling.ends_with(':'),
+                "`{}` is spelled {:?} but its role is {:?}",
+                kw.word(),
+                kw.spelling,
+                kw.role
+            );
+        }
+    }
+
+    /// A `Prefix` builds a statement or is parsed above the dispatch loop; a `Directive` or a
+    /// `Foreign` word never builds one. A `build` on a non-prefix would be dead code the
+    /// dispatch loop can never reach, because it only strips spellings ending in `:`.
+    #[test]
+    fn only_prefixes_build_statements() {
+        for kw in KEYWORDS {
+            if kw.build.is_some() {
+                assert!(
+                    kw.takes_colon(),
+                    "`{}` builds a statement but is not a prefix",
+                    kw.word()
+                );
+            }
+        }
+    }
+
+    /// Reserved words are unique. Two entries for one word means the second is unreachable:
+    /// both the dispatch loop and `bare_keyword` take the first match.
+    #[test]
+    fn no_reserved_word_is_listed_twice() {
+        let mut seen: Vec<&str> = reserved_words().iter().map(|(w, _)| *w).collect();
+        let before = seen.len();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(before, seen.len(), "a reserved word is listed twice");
     }
 
     fn p(line: &str) -> Result<Statement> {

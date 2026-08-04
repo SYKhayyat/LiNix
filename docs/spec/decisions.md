@@ -273,7 +273,7 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q26** | Is the plan a public versioned artifact with a hard refusal on schema mismatch? — **DEFERRED.** The *internal* plan object is ruled **build it**; publishing the format is not. | 2026-08-03 |
 | **Q27** | Does Part II gain a tier-1 / tier-2 distinction, printed per row by `plan`? — RULED: **no.** | 2026-08-03 |
 | **Q28** | Is a command that reports success while leaving the user with a false picture of their machine a *defect class*, with rules of its own? — RULED: **yes.** | 2026-08-03 |
-| **Q29** | Is the statement set closed, with all future computation routed through `generate:`? — **OPEN**, and it splits in two; see the entry. | — |
+| **Q29** | Is the statement set closed, with all future computation routed through `generate:`? — **HALF RULED.** The *resource-kind* set is ruled **open — more prefixes may be added**; a ratchet holds Part II to `KEYWORDS` instead. The *computation* half is still open. | 2026-08-04 |
 
 *Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
 this file exists to prevent, found on 2026-07-30 by adding a row to it.*
@@ -5002,8 +5002,21 @@ failure.
 
 ## Q29
 
-**Status: OPEN.** Recorded here because the file that raised it (as `Q-C`) has been rewritten and
-an unregistered question in a replaced file is exactly the drift this register exists to prevent.
+**Status: HALF RULED, 2026-08-04.** The resource-kind half is ruled **no — the set stays open**:
+*"i dont think it is closed, no. we still might add."* The computation half is **still open** and
+is not implied by it; nobody has ruled on whether a fourth `vars` provider or another logic
+keyword may be added, and this register does not answer a question the owner did not answer.
+
+**What the ruling means in code.** Nothing is frozen and nothing is banned. `KEYWORDS` may grow a
+twelfth prefix. What the ruling *costs* is documentation drift, and that bill is now paid by
+`tests/grammar_table_matches_the_spec_tests.rs`: Part II's Statements table and its reserved-word
+block are both asserted against `KEYWORDS`, in both directions, grouped by `KeywordRole`. Adding
+a prefix without documenting it fails the build.
+
+**The ruling was expensive to defer by exactly one prefix.** `generate:` shipped as U33, sits in
+`KEYWORDS`, has its own rule in Part II — and was missing from Part II's Statements table until
+2026-08-04, *directly beneath the paragraph warning that three earlier prefixes had gone missing
+the same way*. Four, not three. Prose does not fail a build.
 
 **Q29 — Is the statement set closed?** `config/grammar/statement.rs` is 3,406 lines, the largest
 file in `src/`, and it has grown `when`, `param`, `vars` with three providers, `generate:`,

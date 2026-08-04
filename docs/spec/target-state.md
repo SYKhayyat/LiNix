@@ -120,6 +120,7 @@ setting:SCHEMA/KEY            a desktop setting (`@value=…`), read-before-writ
 dotfiles:PATH                 a folder mirrored into place, one file at a time
 firewall:PORT/PROTO           a port; `firewall:default/incoming @value=deny` a policy
 exec:PATH                     run a script the config carries — the one verb
+generate:PATH                 a command whose stdout is declarations (U33), off by default
 use NAME                      reference a module (lowercase) or profile (Capitalized)
 ```
 
@@ -129,6 +130,13 @@ days.** `exec:` is XIII.3 (built 7b), `dotfiles:` is U22–U25 (built 7n), `fire
 shipped statement is worse than one that is short: it reads as the closed set it is not.** The
 authority is `config/grammar/statement.rs`'s `Statement` enum; this table is the human copy and
 must be checked against it, not against itself.
+
+**It was four, not three, and the fourth outlived the paragraph written about the other
+three.** `generate:` shipped as U33, is a `Prefix` in `KEYWORDS`, has its own rule below — and
+was still missing from this table on 2026-08-04, read past by every session that read the
+sentence above it. A prose instruction to check a copy against its authority is not a check;
+`tests/grammar_table_matches_the_spec_tests.rs` is, and it now fails the build if this table
+and `KEYWORDS` disagree in either direction (Q29).
 
 **`exec:` is the one statement that is a verb, and it bends the model in exactly one place.** A
 false `when` on every other statement means *undo*; on `exec:` it does not, because a script that
@@ -148,10 +156,17 @@ table the parser dispatches on, so a prefix added later is refused bare without 
 remembering — and it is, today:
 
 ```
+# prefixes — written `word:`, each introduces a typed statement
 absent  repo  shim  schedule  service  link  setting  exec  generate  dotfiles  firewall
-use  param  exclude  intersect  module  when            the words this grammar has
-if  else  end  import  include                          the words people arrive with
+# directives — this grammar's words, written bare
+use  param  exclude  intersect  module  when
+# the words people arrive with, refused so a typo cannot install a package
+if  else  end  import  include
 ```
+
+The three groups are `KeywordRole::Prefix`, `Directive` and `Foreign`, and the ratchet checks
+each group against its own role rather than the twenty-two as one bag: promoting `if` to a real
+keyword is a language change, and a check that only counted words would pass it.
 
 The ruling was measured against thirteen of these; the other nine are the same sentence one
 layer over — `exec`, `dotfiles`, `firewall` and `generate` are statement prefixes this document
