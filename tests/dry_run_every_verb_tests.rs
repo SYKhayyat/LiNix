@@ -189,7 +189,10 @@ const EXEMPT: &[(&str, &str)] = &[
         "its file IS the preview — a `--dry-run plan` that wrote nothing would produce no          output at all (Q15, ruled 2026-07-30)",
     ),
     ("apply", "applies a saved plan through a real manager"),
-    ("unlock", "covered by lock: same ledger, same writer"),
+    (
+        "unlock",
+        "covered by lock: the same three ledgers, all written through `persist`",
+    ),
     ("teleport", "rewrites a line then syncs through a real manager"),
     ("search", "read-only — queries the managers"),
     ("update", "refreshes manager indexes; touches no config"),

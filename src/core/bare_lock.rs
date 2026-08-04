@@ -15,7 +15,7 @@
 //! each machine still reproduces exactly what it had.
 //!
 //! **Deleting is how you unfreeze** (II.15's rule, applied here): an entry means frozen, no
-//! entry means ask. `linix unlock` removes entries; so does an editor, because the file is
+//! entry means ask. `linix unlock backends` removes entries; so does an editor, because the file is
 //! yours.
 //!
 //! One file per host rather than one per backend, unlike the rest of `locks/`: the fact
@@ -78,7 +78,7 @@ impl BareLock {
         had
     }
 
-    /// Every frozen name and the manager it is frozen to, for `linix unlock` to report.
+    /// Every frozen name and the manager it is frozen to, for `linix lock backends --list`.
     pub fn entries(&self) -> impl Iterator<Item = (&str, &str)> {
         self.resolved.iter().map(|(n, b)| (n.as_str(), b.as_str()))
     }

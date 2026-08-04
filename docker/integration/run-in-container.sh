@@ -775,11 +775,11 @@ command -v "$FOREIGN" >/dev/null 2>&1 \
     || nok "a pin to a manager this host lacks is not silent" lx -y install "$FOREIGN:$PKG"
 
 if [ -z "$SMOKE" ]; then
-grep_ok "unlock --list names the frozen package" "$PKG" lx unlock --list
-ok "unlock forgets one name" lx unlock "$PKG"
+grep_ok "unlock backends --list names the frozen package" "$PKG" lx unlock backends --list
+ok "unlock backends forgets one name" lx unlock backends "$PKG"
 nok "the entry is really gone" grep -q "$PKG" "$LOCKFILE"
 fi
-ok "unlocking a name that was never frozen is not an error" lx unlock linix-never-frozen-zzz
+ok "unlocking a name that was never frozen is not an error" lx unlock backends linix-never-frozen-zzz
 
 # --- 13b. A manager that could not answer is not one that said no (V.7c) --
 echo "[13b] Silence is not a no"

@@ -148,7 +148,9 @@ pub(crate) async fn handle_add(app: &App, source: &str, trust: bool, force: bool
             let approved = app.hooks.approve_all_hooks().unwrap_or(0);
             approve_adapters(app).ok();
             approve_generate_commands(app).ok();
-            approve_exec_scripts(app).await.ok();
+            if let Ok(model) = resolve_for_approval(app).await {
+                approve_exec_scripts(app, &model).await.ok();
+            }
             println!(
                 "--trust: approved the vendored code ({} hook set(s) + adapters/exec/generate).",
                 approved

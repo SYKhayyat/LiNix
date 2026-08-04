@@ -13,6 +13,7 @@ pub use args::{
     GitCommand,
     HooksArgs,
     HooksCommand,
+    LockAxis,
     // New for v3.6.0
     ModuleArgs,
     ModuleCommand,

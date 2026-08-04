@@ -549,6 +549,15 @@ pub(crate) async fn handle_sync(app: &App, locked: bool, upgrade: bool, json: bo
         },
     )
     .await?;
+    // `--upgrade` is the run that means to move forward, so it records where it landed. Without
+    // this the pins still name the versions it just replaced, and the next ordinary sync — which
+    // converges to the lock — plans every one of them back down (Z2).
+    if upgrade {
+        let moved = crate::verbs::plan::refresh_version_locks(app).await?;
+        if moved > 0 && !json {
+            println!("Lock: re-recorded {} version pin(s).", moved);
+        }
+    }
     // Never over a skip. `already up to date` is a claim about the machine, and the machine
     // holds a package this run decided not to remove — which the lines above have just named
     // (AU1). The claim was made, in that exact state, three times: here, in `uninstall`, and

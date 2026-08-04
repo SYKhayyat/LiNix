@@ -41,7 +41,7 @@ says by name what it did not exercise.
 | 8 | `adopt` takes the **manual** set: the count is compared against the manager's own user-chosen list and against every installed package, not printed |
 | 9–10 | The guard keeps a protected package; `purge-unmanaged` after adopt is refused by the *protected set*, a different rule than §4's; real uninstall → gone from PATH |
 | 11–12 | git-backed manifest history, `diff`, `rollback`; `rebuild` repairs and writes **no** commit (K14) |
-| 13 | Backend chains and the per-host lock file; `unlock`; a pin to a manager this host lacks is not silent |
+| 13 | Backend chains and the per-host lock file; `unlock backends`; a pin to a manager this host lacks is not silent |
 | 13b | A manager that could not answer is not one that said no (V.7c) |
 | **14** | **A real install → list → PATH → remove → gone cycle for every other manager the image ships** |
 | **15** | **A plan-smoke for every registered backend the image cannot run**, so its argv/planner wiring is still proven |

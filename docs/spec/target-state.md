@@ -623,12 +623,39 @@ write is deleted (II.17), because two stores could disagree about what this mach
 | **`exec:` script content already run here** | `sha256:… → 1` | **built** (`locks/exec.toml`). Keyed by **content**, while `locks/hooks.toml` is keyed by declared path — the two answer different questions (*has this already run?* vs *is this allowed to run?*), so a script edited after approval is both unapproved and un-run, which is the pair you want |
 | **applied extras** | `service:nginx`, `link:<destination>`, `repo:apt:ppa:x/y` | **built** (`locks/extras.toml`). It is what makes *removing* a `service:`/`link:`/`shim:`/`repo:` line undo it — without a record of what was applied, deleting the last extra line is a change with nothing to diff against |
 
-`linix lock` regenerates the version pins. **It takes no arguments** — the per-name and
-per-backend forms this section used to promise (`lock <name>`, `lock --backend cargo`) do not
-exist. The one-file-per-backend layout now has exactly one real instance: `locks/github.toml`,
-written by the backend as it installs rather than by `linix lock`, because the artifact is only
-known at the moment it is chosen. `github` asks `Layout::lock_file()` for that path rather
-than building it, so there is one answer to where a backend's lock lives.
+**`lock` and `unlock` name the axis they act on** (owner ruling, 2026-08-03, `Z2`):
+
+```
+linix lock   [versions|backends|scripts|all] [NAME…] [--list]
+linix unlock [versions|backends|scripts|all] [NAME…] [--list]
+```
+
+| axis | the ledger | `lock` | `unlock` |
+|---|---|---|---|
+| `versions` | `locks/versions.json` | pin what is installed | drop the pins; sync takes what the managers offer |
+| `backends` | `locks/bare.HOST.toml` | record what each unpinned name resolved to | forget it, so the next sync asks again |
+| `scripts` | `locks/hooks.toml` | approve everything the config can execute, at its current hash (II.12) | withdraw approval, so a sync that reaches one refuses to run it |
+
+**A bare `lock` or `unlock` is `all` three.** `NAME` scopes any axis and matches the whole ledger
+key or its tail — `unlock versions curl` and `unlock versions apt:curl` both pick out `apt:curl`.
+A name that picks nothing out warns, names the ledger, and changes nothing. **A name where the
+axis goes is refused**, with the three axes listed: there is no bare-name form of either verb.
+
+Both verbs took different, unrelated ledgers until this ruling, so `linix unlock` — the obvious
+undo for `linix lock` — discarded a backend resolution and the next sync uninstalled a package
+(V.127). The per-name and per-backend forms this section used to promise and then denied
+(`lock <name>`, `lock --backend cargo`) exist now as `NAME` on any axis.
+
+The one-file-per-backend layout has exactly one real instance: `locks/github.toml`, written by
+the backend as it installs rather than by `linix lock`, because the artifact is only known at the
+moment it is chosen. `github` asks `Layout::lock_file()` for that path rather than building it,
+so there is one answer to where a backend's lock lives.
+
+**Every path that deliberately moves a version forward re-records the pins it moved** — `upgrade`
+in all its modes, and `sync --upgrade`. **Only entries already in the lock are refreshed**; a
+package nobody pinned gains no pin, because an upgrade is not a `lock`. Without this an upgrade
+did not stick: the pin still named the version that was replaced, and the next ordinary sync —
+which converges to the lock — planned the package straight back down (V.127).
 
 **`locks/bare.HOST.toml` is one file per machine, not one per backend** (owner ruling,
 2026-07-22), which is this table's one exception to the layout above. Two reasons, and they
@@ -654,9 +681,10 @@ frozen to a manager the line no longer accepts, or that this machine does not ha
 loudly rather than honoured — the lock exists to stop a line changing meaning, never to demand
 a manager that is not here.
 
-**`linix unlock [NAME…]` is how you ask again** (owner ruling, 2026-07-22), alongside the text
-editor II.15 promises for regex. With no arguments it forgets every name this host froze;
-`--list` shows them and changes nothing. It is what you run when a better source appears:
+**`linix unlock backends [NAME…]` is how you ask again** (owner ruling, 2026-07-22; the axis
+named 2026-08-03), alongside the text editor II.15 promises for regex. With no names it forgets
+every name this host froze; `--list` shows them and changes nothing. It is what you run when a
+better source appears:
 `ripgrep` frozen to `cargo` because apt did not carry it yet moves to `apt` on the next sync
 once it does — **and that sync uninstalls the cargo copy**, because the old one is a managed
 package nothing declares any more, which is exactly what drift removal is for (V.34). Two
@@ -989,8 +1017,8 @@ else, ever.**
 | `check` | **the one looking command** (U9). Eight sections — `config`, `drift`, `unmanaged`, `absent`, `conflicts`, `health`, `security`, `approvals` — one line each by default, detail when a section is named |
 | `heal` | **the one acting-on-what-check-found command.** `doctor --fix`'s repairs live here |
 | `rebuild` | remove and reinstall what is declared, one backend at a time (II.11b) |
-| `lock [NAME]` | freeze versions / expansions, approve hooks |
-| `unlock [NAME…] [--list]` | forget which manager an unpinned name resolved to, so sync asks again (II.6) |
+| `lock [AXIS] [NAME…] [--list]` | freeze one of the three ledgers, or all of them: `versions`, `backends`, `scripts` (II.6) |
+| `unlock [AXIS] [NAME…] [--list]` | release one of the three, or all of them. `unlock backends` is the one that can move packages (II.6) |
 | `purge-unmanaged` | delete everything LiNix doesn't manage |
 | `remove-orphans` | the names each backend can say are orphaned — shown, guarded, removed (II.11c) |
 | `clean-cache` | downloaded archives and build caches. Removes no installed package |

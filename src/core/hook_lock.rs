@@ -181,6 +181,22 @@ impl HookLedger {
         self.approvals.insert(id.to_string(), hash.to_string());
     }
 
+    /// The approved hash for `id`, if there is one.
+    pub fn get(&self, id: &str) -> Option<&str> {
+        self.approvals.get(id).map(String::as_str)
+    }
+
+    /// Every approved id and its hash, for `linix lock --list` to report.
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.approvals.iter().map(|(i, h)| (i.as_str(), h.as_str()))
+    }
+
+    /// Withdraw one approval, so whatever it names is refused again until it is re-approved.
+    /// Reports whether there was anything to withdraw.
+    pub fn revoke(&mut self, id: &str) -> bool {
+        self.approvals.remove(id).is_some()
+    }
+
     /// How many hooks are approved.
     pub fn len(&self) -> usize {
         self.approvals.len()

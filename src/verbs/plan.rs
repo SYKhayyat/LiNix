@@ -593,98 +593,323 @@ pub(crate) async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Resul
     perform_maintenance(app).await
 }
 
-/// Build and write `locks/versions.json` from the current managed state (live installed versions
-/// preferred, falling back to recorded state). Returns the number of versions pinned. Shared
-/// by `linix lock` and by `linix heal` (which reconciles the lockfile).
-pub(crate) async fn build_and_write_locks(app: &App) -> Result<(usize, bool)> {
-    let mut locks = serde_json::Map::new();
-    {
-        let state = app.state.lock().await;
-        for pkg in &state.packages {
-            // Prefer the live installed version from the backend; fall back to recorded state.
-            let version = match app
-                .registry
-                .get(&pkg.backend)
-                .and_then(|b| b.as_queryable().cloned())
-            {
-                Some(q) => match q.info(&pkg.name).await {
-                    Ok(Some(p)) => p.version.or_else(|| pkg.version.clone()),
-                    _ => pkg.version.clone(),
-                },
-                None => pkg.version.clone(),
-            };
-            if let Some(v) = version {
-                if !v.is_empty() && v != "unknown" {
-                    locks.insert(
-                        format!("{}:{}", pkg.backend, pkg.name),
-                        serde_json::Value::String(v),
-                    );
-                }
-            }
-        }
-    }
-    let count = locks.len();
-    let path = app.config.config_root().join("locks").join("versions.json");
-    // The version pins live in the `locks/` directory (II.6) beside the hook and extras
-    // ledgers — not a stray `locks.json` file beside that directory (the old layout).
+/// Where the version pins live (II.6): in the `locks/` directory beside the hook and extras
+/// ledgers, never a stray `locks.json` beside that directory.
+pub(crate) fn version_lock_path(app: &App) -> std::path::PathBuf {
+    app.config.config_root().join("locks").join("versions.json")
+}
+
+/// The pins on disk. A missing or unreadable file is an empty set of pins — the ordinary state
+/// of a machine that has never run `linix lock`, never an error.
+pub(crate) fn load_version_locks(path: &std::path::Path) -> serde_json::Map<String, Value> {
+    let Ok(body) = std::fs::read_to_string(path) else {
+        return serde_json::Map::new();
+    };
+    serde_json::from_str::<Value>(&body)
+        .ok()
+        .and_then(|doc| doc.get("locks").and_then(Value::as_object).cloned())
+        .unwrap_or_default()
+}
+
+/// Write the pins back. Returns whether the bytes reached the disk — a preview pins nothing.
+pub(crate) async fn write_version_locks(
+    path: &std::path::Path,
+    locks: &serde_json::Map<String, Value>,
+) -> Result<bool> {
     if !linix::core::dry_run::active() {
         if let Some(dir) = path.parent() {
             tokio::fs::create_dir_all(dir).await.ok();
         }
     }
     let doc = serde_json::json!({ "locks": locks });
-    let written = linix::utils::file::persist(&path, &serde_json::to_string_pretty(&doc)?)
-        .with_context(|| format!("Failed to write {}", path.display()))?;
+    linix::utils::file::persist(path, &serde_json::to_string_pretty(&doc)?)
+        .with_context(|| format!("Failed to write {}", path.display()))
+}
+
+/// The version every managed package is at *now*, keyed `backend:name`.
+///
+/// The live answer from the backend, falling back to recorded state. `list_installed` is memoized
+/// once per run (`Queryable::list_installed`), so asking `info` per package costs one command per
+/// manager, not one per package.
+async fn scan_installed_versions(app: &App) -> serde_json::Map<String, Value> {
+    let mut locks = serde_json::Map::new();
+    let state = app.state.lock().await;
+    for pkg in &state.packages {
+        let version = match app
+            .registry
+            .get(&pkg.backend)
+            .and_then(|b| b.as_queryable().cloned())
+        {
+            Some(q) => match q.info(&pkg.name).await {
+                Ok(Some(p)) => p.version.or_else(|| pkg.version.clone()),
+                _ => pkg.version.clone(),
+            },
+            None => pkg.version.clone(),
+        };
+        if let Some(v) = version {
+            if !v.is_empty() && v != "unknown" {
+                locks.insert(format!("{}:{}", pkg.backend, pkg.name), Value::String(v));
+            }
+        }
+    }
+    locks
+}
+
+/// Build and write `locks/versions.json` from the current managed state. Returns the number of
+/// versions pinned. Shared by `linix lock versions` and by `linix heal` (which reconciles the
+/// lockfile).
+pub(crate) async fn build_and_write_locks(app: &App) -> Result<(usize, bool)> {
+    let locks = scan_installed_versions(app).await;
+    let count = locks.len();
+    let written = write_version_locks(&version_lock_path(app), &locks).await?;
     Ok((count, written))
 }
 
-pub(crate) async fn handle_lock(app: &App) -> Result<()> {
+/// Re-record the pins that already exist, from what is installed now. Returns how many moved.
+///
+/// A pin nothing updates is a pin that fights the upgrade that just ran: `sync` reads the
+/// recorded version back as `@version=`, the installed one no longer satisfies it, and the next
+/// ordinary sync plans the package straight back down. So every path that deliberately moves a
+/// version forward — `upgrade`, `sync --upgrade` — records where it landed (Z2).
+///
+/// **Only entries that are already pinned are refreshed.** A package nobody pinned gains no pin
+/// here: it has no stale record to fight, and pinning it would turn every upgrade into a `lock`.
+pub(crate) async fn refresh_version_locks(app: &App) -> Result<usize> {
+    // A preview moved no version, so there is nothing to re-record — and reporting a count it
+    // could not write is the "would" that reads as "did".
+    if linix::core::dry_run::active() {
+        return Ok(0);
+    }
+    let path = version_lock_path(app);
+    let mut locks = load_version_locks(&path);
+    if locks.is_empty() {
+        return Ok(0);
+    }
+    let current = scan_installed_versions(app).await;
+    let moved = move_pins_to(&mut locks, &current);
+    if moved > 0 {
+        write_version_locks(&path, &locks).await?;
+    }
+    Ok(moved)
+}
+
+/// Point every existing pin at its current reading. Returns how many moved.
+///
+/// **Adds nothing.** A package with no pin is not pinned here, and a pin whose package the scan
+/// could not read keeps the version it had — an unreadable manager is not evidence that a
+/// package moved.
+fn move_pins_to(
+    locks: &mut serde_json::Map<String, Value>,
+    current: &serde_json::Map<String, Value>,
+) -> usize {
+    let mut moved = 0usize;
+    for (key, was) in locks.iter_mut() {
+        if let Some(now) = current.get(key) {
+            if now != was {
+                *was = now.clone();
+                moved += 1;
+            }
+        }
+    }
+    moved
+}
+
+/// Whether a scoping name the user typed picks out this ledger key.
+///
+/// A key is `KIND:REST` — `apt:curl`, `after_install:nginx`, `adapters:backends.toml` — and both
+/// halves are things a person would type: the whole key when two kinds carry the same tail, the
+/// tail alone when they do not. No names at all means every key.
+pub(crate) fn scoped_by(key: &str, names: &[String]) -> bool {
+    if names.is_empty() {
+        return true;
+    }
+    let tail = key.split_once(':').map_or(key, |(_, rest)| rest);
+    names.iter().any(|n| n == key || n == tail)
+}
+
+/// The heading and verb a message uses. Every ledger these commands write goes through
+/// `utils::file::persist`, so the answer about one of them is the answer about all: a preview
+/// pins nothing, approves nothing and forgets nothing.
+fn tense(label: &str, done: &'static str, would: &'static str) -> (String, &'static str) {
+    if linix::core::dry_run::active() {
+        (format!("[DRY-RUN] {}:", label), would)
+    } else {
+        (format!("{}:", label), done)
+    }
+}
+
+/// The names a "nothing matched" warning quotes back.
+fn quoted(names: &[String]) -> String {
+    names
+        .iter()
+        .map(|n| format!("`{}`", n))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// `linix lock [AXIS] [NAME…]` — freeze what a sync would otherwise decide again (Z2).
+pub(crate) async fn handle_lock(
+    app: &App,
+    axis: LockAxis,
+    names: &[String],
+    list: bool,
+) -> Result<()> {
+    if list {
+        return list_locks(app, axis);
+    }
+    // Scripts before either axis that resolves the model, and generators first within scripts:
+    // resolving *runs* generators, so a command that resolved first could never reach the
+    // generator it exists to approve (U33).
+    if axis.covers(LockAxis::Scripts) {
+        lock_scripts(app, names).await?;
+    }
+    if axis.covers(LockAxis::Versions) {
+        lock_versions(app, names).await?;
+    }
+    if axis.covers(LockAxis::Backends) {
+        lock_backends(app, names).await?;
+    }
+    Ok(())
+}
+
+/// Pin the installed version of every managed package, or of the ones `names` picks out.
+async fn lock_versions(app: &App, names: &[String]) -> Result<()> {
+    let (tag, pinned) = tense("Lock", "pinned", "would pin");
+    let path = version_lock_path(app);
+    if names.is_empty() {
+        let (count, _) = build_and_write_locks(app).await?;
+        println!(
+            "{} {} {} package version(s) to {}",
+            tag,
+            pinned,
+            count,
+            path.display()
+        );
+        return Ok(());
+    }
+    // Scoped: merge over what is already pinned rather than rebuilding the file, or naming one
+    // package would silently drop every other pin.
+    let mut locks = load_version_locks(&path);
+    let mut hit: Vec<String> = Vec::new();
+    for (key, version) in scan_installed_versions(app).await {
+        if scoped_by(&key, names) {
+            locks.insert(key.clone(), version);
+            hit.push(key);
+        }
+    }
+    if hit.is_empty() {
+        warn!(
+            "no managed package matches {} — nothing pinned.",
+            quoted(names)
+        );
+        return Ok(());
+    }
+    write_version_locks(&path, &locks).await?;
+    println!("{} {} {}", tag, pinned, hit.join(", "));
+    Ok(())
+}
+
+/// Record which manager each unpinned bare name resolved to (II.7 step 4).
+///
+/// Resolution is what records, so this runs one and lets the resolver write. A scope is applied
+/// afterwards: the resolver settles the whole model or none of it, and "resolve these three
+/// names only" is not a question it can be asked.
+async fn lock_backends(app: &App, names: &[String]) -> Result<()> {
+    use linix::core::BareLock;
+
+    let path = BareLock::path_in(&app.config.layout().locks_dir());
+    let before = BareLock::load(&path)?;
+    let resolver =
+        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+            .await
+            .recording_locks();
+    resolver.resolve_model().await?;
+    let after = BareLock::load(&path)?;
+
+    let (tag, recorded) = tense("Lock", "recorded", "would record");
+    if !names.is_empty() {
+        let mut scoped = before.clone();
+        let mut hit: Vec<String> = Vec::new();
+        for (name, backend) in after.entries().map(|(n, b)| (n.to_string(), b.to_string())) {
+            if scoped_by(&name, names) {
+                scoped.record(&name, &backend);
+                hit.push(format!("{} -> {}", name, backend));
+            }
+        }
+        // A name the model no longer declares is dropped by resolution; inside the scope that
+        // drop is part of the answer, outside it the entry stays.
+        for name in before
+            .entries()
+            .map(|(n, _)| n.to_string())
+            .collect::<Vec<_>>()
+        {
+            if scoped_by(&name, names) && after.get(&name).is_none() {
+                scoped.forget(&name);
+            }
+        }
+        if hit.is_empty() {
+            warn!(
+                "no unpinned name matches {} — nothing recorded.",
+                quoted(names)
+            );
+            return Ok(());
+        }
+        scoped.save(&path)?;
+        println!("{} {} {}", tag, recorded, hit.join(", "));
+        return Ok(());
+    }
+
+    let fresh = after
+        .entries()
+        .filter(|(name, backend)| before.get(name) != Some(backend))
+        .count();
+    println!(
+        "{} {} {} of {} unpinned name(s) to {}",
+        tag,
+        recorded,
+        fresh,
+        after.entries().count(),
+        path.display()
+    );
+    Ok(())
+}
+
+/// Approve everything the configuration can execute, at its current hash (II.12).
+///
+/// A scope is applied by approving everything and then putting back every entry the names did
+/// not pick out. The seven approvers each read the files they own; a filter threaded through all
+/// seven would be seven places for a scope to be forgotten, and the ledger is one place.
+async fn lock_scripts(app: &App, names: &[String]) -> Result<()> {
+    use linix::core::hook_lock::HookLedger;
+
+    let ledger_path = HookLedger::path_in(&app.config.layout().locks_dir());
+    let before = HookLedger::load(&ledger_path)?;
+    let (tag, approved) = tense("Lock", "approved", "would approve");
+    // Scoped runs report from the ledger afterwards: each approver counts what it read, which is
+    // everything, and printing those counts beside a scope would be a false sentence.
+    let scoped = !names.is_empty();
+
     // Generators are approved FIRST, by scanning the files — before anything calls
     // `resolve_model`, which now runs generators and would refuse an unapproved one, so the very
     // command that approves it could never resolve far enough to reach it (U33).
     let generators = approve_generate_commands(app)?;
-
-    // Every ledger this command writes goes through `utils::file::persist`, so its answer about
-    // one of them is its answer about all: a preview approves nothing and pins nothing. It used
-    // to say "pinned" and "approved" up to eight times beside its own `[DRY-RUN] would write`.
-    // The generator count is printed after the write rather than before it, because approving
-    // them has to happen first (U33) and knowing what to *call* it cannot.
-    let (count, recorded) = build_and_write_locks(app).await?;
-    let (tag, pinned, approved) = if recorded {
-        ("Lock:", "pinned", "approved")
-    } else {
-        ("[DRY-RUN] Lock:", "would pin", "would approve")
-    };
-
-    if generators > 0 {
+    if generators > 0 && !scoped {
         println!(
             "{} {} {} generate command(s) at their current hash.",
             tag, approved, generators
         );
     }
-    println!(
-        "{} {} {} package version(s) to {}",
-        tag,
-        pinned,
-        count,
-        app.config
-            .config_root()
-            .join("locks")
-            .join("versions.json")
-            .display()
-    );
     // II.12: `lock` is also how you approve hooks. Record the current hash of every hook so a
     // later change to any of them stops the next sync until it is re-approved here. "Hash
     // everything, including your own scripts" — one rule, no exceptions.
     let hooks = app.hooks.approve_all_hooks()?;
-    if hooks > 0 {
+    if hooks > 0 && !scoped {
         println!(
             "{} {} {} hook(s) at their current script hash ({}).",
             tag,
             approved,
             hooks,
-            linix::core::hook_lock::HookLedger::path_in(&app.config.config_root().join("locks"))
-                .display()
+            ledger_path.display()
         );
     }
     // A hook on one of LiNix's own events (XIII.13) is the same surface: a script the repo
@@ -692,7 +917,7 @@ pub(crate) async fn handle_lock(app: &App) -> Result<()> {
     // separately — the shared policy's approval must not cover this machine's local file.
     let events = linix::app::events::EventHooks::load(&app.config);
     let approved_events = events.approve_all()?;
-    if approved_events > 0 {
+    if approved_events > 0 && !scoped {
         println!(
             "{} {} {} event hook(s) — {}.",
             tag,
@@ -710,23 +935,28 @@ pub(crate) async fn handle_lock(app: &App) -> Result<()> {
     // here is the one deliberate act that lets it run — a changed provider stops resolution,
     // which is `status` and `plan`, not just `sync`.
     if let Some(file) = approve_vars_provider(app)? {
-        println!(
-            "{} {} the vars provider `{}` at its current hash.",
-            tag, approved, file
-        );
+        if !scoped {
+            println!(
+                "{} {} the vars provider `{}` at its current hash.",
+                tag, approved, file
+            );
+        }
     }
     // And every `adapters/` file (7a/U10). They travel with the repo, and a definition is
     // argv LiNix will run, so each is approved here or it does not load.
     for name in approve_adapters(app)? {
-        println!(
-            "{} {} `adapters/{}` at its current hash.",
-            tag, approved, name
-        );
+        if !scoped {
+            println!(
+                "{} {} `adapters/{}` at its current hash.",
+                tag, approved, name
+            );
+        }
     }
     // And every declared `exec:` script (XIII.3). II.12 admits no exceptions: a script the
     // configuration runs is approved by this command or it does not run.
-    let execs = approve_exec_scripts(app).await?;
-    if execs > 0 {
+    let model = resolve_for_approval(app).await?;
+    let execs = approve_exec_scripts(app, &model).await?;
+    if execs > 0 && !scoped {
         println!(
             "{} {} {} exec script(s) at their current hash.",
             tag, approved, execs
@@ -734,12 +964,93 @@ pub(crate) async fn handle_lock(app: &App) -> Result<()> {
     }
     // And every user-declared health-check COMMAND (U31). A check is argv, run after a change,
     // so it is on the same trust model — approved here or the check counts as failed.
-    let health = approve_health_checks(app).await?;
-    if health > 0 {
+    let health = approve_health_checks(app, &model).await?;
+    if health > 0 && !scoped {
         println!(
             "{} {} {} health-check command(s) at their current hash.",
             tag, approved, health
         );
+    }
+    if !scoped {
+        return Ok(());
+    }
+
+    // Put back everything the names did not pick out. A preview wrote nothing, so there is
+    // nothing on disk to put back and nothing to count — it says what it would do and stops.
+    if linix::core::dry_run::active() {
+        println!("{} {} the entries matching {}", tag, approved, quoted(names));
+        return Ok(());
+    }
+    let mut ledger = HookLedger::load(&ledger_path)?;
+    let entries: Vec<(String, String)> = ledger
+        .entries()
+        .map(|(id, hash)| (id.to_string(), hash.to_string()))
+        .collect();
+    let mut hit: Vec<String> = Vec::new();
+    for (id, _) in entries {
+        if scoped_by(&id, names) {
+            hit.push(id);
+        } else {
+            match before.get(&id) {
+                Some(was) => {
+                    let was = was.to_string();
+                    ledger.approve(&id, &was);
+                }
+                None => {
+                    ledger.revoke(&id);
+                }
+            }
+        }
+    }
+    if hit.is_empty() {
+        warn!(
+            "nothing the configuration can run matches {} — nothing approved. \
+             `linix lock scripts --list` names what is approvable.",
+            quoted(names)
+        );
+    }
+    ledger.save(&ledger_path)?;
+    if !hit.is_empty() {
+        println!("{} {} {}", tag, approved, hit.join(", "));
+    }
+    Ok(())
+}
+
+/// `linix lock --list` / `linix unlock --list` — what is locked on this axis, changing nothing.
+fn list_locks(app: &App, axis: LockAxis) -> Result<()> {
+    use linix::core::hook_lock::HookLedger;
+    use linix::core::BareLock;
+
+    let locks_dir = app.config.layout().locks_dir();
+    if axis.covers(LockAxis::Versions) {
+        let locks = load_version_locks(&version_lock_path(app));
+        if locks.is_empty() {
+            println!("versions: nothing is pinned.");
+        } else {
+            for (key, version) in &locks {
+                println!("versions: {} -> {}", key, version.as_str().unwrap_or("?"));
+            }
+        }
+    }
+    if axis.covers(LockAxis::Backends) {
+        let lock = BareLock::load(&BareLock::path_in(&locks_dir))?;
+        if lock.is_empty() {
+            println!("backends: nothing is frozen on this host.");
+        } else {
+            for (name, backend) in lock.entries() {
+                println!("backends: {} -> {}", name, backend);
+            }
+        }
+    }
+    if axis.covers(LockAxis::Scripts) {
+        let ledger = HookLedger::load(&HookLedger::path_in(&locks_dir))?;
+        if ledger.is_empty() {
+            println!("scripts: nothing is approved.");
+        } else {
+            for (id, hash) in ledger.entries() {
+                println!("scripts: {} -> sha256:{}", id, &hash[..hash.len().min(12)]);
+            }
+        }
     }
     Ok(())
 }
@@ -812,13 +1123,22 @@ pub(crate) fn approve_generate_commands(app: &App) -> Result<usize> {
     Ok(approved)
 }
 
-pub(crate) async fn approve_exec_scripts(app: &App) -> Result<usize> {
+/// The one resolution the approvers read. `exec:` scripts and `@health=` commands are two
+/// questions about the same model, and asking it twice is asking every manager twice.
+pub(crate) async fn resolve_for_approval(app: &App) -> Result<linix::model::DesiredState> {
+    linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+        .await
+        .resolve_model()
+        .await
+        .map_err(Into::into)
+}
+
+pub(crate) async fn approve_exec_scripts(
+    app: &App,
+    state: &linix::model::DesiredState,
+) -> Result<usize> {
     use linix::core::hook_lock::{exec_id, hash_script, HookLedger};
 
-    let resolver =
-        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
-            .await;
-    let state = resolver.resolve_model().await?;
     if !state.has_execs() {
         return Ok(0);
     }
@@ -854,17 +1174,15 @@ pub(crate) async fn approve_exec_scripts(app: &App) -> Result<usize> {
 ///
 /// Reads the resolved model (every `@health=` line the active profiles reach) plus the
 /// machine-wide `health` list, so it approves exactly the commands a sync would run.
-pub(crate) async fn approve_health_checks(app: &App) -> Result<usize> {
+pub(crate) async fn approve_health_checks(
+    app: &App,
+    state: &linix::model::DesiredState,
+) -> Result<usize> {
     use linix::core::hook_lock::{hash_script, health_id, HookLedger};
     use linix::model::health::Probe;
 
-    let resolver =
-        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
-            .await;
-    let desired = resolver.resolve_desired_state().await?;
-
     let mut commands: Vec<String> = Vec::new();
-    for specs in desired.values() {
+    for specs in state.packages.values() {
         for spec in specs {
             if let Some(Probe::Command(cmd)) =
                 spec.options.get("health").and_then(|s| Probe::parse(s))
@@ -970,42 +1288,72 @@ pub(crate) fn approve_vars_provider(app: &App) -> Result<Option<String>> {
     Ok(Some(filename))
 }
 
-pub(crate) async fn handle_unlock(app: &App, names: &[String], list: bool) -> Result<()> {
-    // Q9: an unknown prefix reported "was not frozen on this host — nothing to unlock", which
-    // is what a real name that is not frozen also reports.
-    app.require_known_spec_backends(names).await?;
-    let path = linix::core::BareLock::path_in(&app.config.config_root().join("locks"));
-    let mut lock = linix::core::BareLock::load(&path)?;
+/// `linix unlock [AXIS] [NAME…]` — release a lock, so the next sync decides it again (Z2).
+pub(crate) async fn handle_unlock(
+    app: &App,
+    axis: LockAxis,
+    names: &[String],
+    list: bool,
+) -> Result<()> {
+    if list {
+        return list_locks(app, axis);
+    }
+    // Q9: an unknown prefix reported "was not frozen on this host — nothing to unlock", which is
+    // what a real name that is not frozen also reports.
+    //
+    // **This axis only.** A backend prefix here is a question about the managers *this* host
+    // uses, which is what the check answers. It is not that question on the other two: a version
+    // pin names whichever manager wrote it and `locks/` travels between machines, so
+    // `apt:curl` is an ordinary entry on a host with no apt; a script id's prefix
+    // (`after_install:`, `adapters:`) is not a backend at all; and on `all` the names span all
+    // three namespaces at once. Those rely on each axis warning when a name picks nothing out —
+    // which is a louder answer than this one, because it names the ledger as well as the name.
+    if axis == LockAxis::Backends {
+        app.require_known_spec_backends(names).await?;
+    }
+    if axis.covers(LockAxis::Backends) {
+        unlock_backends(app, names).await?;
+    }
+    if axis.covers(LockAxis::Versions) {
+        unlock_versions(app, names).await?;
+    }
+    if axis.covers(LockAxis::Scripts) {
+        unlock_scripts(app, names)?;
+    }
+    Ok(())
+}
 
-    if list || (names.is_empty() && lock.is_empty()) {
-        if lock.is_empty() {
-            println!("Nothing is frozen on this host.");
-            return Ok(());
-        }
-        for (name, backend) in lock.entries() {
-            println!("{} -> {}", name, backend);
-        }
+/// Forget which manager an unpinned name resolved to, so the next sync asks again (II.6).
+async fn unlock_backends(app: &App, names: &[String]) -> Result<()> {
+    let path = linix::core::BareLock::path_in(&app.config.layout().locks_dir());
+    let mut lock = linix::core::BareLock::load(&path)?;
+    if lock.is_empty() {
+        println!("backends: nothing is frozen on this host.");
         return Ok(());
     }
 
+    let (tag, forgot) = tense("Unlock", "forgot", "would forget");
     let changed = if names.is_empty() {
         let n = lock.entries().count();
         lock.clear();
-        println!("Unlocked {} name(s). The next sync asks again.", n);
+        println!(
+            "{} backends: {} {} name(s). The next sync asks again.",
+            tag, forgot, n
+        );
         true
     } else {
         let mut any = false;
         for name in names {
             if lock.forget(name) {
                 any = true;
-                println!("Unlocked `{}`. The next sync asks again.", name);
+                println!(
+                    "{} backends: {} `{}`. The next sync asks again.",
+                    tag, forgot, name
+                );
             } else {
                 // Not an error: a name with a manager written on its line was never frozen,
                 // and saying so is more use than a failure the caller has to interpret.
-                warn!(
-                    "`{}` was not frozen on this host — nothing to unlock.",
-                    name
-                );
+                warn!("`{}` was not frozen on this host — nothing to unlock.", name);
             }
         }
         any
@@ -1019,6 +1367,170 @@ pub(crate) async fn handle_unlock(app: &App, names: &[String], list: bool) -> Re
         );
     }
     Ok(())
+}
+
+/// Drop the version pins, so the next sync takes what the managers offer.
+async fn unlock_versions(app: &App, names: &[String]) -> Result<()> {
+    let path = version_lock_path(app);
+    let mut locks = load_version_locks(&path);
+    if locks.is_empty() {
+        println!("versions: nothing is pinned.");
+        return Ok(());
+    }
+    let dropped: Vec<String> = locks
+        .keys()
+        .filter(|key| scoped_by(key, names))
+        .cloned()
+        .collect();
+    if dropped.is_empty() {
+        warn!("no pin matches {} — nothing unpinned.", quoted(names));
+        return Ok(());
+    }
+    for key in &dropped {
+        locks.remove(key);
+    }
+    write_version_locks(&path, &locks).await?;
+    let (tag, unpinned) = tense("Unlock", "unpinned", "would unpin");
+    println!(
+        "{} versions: {} {}. The next sync takes what the managers offer.",
+        tag,
+        unpinned,
+        dropped.join(", ")
+    );
+    Ok(())
+}
+
+/// Withdraw script approvals, so a sync that reaches one refuses to run it until `lock scripts`
+/// approves it again (II.12).
+fn unlock_scripts(app: &App, names: &[String]) -> Result<()> {
+    use linix::core::hook_lock::HookLedger;
+
+    let path = HookLedger::path_in(&app.config.layout().locks_dir());
+    let mut ledger = HookLedger::load(&path)?;
+    if ledger.is_empty() {
+        println!("scripts: nothing is approved.");
+        return Ok(());
+    }
+    let revoked: Vec<String> = ledger
+        .entries()
+        .filter(|(id, _)| scoped_by(id, names))
+        .map(|(id, _)| id.to_string())
+        .collect();
+    if revoked.is_empty() {
+        warn!("no approval matches {} — nothing withdrawn.", quoted(names));
+        return Ok(());
+    }
+    for id in &revoked {
+        ledger.revoke(id);
+    }
+    ledger.save(&path)?;
+    let (tag, withdrew) = tense("Unlock", "withdrew", "would withdraw");
+    println!(
+        "{} scripts: {} {}. A sync that reaches one now refuses to run it until \
+         `linix lock scripts` approves it again.",
+        tag,
+        withdrew,
+        revoked.join(", ")
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod lock_axis_tests {
+    use super::*;
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn pins(entries: &[(&str, &str)]) -> serde_json::Map<String, Value> {
+        entries
+            .iter()
+            .map(|(k, v)| (k.to_string(), Value::String(v.to_string())))
+            .collect()
+    }
+
+    /// No names is every key — a bare `lock versions` pins everything, as it always did.
+    #[test]
+    fn an_empty_scope_takes_everything() {
+        assert!(scoped_by("apt:curl", &[]));
+        assert!(scoped_by("after_install:nginx", &[]));
+    }
+
+    /// Both halves of a key are things a person types, on every axis. One rule, and the same
+    /// rule for version pins, bare names, hooks, adapters, `exec:`, events and generators —
+    /// so a scope cannot work on one ledger and quietly miss its twin.
+    #[test]
+    fn a_scope_matches_the_whole_key_or_its_tail() {
+        for (key, tail) in [
+            ("apt:curl", "curl"),
+            ("after_install:nginx", "nginx"),
+            ("adapters:backends.toml", "backends.toml"),
+            ("exec:./setup.sh", "./setup.sh"),
+            ("event:before_sync@repo", "before_sync@repo"),
+            ("generate:./pick.sh", "./pick.sh"),
+            ("health:systemctl is-active nginx", "systemctl is-active nginx"),
+        ] {
+            assert!(scoped_by(key, &names(&[key])), "the whole key: {key}");
+            assert!(scoped_by(key, &names(&[tail])), "the tail: {key}");
+            assert!(!scoped_by(key, &names(&["something-else"])), "{key}");
+        }
+    }
+
+    /// A bare name with no `:` at all — every entry in `locks/bare.HOST.toml` is one.
+    #[test]
+    fn a_key_with_no_prefix_matches_itself_and_nothing_else() {
+        assert!(scoped_by("ripgrep", &names(&["ripgrep"])));
+        assert!(!scoped_by("ripgrep", &names(&["rip"])));
+    }
+
+    /// One name out of several still selects.
+    #[test]
+    fn any_of_the_names_selects() {
+        assert!(scoped_by("apt:curl", &names(&["jq", "curl", "fd"])));
+        assert!(!scoped_by("apt:curl", &names(&["jq", "fd"])));
+    }
+
+    /// Z2's second half: after an upgrade the pin names the version that was replaced, and the
+    /// next ordinary sync converges back down to it. Moving the pin is what stops that.
+    #[test]
+    fn a_pin_follows_the_package_that_moved() {
+        let mut locks = pins(&[("apt:curl", "7.81.0")]);
+        let moved = move_pins_to(&mut locks, &pins(&[("apt:curl", "8.0.1")]));
+        assert_eq!(moved, 1);
+        assert_eq!(locks["apt:curl"], Value::String("8.0.1".into()));
+    }
+
+    /// An upgrade is not a `lock`. A package nobody pinned has no stale record to fight, so it
+    /// gains no pin here — otherwise every `upgrade` would silently pin the whole machine.
+    #[test]
+    fn an_unpinned_package_gains_no_pin() {
+        let mut locks = pins(&[("apt:curl", "7.81.0")]);
+        let moved = move_pins_to(
+            &mut locks,
+            &pins(&[("apt:curl", "7.81.0"), ("cargo:ripgrep", "14.1.0")]),
+        );
+        assert_eq!(moved, 0, "nothing moved");
+        assert_eq!(locks.len(), 1, "an unpinned package was pinned: {:?}", locks);
+    }
+
+    /// A manager that could not be read is not evidence that its package moved (V.7c's rule,
+    /// applied to the pins): the recorded version stays rather than being dropped or blanked.
+    #[test]
+    fn a_pin_the_scan_could_not_read_keeps_its_version() {
+        let mut locks = pins(&[("apt:curl", "7.81.0"), ("brew:jq", "1.7")]);
+        let moved = move_pins_to(&mut locks, &pins(&[("apt:curl", "8.0.1")]));
+        assert_eq!(moved, 1);
+        assert_eq!(locks["brew:jq"], Value::String("1.7".into()));
+    }
+
+    /// Re-recording twice in a row moves nothing the second time, so a `sync --upgrade` that
+    /// changed nothing does not rewrite the lockfile and make every run a commit.
+    #[test]
+    fn re_recording_an_already_current_pin_is_not_a_change() {
+        let mut locks = pins(&[("apt:curl", "8.0.1")]);
+        assert_eq!(move_pins_to(&mut locks, &pins(&[("apt:curl", "8.0.1")])), 0);
+    }
 }
 
 #[cfg(test)]

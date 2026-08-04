@@ -14,6 +14,43 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Session 2026-08-03 (second) — `Z2`: the axis goes in the grammar, and an upgrade sticks
+
+**Ruled and built the same day.** `lock` and `unlock` acted on different ledgers, so the obvious
+undo for a harmless command discarded a backend resolution and the next sync uninstalled a
+package. The audit filed it `low`. **Reading the code to answer it found the report had
+undercounted twice.**
+
+*There were three ledgers, not two* — version pins (`locks/versions.json`), backend resolutions
+(`locks/bare.HOST.toml`), and the approval hashes in `locks/hooks.toml` that gate hooks, event
+hooks, adapters, `exec:`, `generate:`, health-check commands and the `vars` provider. **Two of the
+three had no inverse at all.** Nothing could unpin a version except a text editor; nothing could
+withdraw a script approval at all. The report was about a name; the hole was a missing verb, twice.
+
+*And a defect the report did not contain.* `locks/versions.json` is written by exactly two things
+— `lock` and `heal`. Not `sync`, not `upgrade`. So `linix upgrade` moved a package forward, the
+pin still named the version it replaced, and the next ordinary `sync` — which converges to the
+lock since `U11` — read the old version back as `@version=`, found that an unadorned version is an
+equality constraint (`planner.rs`, `satisfies_constraint`), and planned the package straight back
+down. **The upgrade did not stick and nothing said so**, because each half was behaving correctly
+on its own.
+
+**The ruling** (owner, 2026-08-03): both verbs take the ledger as a positional —
+`lock`/`unlock [versions|backends|scripts|all] [NAME…] [--list]` — bare means all three, `NAME`
+scopes any axis by whole key or tail, a name that picks nothing out warns and changes nothing, and
+**a bare name where the axis goes is refused** with the three axes listed. `hold`/`unhold` stays
+out of it: an exemption from `upgrade` is not a freeze. Every path that deliberately moves a
+version forward now re-records the pins it moved — `upgrade` in all four modes and `sync
+--upgrade` — and **only entries already in the lock**, because an upgrade is not a `lock`.
+Rule in II.6 and II.8, reason in **V.127**, register entry `Z2`.
+
+**One finding fell out of the tests rather than the reading.** Scoping `unlock versions apt:curl`
+first ran the `Q9` unknown-backend check, which refused it on a host with no apt — but `locks/`
+travels between machines and a version pin names whichever manager wrote it. The check is right
+for `backends` (a question about *this* host's managers) and wrong for the other two; it is
+scoped to that axis now, and the other axes rely on the per-ledger "nothing matched" warning,
+which names the ledger as well as the name.
+
 ## Session 2026-07-31 (fourth) — the coverage round: exemptions read against `Q4`
 
 **`Q23` first, because CI was red on it on two platforms.** A package name beginning with `@` —
@@ -5645,8 +5682,9 @@ answer together, from one list pinned to `Statement::listed_as` by a test in bot
 
 `docs/GRADE-2026-08-03.md` drove a real binary against five questions — reliable, fast,
 intuitive, extensible, useful — and found twelve defects: three blockers, one high, three medium,
-five low. **Ten were built here. Two are the owner's** and are in the register as `Z1` (no
-LICENSE) and `Z2` (`lock`/`unlock` are not inverses).
+five low. **Ten were built here. Two are the owner's** and went into the register as `Z1` (no
+LICENSE) and `Z2` (`lock`/`unlock` are not inverses). *`Z2` was ruled and built later the same
+day — see the session at the top of this file. `Z1` is still open.*
 
 **The audit's own diagnosis, and it is the one that matters:** four of the twelve are cases where
 *the correct behaviour already existed in this codebase, with its reasoning written down, and the

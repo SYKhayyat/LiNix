@@ -42,9 +42,10 @@ pub(crate) mod prelude {
     pub(crate) use linix::app::sync::planner::Scope as PlannerScope;
     pub(crate) use linix::app::{ui::TuiPreview, App};
     pub(crate) use linix::cli::{
-        Cli, ConfigCommand, GitCommand, HooksCommand, ModuleCommand, ProfileCommand, RepoCommand,
-        ScheduleCommand, ServiceCommand, SnapshotCommand,
+        Cli, ConfigCommand, GitCommand, HooksCommand, LockAxis, ModuleCommand, ProfileCommand,
+        RepoCommand, ScheduleCommand, ServiceCommand, SnapshotCommand,
     };
+    pub(crate) use serde_json::Value;
     pub(crate) use std::collections::HashMap;
     pub(crate) use tracing::{info, warn};
 

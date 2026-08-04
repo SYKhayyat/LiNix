@@ -2838,3 +2838,49 @@ of a second never crosses; every other instrument measures child processes, and 
 none. The part of a run that asks nobody anything was the one part nothing measured. It has a
 budget now, and the budget is what the rule is: the registry, for all 48 backends, in 120 ms.
 
+**V.127 — Why `lock` and `unlock` name their axis, and why an upgrade re-records the pin.**
+*(Z2, owner ruling 2026-08-03. Rule in II.6 and II.8.)*
+
+**The bug was that the obvious undo did something else, and the something else uninstalled
+software.** `lock` wrote `locks/versions.json` and approved every script the config can run;
+`unlock` cleared `locks/bare.HOST.toml`, which records which *manager* an unpinned bare name
+resolved to. Different files, unrelated jobs, one word apart. Someone who ran `lock`, changed
+their mind and typed `unlock` did not undo the pin — they discarded the resolution, and the next
+sync installed the package from a different manager and removed the old copy as drift. The help
+text said so plainly. **A correct sentence in `--help` is not a design; the pairing is what people
+read, and the pairing was a lie.**
+
+**Reading the code to answer the report found a third ledger and two missing verbs.** There were
+not two things called "the lock" but three — version pins, backend resolutions, and the approval
+hashes in `locks/hooks.toml` that gate hooks, adapters, `exec:`, `generate:`, health-check
+commands and the `vars` provider. Two of the three had no inverse at all: nothing could unpin a
+version except a text editor, and nothing could withdraw an approval. **A list of what a word
+means is an assertion about what is absent, and nothing verifies that half** — the same shape as
+the eighth removal path in V.0.
+
+**Why the axis is a positional and not six verbs.** Three ledgers × two directions is six names to
+invent, remember, and keep from colliding with `hold`/`unhold` — which is a *different* question
+(an exemption from `upgrade`, not a freeze) and which already owns the words a user would guess.
+One grammar with the ledger named in it costs two verbs and reads as what it does. It also makes
+the dangerous member of the family the one you have to spell: `unlock backends` is the only
+command here that can move packages, and it now says "backends" out loud.
+
+**Why a bare `unlock` still means all three, with no prompt.** The axis *is* the care. A
+confirmation on the command whose entire job is releasing locks would be the asking that II.15
+already rejects — the file is the switch, and typing the command is the decision. What was removed
+instead is the accident: a bare name where the axis goes is refused, with the three axes listed,
+rather than guessed at.
+
+**And the second defect, which the report did not contain.** `locks/versions.json` was written by
+exactly two things: `lock`, and `heal`. Not `sync`, not `upgrade`. So an upgrade moved a package
+from 7.81.0 to 8.0.1, the pin still said 7.81.0, and the next ordinary sync — which converges to
+the lock since U11 — read the old version back as `@version=`, found that an unadorned version is
+an equality constraint, and planned the package straight back down. **The upgrade did not stick,
+and nothing said so**, because each half was behaving correctly on its own. So every path that
+deliberately moves a version forward now records where it landed.
+
+**Why only pins that already exist are refreshed.** A package nobody pinned has no stale record to
+fight; pinning it would make every `upgrade` a silent `lock` — a decision the user did not make,
+found weeks later as a machine that quietly stopped tracking `latest`. The repair is exactly the
+size of the defect.
+

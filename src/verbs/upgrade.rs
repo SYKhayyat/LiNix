@@ -331,7 +331,24 @@ pub(crate) async fn upgrade_security(app: &App, except: &[String], json: bool) -
     perform_maintenance(app).await
 }
 
+/// `linix upgrade` — move packages forward, then record where they landed.
+///
+/// The recording is not decoration. A pin that nobody updates fights the upgrade that just ran:
+/// `sync` reads the recorded version back as `@version=`, finds the installed one no longer
+/// satisfies it, and plans the package straight back down. Every mode below moves versions, so
+/// every mode below is followed by this (Z2). Only packages that were already pinned are
+/// touched — an upgrade is not a `lock`.
 pub(crate) async fn handle_upgrade(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
+    let json = req.json;
+    upgrade_modes(app, req).await?;
+    let moved = crate::verbs::plan::refresh_version_locks(app).await?;
+    if moved > 0 && !json {
+        println!("Lock: re-recorded {} version pin(s).", moved);
+    }
+    Ok(())
+}
+
+async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
     // First, before any mode: `upgrade --backend aptt` used to scope to nothing and report
     // that everything was up to date (Q9).
     app.require_known_backend(req.backend)?;

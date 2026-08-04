@@ -13,7 +13,7 @@
 //! | `why nosuchbackend:foo`        | `not under LiNix management`                     | 0    |
 //! | `upgrade nosuchbackend:foo`    | `not a managed package — skipping`               | 0    |
 //! | `rebuild nosuchbackend:foo`    | `skipping — not declared in any active module`    | 0    |
-//! | `unlock nosuchbackend:foo`     | `was not frozen on this host`                    | 0    |
+//! | `unlock backends nosuchbackend:foo` | `was not frozen on this host`               | 0    |
 //! | `uninstall nosuchbackend:foo`  | `is not declared in any active file`             | 1    |
 //! | `info nosuchbackend:foo`       | `is not installed on this machine`               | 0    |
 //!
@@ -234,16 +234,29 @@ fn a_real_backend_prefix_is_never_refused() {
         panic!("no backend is READY on this machine, so over-refusal cannot be tested here");
     };
 
-    for verb in ["info", "why", "unmanage", "unhold", "unlock"] {
+    // `unlock` names its axis since Z2 — the names it takes are still `backend:name`, which is
+    // what the Q9 check reads.
+    let verbs: [&[&str]; 5] = [
+        &["info"],
+        &["why"],
+        &["unmanage"],
+        &["unhold"],
+        &["unlock", "backends"],
+    ];
+    for verb in verbs {
         for arg in [
             format!("{backend}:linix-probe-zzz"),
             "linix-probe-zzz".into(),
         ] {
-            let (out, _) = f.run(&[verb, &arg, "-y"]);
+            let mut argv: Vec<&str> = verb.to_vec();
+            argv.push(&arg);
+            argv.push("-y");
+            let (out, _) = f.run(&argv);
             assert!(
                 !out.contains("is not a backend LiNix uses"),
-                "`linix {verb} {arg}` was refused, and `{backend}` is a backend this build \
-                 registers. The Q9 check has started rejecting real names:\n{out}"
+                "`linix {} {arg}` was refused, and `{backend}` is a backend this build \
+                 registers. The Q9 check has started rejecting real names:\n{out}",
+                verb.join(" ")
             );
         }
     }

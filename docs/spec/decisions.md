@@ -15,9 +15,9 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **2** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **1** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **139** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **140** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -73,7 +73,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-**Two are open — `Z1` and `Z2`, both raised 2026-08-03.** All 144 are accounted for: **139 ANSWERED, 2 PARKED, 1 BUILT NEVER RULED, 2 OPEN** — and this line
+**One is open — `Z1`, raised 2026-08-03.** All 144 are accounted for: **140 ANSWERED, 2 PARKED, 1 BUILT NEVER RULED, 1 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -282,7 +282,7 @@ without asking. Two are not mine: one is a legal choice and one changes a publis
 | | question | answered |
 |---|---|---|
 | **Z1** | There is no `LICENSE` file and no `license` key in `Cargo.toml`, for a tool with an install script and a `self-upgrade` verb. Which licence? | **OPEN** |
-| **Z2** | `lock` and `unlock` touch unrelated files and are not inverses; `unlock` can cause package churn. Rename it, or give `lock` a real inverse? | **OPEN** |
+| **Z2** | `lock` and `unlock` touch unrelated files and are not inverses; `unlock` can cause package churn. Rename it, or give `lock` a real inverse? | **ANSWERED** — both verbs name their axis (`versions`/`backends`/`scripts`/`all`), and every path that moves a version re-records it |
 
 ### Y — the efficiency pass — 8
 
@@ -4798,30 +4798,69 @@ recommendation on this one is a decision wearing a suggestion's clothes.
 
 ## Z2
 
-**Status: OPEN.** Raised by the readiness audit, 2026-08-03 (`AU8`). Low severity, sharp edge.
+**Status: ANSWERED** (owner, 2026-08-03). Raised by the readiness audit the same day (`AU8`).
+Built in the same change.
 
-**Z2 — `lock` and `unlock` are not inverses, and the mis-pairing can move packages.**
+**Z2 — `lock` and `unlock` were not inverses, and the mis-pairing could move packages.**
 
-| command | what it touches |
+| command | what it touched |
 |---|---|
-| `lock` | `locks/versions.json`, and approves hooks and adapters at their current hash |
+| `lock` | `locks/versions.json`, and approved hooks and adapters at their current hash |
 | `unlock` | `locks/bare.HOST.toml` — which *manager* an unpinned bare name resolved to |
 
-Different files, unrelated jobs. Someone who runs `linix lock`, changes their mind and types
-`linix unlock` does not undo the pin: they discard the recorded backend resolution, and
-`unlock`'s own help states the consequence — *"sync uninstalls the cargo copy, because two of
-the same package is what this avoids."* So the obvious undo for a harmless command can uninstall
-software.
+Different files, unrelated jobs. Someone who ran `linix lock`, changed their mind and typed
+`linix unlock` did not undo the pin: they discarded the recorded backend resolution, and
+`unlock`'s own help stated the consequence — *"sync uninstalls the cargo copy, because two of
+the same package is what this avoids."* So the obvious undo for a harmless command could
+uninstall software.
 
-**Why it is not built already:** it renames a published verb, which II.8 makes an owner ruling,
-and `NO LEGACY` means the old name goes in the same change rather than lingering as an alias.
+**Reading the code to answer it found the surface was wider than the report.** There were not two
+things called "the lock" but *three* — version pins, backend resolutions, and the approval hashes
+for everything the config can execute — plus `hold`/`unhold`, which is a different question
+(exemption from `upgrade`, not a freeze) and stays where it is. Only one of the three had an
+inverse at all: **version pins could not be released by any command**, only by hand-editing
+`locks/versions.json`. `sync --upgrade` is a per-run bypass, not an undo.
 
-**The options, in the owner's terms:**
+**And a second defect, in the same family.** `locks/versions.json` is written by exactly two
+things — `lock`, and `heal`. Not by `sync`, not by `upgrade`. So `linix upgrade` moved a package
+from 7.81.0 to 8.0.1, the pin still said 7.81.0, and the next ordinary `sync` — which converges
+to the lock (U11) — read the old version back as `@version=`, found the installed one did not
+satisfy it (an unadorned version is an equality constraint), and planned the package straight
+back down. The upgrade did not stick. `sync --upgrade` had the same hole.
 
-1. **Rename `unlock`** to what it does — `forget-backend`, or `unresolve`. `lock` then has no
-   inverse, which is honest: approving a hash and pinning a version are not things you routinely
-   undo, and `lock --force` re-approves.
-2. **Give `lock` a real inverse** and rename `unlock` as well — two verbs where there is now one
-   confusing one.
-3. **Leave it.** The names are wrong and the help text is right; a user who reads it is not
-   misled, and every rename costs everyone's muscle memory.
+### The ruling
+
+**Both verbs name the axis they act on**, as a positional value with `all` as the default:
+
+```
+linix lock   [versions|backends|scripts|all] [NAME…] [--list]
+linix unlock [versions|backends|scripts|all] [NAME…] [--list]
+```
+
+- `versions` — the pins in `locks/versions.json`. `lock versions` records what is installed;
+  `unlock versions` drops the pins, which nothing could do before.
+- `backends` — `locks/bare.HOST.toml`. `unlock backends` is the old `unlock`, unchanged in
+  behaviour and now unmistakable in name. `lock backends` records the resolutions explicitly,
+  which previously only happened as a side effect of a sync.
+- `scripts` — `locks/hooks.toml`: hooks, event hooks, adapters, `exec:`, `generate:`,
+  health-check commands and the `vars` provider. `lock scripts` is the old approval half of
+  `lock`; `unlock scripts` withdraws approval, which nothing could do before.
+- **A bare `lock` or `unlock` means `all`** (owner ruling): a bare `lock` does what `lock` always
+  did, plus recording backend resolutions, and a bare `unlock` releases all three. It is not
+  gated behind a confirmation — the axis is what a user types to be careful, and a prompt on a
+  command whose whole job is this would be the asking that II.15 already rejects.
+- `NAME` scopes any axis and matches the whole ledger key or its tail: `unlock versions curl` and
+  `unlock versions apt:curl` both pick out `apt:curl`.
+- A name that picks nothing out **warns and changes nothing**, naming the ledger. It is not an
+  error, matching what `unlock` already did for an unfrozen name.
+
+**And every path that deliberately moves a version forward re-records it** — `upgrade` in all its
+modes, and `sync --upgrade`. **Only entries already in the lock are refreshed.** A package nobody
+pinned has no stale record to fight, and pinning it would make every `upgrade` a silent `lock`.
+
+**What was rejected.** Renaming `unlock` to `forget-backend` and leaving `lock` without an
+inverse was the recommendation this entry carried, and the owner went the other way: the axis
+belongs in the grammar rather than in a verb name, because there were three ledgers rather than
+two and a per-ledger verb name would have needed six. `NO LEGACY` applies — there is no `unlock`
+that takes a bare name any more, and a name where the axis goes is refused with the three axes
+listed rather than guessed at.

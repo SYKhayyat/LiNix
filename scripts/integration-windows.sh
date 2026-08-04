@@ -660,8 +660,10 @@ nok_saying "a name repeated is refused" "is named twice" lx --dry-run install "$
 nok_saying "a pattern cannot span one" "must match in exactly one backend"  lx --dry-run install "$BACKEND,cargo:re:^$PKG"
 # A manager no Windows host has: a pin to it must say so rather than no-op.
 nok "a pin to a manager this host lacks is not silent" lx -y install "apt:$PKG"
-ok  "unlock --list runs"         lx unlock --list
-ok  "unlocking an unfrozen name is not an error" lx unlock linix-never-frozen-zzz
+ok  "unlock backends --list runs"  lx unlock backends --list
+ok  "unlocking an unfrozen name is not an error" lx unlock backends linix-never-frozen-zzz
+# Z2: the axis is not optional in the sense that matters — a bare name is not one.
+nok_saying "a name where the axis goes is refused" "invalid value" lx unlock linix-never-frozen-zzz
 
 # --- 11b. A manager that could not answer is not one that said no (V.7c) ---
 echo "[11b] Silence is not a no"

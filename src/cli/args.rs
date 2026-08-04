@@ -322,21 +322,48 @@ pub enum Commands {
         yes: bool,
     },
 
-    /// Record the installed version of every managed package to locks/versions.json (and
-    /// approve current hooks), so `sync --locked` reproduces those exact versions elsewhere
-    Lock,
-
-    /// Forget which package manager an unpinned name resolved to, so the next sync asks again.
+    /// Freeze what a sync would otherwise decide again — on one axis, or all three.
     ///
-    /// Use it when a better source appears: `ripgrep` frozen to `cargo` because apt did not
-    /// carry it yet moves to `apt` on the next sync once it does — and sync uninstalls the
-    /// cargo copy, because two of the same package is what this avoids. Only names with no
-    /// manager written on their line are affected; `cargo:ripgrep` says cargo and stays.
-    Unlock {
-        /// Name(s) to unfreeze. Empty = every name this host has frozen.
+    /// `lock versions` records the installed version of every managed package, so `sync`
+    /// converges back to it and `sync --locked` reproduces it elsewhere. `lock backends`
+    /// records which manager each unpinned bare name resolved to. `lock scripts` approves every
+    /// hook, event hook, adapter, `exec:`, `generate:`, health-check command and `vars` provider
+    /// at its current hash, without which none of them may run.
+    ///
+    /// With no axis, all three. Name packages or ledger entries to scope it; `--list` shows what
+    /// is locked and changes nothing.
+    Lock {
+        /// What to lock (default: all three)
+        #[arg(value_enum, default_value_t = LockAxis::All)]
+        axis: LockAxis,
+
+        /// Name(s) to scope to. Empty = everything on this axis.
         names: Vec<String>,
 
-        /// List what is frozen and change nothing
+        /// List what is locked and change nothing
+        #[arg(long)]
+        list: bool,
+    },
+
+    /// Release a lock, so the next sync decides it again — on one axis, or all three.
+    ///
+    /// `unlock versions` drops the pins, so sync takes what the managers offer now. `unlock
+    /// backends` forgets which manager an unpinned name resolved to — use it when a better
+    /// source appears, and note that a name which then moves manager is installed from the new
+    /// one and **the old copy is uninstalled**, because two of the same package is what this
+    /// avoids. `unlock scripts` withdraws approval, so the next sync refuses to run them until
+    /// `lock scripts` approves them again.
+    ///
+    /// With no axis, all three.
+    Unlock {
+        /// What to unlock (default: all three)
+        #[arg(value_enum, default_value_t = LockAxis::All)]
+        axis: LockAxis,
+
+        /// Name(s) to scope to. Empty = everything on this axis.
+        names: Vec<String>,
+
+        /// List what is locked and change nothing
         #[arg(long)]
         list: bool,
     },
@@ -1086,6 +1113,30 @@ pub struct FleetArgs {
     /// Push `linix sync` to EVERY reachable machine, whether or not it drifted (fleet-wide apply)
     #[arg(long)]
     pub apply: bool,
+}
+
+/// Which of the three ledgers a `lock`/`unlock` acts on.
+///
+/// They were all once called "the lock", and `lock` and `unlock` acted on different ones — so
+/// the obvious undo for `lock` discarded the recorded backend resolution and the next sync
+/// uninstalled a package (Z2). Naming the axis is what makes the pair inverses.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
+pub enum LockAxis {
+    /// Version pins — `locks/versions.json`
+    Versions,
+    /// Which manager each unpinned bare name resolved to — `locks/bare.HOST.toml`
+    Backends,
+    /// Approval hashes for everything the config can execute — `locks/hooks.toml`
+    Scripts,
+    /// All three
+    All,
+}
+
+impl LockAxis {
+    /// Whether this axis covers `other`. `All` covers everything; anything else covers itself.
+    pub fn covers(self, other: LockAxis) -> bool {
+        self == LockAxis::All || self == other
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
