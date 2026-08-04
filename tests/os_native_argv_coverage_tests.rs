@@ -125,7 +125,7 @@ fn registrars(src: &str) -> Vec<String> {
         }
     }
 
-    // Shape two: `crate::backends::pipx::register(...)` called from `create_default_registry`.
+    // Shape two: `crate::backends::brew::register(...)` called from `create_default_registry`.
     // Read from the production function only — the test module calls registrars too, and a
     // registrar reachable *only* from a test is not something this build ships.
     let production = src
@@ -241,8 +241,8 @@ fn the_registrar_scan_can_actually_fail() {
         "the generic-registrar scan stopped finding `register_apt`"
     );
     assert!(
-        found.iter().any(|r| r == "backends::pipx::register"),
-        "the module-registrar scan stopped finding `backends::pipx::register` — this is the \
+        found.iter().any(|r| r == "backends::brew::register"),
+        "the module-registrar scan stopped finding `backends::brew::register` — this is the \
          half that was missing, so a silent zero here is the original bug returning"
     );
 

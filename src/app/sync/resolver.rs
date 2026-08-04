@@ -1503,6 +1503,7 @@ mod tests {
     }
 
     mod silent_managers {
+        use crate::backends::generic::SearchSource;
         use super::*;
         use crate::backends::generic::{
             GenericBackendCore, GenericSearchable, ManagerConfig, ManualListing,
@@ -1548,7 +1549,9 @@ mod tests {
                 is_exclusive: false,
                 install_source_option: None,
                 extra_probes: None,
-                upgrade_reinstalls_each: false,
+                upgrade_reinstall_args: None,
+                property_probes: Vec::new(),
+                search_source: SearchSource::Command,
                 flag_map: Map::new(),
             };
             let core = Arc::new(GenericBackendCore {

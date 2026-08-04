@@ -587,6 +587,7 @@ impl Adopter {
 
 #[cfg(test)]
 mod tests {
+    use crate::backends::generic::SearchSource;
     use super::*;
     use crate::backends::generic::{
         GenericBackendCore, GenericQueryable, ManagerConfig, ManualFormat, ManualListing,
@@ -634,7 +635,9 @@ mod tests {
             is_exclusive: false,
             install_source_option: None,
             extra_probes: None,
-            upgrade_reinstalls_each: false,
+            upgrade_reinstall_args: None,
+            property_probes: Vec::new(),
+            search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         };
         config.manual = manual;

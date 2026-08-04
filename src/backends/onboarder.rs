@@ -38,6 +38,7 @@
 use crate::backends::generic::{
     GenericBackendCore, GenericEnumerable, GenericInstallable, GenericQueryable,
     GenericRepoManager, GenericSearchable, GenericUpgradable, ManagerConfig, ManualListing,
+    SearchSource,
     VersionPin,
 };
 use crate::backends::BackendRegistry;
@@ -652,7 +653,9 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
         is_exclusive: def.is_exclusive,
         install_source_option: None,
         extra_probes: None,
-        upgrade_reinstalls_each: false,
+        upgrade_reinstall_args: None,
+        property_probes: Vec::new(),
+        search_source: SearchSource::Command,
         flag_map: HashMap::new(),
     };
 

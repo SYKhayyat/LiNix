@@ -4,7 +4,8 @@ use crate::app::LuaHooks;
 use crate::backends::generic::ManualFormat;
 use crate::backends::generic::{
     GenericBackendCore, GenericInstallable, GenericQueryable, GenericRepoManager,
-    GenericSearchable, GenericUpgradable, ManagerConfig, ManualListing, VersionPin,
+    GenericSearchable, GenericUpgradable, PropertyProbe, ManagerConfig, ManualListing,
+    SearchSource, VersionPin,
 };
 use crate::backends::generic::{GenericEnumerable, OrphanDryRun};
 use crate::backends::pip_search::PipSearchable;
@@ -117,12 +118,12 @@ pub async fn create_default_registry(
 
     // --- Cross-platform & specialized backends (each module owns its registration) ---
     crate::backends::brew::register(&mut reg, &executor, config);
-    crate::backends::cargo::register(&mut reg, &executor, config);
-    crate::backends::pipx::register(&mut reg, &executor, config);
-    crate::backends::uv::register(&mut reg, &executor, config);
-    crate::backends::npm::register(&mut reg, &executor, config);
-    crate::backends::pnpm::register(&mut reg, &executor, config);
-    crate::backends::yarn::register(&mut reg, &executor, config);
+    register_cargo(&mut reg, &executor);
+    register_pipx(&mut reg, &executor);
+    register_uv(&mut reg, &executor);
+    register_npm(&mut reg, &executor);
+    register_pnpm(&mut reg, &executor);
+    register_yarn(&mut reg, &executor);
     crate::backends::mise::register(&mut reg, &executor, config);
     crate::backends::github::register(&mut reg, &executor, config);
     crate::backends::web::register(&mut reg, &executor, config);
@@ -192,8 +193,7 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "apt".into(),
         executor: executor
-            .duplicate()
-            .with_exit_policy(crate::core::exit_policy::for_manager("apt")),
+            .duplicate(),
         config: ManagerConfig {
             name: "apt".into(),
             binary: None,
@@ -256,7 +256,9 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             is_exclusive: true,
             install_source_option: None,
         extra_probes: None,
-        upgrade_reinstalls_each: false,
+        upgrade_reinstall_args: None,
+        property_probes: Vec::new(),
+        search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(crate::parsers::apt::AptParser),
@@ -316,8 +318,7 @@ fn register_aur_helper(
         name: name.into(),
         // AUR helpers speak pacman's flags, and they speak pacman's complaints too.
         executor: executor
-            .duplicate()
-            .with_exit_policy(crate::core::exit_policy::for_manager("pacman")),
+            .duplicate(),
         config: ManagerConfig {
             name: name.into(),
             binary: None,
@@ -357,7 +358,9 @@ fn register_aur_helper(
             is_exclusive: true,
             install_source_option: None,
         extra_probes: None,
-        upgrade_reinstalls_each: false,
+        upgrade_reinstall_args: None,
+        property_probes: Vec::new(),
+        search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -380,8 +383,7 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "apk".into(),
         executor: executor
-            .duplicate()
-            .with_exit_policy(crate::core::exit_policy::for_manager("apk")),
+            .duplicate(),
         config: ManagerConfig {
             name: "apk".into(),
             binary: None,
@@ -436,7 +438,9 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             is_exclusive: true,
             install_source_option: None,
         extra_probes: None,
-        upgrade_reinstalls_each: false,
+        upgrade_reinstall_args: None,
+        property_probes: Vec::new(),
+        search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -507,7 +511,9 @@ fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             is_exclusive: true,
             install_source_option: None,
         extra_probes: None,
-        upgrade_reinstalls_each: false,
+        upgrade_reinstall_args: None,
+        property_probes: Vec::new(),
+        search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -531,8 +537,7 @@ fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "winget".into(),
         executor: executor
-            .duplicate()
-            .with_exit_policy(crate::core::exit_policy::for_manager("winget")),
+            .duplicate(),
         config: ManagerConfig {
             name: "winget".into(),
             binary: None,
@@ -583,7 +588,9 @@ fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             is_exclusive: false,
             install_source_option: None,
         extra_probes: None,
-        upgrade_reinstalls_each: false,
+        upgrade_reinstall_args: None,
+        property_probes: Vec::new(),
+        search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -606,8 +613,7 @@ fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "scoop".into(),
         executor: executor
-            .duplicate()
-            .with_exit_policy(crate::core::exit_policy::for_manager("scoop")),
+            .duplicate(),
         config: ManagerConfig {
             name: "scoop".into(),
             binary: None,
@@ -644,7 +650,9 @@ fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             is_exclusive: false,
             install_source_option: None,
         extra_probes: None,
-        upgrade_reinstalls_each: false,
+        upgrade_reinstall_args: None,
+        property_probes: Vec::new(),
+        search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -667,8 +675,7 @@ fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "choco".into(),
         executor: executor
-            .duplicate()
-            .with_exit_policy(crate::core::exit_policy::for_manager("choco")),
+            .duplicate(),
         config: ManagerConfig {
             name: "choco".into(),
             binary: None,
@@ -721,7 +728,9 @@ fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             is_exclusive: true,
             install_source_option: None,
         extra_probes: None,
-        upgrade_reinstalls_each: false,
+        upgrade_reinstall_args: None,
+        property_probes: Vec::new(),
+        search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -776,7 +785,9 @@ fn register_mas(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             is_exclusive: false,
             install_source_option: None,
         extra_probes: None,
-        upgrade_reinstalls_each: false,
+        upgrade_reinstall_args: None,
+        property_probes: Vec::new(),
+        search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -833,7 +844,9 @@ fn register_pip(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             is_exclusive: false,
             install_source_option: None,
         extra_probes: None,
-        upgrade_reinstalls_each: false,
+        upgrade_reinstall_args: None,
+        property_probes: Vec::new(),
+        search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -855,8 +868,7 @@ fn register_gem(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "gem".into(),
         executor: executor
-            .duplicate()
-            .with_exit_policy(crate::core::exit_policy::for_manager("gem")),
+            .duplicate(),
         config: ManagerConfig {
             name: "gem".into(),
             binary: None,
@@ -888,7 +900,9 @@ fn register_gem(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             is_exclusive: false,
             install_source_option: None,
         extra_probes: None,
-        upgrade_reinstalls_each: false,
+        upgrade_reinstall_args: None,
+        property_probes: Vec::new(),
+        search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -942,7 +956,9 @@ fn register_bun(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             is_exclusive: false,
             install_source_option: None,
         extra_probes: None,
-        upgrade_reinstalls_each: false,
+        upgrade_reinstall_args: None,
+        property_probes: Vec::new(),
+        search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -1002,7 +1018,9 @@ fn register_macports(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             is_exclusive: true,
             install_source_option: None,
         extra_probes: None,
-        upgrade_reinstalls_each: false,
+        upgrade_reinstall_args: None,
+        property_probes: Vec::new(),
+        search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -1058,7 +1076,9 @@ fn register_pkgin(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             is_exclusive: true,
             install_source_option: None,
         extra_probes: None,
-        upgrade_reinstalls_each: false,
+        upgrade_reinstall_args: None,
+        property_probes: Vec::new(),
+        search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -1121,7 +1141,9 @@ fn register_pkg_freebsd(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             is_exclusive: true,
             install_source_option: None,
         extra_probes: None,
-        upgrade_reinstalls_each: false,
+        upgrade_reinstall_args: None,
+        property_probes: Vec::new(),
+        search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -1185,7 +1207,9 @@ fn register_pkg_add_openbsd(reg: &mut BackendRegistry, executor: &CommandExecuto
             is_exclusive: true,
             install_source_option: None,
         extra_probes: None,
-        upgrade_reinstalls_each: false,
+        upgrade_reinstall_args: None,
+        property_probes: Vec::new(),
+        search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -1249,7 +1273,9 @@ fn register_dotnet(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             is_exclusive: false,
             install_source_option: None,
         extra_probes: None,
-        upgrade_reinstalls_each: false,
+        upgrade_reinstall_args: None,
+        property_probes: Vec::new(),
+        search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -1311,14 +1337,40 @@ fn base_config(name: &str) -> ManagerConfig {
         is_exclusive: false,
         install_source_option: None,
         extra_probes: None,
-        upgrade_reinstalls_each: false,
+        upgrade_reinstall_args: None,
+        property_probes: Vec::new(),
+        search_source: SearchSource::Command,
         flag_map: HashMap::new(),
     }
+}
+
+/// Give a generic core its manager's exit policy.
+///
+/// Named rather than inlined so it can be asserted: an exit policy changes no argv, so a
+/// backend that lost one looks identical from everywhere except a failing install.
+fn with_manager_policy(core: Arc<GenericBackendCore>) -> Arc<GenericBackendCore> {
+    Arc::new(GenericBackendCore {
+        name: core.name.clone(),
+        executor: core
+            .executor
+            .duplicate()
+            .with_exit_policy(crate::core::exit_policy::for_manager(&core.name)),
+        config: core.config.clone(),
+        parser: core.parser.clone(),
+    })
 }
 
 /// Register a generic backend, attaching Installable + MetadataProvider always and the
 /// other capabilities per the boolean flags. Installable is always present (install is the
 /// point); `query`/`search`/`upgrade` are opt-in because not every manager supports them.
+///
+/// **Every generic backend gets its manager's exit policy here**, so no registrar can forget
+/// it. Two did: converting `cargo` and `pipx` to data on 2026-08-04 dropped the
+/// `with_exit_policy` line their hand-written modules had, and `cargo install
+/// <no-such-crate>` stopped being classified `permanent` — which sends the sweep harness back
+/// to retrying a crate that will never exist. The argv table could not catch it, because an
+/// exit policy is not argv. An unknown manager yields the default policy, which classifies
+/// nothing, so applying this to all of them is safe in the direction that keeps a declaration.
 #[allow(clippy::fn_params_excessive_bools)]
 fn register_generic(
     reg: &mut BackendRegistry,
@@ -1327,6 +1379,7 @@ fn register_generic(
     search: bool,
     upgrade: bool,
 ) {
+    let core = with_manager_policy(core);
     let mut builder = BackendCapabilities::builder(core.clone())
         .with_installable(Arc::new(GenericInstallable { core: core.clone() }))
         .with_metadata_provider(core.clone());
@@ -1407,8 +1460,7 @@ fn register_luarocks(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "luarocks".into(),
         executor: executor
-            .duplicate()
-            .with_exit_policy(crate::core::exit_policy::for_manager("luarocks")),
+            .duplicate(),
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "luarocks"),
@@ -1430,8 +1482,7 @@ fn register_nimble(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "nimble".into(),
         executor: executor
-            .duplicate()
-            .with_exit_policy(crate::core::exit_policy::for_manager("nimble")),
+            .duplicate(),
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::ecosystem::nimble_list(o, "nimble"),
@@ -1461,8 +1512,7 @@ fn register_pixi(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "pixi".into(),
         executor: executor
-            .duplicate()
-            .with_exit_policy(crate::core::exit_policy::for_manager("pixi")),
+            .duplicate(),
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::ecosystem::pixi_list(o, "pixi"),
@@ -1544,8 +1594,7 @@ fn register_helm(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "helm".into(),
         executor: executor
-            .duplicate()
-            .with_exit_policy(crate::core::exit_policy::for_manager("helm")),
+            .duplicate(),
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "helm"),
@@ -1605,6 +1654,229 @@ fn register_stack(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 
 /// asdf version manager (`asdf`). Cross-platform; gated by the `asdf` binary. A tool/plugin
 /// is the "package"; installing pins a version via the trailing positional.
+/// The three Node managers, which spell one shape three ways.
+///
+/// They were three modules totalling 757 non-test lines, ~85% identical once renamed, with
+/// `global_argv` defined three separate times — npm's and pnpm's copies character-for-character
+/// the same. What actually differs is four things, and all four are data: the global flag
+/// (`-g` vs a `global` verb), the install verb (`install` vs `add`), the remove verb
+/// (`uninstall` vs `remove`), and where the manager keeps what it installed.
+///
+/// None of them has a usable CLI search — npm's is slow and output-unstable, pnpm has none, and
+/// yarn removed its own in Berry — and all three resolve from the npm registry, which is why
+/// `node_registry.rs` already existed and why three backends reached into it. That is
+/// `SearchSource::NpmRegistry` now.
+///
+/// Upgrading is re-installing each global package, for all three.
+fn register_npm(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("npm");
+    cfg.manual = ManualListing::AllInstalled;
+    cfg.version_pin = Some(VersionPin::Inline("{name}@{version}".into()));
+    cfg.install_args = vec!["install".into(), "-g".into()];
+    cfg.remove_args = vec!["uninstall".into(), "-g".into()];
+    cfg.list_args = vec![
+        "list".into(),
+        "-g".into(),
+        "--depth=0".into(),
+        "--json".into(),
+    ];
+    cfg.upgrade_reinstall_args = Some(cfg.install_args.clone());
+    cfg.search_source = SearchSource::NpmRegistry;
+    // `npm prefix -g` reports the PREFIX, not the module directory, and the layout below it
+    // differs by OS: POSIX puts modules under `lib/node_modules`, Windows directly under
+    // `node_modules`. Getting this wrong yields a path that does not exist.
+    cfg.property_probes = vec![PropertyProbe {
+        property: "install_path".into(),
+        args: vec!["prefix".into(), "-g".into()],
+        template: if cfg!(windows) {
+            "{base}/node_modules/{name}".into()
+        } else {
+            "{base}/lib/node_modules/{name}".into()
+        },
+    }];
+    let core = Arc::new(GenericBackendCore {
+        name: "npm".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::language::parse_installed("npm", o),
+            search_fn: |_| vec![],
+        }),
+    });
+    register_generic(reg, core, true, true, true);
+}
+
+fn register_pnpm(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("pnpm");
+    cfg.manual = ManualListing::AllInstalled;
+    cfg.version_pin = Some(VersionPin::Inline("{name}@{version}".into()));
+    cfg.install_args = vec!["add".into(), "-g".into()];
+    cfg.remove_args = vec!["remove".into(), "-g".into()];
+    cfg.list_args = vec![
+        "list".into(),
+        "-g".into(),
+        "--depth=0".into(),
+        "--json".into(),
+    ];
+    cfg.upgrade_reinstall_args = Some(cfg.install_args.clone());
+    cfg.search_source = SearchSource::NpmRegistry;
+    // `pnpm root -g` already IS the global node_modules directory, so the package folder is
+    // `<root>/<name>`; appending another `node_modules` yields a path that does not exist.
+    cfg.property_probes = vec![
+        PropertyProbe {
+            property: "install_path".into(),
+            args: vec!["root".into(), "-g".into()],
+            template: "{base}/{name}".into(),
+        },
+        PropertyProbe {
+            property: "bin_path".into(),
+            args: vec!["bin".into(), "-g".into()],
+            template: "{base}".into(),
+        },
+    ];
+    let core = Arc::new(GenericBackendCore {
+        name: "pnpm".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            // `pnpm list -g --json` returns an ARRAY of project objects where npm returns one
+            // bare object. The shared parser handles both; parsing pnpm as npm yields nothing.
+            installed_fn: |o| crate::parsers::language::parse_installed("pnpm", o),
+            search_fn: |_| vec![],
+        }),
+    });
+    register_generic(reg, core, true, true, true);
+}
+
+fn register_yarn(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("yarn");
+    cfg.manual = ManualListing::AllInstalled;
+    cfg.version_pin = Some(VersionPin::Inline("{name}@{version}".into()));
+    // yarn 1 spells global as a leading verb rather than a flag.
+    cfg.install_args = vec!["global".into(), "add".into()];
+    cfg.remove_args = vec!["global".into(), "remove".into()];
+    cfg.list_args = vec!["global".into(), "list".into(), "--json".into()];
+    cfg.upgrade_reinstall_args = Some(cfg.install_args.clone());
+    cfg.search_source = SearchSource::NpmRegistry;
+    // `yarn global dir` returns the folder CONTAINING node_modules, unlike `pnpm root -g`.
+    cfg.property_probes = vec![
+        PropertyProbe {
+            property: "install_path".into(),
+            args: vec!["global".into(), "dir".into()],
+            template: "{base}/node_modules/{name}".into(),
+        },
+        PropertyProbe {
+            property: "bin_path".into(),
+            args: vec!["global".into(), "bin".into()],
+            template: "{base}".into(),
+        },
+    ];
+    let core = Arc::new(GenericBackendCore {
+        name: "yarn".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::language::parse_installed("yarn", o),
+            search_fn: |_| vec![],
+        }),
+    });
+    register_generic(reg, core, true, true, true);
+}
+
+/// Rust / crates.io. Was 298 non-test lines.
+///
+/// The one thing worth carrying over: **`cargo install foo` on an already-installed foo
+/// declines and exits 0.** Upgrading has to say `--force`, which is why
+/// `upgrade_reinstall_args` carries args of its own instead of being a boolean — a boolean
+/// would have upgraded cargo by asking it to do nothing, and reported success.
+fn register_cargo(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("cargo");
+    // `cargo install --list` reports exactly what was asked for; crates.io dependencies are
+    // compiled in, never installed as separate entries.
+    cfg.manual = ManualListing::AllInstalled;
+    // `--version` is an option of `install`, not of the crate name, so it goes ahead of the
+    // terminator and the name stays protected behind it.
+    cfg.version_pin = Some(VersionPin::LeadingFlag(vec![
+        "--version".into(),
+        "{version}".into(),
+    ]));
+    cfg.install_args = vec!["install".into()];
+    cfg.remove_args = vec!["uninstall".into()];
+    cfg.list_args = vec!["install".into(), "--list".into()];
+    cfg.search_args = vec!["search".into()];
+    cfg.upgrade_reinstall_args = Some(vec!["install".into(), "--force".into()]);
+    let core = Arc::new(GenericBackendCore {
+        name: "cargo".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            // `cargo install --list` indents each crate's binaries beneath it; a column parser
+            // would read those indented lines as package names.
+            installed_fn: |o| crate::parsers::language::parse_installed("cargo", o),
+            search_fn: |o| crate::parsers::language::parse_search("cargo", o),
+        }),
+    });
+    register_generic(reg, core, true, true, true);
+}
+
+/// Python applications in their own venvs. Was 193 non-test lines, of which the only part
+/// outside this table was asking pipx where a venv lives.
+fn register_pipx(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("pipx");
+    // pipx installs one requested application per entry; its dependencies live inside that
+    // application's venv and are never listed here.
+    cfg.manual = ManualListing::AllInstalled;
+    // pipx takes a pip requirement spec.
+    cfg.version_pin = Some(VersionPin::Inline("{name}=={version}".into()));
+    cfg.install_args = vec!["install".into()];
+    cfg.remove_args = vec!["uninstall".into()];
+    cfg.list_args = vec!["list".into(), "--json".into()];
+    cfg.upgrade_args = vec!["upgrade-all".into()];
+    cfg.property_probes = vec![PropertyProbe {
+        property: "install_path".into(),
+        args: vec!["environment".into(), "--value".into(), "PIPX_HOME".into()],
+        template: "{base}/venvs/{name}".into(),
+    }];
+    let core = Arc::new(GenericBackendCore {
+        name: "pipx".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::language::parse_installed("pipx", o),
+            search_fn: |_| vec![],
+        }),
+    });
+    register_generic(reg, core, true, false, true);
+}
+
+/// uv's tool installs. Was 214 non-test lines.
+fn register_uv(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("uv");
+    // `uv tool list` reports installed tools only; there are no implicit or dependency tools
+    // to tell apart.
+    cfg.manual = ManualListing::AllInstalled;
+    cfg.version_pin = Some(VersionPin::Inline("{name}=={version}".into()));
+    cfg.install_args = vec!["tool".into(), "install".into()];
+    cfg.remove_args = vec!["tool".into(), "uninstall".into()];
+    cfg.list_args = vec!["tool".into(), "list".into()];
+    cfg.upgrade_args = vec!["tool".into(), "upgrade".into(), "--all".into()];
+    cfg.property_probes = vec![PropertyProbe {
+        property: "install_path".into(),
+        args: vec!["tool".into(), "dir".into()],
+        template: "{base}/{name}".into(),
+    }];
+    let core = Arc::new(GenericBackendCore {
+        name: "uv".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "uv"),
+            search_fn: |_| vec![],
+        }),
+    });
+    register_generic(reg, core, true, false, true);
+}
+
 /// krew, the kubectl plugin manager. Its verbs are subcommands of `kubectl`.
 ///
 /// Was 193 lines of hand-written Rust. The one thing that file knew and this table did not is
@@ -1655,7 +1927,7 @@ fn register_pubdart(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     cfg.remove_args = vec!["pub".into(), "global".into(), "deactivate".into()];
     cfg.list_args = vec!["pub".into(), "global".into(), "list".into()];
     // pub.dev has no upgrade-all verb: re-activating each package unpinned is the upgrade.
-    cfg.upgrade_reinstalls_each = true;
+    cfg.upgrade_reinstall_args = Some(cfg.install_args.clone());
     let core = Arc::new(GenericBackendCore {
         name: "pub".into(),
         executor: executor.duplicate(),
@@ -2456,19 +2728,19 @@ mod tests {
             ),
             ArgvCase::pkg(
                 "cargo",
-                &|r, e| crate::backends::cargo::register(r, e, &Config::default()),
+                &register_cargo,
                 Runs("cargo install -- jq"),
                 Runs("cargo uninstall -- jq"),
             ),
             ArgvCase::pkg(
                 "pipx",
-                &|r, e| crate::backends::pipx::register(r, e, &Config::default()),
+                &register_pipx,
                 Runs("pipx install -- jq"),
                 Runs("pipx uninstall -- jq"),
             ),
             ArgvCase::pkg(
                 "uv",
-                &|r, e| crate::backends::uv::register(r, e, &Config::default()),
+                &register_uv,
                 Runs("uv tool install -- jq"),
                 Runs("uv tool uninstall -- jq"),
             ),
@@ -2476,19 +2748,19 @@ mod tests {
             // each needs its own row: `npm install -g` / `pnpm add -g` / `yarn global add`.
             ArgvCase::pkg(
                 "npm",
-                &|r, e| crate::backends::npm::register(r, e, &Config::default()),
+                &register_npm,
                 Runs("npm install -g -- jq"),
                 Runs("npm uninstall -g -- jq"),
             ),
             ArgvCase::pkg(
                 "pnpm",
-                &|r, e| crate::backends::pnpm::register(r, e, &Config::default()),
+                &register_pnpm,
                 Runs("pnpm add -g -- jq"),
                 Runs("pnpm remove -g -- jq"),
             ),
             ArgvCase::pkg(
                 "yarn",
-                &|r, e| crate::backends::yarn::register(r, e, &Config::default()),
+                &register_yarn,
                 Runs("yarn global add -- jq"),
                 Runs("yarn global remove -- jq"),
             ),
@@ -2848,6 +3120,57 @@ mod tests {
                 .any(|c| c.contains("dart pub global activate -- webdev 2.7.0")),
             "the pinned version did not land as a trailing positional: {calls:?}"
         );
+    }
+
+    /// Every manager the exit-policy table knows carries its policy into the registry.
+    ///
+    /// **An exit policy is not argv, so the argv table cannot see it.** Converting `cargo` and
+    /// `pipx` from hand-written modules to data on 2026-08-04 dropped their `with_exit_policy`
+    /// line; every argv assertion stayed green and `cargo install <no-such-crate>` silently
+    /// stopped being classified `permanent`, which sends the sweep harness back to retrying a
+    /// crate that will never exist. Two integration tests caught it after the fact. This is the
+    /// same check one layer down, so the next conversion fails here first.
+    #[test]
+    fn a_generic_backend_carries_its_managers_exit_policy() {
+        use crate::core::executor::MockExecutor;
+        use dashmap::DashMap;
+
+        // Filtered on the predicate, not on a hand-written list: `helm` has a policy entry
+        // that carries benign exit codes and no absent markers, so asserting it "classifies"
+        // asserts something untrue about helm rather than something true about the wiring.
+        let known: Vec<&str> = argv_cases()
+            .iter()
+            .map(|c| c.backend)
+            .filter(|n| crate::core::exit_policy::classifies_absent_names(n))
+            .collect();
+        assert!(
+            known.len() >= 5,
+            "only {} backends classify absent names — the filter is broken, not the code",
+            known.len()
+        );
+        for name in known {
+            let vfs = Arc::new(DashMap::new());
+            let mock = Arc::new(MockExecutor::new(vfs.clone()));
+            let exec =
+                CommandExecutor::with_layer(true, false, mock, vfs, Arc::new(DashMap::new()));
+            assert!(
+                !exec.classifies_absent_names(),
+                "the bare executor already classifies, so this test proves nothing"
+            );
+            let core = Arc::new(GenericBackendCore {
+                name: name.to_string(),
+                executor: exec,
+                config: base_config(name),
+                parser: Arc::new(LambdaParser {
+                    installed_fn: |_| vec![],
+                    search_fn: |_| vec![],
+                }),
+            });
+            assert!(
+                with_manager_policy(core).executor.classifies_absent_names(),
+                "`{name}` has an entry in exit_policy::for_manager and did not carry it. A                  manager that cannot say \"no such package\" leaves the line in the manifest                  and every later command fails on it."
+            );
+        }
     }
 
     /// The table must not name one backend twice: the second row would silently replace the

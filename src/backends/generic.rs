@@ -22,6 +22,18 @@ pub enum VersionPin {
     /// name rather than an option. That is right for a real flag and wrong for a version that
     /// is a bare positional — see [`TrailingPositional`](VersionPin::TrailingPositional).
     Flag(Vec<String>),
+    /// The version as a flag placed **before** the name, which therefore stays behind the `--`
+    /// terminator: cargo `install --version 13.0.0 -- ripgrep`.
+    ///
+    /// Distinct from [`Flag`](VersionPin::Flag), which puts the flag *after* the name and so
+    /// has to give the terminator up. Cargo does not need to: its `--version` is an option of
+    /// the subcommand, not of the operand, so the safer form is available and is the one it
+    /// has always used.
+    ///
+    /// **A leading flag cannot be batched.** `cargo install --version 1.0 --version 2.0 -- a b`
+    /// is not two pinned installs, it is nonsense — so a backend using this installs one spec
+    /// per command. `Flag` and `Inline` carry their version inside the operand and batch fine.
+    LeadingFlag(Vec<String>),
     /// The bare name followed by the version as a **positional**, e.g. pub
     /// `activate webdev 2.7.0`.
     ///
@@ -65,6 +77,8 @@ impl VersionPin {
             VersionPin::Inline(tmpl) => {
                 vec![tmpl.replace("{name}", name).replace("{version}", version)]
             }
+            // The flags go into the subcommand args, not beside the name — see the caller.
+            VersionPin::LeadingFlag(_) => vec![name.to_string()],
             VersionPin::Flag(flags)
             | VersionPin::TrailingPositional(flags)
             | VersionPin::RequiredFlag { args: flags, .. } => {
@@ -77,6 +91,22 @@ impl VersionPin {
                 out
             }
         }
+    }
+
+    /// The flags this pin contributes *before* the name, if any.
+    fn leading_flags(&self, version: &str) -> Vec<String> {
+        match self {
+            VersionPin::LeadingFlag(flags) => flags
+                .iter()
+                .map(|f| f.replace("{version}", version))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Whether this pin forbids batching several specs into one command.
+    fn is_one_per_command(&self) -> bool {
+        matches!(self, VersionPin::LeadingFlag(_))
     }
 
     /// What this manager should be asked for when the declaration names no version.
@@ -208,10 +238,19 @@ pub struct ManagerConfig {
     pub install_source_option: Option<String>,
     pub needs_root: bool,
     pub is_exclusive: bool,
-    /// This manager has no upgrade-all verb, and upgrades by re-installing each installed
-    /// package unpinned. `upgrade_args` is then unused and must be empty — see
-    /// [`GenericUpgradable::upgrade`].
-    pub upgrade_reinstalls_each: bool,
+    /// Properties `info` learns by asking the manager a second question. Empty for a manager
+    /// that reports none, which is most of them.
+    pub property_probes: Vec<PropertyProbe>,
+    /// Where `search` gets its answers. Defaults to running `search_args`.
+    pub search_source: SearchSource,
+    /// This manager has no upgrade-all verb: upgrading means re-installing each installed
+    /// package unpinned, with THESE args rather than `install_args`.
+    ///
+    /// The args are separate because they are not always the same: pub re-activates with the
+    /// verb it installs with, while `cargo install foo` on an already-installed foo declines
+    /// and needs `install --force`. A boolean would have upgraded cargo by asking it to do
+    /// nothing, and reported success. `upgrade_args` is unused when this is `Some`.
+    pub upgrade_reinstall_args: Option<Vec<String>>,
     /// Programs that must ALSO be present for this backend to be usable, beyond `binary`.
     /// `None` = the binary is the whole requirement, which is true of every manager that is a
     /// program rather than a plugin of one. See [`BackendCore::is_available`].
@@ -437,6 +476,22 @@ impl Installable for GenericInstallable {
                 return self.install_group(&rest, sudo).await;
             }
         }
+        // A leading-flag pin belongs to the subcommand, not to an operand, so it cannot be
+        // shared: `cargo install --version 1.0 --version 2.0 -- a b` is not two pinned
+        // installs. One command per spec, and only for the managers that spell it that way.
+        if self
+            .core
+            .config
+            .version_pin
+            .as_ref()
+            .is_some_and(VersionPin::is_one_per_command)
+            && specs.len() > 1
+        {
+            for spec in specs {
+                self.install_group(std::slice::from_ref(spec), sudo).await?;
+            }
+            return Ok(());
+        }
         self.install_group(specs, sudo).await
     }
 
@@ -480,6 +535,7 @@ impl GenericInstallable {
         // A `Flag` pin puts an option *after* the name it pins (`gem install jq -v 1.6`), so
         // the terminator cannot precede it — behind `--` that `-v` is a package.
         let mut trailing_flags = false;
+        let mut leading: Vec<String> = Vec::new();
         for spec in specs {
             if let Some(key) = &self.core.config.install_source_option {
                 names.push(install_source(&self.core.name, spec, key)?);
@@ -489,6 +545,10 @@ impl GenericInstallable {
             // backend's native syntax, when both a pin syntax and a concrete version exist.
             match (spec.options.get("version"), &self.core.config.version_pin) {
                 (Some(ver), Some(pin)) if is_concrete_version(ver) => {
+                    // A leading flag goes into the subcommand args, ahead of the terminator,
+                    // and the name stays behind it — which is the safer of the two shapes and
+                    // is available whenever the flag is an option of the verb, not the operand.
+                    leading.extend(pin.leading_flags(ver));
                     trailing_flags |=
                         matches!(pin, VersionPin::Flag(_) | VersionPin::RequiredFlag { .. });
                     // `TrailingPositional` is deliberately absent from that list: it emits an
@@ -507,6 +567,8 @@ impl GenericInstallable {
                 _ => names.push(spec.name.clone()),
             }
         }
+        final_args.extend(leading);
+
         // Before the terminator: behind `--` this is a package name.
         let opting_out = specs.iter().any(crate::core::download::is_unverified);
         if opting_out {
@@ -741,7 +803,7 @@ impl Queryable for GenericQueryable {
         let b = self.core.name.as_str();
         let ci = matches!(b, "choco" | "scoop" | "winget");
         let winget = b == "winget";
-        Ok(all.into_iter().find(|p| {
+        let found = all.into_iter().find(|p| {
             p.name == name
                 || (ci && p.name.eq_ignore_ascii_case(name))
                 || (winget
@@ -749,8 +811,70 @@ impl Queryable for GenericQueryable {
                         .rsplit('.')
                         .next()
                         .is_some_and(|s| s.eq_ignore_ascii_case(name)))
-        }))
+        });
+        let Some(mut pkg) = found else { return Ok(None) };
+        for probe in &self.core.config.property_probes {
+            if let Some(value) = probe.resolve(&self.core, name).await {
+                pkg.properties.insert(probe.property.clone(), value);
+            }
+        }
+        Ok(Some(pkg))
     }
+}
+
+/// A property of an installed package that only the manager can answer, and the command that
+/// asks it.
+///
+/// `npm prefix -g`, `pipx environment --value PIPX_HOME`, `yarn global bin`: a second command
+/// whose stdout is a directory, and a template that turns it into this package's value. Six
+/// hand-written backends existed largely for this — it is what `info` needed and the generic
+/// queryable could not do.
+///
+/// A **list**, not one install path, because `linix info` prints every property a package
+/// carries: npm, pnpm and yarn each report `bin_path` beside `install_path`, and collapsing
+/// that to one probe would have quietly removed a line from a user's output.
+#[derive(Debug, Clone)]
+pub struct PropertyProbe {
+    /// The property key, as `linix info` prints it — `install_path`, `bin_path`.
+    pub property: String,
+    /// Argv run against the backend's binary; its stdout is the base value.
+    pub args: Vec<String>,
+    /// `{base}` and `{name}` substituted. `{base}` alone is a legitimate template: `bin_path`
+    /// is the directory itself, with no per-package component.
+    pub template: String,
+}
+
+impl PropertyProbe {
+    /// `None` rather than an error on every failure path: these are enrichment for `linix
+    /// info`, and a manager that will not answer must not turn a working `info` into a failed
+    /// one — which is what the hand-written backends did, each in its own words.
+    async fn resolve(&self, core: &GenericBackendCore, name: &str) -> Option<String> {
+        let args: Vec<&str> = self.args.iter().map(String::as_str).collect();
+        let base = core
+            .executor
+            .run_output(core.binary(), &args, false)
+            .await
+            .ok()?;
+        let base = base.trim();
+        if base.is_empty() {
+            return None;
+        }
+        Some(self.template.replace("{base}", base).replace("{name}", name))
+    }
+}
+
+/// Where a manager's `search` answers come from.
+///
+/// Not every manager has one. npm's is slow and output-unstable, pnpm has none, and yarn
+/// removed its own in Berry — all three resolve from the same npm registry, which is why
+/// `node_registry.rs` exists and why three separate backends reached for it. A search that is
+/// an HTTP call rather than a subcommand is still this backend's search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchSource {
+    /// Run `search_args` and parse stdout. Every manager that has a real search subcommand.
+    Command,
+    /// Query the public npm registry over HTTP, tagging results with this backend's name.
+    NpmRegistry,
 }
 
 pub struct GenericSearchable {
@@ -760,6 +884,10 @@ pub struct GenericSearchable {
 #[async_trait]
 impl Searchable for GenericSearchable {
     async fn search(&self, query: &str) -> Result<Vec<Package>> {
+        if self.core.config.search_source == SearchSource::NpmRegistry {
+            return crate::backends::node_registry::registry_search(query, &self.core.name, 25)
+                .await;
+        }
         let bin = self
             .core
             .config
@@ -826,22 +954,34 @@ impl Upgradable for GenericUpgradable {
         // global activate <name>` with no version moves that package to latest, and running it
         // over the installed list is the whole of "upgrade everything" for pub. Expressed here
         // rather than in a module, because the shape is the manager's, not the module's.
-        if self.core.config.upgrade_reinstalls_each {
+        if let Some(reinstall_args) = self.core.config.upgrade_reinstall_args.clone() {
             let installed = GenericQueryable {
                 core: self.core.clone(),
             }
             .fetch_installed()
             .await?;
+            // The install path, with the reinstall verb swapped in — so the terminator rule,
+            // the exclusivity rule and every other thing `install` knows apply here too. A
+            // second hand-rolled loop is how the six modules this replaces each got their own
+            // slightly different one.
+            let mut cfg = self.core.config.clone();
+            cfg.install_args = reinstall_args;
+            let reinstaller = Arc::new(GenericBackendCore {
+                name: self.core.name.clone(),
+                executor: self.core.executor.duplicate(),
+                config: cfg,
+                parser: self.core.parser.clone(),
+            });
             for pkg in installed {
                 let spec = PackageSpec {
                     name: pkg.name,
                     backend: self.core.name.clone(),
                     ..Default::default()
                 };
-                // Deliberately not `?`: one package that will not re-activate must not stop the
+                // Deliberately not `?`: one package that will not reinstall must not stop the
                 // other forty. The executor has already reported which one and why.
                 let _ = GenericInstallable {
-                    core: self.core.clone(),
+                    core: reinstaller.clone(),
                 }
                 .install(&[spec], sudo)
                 .await;
@@ -1252,7 +1392,9 @@ mod tests {
                 is_exclusive: true,
                 install_source_option: None,
                 extra_probes: None,
-                upgrade_reinstalls_each: false,
+                upgrade_reinstall_args: None,
+                property_probes: Vec::new(),
+                search_source: SearchSource::Command,
                 flag_map: HashMap::new(),
             },
             parser: Arc::new(LambdaParser {

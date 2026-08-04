@@ -783,6 +783,15 @@ impl CommandExecutor {
     ///
     /// Called at registration, beside the rest of that backend's definition, so a manager
     /// with a new convention is added by declaring one — never by editing this file.
+    /// Can this executor's manager tell LiNix that a name does not exist?
+    ///
+    /// Exposed so the property is *observable*: a backend that quietly lost its policy still
+    /// runs the same argv, so nothing else can see the loss. `cargo` and `pipx` lost theirs in
+    /// the 2026-08-04 conversion with every argv assertion green.
+    pub fn classifies_absent_names(&self) -> bool {
+        !self.exit_policy.absent_markers.is_empty()
+    }
+
     pub fn with_exit_policy(mut self, policy: ExitPolicy) -> Self {
         self.exit_policy = Arc::new(policy);
         self

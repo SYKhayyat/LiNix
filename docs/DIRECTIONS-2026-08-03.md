@@ -338,18 +338,24 @@ makes everything above safe. **They get bigger, not smaller.**
    through a serialized plan. Putting argv *into* `SyncReport` is not done: that changes
    `--json`, which is user-visible, and **Q26** is still deferred.
 6. **`Ledger<T>`** — **DONE** as the `LockFile` trait, with a ratchet against a seventh ledger
-   hand-rolling its own carrier. **The backend conversions are begun, not finished:** `krew` and
-   `pubdart` are data now (390 lines of Rust → two rows), 6 remain marked `TO CONVERT`. Each
-   conversion cost one new `ManagerConfig` field rather than a lost behaviour — `extra_probes`
-   and `upgrade_reinstalls_each` — and both are now available to every backend.
-7. **Re-measure and report the line count** — **DONE, and standing.** `src` 89,592 → 89,849 (same
-   204 files); `tests` 15,759 → 16,893 (67 → 72 files). Net **+1,391**, and what it bought: argv
-   assertions for 62 backends where 32 had them, five ratchets that did not exist, and ~560 lines
-   of duplicated carrier and hand-written backend deleted.
+   hand-rolling its own carrier. **The conversions are done too:** the formulaic list began at 29
+   modules and the eight formulaic ones all came off — `krew`, `pubdart`, `npm`, `pnpm`, `yarn`,
+   `cargo`, `pipx`, `uv`, ~1,900 lines of Rust for eight data rows. Not one accepted a loss; each
+   cost the machinery a field (`extra_probes`, `upgrade_reinstall_args`, `property_probes`,
+   `SearchSource`, and two new `VersionPin` variants), all now available to every backend. 21
+   modules remain, every one of them hand-written because the *manager* is.
+7. **Re-measure and report the line count** — **DONE, and it went down.** `src` 89,592 →
+   **88,499** (204 → 198 files); `tests` 15,759 → 16,869 (67 → 72). Net **−383**, with `src`
+   down 1,093 — a phase that ends smaller than it started while adding six ratchets. The
+   standing practice's sentence, owed even when the number falls: argv assertions for 62
+   backends where 32 had them, six ratchets, ~170 lines of duplicated ledger carrier gone, and
+   ~1,900 lines of hand-written backend replaced by data.
 
 **What the scoreboard is actually recording.** Three of the five open steps were already built
-and simply unwritten, and five new ratchets were written of which **four found a live defect the
-day they were written**. Neither of those is about carelessness. Every rule involved had been
+and simply unwritten, and six new ratchets were written of which **five found a live defect the
+day they were written** — including two backends that lost their exit policy in a conversion
+whose argv was byte-identical, which is the reminder that a gate covers the property it asserts
+and no other. Neither of those is about carelessness. Every rule involved had been
 found once and stated correctly — a paragraph instructing that a table "must be checked against"
 the code, six correct copies of a dry-run rule, sixteen backends that sanitize — and then left to
 be enforced by memory. *A prose instruction to check a copy against its authority is not a

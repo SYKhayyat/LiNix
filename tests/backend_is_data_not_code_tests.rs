@@ -6,8 +6,17 @@
 //! its own `impl BackendCore`, its own install loop, its own remove loop, its own argv builder:
 //! 200 to 400 lines, of which most is the same shape as its neighbour's.
 //!
-//! 34 backends are data. 27 are modules, totalling ~4,890 non-test lines — `krew` and
-//! `pubdart` came out on 2026-08-04, 390 lines of Rust replaced by two data rows. `npm.rs` and
+//! **The formulaic list is empty as of 2026-08-04.** It began at 29 modules; eight came out the
+//! same day — `krew`, `pubdart`, `npm`, `pnpm`, `yarn`, `cargo`, `pipx`, `uv` — about 1,900
+//! lines of Rust replaced by eight data rows. What remains are 21 modules that are hand-written
+//! because the manager is, each named below with what the generic machinery cannot express.
+//!
+//! Every one of the eight cost the machinery a field rather than a compromise: `extra_probes`
+//! (a manager reached as a plugin of another program), `upgrade_reinstall_args` (no upgrade-all
+//! verb), `property_probes` (where the manager put it, asked with a second command),
+//! `SearchSource` (a search that is an HTTP call), and `VersionPin::TrailingPositional`. All
+//! five are now available to every backend, which is the difference between converting a
+//! backend and deleting one. `npm.rs` and
 //! `pnpm.rs` are ~85% identical once you rename; the real differences are three subcommand words
 //! and one JSON quirk. A helper called `global_argv` is defined three separate times — npm,
 //! pnpm, yarn — and npm's and pnpm's copies are character-for-character the same.
@@ -147,39 +156,6 @@ const HAND_WRITTEN: &[HandWritten] = &[
         module: "xbps.rs",
         why: "installs with `xbps-install` and removes with `xbps-remove` — two binaries — and \
               its listing needs the manual/automatic split from a third.",
-    },
-    // ---- The formulaic ones. THESE ARE THE WORK. Each is here because it has ONE piece the
-    // generic machinery cannot yet express, and the rest of the file is boilerplate around it.
-    HandWritten {
-        module: "npm.rs",
-        why: "TO CONVERT. Install/remove/upgrade are formulaic. What blocks it: `info` reports \
-              an install path derived from `npm prefix -g` with a per-OS layout, and `search` \
-              goes to the npm registry over HTTP rather than to a subcommand.",
-    },
-    HandWritten {
-        module: "pnpm.rs",
-        why: "TO CONVERT, and ~85% identical to npm.rs once renamed. Same two blockers, plus \
-              `pnpm list -g --json` returns an ARRAY of project objects where npm returns one.",
-    },
-    HandWritten {
-        module: "yarn.rs",
-        why: "TO CONVERT. Third copy of the Node shape: `yarn global add` instead of `-g`, and \
-              the same HTTP search. `global_argv` is defined here for the third time.",
-    },
-    HandWritten {
-        module: "cargo.rs",
-        why: "TO CONVERT. `cargo install --list` has an indented sub-listing of binaries that \
-              the generic column parser would read as package names.",
-    },
-    HandWritten {
-        module: "pipx.rs",
-        why: "TO CONVERT. Only `info` blocks it: the venv path comes from `pipx environment \
-              --value PIPX_HOME`, a second command.",
-    },
-    HandWritten {
-        module: "uv.rs",
-        why: "TO CONVERT. Same shape as pipx; `uv tool list` output needs a parser that is not \
-              yet in `src/parsers/`.",
     },
 ];
 

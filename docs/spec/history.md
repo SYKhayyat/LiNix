@@ -63,20 +63,61 @@ right answers to the second question, and `SPEC.md`'s 52 was an answer to neithe
 asserted against the argv table now, which works because every registrar is already required to
 have a row there — the two hold each other up.
 
-**The `ManagerConfig` ratchet, and the first two conversions (step 6b).** The direction doc is
-explicit that the ratchet is worth more than the conversions and must come first, so it does:
-every backend module is built from data or named with **what the generic machinery cannot
-express**. "Not converted yet" is rejected as a reason. The list started at 29 and the two
-easiest came off the same day — `krew` and `pubdart`, 390 lines of Rust replaced by two data
-rows. Each required extending the machinery by one field rather than accepting a loss:
-`extra_probes`, because krew is a *plugin* and a host with `kubectl` and no krew once reported
-READY and then failed every command; and `upgrade_reinstalls_each`, because pub has no
-upgrade-all verb and upgrades by re-activating each package. **Both extensions are now available
-to every backend**, which is the difference between converting a backend and deleting one.
+**The `ManagerConfig` ratchet, and the conversions (step 6b).** The direction doc is explicit
+that the ratchet is worth more than the conversions and must come first, so it does: every
+backend module is built from data or named with **what the generic machinery cannot express**.
+"Not converted yet" is rejected as a reason.
 
-**The conversions are verified by the argv table**, which did not exist in this form when the
-direction doc warned that *"a converted backend nothing ran is a rewrite nobody verified."* A
-conversion that changes behaviour changes the argv, and the argv is asserted for all 62.
+The list began at 29 and **the eight formulaic ones all came off the same day** - `krew`,
+`pubdart`, `npm`, `pnpm`, `yarn`, `cargo`, `pipx`, `uv`: about 1,900 lines of Rust replaced by
+eight data rows. The three Node managers were the point of the exercise, ~85% identical once
+renamed with `global_argv` defined three separate times; what actually differed was four things
+and all four were data.
+
+**Not one conversion accepted a loss.** Each cost the machinery a field instead:
+
+- `extra_probes` - krew is a *plugin*, and a host with `kubectl` and no krew once reported READY
+  and then failed every command including `linix update`. `is_available` now requires all
+  probes, not the first.
+- `upgrade_reinstall_args` - five managers have no upgrade-all verb and upgrade by re-installing
+  each package. It carries **args**, not a boolean, because `cargo install foo` on an
+  already-installed foo declines and exits 0: a boolean would have upgraded cargo by asking it
+  to do nothing and reported success.
+- `property_probes` - where a manager put what it installed, asked with a second command. A
+  *list*, because `linix info` prints every property and npm/pnpm/yarn each report `bin_path`
+  beside `install_path`; one probe would have quietly deleted a line from a user's output.
+- `SearchSource::NpmRegistry` - npm's CLI search is unusable, pnpm has none and yarn removed its
+  own, so all three resolve over HTTP. `node_registry.rs` already existed; three backends
+  reached into it privately.
+- `VersionPin::TrailingPositional` and `VersionPin::LeadingFlag` - three different places a
+  version can sit relative to the `--` terminator, where there had been two.
+
+**The argv table verified the conversions and then found what it could not see.** Every one of
+the eight produced byte-identical argv, and the full suite still went red twice:
+
+*`cargo` and `pipx` silently lost their exit policy.* The hand-written modules set
+`with_exit_policy(for_manager(...))`; the registrars did not. An exit policy is not argv, so
+every assertion stayed green while `cargo install <no-such-crate>` stopped being classified
+`permanent` - which sends the sweep harness back to retrying a crate that will never exist. Two
+integration tests caught it. The fix is `register_generic` applying the policy for every generic
+backend, which also deleted **11 per-registrar copies** of the same line, plus a unit test one
+layer down so the next conversion fails before the integration tests do.
+
+*`cargo`'s pinned form changed.* `cargo install --version 13.0.0 -- ripgrep` became
+`cargo install ripgrep --version 13.0.0` - still valid, but it gives up the terminator that
+protects the crate name, and an existing hardening test said so. `--version` is an option of
+`install`, not of the operand, so it belongs ahead of the terminator: hence `LeadingFlag`, which
+also forbids batching, because `cargo install --version 1.0 --version 2.0 -- a b` is not two
+pinned installs.
+
+**Three tests were deleted with their modules and one of them mattered.** Diffing the suite per
+binary showed all three came from the deleted files and nothing else moved. One asserted pub's
+*pinned* argv, which the table's unpinned row does not cover, so it was rewritten against the
+converted backend - and failed, which is how `TrailingPositional` was found. `luarocks` and
+`asdf` share that positional shape, still carry the inconsistency (terminator when unpinned,
+none when pinned), and are **deliberately left alone**: neither is installed here, `argv_drift`
+can only ask a manager that is present, and whether they accept `--` before an operand is a
+measurement rather than a guess.
 
 ### What was already built, and is now recorded
 
@@ -98,18 +139,27 @@ user-visible, and Q26 (publishing the format) is still deferred.
 
 ### Line count (step 7)
 
-`src` went 89,592 → 89,849 across the same 204 files; `tests` went 15,759 → 16,893 across 67 →
-72. **Net +1,391, and the sentence the standing practice asks for:** it bought argv assertions
-for 62 backends where 32 had them, five ratchets that did not exist, and the deletion of ~560
-lines of duplicated carrier and hand-written backend. Four of the five ratchets found a live
-defect on the day they were written, which is the only evidence that matters for whether a gate
-is worth its lines.
+`src` went **89,592 -> 88,499** across 204 -> 198 files; `tests` went 15,759 -> 16,869 across
+67 -> 72. **Net -383 overall, and src is down 1,093** - the first phase in a while that ends
+smaller than it started, and it did so while adding six ratchets.
+
+The sentence the standing practice asks for, even though the number fell: it bought argv
+assertions for 62 backends where 32 had them, six ratchets that did not exist, ~170 lines of
+duplicated ledger carrier gone, and ~1,900 lines of hand-written backend replaced by eight data
+rows. Five of the six ratchets found a live defect the day they were written.
 
 ### The shape of every finding here
 
-Five ratchets were written and **four of them found something immediately**: a missing
-`generate:` row, 28 uncovered backends, five unsanitized reads, and a spec number that matched
-neither host. The fifth — the `ManagerConfig` list — found nothing because it *is* the finding.
+Six ratchets were written and **five of them found something immediately**: a missing
+`generate:` row, 28 uncovered backends, five unsanitized reads, a spec number that matched
+neither host, and two backends that lost their exit policy in a conversion whose argv was
+byte-identical. The sixth - the `ManagerConfig` list - found nothing because it *is* the finding.
+
+**And the two that the argv table could not see are the more useful lesson.** A gate covers the
+property it asserts and no other. The argv table is a good gate, and it passed while cargo
+stopped classifying a permanent failure, because an exit policy is not argv. What caught that was
+a test written about the *behaviour* rather than the shape - and the answer was not to distrust
+the table but to add the missing gate one layer down.
 
 The common cause is not carelessness. Every one of these rules was found once, stated correctly,
 and then enforced by people remembering it: a paragraph in Part II saying the table "must be

@@ -32,12 +32,6 @@ pub mod xbps;
 pub mod psresource;
 
 pub mod brew;
-pub mod cargo;
-pub mod npm;
-pub mod pipx;
-pub mod pnpm;
-pub mod uv;
-pub mod yarn;
 
 // Dedicated backends whose CLI doesn't fit the generic config model (no uninstall verb,
 // filesystem enumeration, or a subcommand-of-another-binary invocation).
