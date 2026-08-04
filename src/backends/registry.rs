@@ -2090,175 +2090,544 @@ mod tests {
         );
     }
 
-    /// `psresource::register` takes a `Config` the others do not, so it needs two lines of
-    /// adapter to sit in the table. It is here rather than beside the production registrars
-    /// because nothing outside the test wants it.
-    fn register_psresource_for_test(reg: &mut BackendRegistry, exec: &CommandExecutor) {
-        crate::backends::psresource::register(reg, exec, &Config::default());
+    /// What a verb must do, when driven against a mock that runs nothing.
+    ///
+    /// Three outcomes and no fourth, because the fourth — "it did something, we did not look" —
+    /// is how `pixi global upgrade-all` survived upstream removal inside a passing suite.
+    #[derive(Debug)]
+    enum Expect {
+        /// A call containing this substring must have run.
+        Runs(&'static str),
+        /// The verb must refuse with `Unsupported` and run **nothing**. Asserted rather than
+        /// skipped: a manager with no uninstall verb that silently ran *something* would leave
+        /// the model claiming a package is gone that is still installed.
+        Unsupported,
+        /// This verb runs no command at all, and the reason. A download backend fetches over
+        /// HTTP and a link backend writes a symlink; neither shells out, so "no argv" is the
+        /// correct answer rather than a gap. The reason is the exemption — an unexplained one
+        /// is a backend nobody looked at wearing the costume of one somebody did (E29).
+        NoCommand(&'static str),
     }
 
-    #[tokio::test]
-    async fn every_os_native_backend_sends_the_argv_its_manager_expects() {
-        use crate::core::executor::MockExecutor;
-        use dashmap::DashMap;
+    /// Every registrar this build compiles, the declaration to drive it with, and the argv it
+    /// must produce.
+    ///
+    /// **One table for both halves of the family.** Until 2026-08-04 this covered only the
+    /// registrars written *in this file*, because that is where the check was written and the
+    /// scan that guards it read one file. The twenty-eight backends that register from their
+    /// own modules — `brew`, `npm`, `nix`, `snap`, `pacman`, every one of them — had no argv
+    /// row and no exemption, which is this repo's signature defect (`CLAUDE.md`: a rule found
+    /// once and applied to the half of the family that happened to be in the file being
+    /// edited). `tests/os_native_argv_coverage_tests.rs` now scans both halves.
+    struct ArgvCase {
+        backend: &'static str,
+        /// A closure, not a function pointer: the registrars in this file take
+        /// `(reg, exec)` and every module-owned one also takes a `&Config`. A row that is a
+        /// closure adapts in place, so adding a backend does not also add a wrapper function
+        /// nobody reads — `register_psresource_for_test` was the first of twenty-eight.
+        register: &'static dyn Fn(&mut BackendRegistry, &CommandExecutor),
+        /// What the declaration names. `jq` for a package manager — but `setting:` addresses
+        /// `SUBKEY/VALUE` and `lvm:` addresses `group/volume`, and a package name is neither.
+        /// Driving every backend with `"jq"` would have tested those backends' *refusals* and
+        /// reported it as argv coverage.
+        subject: &'static str,
+        options: &'static [(&'static str, &'static str)],
+        install: Expect,
+        remove: Expect,
+    }
 
-        type Registrar = fn(&mut BackendRegistry, &CommandExecutor);
-        // backend, registrar, the install argv, the remove argv.
-        //
-        // The remove argv is `None` for a manager that genuinely has no uninstall verb. That is
-        // asserted rather than skipped: `remove` must refuse with `Unsupported` and run nothing,
-        // because a manager that silently ran *something* would leave the model claiming a
-        // package is gone that is still installed.
-        let cases: &[(&str, Registrar, &str, Option<&str>)] = &[
-            // OS-native system managers — each invisible to every platform's CI but its own.
-            (
+    impl ArgvCase {
+        /// A package manager: the declaration is a bare package name.
+        fn pkg(
+            backend: &'static str,
+            register: &'static dyn Fn(&mut BackendRegistry, &CommandExecutor),
+            install: Expect,
+            remove: Expect,
+        ) -> Self {
+            Self {
+                backend,
+                register,
+                subject: "jq",
+                options: &[],
+                install,
+                remove,
+            }
+        }
+
+        /// A backend whose declaration is not a package name.
+        fn shaped(
+            backend: &'static str,
+            register: &'static dyn Fn(&mut BackendRegistry, &CommandExecutor),
+            subject: &'static str,
+            options: &'static [(&'static str, &'static str)],
+            install: Expect,
+            remove: Expect,
+        ) -> Self {
+            Self {
+                backend,
+                register,
+                subject,
+                options,
+                install,
+                remove,
+            }
+        }
+    }
+
+    /// The argv table. Kept in one function so the scan has one region to read.
+    fn argv_cases() -> Vec<ArgvCase> {
+        use Expect::{NoCommand, Runs, Unsupported};
+        vec![
+            // ---- OS-native system managers, each invisible to every platform's CI but its own.
+            ArgvCase::pkg(
                 "apt",
-                register_apt,
-                "apt install -y -- jq",
-                Some("apt remove -y -- jq"),
+                &register_apt,
+                Runs("apt install -y -- jq"),
+                Runs("apt remove -y -- jq"),
             ),
-            ("apk", register_apk, "apk add -- jq", Some("apk del -- jq")),
-            (
+            ArgvCase::pkg(
+                "apk",
+                &register_apk,
+                Runs("apk add -- jq"),
+                Runs("apk del -- jq"),
+            ),
+            ArgvCase::pkg(
                 "zypper",
-                register_zypper,
-                "zypper install -y",
-                Some("zypper remove -y"),
+                &register_zypper,
+                Runs("zypper install -y"),
+                Runs("zypper remove -y"),
             ),
-            (
+            ArgvCase::pkg(
                 "winget",
-                register_winget,
-                "winget install",
-                Some("winget uninstall"),
+                &register_winget,
+                Runs("winget install"),
+                Runs("winget uninstall"),
             ),
-            (
+            ArgvCase::pkg(
                 "scoop",
-                register_scoop,
-                "scoop install",
-                Some("scoop uninstall"),
+                &register_scoop,
+                Runs("scoop install"),
+                Runs("scoop uninstall"),
             ),
-            (
+            ArgvCase::pkg(
                 "choco",
-                register_choco,
-                "choco install",
-                Some("choco uninstall"),
+                &register_choco,
+                Runs("choco install"),
+                Runs("choco uninstall"),
             ),
-            ("mas", register_mas, "mas install", Some("mas uninstall")),
-            (
+            ArgvCase::pkg(
+                "mas",
+                &register_mas,
+                Runs("mas install"),
+                Runs("mas uninstall"),
+            ),
+            ArgvCase::pkg(
                 "macports",
-                register_macports,
-                "port install",
-                Some("port uninstall"),
+                &register_macports,
+                Runs("port install"),
+                Runs("port uninstall"),
             ),
             // PowerShell's module manager. Its module was `#[cfg(target_os = "windows")]` until
             // 2026-07-30, so it could not appear in this table at all: the row would not compile
             // where it is most needed, which is every platform that cannot run PSResourceGet.
-            (
+            ArgvCase::pkg(
                 "psresource",
-                register_psresource_for_test,
-                "Install-PSResource",
-                Some("Uninstall-PSResource"),
+                &|r, e| crate::backends::psresource::register(r, e, &Config::default()),
+                Runs("Install-PSResource"),
+                Runs("Uninstall-PSResource"),
             ),
-            ("guix", register_guix, "guix install", Some("guix remove")),
-            ("emerge", register_emerge, "emerge", Some("--unmerge")),
-            (
+            ArgvCase::pkg(
+                "pacman",
+                &|r, e| crate::backends::pacman::register(r, e, &Config::default()),
+                Runs("pacman -S --noconfirm --needed jq"),
+                Runs("pacman -Rs --noconfirm jq"),
+            ),
+            ArgvCase::pkg(
+                "dnf",
+                &|r, e| crate::backends::dnf::register(r, e, &Config::default()),
+                Runs("dnf install -y jq"),
+                Runs("dnf remove -y jq"),
+            ),
+            // Void's manager installs and removes with two different programs, which is the
+            // `remove_binary` case a single-binary assumption gets wrong.
+            ArgvCase::pkg(
+                "xbps",
+                &|r, e| crate::backends::xbps::register(r, e, &Config::default()),
+                Runs("xbps-install -Sy -- jq"),
+                Runs("xbps-remove -y -- jq"),
+            ),
+            ArgvCase::pkg(
+                "guix",
+                &register_guix,
+                Runs("guix install"),
+                Runs("guix remove"),
+            ),
+            ArgvCase::pkg("emerge", &register_emerge, Runs("emerge"), Runs("--unmerge")),
+            ArgvCase::pkg(
                 "eopkg",
-                register_eopkg,
-                "eopkg install -y",
-                Some("eopkg remove -y"),
+                &register_eopkg,
+                Runs("eopkg install -y"),
+                Runs("eopkg remove -y"),
             ),
-            (
+            ArgvCase::pkg(
                 "slackpkg",
-                register_slackpkg,
-                "slackpkg -batch=on",
-                Some("remove"),
+                &register_slackpkg,
+                Runs("slackpkg -batch=on"),
+                Runs("remove"),
             ),
             // The AUR helpers: pacman-syntax, registered on Linux only, and until 2026-07-30
             // reached through a five-argument helper no row could name.
-            ("yay", register_yay, "yay -S", Some("yay -Rs")),
-            ("paru", register_paru, "paru -S", Some("paru -Rs")),
+            ArgvCase::pkg("yay", &register_yay, Runs("yay -S"), Runs("yay -Rs")),
+            ArgvCase::pkg("paru", &register_paru, Runs("paru -S"), Runs("paru -Rs")),
             // The BSD tools, where removal is a different program.
-            (
+            ArgvCase::pkg(
                 "pkgin",
-                register_pkgin,
-                "pkgin -y install",
-                Some("pkgin -y remove"),
+                &register_pkgin,
+                Runs("pkgin -y install"),
+                Runs("pkgin -y remove"),
             ),
-            (
+            ArgvCase::pkg(
                 "pkg",
-                register_pkg_freebsd,
-                "pkg install -y",
-                Some("pkg delete -y"),
+                &register_pkg_freebsd,
+                Runs("pkg install -y"),
+                Runs("pkg delete -y"),
             ),
-            (
+            ArgvCase::pkg(
                 "pkg_add",
-                register_pkg_add_openbsd,
-                "pkg_add",
-                Some("pkg_delete"),
+                &register_pkg_add_openbsd,
+                Runs("pkg_add"),
+                Runs("pkg_delete"),
             ),
-            // Language and ecosystem managers: the verbs are where a mock sees nothing.
-            ("pip", register_pip, "pip install", Some("pip uninstall")),
-            ("gem", register_gem, "gem install", Some("gem uninstall")),
-            ("bun", register_bun, "bun add", Some("bun remove")),
-            (
+            // ---- Cross-platform store-shaped managers.
+            ArgvCase::pkg(
+                "brew",
+                &|r, e| crate::backends::brew::register(r, e, &Config::default()),
+                Runs("brew install -- jq"),
+                Runs("brew uninstall -- jq"),
+            ),
+            // `snap info` first: the install path asks whether the snap is classic before it
+            // installs, so both calls are the argv and asserting only the second would let the
+            // probe change without notice.
+            ArgvCase::pkg(
+                "snap",
+                &|r, e| crate::backends::snap::register(r, e, &Config::default()),
+                Runs("snap install -- jq"),
+                Runs("snap remove -- jq"),
+            ),
+            ArgvCase::pkg(
+                "flatpak",
+                &|r, e| crate::backends::flatpak::register(r, e, &Config::default()),
+                Runs("flatpak --system install -y --noninteractive -- jq"),
+                Runs("flatpak --system uninstall -y --noninteractive -- jq"),
+            ),
+            ArgvCase::pkg(
+                "nix",
+                &|r, e| crate::backends::nix::register(r, e, &Config::default()),
+                Runs("nix profile install -- nixpkgs#jq"),
+                // nix removes by index, so it must read the profile before it can name what to
+                // remove. The listing IS the removal's first argv; a row asserting a
+                // `nix profile remove` that never runs would pin a command that does not exist.
+                Runs("nix profile list --json"),
+            ),
+            ArgvCase::pkg(
+                "conda",
+                &|r, e| crate::backends::conda::register(r, e, &Config::default()),
+                Runs("conda install -n base -y -- jq"),
+                Runs("conda remove -n base -y -- jq"),
+            ),
+            // ---- Language managers.
+            ArgvCase::pkg(
+                "pip",
+                &register_pip,
+                Runs("pip install"),
+                Runs("pip uninstall"),
+            ),
+            ArgvCase::pkg(
+                "gem",
+                &register_gem,
+                Runs("gem install"),
+                Runs("gem uninstall"),
+            ),
+            ArgvCase::pkg("bun", &register_bun, Runs("bun add"), Runs("bun remove")),
+            ArgvCase::pkg(
                 "dotnet",
-                register_dotnet,
-                "dotnet tool install",
-                Some("dotnet tool uninstall"),
+                &register_dotnet,
+                Runs("dotnet tool install"),
+                Runs("dotnet tool uninstall"),
             ),
-            (
+            ArgvCase::pkg(
+                "cargo",
+                &|r, e| crate::backends::cargo::register(r, e, &Config::default()),
+                Runs("cargo install -- jq"),
+                Runs("cargo uninstall -- jq"),
+            ),
+            ArgvCase::pkg(
+                "pipx",
+                &|r, e| crate::backends::pipx::register(r, e, &Config::default()),
+                Runs("pipx install -- jq"),
+                Runs("pipx uninstall -- jq"),
+            ),
+            ArgvCase::pkg(
+                "uv",
+                &|r, e| crate::backends::uv::register(r, e, &Config::default()),
+                Runs("uv tool install -- jq"),
+                Runs("uv tool uninstall -- jq"),
+            ),
+            // The three Node managers spell the same two verbs three ways, which is exactly why
+            // each needs its own row: `npm install -g` / `pnpm add -g` / `yarn global add`.
+            ArgvCase::pkg(
+                "npm",
+                &|r, e| crate::backends::npm::register(r, e, &Config::default()),
+                Runs("npm install -g -- jq"),
+                Runs("npm uninstall -g -- jq"),
+            ),
+            ArgvCase::pkg(
+                "pnpm",
+                &|r, e| crate::backends::pnpm::register(r, e, &Config::default()),
+                Runs("pnpm add -g -- jq"),
+                Runs("pnpm remove -g -- jq"),
+            ),
+            ArgvCase::pkg(
+                "yarn",
+                &|r, e| crate::backends::yarn::register(r, e, &Config::default()),
+                Runs("yarn global add -- jq"),
+                Runs("yarn global remove -- jq"),
+            ),
+            ArgvCase::pkg(
+                "mise",
+                &|r, e| crate::backends::mise::register(r, e, &Config::default()),
+                Runs("mise use -g -- jq@latest"),
+                Runs("mise uninstall -- jq"),
+            ),
+            // `go install` takes a module path, not a package name, and removal is deleting the
+            // binary out of GOPATH/bin — so the only argv removal runs is the question of where
+            // that is. Asserting a `go uninstall` would pin a verb the go tool does not have.
+            ArgvCase::shaped(
+                "go",
+                &|r, e| crate::backends::go::register(r, e, &Config::default()),
+                "github.com/mikefarah/yq/v4",
+                &[],
+                Runs("go install -- github.com/mikefarah/yq/v4@latest"),
+                Runs("go env GOPATH"),
+            ),
+            ArgvCase::pkg(
+                "pub",
+                &|r, e| crate::backends::pubdart::register(r, e, &Config::default()),
+                Runs("dart pub global activate -- jq"),
+                Runs("dart pub global deactivate -- jq"),
+            ),
+            ArgvCase::pkg(
+                "krew",
+                &|r, e| crate::backends::krew::register(r, e, &Config::default()),
+                Runs("kubectl krew install -- jq"),
+                Runs("kubectl krew uninstall -- jq"),
+            ),
+            ArgvCase::pkg(
                 "composer",
-                register_composer,
-                "composer global require",
-                Some("global remove"),
+                &register_composer,
+                Runs("composer global require"),
+                Runs("global remove"),
             ),
-            ("opam", register_opam, "opam install", Some("opam remove")),
-            (
+            ArgvCase::pkg(
+                "opam",
+                &register_opam,
+                Runs("opam install"),
+                Runs("opam remove"),
+            ),
+            ArgvCase::pkg(
                 "luarocks",
-                register_luarocks,
-                "luarocks install",
-                Some("luarocks remove"),
+                &register_luarocks,
+                Runs("luarocks install"),
+                Runs("luarocks remove"),
             ),
-            (
+            ArgvCase::pkg(
                 "nimble",
-                register_nimble,
-                "nimble install",
-                Some("nimble uninstall"),
+                &register_nimble,
+                Runs("nimble install"),
+                Runs("nimble uninstall"),
             ),
-            (
+            ArgvCase::pkg(
                 "pixi",
-                register_pixi,
-                "pixi global install",
-                Some("pixi global uninstall"),
+                &register_pixi,
+                Runs("pixi global install"),
+                Runs("pixi global uninstall"),
             ),
-            (
+            ArgvCase::pkg(
                 "spack",
-                register_spack,
-                "spack install",
-                Some("spack uninstall"),
+                &register_spack,
+                Runs("spack install"),
+                Runs("spack uninstall"),
             ),
-            (
+            ArgvCase::pkg(
                 "mix",
-                register_mix,
-                "mix archive.install",
-                Some("mix archive.uninstall"),
+                &register_mix,
+                Runs("mix archive.install"),
+                Runs("mix archive.uninstall"),
             ),
-            (
+            ArgvCase::pkg(
                 "asdf",
-                register_asdf,
-                "asdf install",
-                Some("asdf uninstall"),
+                &register_asdf,
+                Runs("asdf install"),
+                Runs("asdf uninstall"),
             ),
-            // The two Haskell managers, which have no uninstall verb at all. `None` asserts
-            // that removal refuses rather than running a command — the failure mode being
-            // guarded against is a removal that reports success and leaves the package there.
-            ("cabal", register_cabal, "cabal install", None),
-            ("stack", register_stack, "stack install", None),
-            // `helm` is deliberately absent: it installs from an option this table cannot
-            // carry, so its install call never happens and the row would pass on the remove
-            // alone — a check that tests nothing (IV.1). It has its own tests and a live run.
-        ];
+            // helm installs from `@url=` and lists/removes by name. It was exempt from this
+            // table while a row could only carry a package name — the exemption said the row
+            // "would pass on the remove alone", which was true of the table's *shape*, not of
+            // helm. A row that carries options covers it, and the exemption is retired.
+            ArgvCase::shaped(
+                "helm",
+                &register_helm,
+                "linix-probe",
+                &[("url", "https://example.invalid/p.tgz")],
+                Runs("helm plugin install -- https://example.invalid/p.tgz"),
+                Runs("helm plugin uninstall -- linix-probe"),
+            ),
+            // The two Haskell managers, which have no uninstall verb at all.
+            ArgvCase::pkg("cabal", &register_cabal, Runs("cabal install"), Unsupported),
+            ArgvCase::pkg("stack", &register_stack, Runs("stack install"), Unsupported),
+            // ---- Editor extension hosts.
+            ArgvCase::pkg(
+                "vscode",
+                &|r, e| crate::backends::vscode::register(r, e, &Config::default()),
+                Runs("code --force --install-extension jq"),
+                Runs("code --uninstall-extension jq"),
+            ),
+            // Emacs is handed an Emacs Lisp form, not a subcommand — which is why
+            // `argv_drift_tests` excuses it from the `--help` walk. The form's *shape* is still
+            // argv and still drifts, so it is asserted here rather than nowhere.
+            ArgvCase::pkg(
+                "emacs",
+                &|r, e| crate::backends::emacs::register(r, e, &Config::default()),
+                Runs("(package-install 'jq)"),
+                Runs("(package-delete p)"),
+            ),
+            // ---- Resource backends: the declaration is not a package name, and each addresses
+            // its own kind of thing. These are the rows the old table's shape could not hold.
+            ArgvCase::shaped(
+                "lvm",
+                &|r, e| crate::backends::storage::register(r, e, &Config::default()),
+                "vg0/data",
+                &[("size", "1G")],
+                Runs("lvcreate -n data -L 1G vg0"),
+                Runs("lvremove -y vg0/data"),
+            ),
+            ArgvCase::shaped(
+                "zfs",
+                &|r, e| crate::backends::storage::register(r, e, &Config::default()),
+                "tank/data",
+                &[],
+                Runs("zfs create tank/data"),
+                Runs("zfs destroy -r tank/data"),
+            ),
+            ArgvCase::shaped(
+                "btrfs",
+                &|r, e| crate::backends::btrfs::register(r, e, &Config::default()),
+                "/mnt/linix-probe",
+                &[],
+                Runs("btrfs subvolume create /mnt/linix-probe"),
+                NoCommand(
+                    "deletion is guarded on the subvolume existing on the real filesystem \
+                     (`Path::exists`), which no mock can satisfy. Deleting a path that is not \
+                     there is the one case where running nothing is right.",
+                ),
+            ),
+            // `service:` and `setting:` dispatch on which init system / settings store this
+            // HOST has, not on which OS the code was compiled for — `sc` here, `systemctl`
+            // there. So these two rows assert the provider this host selects, and each platform's
+            // CI covers its own. Both backends additionally have provider-table tests that run
+            // everywhere.
+            ArgvCase::shaped(
+                "service",
+                &|r, e| crate::backends::service::register(r, e, &Config::default()),
+                "nginx",
+                &[("state", "running")],
+                Runs(if cfg!(windows) {
+                    "sc start nginx"
+                } else {
+                    "systemctl"
+                }),
+                Runs(if cfg!(windows) {
+                    "sc stop nginx"
+                } else {
+                    "systemctl"
+                }),
+            ),
+            ArgvCase::shaped(
+                "setting",
+                &|r, e| crate::backends::setting::register(r, e, &Config::default()),
+                if cfg!(windows) {
+                    "Software\\LinixProbe/Value"
+                } else {
+                    "org.linix.probe/key"
+                },
+                &[("value", "1")],
+                Runs(if cfg!(windows) {
+                    "reg add HKCU\\Software\\LinixProbe /v Value /d 1 /f"
+                } else {
+                    "gsettings set org.linix.probe key 1"
+                }),
+                Runs(if cfg!(windows) {
+                    "reg delete HKCU\\Software\\LinixProbe /v Value /f"
+                } else {
+                    "gsettings reset org.linix.probe key"
+                }),
+            ),
+            // ---- Backends that run no command. Each fetches over HTTP or writes to the
+            // filesystem directly, so "no argv" is the right answer and not a hole — but it is
+            // asserted, because a download backend that started shelling out to `curl` would
+            // otherwise change from "no calls" to "some calls" with nothing watching.
+            ArgvCase::shaped(
+                "link",
+                &|r, e| crate::backends::link::register(r, e, &Config::default()),
+                "/tmp/linix-probe-src",
+                &[("target", "/tmp/linix-probe-dst")],
+                NoCommand(
+                    "writes a symlink (or copies) through the filesystem layer. It shells out \
+                     for nothing, which is why a link works on a machine with no shell at all.",
+                ),
+                NoCommand("removes the file it wrote, through the same filesystem layer."),
+            ),
+            ArgvCase::shaped(
+                "web",
+                &|r, e| crate::backends::web::register(r, e, &Config::default()),
+                "https://example.invalid/probe.tar.gz",
+                &[("unverified", "true")],
+                NoCommand(
+                    "fetches over HTTP and writes the file itself. The scheme and checksum \
+                     refusals happen before any process could be started.",
+                ),
+                NoCommand("deletes the file it downloaded; no process is involved."),
+            ),
+            ArgvCase::pkg(
+                "github",
+                &|r, e| crate::backends::github::register(r, e, &Config::default()),
+                NoCommand(
+                    "resolves a release through the GitHub API and downloads the asset over \
+                     HTTP. Asset SELECTION is the thing worth pinning here and has its own \
+                     tests and a recorded lock; no argv is involved in either half.",
+                ),
+                NoCommand("deletes the extracted artifact; no process is involved."),
+            ),
+            ArgvCase::shaped(
+                "appimage",
+                &|r, e| crate::backends::appimage::register(r, e, &Config::default()),
+                "https://example.invalid/probe.AppImage",
+                &[("unverified", "true")],
+                NoCommand(
+                    "downloads the image over HTTP and marks it executable through the \
+                     filesystem layer — the same shape as `web`, one file format along.",
+                ),
+                NoCommand("deletes the image it downloaded; no process is involved."),
+            ),
+        ]
+    }
 
-        for (name, register, want_install, want_remove) in cases {
+    #[tokio::test]
+    async fn every_backend_sends_the_argv_its_manager_expects() {
+        use crate::core::executor::MockExecutor;
+        use dashmap::DashMap;
+
+        for case in argv_cases() {
             let vfs = Arc::new(DashMap::new());
             let mock = Arc::new(MockExecutor::new(vfs.clone()));
             let exec = CommandExecutor::with_layer(
@@ -2269,54 +2638,92 @@ mod tests {
                 Arc::new(DashMap::new()),
             );
             let mut reg = BackendRegistry::new();
-            register(&mut reg, &exec);
+            (case.register)(&mut reg, &exec);
 
+            let name = case.backend;
             let b = reg
                 .get(name)
-                .unwrap_or_else(|| panic!("{} did not register", name));
+                .unwrap_or_else(|| panic!("{name} did not register"));
             let inst = b
                 .as_installable()
-                .unwrap_or_else(|| panic!("{} cannot install", name));
+                .unwrap_or_else(|| panic!("{name} cannot install"));
             let spec = crate::core::PackageSpec {
-                name: "jq".into(),
-                backend: (*name).into(),
+                name: case.subject.into(),
+                backend: name.into(),
+                options: case
+                    .options
+                    .iter()
+                    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                    .collect(),
                 ..Default::default()
             };
-            let _ = inst.install(&[spec], false).await;
-            let after_install = mock.get_calls().await.len();
-            let removal = inst.remove(&["jq".to_string()], false).await;
 
+            let installed = inst.install(&[spec], false).await;
+            let after_install = mock.get_calls().await.len();
+            let removed = inst.remove(&[case.subject.to_string()], false).await;
             let calls = mock.get_calls().await;
-            let mut wanted = vec![*want_install];
-            match want_remove {
-                Some(w) => wanted.push(*w),
-                None => {
-                    assert!(
-                        matches!(removal, Err(crate::core::Error::Unsupported(_))),
-                        "{}: this manager has no uninstall verb, so removal must refuse with \
-                         Unsupported — it returned {:?}",
-                        name,
-                        removal.map(|_| "Ok")
-                    );
-                    assert_eq!(
-                        calls.len(),
-                        after_install,
-                        "{}: removal is unsupported and yet it ran something: {:?}",
-                        name,
-                        &calls[after_install..]
-                    );
-                }
-            }
-            for want in wanted {
+
+            check(name, "install", &case.install, installed, &calls[..after_install]);
+            check(name, "remove", &case.remove, removed, &calls[after_install..]);
+        }
+    }
+
+    /// One verb's outcome against one expectation.
+    ///
+    /// Split out so `install` and `remove` cannot drift into two different standards — which is
+    /// what happened the first time: removal asserted "ran nothing" for the unsupported case and
+    /// install asserted nothing of the kind.
+    fn check(
+        backend: &str,
+        verb: &str,
+        expect: &Expect,
+        outcome: crate::core::Result<()>,
+        calls: &[String],
+    ) {
+        match expect {
+            Expect::Runs(want) => {
                 assert!(
                     calls.iter().any(|c| c.contains(want)),
-                    "{}: no call contained `{}`\n  calls: {:?}",
-                    name,
-                    want,
-                    calls
+                    "{backend}: {verb} ran no call containing `{want}`\n  calls: {calls:?}"
+                );
+            }
+            Expect::Unsupported => {
+                assert!(
+                    matches!(outcome, Err(crate::core::Error::Unsupported(_))),
+                    "{backend}: this manager has no {verb} verb, so it must refuse with \
+                     Unsupported — it returned {:?}",
+                    outcome.map(|()| "Ok")
+                );
+                assert!(
+                    calls.is_empty(),
+                    "{backend}: {verb} is unsupported and yet it ran something: {calls:?}"
+                );
+            }
+            Expect::NoCommand(why) => {
+                assert!(
+                    calls.is_empty(),
+                    "{backend}: {verb} is documented as running no command — \"{why}\" — and it \
+                     ran {calls:?}. Either the backend grew a subprocess, in which case give it \
+                     a `Runs` row, or the reason is now wrong."
+                );
+                assert!(
+                    why.len() > 40,
+                    "{backend}: {verb}'s no-command exemption has no reason worth the name"
                 );
             }
         }
+    }
+
+    /// The table must not name one backend twice: the second row would silently replace the
+    /// first in a reader's mind while both ran, and a contradiction between them would show up
+    /// as a flake rather than a failure.
+    #[test]
+    fn no_backend_has_two_argv_rows() {
+        let mut seen: Vec<&str> = argv_cases().iter().map(|c| c.backend).collect();
+        let before = seen.len();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(before, seen.len(), "a backend has two rows in the argv table");
     }
 
     /// The leading word of a repository command is a program, and for two backends it was a

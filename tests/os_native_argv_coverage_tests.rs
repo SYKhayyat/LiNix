@@ -51,12 +51,6 @@ const NO_ROW: &[NoRow] = &[
         why: "takes five arguments, so it cannot be a `Registrar`. The two backends it builds \
               have rows of their own via `register_yay` and `register_paru`.",
     },
-    NoRow {
-        registrar: "register_helm",
-        why: "installs from an option the table cannot carry (`@url=`), so its install call \
-              never happens and the row would pass on the remove alone — a check that tests \
-              nothing (IV.1). It has its own tests and a real lifecycle in both harnesses.",
-    },
 ];
 
 #[test]
@@ -89,11 +83,36 @@ fn no_backend_module_is_compiled_on_one_os_only() {
     );
 }
 
-#[test]
-fn every_registrar_has_an_argv_row_or_a_written_reason() {
-    let src = read("src/backends/registry.rs");
+/// The text of the argv table, so a registrar named in a comment elsewhere does not count.
+fn argv_table(src: &str) -> &str {
+    src.split_once("    fn argv_cases() -> Vec<ArgvCase> {")
+        .expect("the argv table moved or was renamed")
+        .1
+        .split_once("\n    }")
+        .expect("the argv table has no end")
+        .0
+}
 
-    let mut defined: Vec<String> = Vec::new();
+/// A row satisfies `needle` only when the match is not part of a longer identifier —
+/// `register_pkg` must not be satisfied by `register_pkgin`.
+fn mentions(table: &str, needle: &str) -> bool {
+    table.match_indices(needle).any(|(i, _)| {
+        !matches!(table.as_bytes().get(i + needle.len()), Some(c) if c.is_ascii_alphanumeric() || *c == b'_')
+    })
+}
+
+/// Every registrar this build can reach, in the two shapes they are written in.
+///
+/// **Both halves, which is the whole point of this scan.** Until 2026-08-04 it collected only
+/// `fn register_*` — the generic registrars written in `registry.rs` — and the twenty-eight
+/// backends that register from their own modules were invisible to it. The scan that existed
+/// to stop a backend going uncovered was itself covering half the family, which is the defect
+/// class `CLAUDE.md` opens with. `brew`, `npm`, `nix`, `snap`, `pacman` and twenty-three others
+/// had no argv row, no exemption, and a green gate saying otherwise.
+fn registrars(src: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+
+    // Shape one: `fn register_apt(...)` defined in registry.rs.
     for line in src.lines() {
         if let Some(rest) = line.strip_prefix("fn register_") {
             let name: String = rest
@@ -101,35 +120,61 @@ fn every_registrar_has_an_argv_row_or_a_written_reason() {
                 .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
                 .collect();
             if !name.is_empty() {
-                defined.push(format!("register_{name}"));
+                out.push(format!("register_{name}"));
             }
         }
     }
+
+    // Shape two: `crate::backends::pipx::register(...)` called from `create_default_registry`.
+    // Read from the production function only — the test module calls registrars too, and a
+    // registrar reachable *only* from a test is not something this build ships.
+    let production = src
+        .split_once("pub async fn create_default_registry(")
+        .expect("create_default_registry moved or was renamed")
+        .1
+        .split_once("\n}")
+        .expect("create_default_registry has no end")
+        .0;
+    for chunk in production.split("crate::backends::").skip(1) {
+        let module: String = chunk
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        let after = &chunk[module.len()..];
+        if after.starts_with("::register(") && !module.is_empty() {
+            let entry = format!("backends::{module}::register");
+            if !out.contains(&entry) {
+                out.push(entry);
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn every_registrar_has_an_argv_row_or_a_written_reason() {
+    let src = read("src/backends/registry.rs");
+    let defined = registrars(&src);
+
     assert!(
-        defined.len() > 20,
-        "found only {} registrars in registry.rs — the scan is broken, not the code",
-        defined.len()
+        defined.iter().filter(|r| r.starts_with("register_")).count() > 20,
+        "found too few generic registrars — the scan is broken, not the code"
+    );
+    assert!(
+        defined
+            .iter()
+            .filter(|r| r.starts_with("backends::"))
+            .count()
+            > 20,
+        "found too few module registrars — the scan is broken, not the code. This half was \
+         missing entirely until 2026-08-04 and a zero here reads exactly like the bug."
     );
 
-    // The table's own text, so a registrar named in a *comment* elsewhere does not count.
-    let table = src
-        .split_once("let cases: &[(&str, Registrar, &str, Option<&str>)] = &[")
-        .expect("the argv cases table moved or was renamed")
-        .1
-        .split_once("\n        ];")
-        .expect("the argv cases table has no end")
-        .0;
+    let table = argv_table(&src);
 
     let mut missing: Vec<String> = Vec::new();
     for r in &defined {
-        // Word-boundary check: `register_pkg` must not be satisfied by `register_pkgin`.
-        let has_row = table
-            .match_indices(r.as_str())
-            .any(|(i, _)| !matches!(table.as_bytes().get(i + r.len()), Some(c) if c.is_ascii_alphanumeric() || *c == b'_'));
-        if has_row {
-            continue;
-        }
-        if NO_ROW.iter().any(|n| n.registrar == r) {
+        if mentions(table, r) || NO_ROW.iter().any(|n| n.registrar == r) {
             continue;
         }
         missing.push(r.clone());
@@ -155,6 +200,23 @@ fn every_registrar_has_an_argv_row_or_a_written_reason() {
         "NO_ROW names registrars that no longer exist: {stale:?}"
     );
 
+    // An exemption for a registrar that HAS a row is a contradiction, and the contradiction
+    // survives silently: the loop above takes the row and never reads the reason. `helm` was
+    // exempt on the grounds that a row "would pass on the remove alone", which stopped being
+    // true the moment rows could carry options — and nothing would have said so.
+    let contradicted: Vec<&str> = NO_ROW
+        .iter()
+        .filter(|n| mentions(table, n.registrar))
+        .map(|n| n.registrar)
+        .collect();
+    assert!(
+        contradicted.is_empty(),
+        "these registrars have BOTH an argv row and a NO_ROW exemption saying they cannot have \
+         one: {contradicted:?}\n\n\
+         Delete the exemption. A reason that is no longer true is worse than no reason: it \
+         reads as considered."
+    );
+
     // The reason is the exemption. A blank one is a backend nobody looked at wearing the
     // costume of one somebody did.
     for n in NO_ROW {
@@ -165,6 +227,35 @@ fn every_registrar_has_an_argv_row_or_a_written_reason() {
             n.why
         );
     }
+}
+
+/// A gate that has never failed is a claim, not a check.
+#[test]
+fn the_registrar_scan_can_actually_fail() {
+    let src = read("src/backends/registry.rs");
+
+    // Both shapes are found in the real file.
+    let found = registrars(&src);
+    assert!(
+        found.iter().any(|r| r == "register_apt"),
+        "the generic-registrar scan stopped finding `register_apt`"
+    );
+    assert!(
+        found.iter().any(|r| r == "backends::pipx::register"),
+        "the module-registrar scan stopped finding `backends::pipx::register` — this is the \
+         half that was missing, so a silent zero here is the original bug returning"
+    );
+
+    // A registrar with no row is reported rather than passed over.
+    let table = argv_table(&src);
+    assert!(
+        !mentions(table, "backends::linix_nonexistent::register"),
+        "the table cannot mention a module that does not exist"
+    );
+
+    // Word-boundary: a longer name must not satisfy a shorter one.
+    assert!(!mentions("register_pkgin", "register_pkg"));
+    assert!(mentions("register_pkg,", "register_pkg"));
 }
 
 #[test]
