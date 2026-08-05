@@ -6164,3 +6164,32 @@ no known cause then, and nothing here narrows it.
 **Until it is understood the Windows sweep cannot run unattended on this host**, which is the
 real reason the native sweep has never been an automated gate. It is the next thing to attack:
 one clean uninterrupted run is worth more than any assertion added to it.
+
+#### Three explanations for the stall, all measured and all wrong
+
+Chasing it properly rather than by narrative. Each of these was a plausible account and each is
+now refused by a number, so the next attempt starts three doors further in:
+
+1. **"The harness's `timeout 900` cannot signal a native process."**
+   `timeout 3 powershell -NoProfile -Command "Start-Sleep 60"` returns **124 after 3s**. It can.
+   And the only unwrapped `"$LINIX"` calls in the script are the three background lock holders,
+   which are deliberate.
+
+2. **"`plan` is O(declarations x full machine listing), so a big config looks wedged."**
+   The 2026-08-02 note measured `plan` at 439.6s and diagnosed exactly that. Run against the
+   sweep's own leftover config — **458 declarations, 22 backends in `priority`** —
+   `--timings --dry-run sync` is **2.68s wall, 21 child commands, 3.9x overlap**. Whatever cost
+   439s then is not costing it here.
+
+3. **"`auto_snapshot` wedges on `Checkpoint-Computer`, which runs outside the DAG timeout."**
+   The nearest documented relative, and the probe cannot make it happen: **25 consecutive
+   mutating syncs, every one 2–3s**, and a genuine `scoop` install is **4.4s wall** of which the
+   snapshot provider's `powershell -NoProfile (3x)` is **1.81s** — not the ~51s a real restore
+   point costs. Windows rate-limits restore points to one per 24h by default, so the provider is
+   very likely being declined rather than running; either way there is no 51s to wedge in.
+
+**What is left is the observation and nothing else**: during the full sweep, four times, a
+`linix` sat with near-zero CPU while the log stopped growing, and each time killing it let the
+run continue. It has never reproduced outside a full sweep. The next move is not another theory
+— it is one full run instrumented to capture the wedged process's CHILD LIST before anything
+kills it, which is the one thing four opportunities all threw away.
