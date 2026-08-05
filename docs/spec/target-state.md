@@ -1328,8 +1328,19 @@ under the flag, which is how this was found.
 | apt | `apt-mark showmanual` | 103 of 579 |
 | pacman | `-Qqe` | 11 of 173 |
 | conda | `env export --from-history` | 4 of 88 |
-| winget / choco / scoop | installs no dependencies — everything **is** chosen | exact |
+| **winget** | `winget export` | **78 of 280** |
+| choco / scoop | installs no dependencies — everything **is** chosen | exact |
 | **pip** | **none.** No flag separates dependencies | **adopt nothing, say why** |
+
+**A manager adopts only what it can put back** (2026-08-05, `Q36`). "Everything installed was
+chosen" and "everything installed can be reinstalled" are two questions, and a manager may pass
+the first and fail the second. `winget list` reports every Add/Remove-Programs and MSIX row under
+an identifier winget invents from the registry — 186 of 280 on the measured host. `winget
+uninstall` takes those; **`winget install` refuses every one of them**, and a third carry their
+own version, so the name moves out from under the declaration when the package updates. A
+declaration that can never converge is worse than an absent one: it fails every later `install`
+in the same transaction (`Q34`). So adoption reads the manager's own export where one exists,
+and where entries are dropped it says how many, why, and names some.
 
 **Base-image packages ARE adopted** — `grub-pc`, `linux-image-generic`. They keep the
 machine bootable, and `purge-unmanaged` deletes what isn't declared.

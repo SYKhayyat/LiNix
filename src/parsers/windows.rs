@@ -290,6 +290,41 @@ fn parse_scoop_search(output: &str) -> Vec<Package> {
     .collect()
 }
 
+/// The `PackageIdentifier`s in a `winget export` file.
+///
+/// **This is a different question from `parse_winget_list`, not a tidier answer to the same
+/// one.** `winget list` reports what is on the machine, which includes every Add/Remove-Programs
+/// and MSIX row winget synthesises an identifier for. Those identifiers are accepted by
+/// `winget uninstall` and rejected by `winget install` — measured, `winget show` answers
+/// `No package found matching input criteria` for every one of them — so a declaration naming
+/// one can never converge. The export is winget's own answer to *what could I put back*, and
+/// that is the only set adoption may write.
+///
+/// A malformed or truncated export yields no packages rather than an error: the caller has
+/// already established the file exists, and `Sources` being absent is how winget writes
+/// "nothing to export".
+pub fn parse_winget_export(json: &str) -> Vec<Package> {
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let Some(sources) = doc.get("Sources").and_then(|s| s.as_array()) else {
+        return Vec::new();
+    };
+    let mut seen = std::collections::HashSet::new();
+    sources
+        .iter()
+        .filter_map(|s| s.get("Packages")?.as_array())
+        .flatten()
+        .filter_map(|p| p.get("PackageIdentifier")?.as_str())
+        .filter(|id| !id.trim().is_empty())
+        // winget lists a runtime once per architecture and exports it once per architecture
+        // too; `Microsoft.WindowsAppRuntime.1.8` arrived four times on the host this was
+        // measured on. A manifest cannot hold the same declaration twice.
+        .filter(|id| seen.insert(id.to_string()))
+        .map(|id| Package::new(id, "winget"))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,5 +572,103 @@ mod real_output_tests {
     fn choco_search_finding_nothing_yields_nothing() {
         assert!(parse_choco_search(CHOCO_NOT_FOUND).is_empty());
         assert!(parse_choco_search("").is_empty());
+    }
+}
+
+/// The export is the *restorable* set, and every case here is a row that separates it from the
+/// listing — measured on a stock Windows host where `winget list` reported 280 entries, 186 of
+/// them identifiers `winget install` refuses.
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+
+    /// Trimmed from a real `winget export` on the host in the Q36 measurement. The two
+    /// `WindowsAppRuntime` lines are the shape that arrived four times over.
+    const EXPORT: &str = r#"{
+        "$schema": "https://aka.ms/winget-packages.schema.2.0.json",
+        "CreationDate": "2026-08-05T12:19:44.000-00:00",
+        "Sources": [
+            {
+                "Packages": [
+                    { "PackageIdentifier": "7zip.7zip" },
+                    { "PackageIdentifier": "Git.Git" },
+                    { "PackageIdentifier": "Microsoft.WindowsAppRuntime.1.8" },
+                    { "PackageIdentifier": "Microsoft.WindowsAppRuntime.1.8" },
+                    { "PackageIdentifier": "Notepad++.Notepad++" }
+                ],
+                "SourceDetails": { "Name": "winget" }
+            }
+        ],
+        "WinGetVersion": "1.12.360"
+    }"#;
+
+    #[test]
+    fn an_export_yields_its_package_identifiers() {
+        let pkgs = parse_winget_export(EXPORT);
+        let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "7zip.7zip",
+                "Git.Git",
+                "Microsoft.WindowsAppRuntime.1.8",
+                "Notepad++.Notepad++"
+            ],
+            "the export's identifiers, in order, each once"
+        );
+        assert!(
+            pkgs.iter().all(|p| p.backend == "winget"),
+            "every package carries its backend"
+        );
+    }
+
+    /// winget lists — and exports — a runtime once per architecture. A manifest cannot hold
+    /// the same declaration twice, and `sync` reading one twice plans it twice.
+    #[test]
+    fn a_package_exported_once_per_architecture_is_declared_once() {
+        let pkgs = parse_winget_export(EXPORT);
+        assert_eq!(
+            pkgs.iter()
+                .filter(|p| p.name == "Microsoft.WindowsAppRuntime.1.8")
+                .count(),
+            1
+        );
+    }
+
+    /// The whole point of the change: these are what `winget list` reports and `winget install`
+    /// refuses, and the export is where they are absent. If a pseudo-id ever appears in an
+    /// export, adoption would plant a declaration that can never converge (Q36).
+    #[test]
+    fn no_pseudo_identifier_can_reach_a_declaration_through_the_export() {
+        let pkgs = parse_winget_export(EXPORT);
+        assert!(
+            !pkgs
+                .iter()
+                .any(|p| p.name.starts_with("ARP\\") || p.name.starts_with("MSIX\\")),
+            "an ARP/MSIX identifier reached the adopted set"
+        );
+    }
+
+    /// An export that did not happen must not read as a machine with nothing on it. The file's
+    /// absence is an error the caller raises; a file that exists and says nothing is winget
+    /// saying there is nothing to restore, which is a different and legitimate answer.
+    #[test]
+    fn an_empty_or_broken_export_yields_nothing_rather_than_guessing() {
+        assert!(parse_winget_export("").is_empty());
+        assert!(parse_winget_export("not json at all").is_empty());
+        assert!(parse_winget_export(r#"{"Sources": []}"#).is_empty());
+        assert!(parse_winget_export(r#"{"WinGetVersion": "1.12.360"}"#).is_empty());
+        assert!(parse_winget_export(r#"{"Sources": [{"SourceDetails": {}}]}"#).is_empty());
+    }
+
+    /// A blank identifier is not a package name, and the validator would refuse it later with
+    /// a worse message than "nothing was adopted".
+    #[test]
+    fn a_blank_identifier_is_not_a_package() {
+        let pkgs = parse_winget_export(
+            r#"{"Sources":[{"Packages":[{"PackageIdentifier":"  "},{"PackageIdentifier":"jq.jq"}]}]}"#,
+        );
+        assert_eq!(pkgs.len(), 1);
+        assert_eq!(pkgs[0].name, "jq.jq");
     }
 }

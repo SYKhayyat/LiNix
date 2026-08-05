@@ -3288,3 +3288,54 @@ line that was fine. The withdrawal logic itself was already careful, and says wh
 on a guess is the one outcome worse than keeping a line."* The advice beside it was not.
 
 ---
+
+## `Q36` — adoption declares only what the manager can reinstall
+
+**The bug.** `linix adopt` on Windows wrote 186 declarations naming packages that cannot be
+installed. Not "were hard to install" — cannot. `winget list` merges two different things: what
+winget installed from a catalogue, and every Add/Remove-Programs and MSIX entry it finds by
+reading the registry. For the second kind it synthesises an identifier, and that identifier
+exists only on that machine. Measured, on 280 installed rows:
+
+```
+$ winget show --id "ARP\Machine\X86\PHSP_27_2" --exact
+No package found matching input criteria.
+$ winget show --id "MSIX\AdobeAcrobatDCCoreApp_23.1.0.0_x64__pc75e8sa7ep4e" --exact
+No package found matching input criteria.
+$ winget show --id 7zip.7zip --exact
+Found 7-Zip [7zip.7zip]
+```
+
+The split is exact and winget states it outright: **94 rows carry `Source: winget`, 186 carry no
+source at all, and no row is on the wrong side of that line.** A blank source is winget saying it
+found the entry by rummaging, not by matching a catalogue — and it only ever prints a synthesised
+identifier when its own correlation to a real package has already failed.
+
+**Why it looked fine for so long.** The grammar could not hold a backslash, so `adopt` refused
+these names and wrote them as commented-out lines with the reason. A 2026-07-31 review recorded
+that as *"good defence, and it is why G-2 is medium rather than high."* It was not defence; it was
+an accident. `V.113` then fixed the grammar — correctly, because `winget uninstall` really does
+take these names and refusing to type one was a real bug — and the accidental protection went
+with it. Nobody replaced it with a deliberate one. **Being able to write a name down and deciding
+to write it down are different decisions, and only the first was ever made.**
+
+**Why not a filter.** The first proposal was to skip identifiers whose name carries a version,
+on the theory that `MSIX\` rots and `ARP\` is stable. The machine refuted it: Adobe bakes the
+version into the ARP key too — `ARP\Machine\X86\ILST_30_2_1`, `PHSP_27_2`, `LTRM_15_2` — so a
+prefix rule keeps 119 entries that decay exactly like the 66 it drops. Recovering a real name by
+searching the catalogue for the display name does not work either: of the 186, **176 have no
+match at all, 7 are ambiguous, 3 resolve.** 1.6%.
+
+**Why the export.** `winget export` is one call, and it is the manager's own answer to *what
+could I put back*. It returns exactly the 78 distinct installable identities — verified against
+the listing with no difference in either direction, the 94-to-78 gap being runtimes that winget
+lists once per architecture and a manifest can only hold once. It also names every entry it is
+skipping, in the user's language.
+
+**The rule is not "winget is special".** It is that adoption's output is *declarations*, which
+have to converge later, and a listing is not that. Any manager whose listing includes entries it
+cannot reinstall needs its export, which is why the seam is `ManualListing::ExportFile` and not a
+winget branch. What the version-bearing names did was make the failure visible the same day
+rather than on rebuild day; the other 120 were equally unenforceable and perfectly quiet.
+
+---

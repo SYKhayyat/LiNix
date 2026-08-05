@@ -281,7 +281,7 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q33** | `heal` acted on `Failed` entries as well as interrupted ones, and every failed attempt wrote a *new* operation — 22 for one package, all 22 reinstalled, serially. — RULED: **recovery finishes interrupted work only** (`InProgress`/`Abandoned`), one recovery per operation, and it runs on the transaction engine rather than a serial loop beside it. `Failed` becomes terminal and ages out. | 2026-08-05 |
 | **Q34** | `install X` converges the whole manifest, so one unresolvable declaration fails every later install, and the error named the innocent package. — RULED: **the model stays; the message changes.** A failure names the declaration and its file and line, and `install` says outright when what failed is not what you asked for — and never advises taking back the line that was. | 2026-08-05 |
 | **Q35** | U40 lets a mutation share stdin because `sudo` asks on the terminal; `sudo` is never inserted on Windows, where the sharing cost a 900s silence — 48ms vs 21.9s measured. — RULED: **no, the reason does not reach Windows.** Windows mutations get a closed stdin; Unix keeps U40 exactly as ruled. | 2026-08-05 |
-| **Q36** | `adopt` writes 186 winget declarations whose identity embeds a version (`MSIX\Microsoft.Winget.Source_2026.805.1050.50_...`). The package updated the same day; the line can now never converge, and it feeds Q34's cascade on every real machine. — **OPEN.** | — |
+| **Q36** | `adopt` wrote 186 winget declarations naming identifiers `winget install` refuses — every `ARP\`/`MSIX\` row, not only the version-bearing ones. **Ruled: adoption declares only what the manager can put back**; winget adopts from `winget export` (78, not 280). | 2026-08-05 |
 | **Q37** | `github:` downloaded the whole release artifact and *then* refused to deploy because the destination is not LiNix's — a refusal that needs zero downloaded bytes. Measured 61s and 119s, silent. — RULED: **ask the destination before spending the network**, in `github:`, `web:` and `appimage:` alike. | 2026-08-05 |
 | **Q38** | `watch --once` printed `watch: reconcile failed` and **exited 0**. — RULED: **a failed reconcile is a non-zero exit**, on `watch --once` as everywhere. The looping form still warns and carries on. | 2026-08-05 |
 | **Q39** | `adopt` wrote 150 `service:X@status=running` lines and converging one ran `sc start` on an already-running service. — RULED, both halves: already being in the declared state is success (150 placements to 2), **and** a bare `adopt` does not take a backend where being on the machine is not evidence of a choice. `linix adopt service` takes them; `--enabled-only` narrows to what starts at boot. | 2026-08-05 |
@@ -5379,7 +5379,28 @@ anyway.
 
 ## Q36
 
-**Status: OPEN — raised 2026-08-05, measured.**
+**Status: ANSWERED — ruled 2026-08-05, and built the same day.**
+
+**Ruled: adoption declares only what the manager can put back.** `adopt` drives winget from
+`winget export` — the manager's own restorable set — instead of `winget list`. On the measured
+host that is **78 declarations instead of 280 rows**, and the 186 that are gone are the ones
+`winget install` refuses. Where entries are dropped, adoption says how many, why, and names
+some. The seam is `ManualListing::ExportFile`, not a winget branch, because the rule is about
+managers whose listing outruns what they can reinstall — the rule is in `target-state.md`
+(II.10, adoption table) and the evidence in `why.md`.
+
+**The recommendation below was wrong and the machine said so.** It proposed skipping identifiers
+by prefix, on the theory that `MSIX\` carries a version and `ARP\` does not. Adobe writes
+`ARP\Machine\X86\ILST_30_2_1` and `PHSP_27_2`, so the prefix rule keeps 119 decaying entries
+while dropping 66. And the version churn turned out to be the *visible* fault, not the fault:
+**none of the 186 was ever installable**, versioned or not. `winget show` refuses every one.
+Recovering a real name by searching the catalogue does not rescue them either — 176 of 186 have
+no match, 7 are ambiguous, 3 resolve.
+
+Kept below as raised, because the reasoning that was refuted is the reason the rule is stated as
+*"only what the manager can reinstall"* rather than *"nothing with a version in its name"*.
+
+---
 
 **`adopt` writes declarations that decay.** On Windows, `winget list` reports Add/Remove-Programs
 and MSIX identities as pseudo-ids, and those ids **contain the version**. `adopt` wrote 186 of

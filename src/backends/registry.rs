@@ -1,7 +1,7 @@
 // src/backends/registry.rs
 
 use crate::app::LuaHooks;
-use crate::backends::generic::ManualFormat;
+use crate::backends::generic::{ExportFormat, ManualFormat};
 use crate::backends::generic::{
     GenericBackendCore, GenericInstallable, GenericQueryable, GenericRepoManager,
     GenericSearchable, GenericUpgradable, ManagerConfig, ManualListing, PropertyProbe,
@@ -555,8 +555,24 @@ fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             remove_args: vec!["uninstall".into(), "--silent".into()],
             purge_args: None,
             list_args: vec!["list".into()],
-            // winget installs no dependencies of its own: everything listed was asked for.
-            manual: ManualListing::AllInstalled,
+            // `winget list` is the machine, not the manifest. 186 of the 280 rows it reports on
+            // a stock Windows box are `ARP\…`/`MSIX\…` identifiers winget synthesises from the
+            // registry: `winget uninstall` takes them, `winget install` answers `No package
+            // found matching input criteria` for every one, and a third of them carry their own
+            // version so the name changes when the package updates. `winget export` is winget's
+            // own answer to what it could put back, and adoption may write nothing else.
+            manual: ManualListing::ExportFile {
+                binary: None,
+                args: vec![
+                    "export".into(),
+                    "-o".into(),
+                    "{file}".into(),
+                    // No `--include-versions`: adoption declares a package, not a moment.
+                    "--accept-source-agreements".into(),
+                    "--disable-interactivity".into(),
+                ],
+                format: ExportFormat::WingetJson,
+            },
             essential_args: None,
             search_args: vec!["search".into()],
             search_binary: None,
@@ -3736,5 +3752,59 @@ mod tests {
         };
         let msg = inst.install(&[spec], false).await.unwrap_err().to_string();
         assert!(msg.contains("helm:diff@url="), "{}", msg);
+    }
+
+    /// Q36, pinned at the wiring: **adoption reads winget's export, never its listing.**
+    ///
+    /// `winget list` reports every Add/Remove-Programs and MSIX row with an identifier winget
+    /// synthesises from the registry — 186 of 280 on the measured host. `winget uninstall`
+    /// takes those; `winget install` answers `No package found matching input criteria` for
+    /// every one, and a third of them carry their own version, so the name changes under the
+    /// declaration when the package updates. Reverting this to `AllInstalled` reads as a
+    /// simplification and silently replants 186 lines that can never converge.
+    #[tokio::test]
+    async fn winget_adoption_reads_what_it_can_reinstall_not_what_it_can_see() {
+        let reg = build_registry().await;
+        let Some(winget) = reg.get("winget") else {
+            return; // not this machine's platform
+        };
+        let src = winget
+            .as_queryable()
+            .expect("winget answers questions")
+            .manual_source();
+        assert!(
+            src.contains("export"),
+            "winget adoption no longer goes through `winget export`: {src}"
+        );
+        assert!(
+            !src.starts_with("everything "),
+            "winget adoption is back on the whole listing, which includes 186 identifiers \
+             `winget install` refuses: {src}"
+        );
+    }
+
+    /// The other half of the same rule, asked of every backend rather than of winget.
+    ///
+    /// `AllInstalled` asserts two things at once — the manager invents no dependencies **and**
+    /// it can reinstall everything it lists — and winget was filed under it because only the
+    /// first was ever checked. Whether each *other* manager on that list satisfies the second
+    /// is unverified and is the open sweep; this pins the one answer that is measured, so a
+    /// tidy-up cannot quietly put winget back.
+    #[tokio::test]
+    async fn winget_is_not_among_the_managers_that_adopt_their_whole_listing() {
+        let reg = build_registry().await;
+        let from_listing: Vec<String> = reg
+            .available()
+            .iter()
+            .filter(|b| {
+                b.as_queryable()
+                    .is_some_and(|q| q.manual_source().starts_with("everything "))
+            })
+            .map(|b| b.name().to_string())
+            .collect();
+        assert!(
+            !from_listing.iter().any(|n| n == "winget"),
+            "winget adopts from its listing again (Q36): {from_listing:?}"
+        );
     }
 }

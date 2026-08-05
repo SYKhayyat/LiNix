@@ -7,7 +7,7 @@ use crate::parsers::OutputParser;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, warn};
 
 /// How a backend expresses an exact version at install time, for reproducible
 /// (locked) installs. `{name}` / `{version}` are substituted.
@@ -141,8 +141,11 @@ fn is_concrete_version(v: &str) -> bool {
 /// how an entire dependency graph gets adopted and then purged.
 #[derive(Debug, Clone)]
 pub enum ManualListing {
-    /// Every installed package was user-requested: the manager installs no dependencies
-    /// of its own, so `list_installed` *is* the manual set (winget, choco, mas, dotnet).
+    /// Every installed package was user-requested *and* the manager can reinstall all of
+    /// them, so `list_installed` *is* the manual set (choco, mas, dotnet).
+    ///
+    /// Both halves are load-bearing. winget satisfies the first and fails the second, which
+    /// is why it is [`ExportFile`](Self::ExportFile) and not this.
     AllInstalled,
     /// The manager reports its explicit set via a command of its own.
     Command {
@@ -152,6 +155,20 @@ pub enum ManualListing {
         binary: Option<String>,
         args: Vec<String>,
         format: ManualFormat,
+    },
+    /// The manager writes its own restorable set to a file it is handed.
+    ///
+    /// **The only variant that answers "what could I put back" rather than "what is here".**
+    /// Every other one reads a listing of the machine; a manager whose listing includes things
+    /// it cannot reinstall needs this, because adoption's whole output is declarations that
+    /// have to converge later. On winget the two sets differ by 186 of 280 rows.
+    ExportFile {
+        /// `None` falls back to `list_binary`, then the backend name.
+        binary: Option<String>,
+        /// `{file}` is replaced with a path in a directory LiNix owns for the call. The
+        /// manager writes there; nothing reads its stdout for the set.
+        args: Vec<String>,
+        format: ExportFormat,
     },
     /// The manager installs dependencies but exposes no way to tell them apart from what
     /// the user chose (pip, gem, zypper, pkgin). Adoption must skip the backend entirely.
@@ -165,6 +182,13 @@ pub enum ManualFormat {
     SameAsInstalled,
     /// One bare package name per line, no versions (`apt-mark showmanual`).
     BareNames,
+}
+
+/// The shape of the file a [`ManualListing::ExportFile`] manager writes.
+#[derive(Debug, Clone, Copy)]
+pub enum ExportFormat {
+    /// `winget export`'s JSON: `Sources[].Packages[].PackageIdentifier`.
+    WingetJson,
 }
 
 /// A dry run of the manager's own orphan verb, and how to read the names back out of it.
@@ -750,6 +774,14 @@ impl Queryable for GenericQueryable {
                     ManualFormat::SameAsInstalled => self.core.parser.parse_installed(&output),
                 })
             }
+            ManualListing::ExportFile {
+                binary,
+                args,
+                format,
+            } => {
+                self.list_from_export(binary.as_deref(), args, *format)
+                    .await
+            }
             // Deliberately empty, not `list_installed`. Callers gate on `tracks_manual`;
             // returning the installed set here would be a confident wrong answer.
             ManualListing::Unsupported => Ok(Vec::new()),
@@ -772,6 +804,18 @@ impl Queryable for GenericQueryable {
                     .or(self.core.config.list_binary.as_deref())
                     .unwrap_or(self.core.binary());
                 format!("{} {}", bin, args.join(" "))
+            }
+            ManualListing::ExportFile { binary, args, .. } => {
+                let bin = binary
+                    .as_deref()
+                    .or(self.core.config.list_binary.as_deref())
+                    .unwrap_or(self.core.binary());
+                format!(
+                    "{} {} — what {} can reinstall, not everything it can see",
+                    bin,
+                    args.join(" "),
+                    self.core.name
+                )
             }
             ManualListing::Unsupported => {
                 format!(
@@ -828,6 +872,94 @@ impl Queryable for GenericQueryable {
             }
         }
         Ok(Some(pkg))
+    }
+}
+
+impl GenericQueryable {
+    /// Run a manager's own export and read the set back out of the file it wrote.
+    ///
+    /// The temp directory must outlive the read, so it is bound to a name rather than
+    /// left temporary in an expression — dropping it deletes the file the manager just
+    /// wrote, and the read that follows would find nothing.
+    ///
+    /// **A missing file is an error, never an empty set.** An export that did not run is
+    /// indistinguishable from a machine with nothing on it if this returns `Ok(vec![])`, and
+    /// the caller is `adopt` — which would take that as "nothing to adopt" and say so.
+    async fn list_from_export(
+        &self,
+        binary: Option<&str>,
+        args: &[String],
+        format: ExportFormat,
+    ) -> Result<Vec<Package>> {
+        let bin = binary
+            .or(self.core.config.list_binary.as_deref())
+            .unwrap_or(self.core.binary());
+        let dir = tempfile::Builder::new()
+            .prefix("linix-export-")
+            .tempdir()
+            .map_err(|e| Error::Io(format!("could not make a directory for `{bin}`'s export: {e}")))?;
+        let path = dir.path().join("export.json");
+        let path_arg = path.to_string_lossy().to_string();
+        let rendered: Vec<String> = args
+            .iter()
+            .map(|a| a.replace("{file}", &path_arg))
+            .collect();
+        let argv: Vec<&str> = rendered.iter().map(|s| s.as_str()).collect();
+        // The manager's stdout names what it declined to export, one line per package, in the
+        // user's own display language. It is not the set and is not parsed for one; the count
+        // below is a set difference, which no localisation changes.
+        let _ = self.core.executor.run_output(bin, &argv, false).await?;
+        let text = tokio::fs::read_to_string(&path).await.map_err(|e| {
+            Error::Io(format!(
+                "`{bin} {}` wrote no export for LiNix to read ({e}). Nothing was adopted from \
+                 `{}` — rather than reporting the machine as empty.",
+                rendered.join(" "),
+                self.core.name
+            ))
+        })?;
+        let restorable = match format {
+            ExportFormat::WingetJson => crate::parsers::windows::parse_winget_export(&text),
+        };
+        self.report_unrestorable(&restorable).await;
+        Ok(restorable)
+    }
+
+    /// Say how much of the machine this manager cannot put back, and name a few.
+    ///
+    /// Adoption that silently drops two thirds of what `list` shows reads as a bug in
+    /// adoption. It is not: those rows name things the manager can uninstall and can never
+    /// install. Counted as a set difference against the listing rather than by matching the
+    /// manager's own message, which is localised and would silently count zero abroad.
+    async fn report_unrestorable(&self, restorable: &[Package]) {
+        let Ok(installed) = self.list_installed().await else {
+            return;
+        };
+        let keep: std::collections::HashSet<&str> =
+            restorable.iter().map(|p| p.name.as_str()).collect();
+        let dropped: Vec<&str> = installed
+            .iter()
+            .map(|p| p.name.as_str())
+            .filter(|n| !keep.contains(n))
+            .collect();
+        if dropped.is_empty() {
+            return;
+        }
+        let sample: Vec<&str> = dropped.iter().take(3).copied().collect();
+        // `warn`, not `info`: a default run prints `warn` and above, and "two thirds of your
+        // installed software is outside management" is a fact about the outcome the user just
+        // asked for. At `info` it would be invisible to everyone who did not already suspect it.
+        warn!(
+            "{name} lists {total} installed entries and can reinstall {kept} of them, adopted \
+             here as {distinct} declaration(s). The other {gone} — e.g. {sample} — are entries \
+             {name} can remove but never install, so a declaration naming one could never \
+             converge, and they were left out.",
+            name = self.core.name,
+            total = installed.len(),
+            kept = installed.len() - dropped.len(),
+            distinct = restorable.len(),
+            gone = dropped.len(),
+            sample = sample.join(", "),
+        );
     }
 }
 
