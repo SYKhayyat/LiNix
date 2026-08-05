@@ -634,6 +634,7 @@ pub(crate) async fn handle_watch(
     );
     let mut last_sig = manifest_signature(&app.config.config_root().join("modules")).await;
     let mut first = true;
+    let mut failed: Option<anyhow::Error> = None;
     loop {
         if pull {
             let git = app.git_manager();
@@ -663,7 +664,10 @@ pub(crate) async fn handle_watch(
                     done.left_in_place
                 ),
                 Ok(done) => println!("watch: applied {} change(s).", done.applied),
-                Err(e) => warn!("watch: reconcile failed: {}", e),
+                Err(e) => {
+                    warn!("watch: reconcile failed: {}", e);
+                    failed = Some(e);
+                }
             }
             last_sig = sig;
         }
@@ -673,7 +677,19 @@ pub(crate) async fn handle_watch(
         }
         tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
     }
-    Ok(())
+    // A `watch --once` is read by its exit code and by nothing else — that is what a cron entry
+    // or a timer unit is. Warning that the reconcile failed and then exiting 0 tells the
+    // scheduler the opposite of what it told the log, on the surface with the fewest readers
+    // (U21's exit vocabulary; Q28's class).
+    //
+    // The looping form never reaches here: one failed tick is not a reason to stop reconciling,
+    // and the warning is what a long-running watch has always had. The sibling one line up —
+    // `git pull failed` — stays a warning on purpose: the reconcile after it still converged the
+    // machine to the manifests this host holds, which is what `watch` promises.
+    match failed {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 /// Enforce the `[guard]` install/change rules against the desired state before any change
