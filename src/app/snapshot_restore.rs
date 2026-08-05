@@ -13,10 +13,10 @@ pub struct SnapshotRestore {
 }
 
 #[derive(Debug, Default)]
-struct StateDiff {
-    added: Vec<ManagedPackage>,
-    removed: Vec<ManagedPackage>,
-    changed: Vec<(ManagedPackage, ManagedPackage)>, // (Current, Snapshot)
+pub struct StateDiff {
+    pub added: Vec<ManagedPackage>,
+    pub removed: Vec<ManagedPackage>,
+    pub changed: Vec<(ManagedPackage, ManagedPackage)>, // (Current, Snapshot)
 }
 
 /// Snapshot roots `validate_snapshot_path` will read from. Enforced only on the read path
@@ -186,24 +186,20 @@ impl SnapshotRestore {
         Ok(None)
     }
 
-    async fn show_diff_and_confirm(&self, snapshot: &Snapshot) -> Result<()> {
-        println!(
-            "\nCalculating Package Diff for Snapshot: {}...",
-            snapshot.id
-        );
-
-        let snapshot_root = match snapshot.backend.as_str() {
-            "btrfs" => PathBuf::from(format!("/.snapshots/{}", snapshot.id)),
-            "timeshift" => PathBuf::from(format!(
-                "/run/timeshift/backup/timeshift/snapshots/{}",
-                snapshot.id
-            )),
-            _ => {
-                return Err(Error::Snapshot(format!(
-                    "Unsupported snapshot backend: {}",
-                    snapshot.backend
-                )))
-            }
+    /// The package summary shown before the `RESTORE` confirmation, computed without touching the
+    /// terminal — so the step that gates a restore can be tested without one.
+    ///
+    /// `Ok(None)` means this provider does not expose its snapshot as a readable tree. That is a
+    /// missing **summary**, not a missing capability: zfs rolls a dataset back in place, Windows
+    /// System Restore is a sequence number, and an lvm row merges a snapshot volume. None of them
+    /// hands anyone a mounted copy of `/` to read `registry.json` out of, and until 2026-08-04 not
+    /// having one meant `Unsupported snapshot backend` — the restore was refused for the shape of
+    /// its evidence rather than for anything about the machine. U27 ruled providers are rows; this
+    /// was the last place that still read them as a list of two names.
+    pub async fn restore_preamble(&self, snapshot: &Snapshot) -> Result<Option<StateDiff>> {
+        let Some(snapshot_root) = Self::readable_snapshot_root(&snapshot.backend, &snapshot.id)
+        else {
+            return Ok(None);
         };
 
         let validated_root = self
@@ -230,7 +226,35 @@ impl SnapshotRestore {
                 .map_err(Error::from)?;
 
         let current_state = self.state.lock().await;
-        let diff = Self::calculate_diff(&current_state, &snapshot_state);
+        Ok(Some(Self::calculate_diff(&current_state, &snapshot_state)))
+    }
+
+    /// Where this provider's snapshot can be read as a directory tree, when it can be at all.
+    fn readable_snapshot_root(backend: &str, id: &str) -> Option<PathBuf> {
+        match backend {
+            "btrfs" => Some(PathBuf::from(format!("/.snapshots/{}", id))),
+            "timeshift" => Some(PathBuf::from(format!(
+                "/run/timeshift/backup/timeshift/snapshots/{}",
+                id
+            ))),
+            _ => None,
+        }
+    }
+
+    async fn show_diff_and_confirm(&self, snapshot: &Snapshot) -> Result<()> {
+        println!(
+            "\nCalculating Package Diff for Snapshot: {}...",
+            snapshot.id
+        );
+
+        let Some(diff) = self.restore_preamble(snapshot).await? else {
+            println!(
+                "\n{} does not mount its snapshots as a readable tree, so there is no package \
+                 summary to show. The restore below is the provider's own, and it is whole.",
+                snapshot.backend
+            );
+            return self.confirm_and_execute(snapshot).await;
+        };
 
         if !diff.added.is_empty() || !diff.removed.is_empty() || !diff.changed.is_empty() {
             println!("\nPACKAGE CHANGES (Rolling back will result in):");
@@ -250,6 +274,13 @@ impl SnapshotRestore {
             println!("\nNo package changes detected.");
         }
 
+        self.confirm_and_execute(snapshot).await
+    }
+
+    /// The `RESTORE` gate. Separate from the summary because it must run whether or not a summary
+    /// could be built: the warning below is the part that is always true, and a provider that
+    /// cannot show a package diff still rolls the whole filesystem back.
+    async fn confirm_and_execute(&self, snapshot: &Snapshot) -> Result<()> {
         // The package list above is a SUMMARY, not the scope. A snapshot restore rolls the
         // entire filesystem back — every file, not just managed packages: configs you edited,
         // data you wrote, and anything else that changed since the snapshot are all reverted
