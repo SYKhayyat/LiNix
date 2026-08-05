@@ -1,7 +1,7 @@
 // src/backends/registry.rs
 
 use crate::app::LuaHooks;
-use crate::backends::generic::{ExportFormat, ManualFormat};
+use crate::backends::generic::{ExportFormat, MachineListing, ManualFormat, OutdatedProbe};
 use crate::backends::generic::{
     GenericBackendCore, GenericInstallable, GenericQueryable, GenericRepoManager,
     GenericSearchable, GenericUpgradable, ManagerConfig, ManualListing, PropertyProbe,
@@ -257,6 +257,13 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             extra_probes: None,
             upgrade_reinstall_args: None,
             property_probes: Vec::new(),
+            machine_list: None,
+                        // `apt list --upgradable` also warns about an unstable CLI on stderr; the parser drops it.
+outdated: Some(OutdatedProbe {
+                binary: None,
+                args: vec!["list".into(), "--upgradable".into()],
+                parse: std::sync::Arc::new(crate::parsers::apt::parse_apt_outdated),
+            }),
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
@@ -359,6 +366,8 @@ fn register_aur_helper(
             extra_probes: None,
             upgrade_reinstall_args: None,
             property_probes: Vec::new(),
+            machine_list: None,
+            outdated: None,
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
@@ -439,6 +448,12 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             extra_probes: None,
             upgrade_reinstall_args: None,
             property_probes: Vec::new(),
+            machine_list: None,
+            outdated: Some(OutdatedProbe {
+                binary: None,
+                args: vec!["version".into(), "-l".into(), "<".into()],
+                parse: std::sync::Arc::new(|o: &str| crate::parsers::common::parse_apk_outdated(o, "apk")),
+            }),
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
@@ -513,6 +528,12 @@ fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             extra_probes: None,
             upgrade_reinstall_args: None,
             property_probes: Vec::new(),
+            machine_list: None,
+            outdated: Some(OutdatedProbe {
+                binary: None,
+                args: vec!["--non-interactive".into(), "list-updates".into()],
+                parse: std::sync::Arc::new(crate::parsers::dnf::parse_zypper_outdated),
+            }),
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
@@ -606,6 +627,12 @@ fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             extra_probes: None,
             upgrade_reinstall_args: None,
             property_probes: Vec::new(),
+            machine_list: None,
+            outdated: Some(OutdatedProbe {
+                binary: None,
+                args: vec!["upgrade".into(), "--disable-interactivity".into(), "--accept-source-agreements".into()],
+                parse: std::sync::Arc::new(windows::parse_winget_outdated),
+            }),
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
@@ -671,6 +698,18 @@ fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             extra_probes: None,
             upgrade_reinstall_args: None,
             property_probes: Vec::new(),
+            machine_list: Some(MachineListing {
+                binary: None,
+                // `scoop export` is JSON in current scoop and plain lines in older ones; the
+                // negotiation below is what makes asking safe.
+                args: vec!["export".into()],
+                parse: std::sync::Arc::new(windows::parse_scoop_export),
+            }),
+            outdated: Some(OutdatedProbe {
+                binary: None,
+                args: vec!["status".into()],
+                parse: std::sync::Arc::new(windows::parse_scoop_outdated),
+            }),
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
@@ -752,6 +791,12 @@ fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             extra_probes: None,
             upgrade_reinstall_args: None,
             property_probes: Vec::new(),
+            machine_list: None,
+            outdated: Some(OutdatedProbe {
+                binary: None,
+                args: vec!["outdated".into(), "-r".into()],
+                parse: std::sync::Arc::new(windows::parse_choco_outdated),
+            }),
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
@@ -813,6 +858,8 @@ fn register_mas(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             extra_probes: None,
             upgrade_reinstall_args: None,
             property_probes: Vec::new(),
+            machine_list: None,
+            outdated: None,
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
@@ -873,6 +920,12 @@ fn register_pip(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             extra_probes: None,
             upgrade_reinstall_args: None,
             property_probes: Vec::new(),
+            machine_list: None,
+            outdated: Some(OutdatedProbe {
+                binary: None,
+                args: vec!["list".into(), "--outdated".into(), "--format=json".into()],
+                parse: std::sync::Arc::new(crate::parsers::language::parse_pip_outdated),
+            }),
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
@@ -929,6 +982,12 @@ fn register_gem(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             extra_probes: None,
             upgrade_reinstall_args: None,
             property_probes: Vec::new(),
+            machine_list: None,
+            outdated: Some(OutdatedProbe {
+                binary: None,
+                args: vec!["outdated".into()],
+                parse: std::sync::Arc::new(crate::parsers::language::parse_gem_outdated),
+            }),
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
@@ -986,6 +1045,8 @@ fn register_bun(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             extra_probes: None,
             upgrade_reinstall_args: None,
             property_probes: Vec::new(),
+            machine_list: None,
+            outdated: None,
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
@@ -1049,6 +1110,8 @@ fn register_macports(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             extra_probes: None,
             upgrade_reinstall_args: None,
             property_probes: Vec::new(),
+            machine_list: None,
+            outdated: None,
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
@@ -1108,6 +1171,8 @@ fn register_pkgin(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             extra_probes: None,
             upgrade_reinstall_args: None,
             property_probes: Vec::new(),
+            machine_list: None,
+            outdated: None,
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
@@ -1174,6 +1239,8 @@ fn register_pkg_freebsd(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             extra_probes: None,
             upgrade_reinstall_args: None,
             property_probes: Vec::new(),
+            machine_list: None,
+            outdated: None,
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
@@ -1241,6 +1308,8 @@ fn register_pkg_add_openbsd(reg: &mut BackendRegistry, executor: &CommandExecuto
             extra_probes: None,
             upgrade_reinstall_args: None,
             property_probes: Vec::new(),
+            machine_list: None,
+            outdated: None,
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
@@ -1308,6 +1377,20 @@ fn register_dotnet(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             extra_probes: None,
             upgrade_reinstall_args: None,
             property_probes: Vec::new(),
+            machine_list: Some(MachineListing {
+                binary: None,
+                // SDK 10 and later. Older SDKs reject the flag, which is what the
+                // negotiation in `fetch_installed` is for.
+                args: vec![
+                    "tool".into(),
+                    "list".into(),
+                    "--global".into(),
+                    "--format".into(),
+                    "json".into(),
+                ],
+                parse: std::sync::Arc::new(crate::parsers::dotnet::parse_dotnet_list_json),
+            }),
+            outdated: None,
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
@@ -1373,6 +1456,8 @@ fn base_config(name: &str) -> ManagerConfig {
         extra_probes: None,
         upgrade_reinstall_args: None,
         property_probes: Vec::new(),
+        machine_list: None,
+        outdated: None,
         search_source: SearchSource::Command,
         flag_map: HashMap::new(),
     }
@@ -1441,6 +1526,13 @@ fn register_composer(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     cfg.remove_args = vec!["global".into(), "remove".into()];
     cfg.list_args = vec!["global".into(), "show".into(), "--format=json".into()];
     cfg.search_args = vec!["global".into(), "search".into(), "--format=json".into()];
+    // composer prints `Changed current directory to ...` ahead of the JSON, which the
+    // parser steps past — a strict parse would report nothing outdated on every machine.
+    cfg.outdated = Some(OutdatedProbe {
+        binary: None,
+        args: vec!["global".into(), "outdated".into(), "--format=json".into()],
+        parse: std::sync::Arc::new(crate::parsers::language::parse_composer_outdated),
+    });
     cfg.upgrade_args = vec!["global".into(), "update".into()];
     let core = Arc::new(GenericBackendCore {
         name: "composer".into(),
@@ -1542,6 +1634,13 @@ fn register_pixi(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     // from an environment and requires `--environment`, so it errors on a bare tool name.
     cfg.remove_args = vec!["global".into(), "uninstall".into()];
     cfg.list_args = vec!["global".into(), "list".into()];
+    // pixi prints its listing as a box-drawing tree; `--json` is the same answer already
+    // parsed. Recent pixi only, hence the negotiation rather than a straight swap.
+    cfg.machine_list = Some(MachineListing {
+        binary: None,
+        args: vec!["global".into(), "list".into(), "--json".into()],
+        parse: std::sync::Arc::new(|o: &str| crate::parsers::ecosystem::pixi_list_json(o, "pixi")),
+    });
     cfg.search_args = vec!["search".into()];
     // `global upgrade-all` was removed upstream; pixi 0.73 answers it with "This command has
     // been removed, please use `pixi global update` instead". A plan-smoke passed it the whole
@@ -1718,6 +1817,15 @@ fn register_npm(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     ];
     cfg.upgrade_reinstall_args = Some(cfg.install_args.clone());
     cfg.search_source = SearchSource::NpmRegistry;
+    // `npm outdated` exits non-zero when it FINDS something, so this is read
+    // through `run_output` rather than a status-checked reader.
+    cfg.outdated = Some(OutdatedProbe {
+        binary: None,
+        args: vec!["outdated".into(), "-g".into(), "--json".into()],
+        parse: std::sync::Arc::new(|o: &str| {
+            crate::parsers::language::parse_npm_outdated(o, "npm")
+        }),
+    });
     // `npm prefix -g` reports the PREFIX, not the module directory, and the layout below it
     // differs by OS: POSIX puts modules under `lib/node_modules`, Windows directly under
     // `node_modules`. Getting this wrong yields a path that does not exist.
@@ -1756,6 +1864,15 @@ fn register_pnpm(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     ];
     cfg.upgrade_reinstall_args = Some(cfg.install_args.clone());
     cfg.search_source = SearchSource::NpmRegistry;
+    // `npm outdated` exits non-zero when it FINDS something, so this is read
+    // through `run_output` rather than a status-checked reader.
+    cfg.outdated = Some(OutdatedProbe {
+        binary: None,
+        args: vec!["outdated".into(), "-g".into(), "--json".into()],
+        parse: std::sync::Arc::new(|o: &str| {
+            crate::parsers::language::parse_npm_outdated(o, "pnpm")
+        }),
+    });
     // `pnpm root -g` already IS the global node_modules directory, so the package folder is
     // `<root>/<name>`; appending another `node_modules` yields a path that does not exist.
     cfg.property_probes = vec![
@@ -2937,10 +3054,15 @@ mod tests {
             // Emacs is handed an Emacs Lisp form, not a subcommand — which is why
             // `argv_drift_tests` excuses it from the `--help` walk. The form's *shape* is still
             // argv and still drifts, so it is asserted here rather than nowhere.
+            //
+            // The form batches (`Q46`): `(dolist (p '(a b)) (package-install p))` rather than
+            // one `(package-install 'a)` per Emacs launch, because each launch also paid for a
+            // `package-refresh-contents`. What is pinned is that the *name reaches the form* —
+            // this test caught the change when it was made, which is the whole point of it.
             ArgvCase::pkg(
                 "emacs",
                 &|r, e| crate::backends::emacs::register(r, e, &Config::default()),
-                Runs("(package-install 'jq)"),
+                Runs("(dolist (p '(jq)) (package-install p))"),
                 Runs("(package-delete p)"),
             ),
             // ---- Resource backends: the declaration is not a package name, and each addresses

@@ -101,48 +101,48 @@ pub struct EmacsInstallable {
 #[async_trait]
 impl Installable for EmacsInstallable {
     async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
+        if specs.is_empty() {
+            return Ok(());
+        }
+        // Every name is validated before ANY of them runs. They are interpolated into a Lisp
+        // form, so this is what stands between a package name and evaluated code, and it has
+        // to reject the batch rather than fail part-way through one.
         for spec in specs {
             validate_symbol(&spec.name)?;
-            info!("Emacs: Installing package '{}'...", spec.name);
-
-            let lisp = format!(
-                "(progn \
-                    (require 'package) \
-                    (package-initialize) \
-                    (unless package-archive-contents (package-refresh-contents)) \
-                    (package-install '{}) \
-                )",
-                spec.name
-            );
-
-            self.core
-                .executor
-                .run_exclusive("emacs", "emacs", &["--batch", "--eval", &lisp], false)
-                .await?;
         }
+        let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
+        info!("Emacs: Installing {} package(s)...", names.len());
+        // One Emacs for the lot (Q46). Each launch was paying for a whole startup AND a
+        // `package-refresh-contents` — a network fetch of the archive — so ten packages meant
+        // ten of each, for an archive that had not changed between them. Verified against GNU
+        // Emacs 29.3 in a container: one `--batch` with a `dolist` installs them all.
+        let lisp = format!(
+            "(progn (require 'package) (package-initialize)              (unless package-archive-contents (package-refresh-contents))              (dolist (p '({})) (package-install p)))",
+            names.join(" ")
+        );
+        self.core
+            .executor
+            .run_exclusive("emacs", "emacs", &["--batch", "--eval", &lisp], false)
+            .await?;
         Ok(())
     }
 
     async fn remove(&self, names: &[String], _: bool) -> Result<()> {
+        if names.is_empty() {
+            return Ok(());
+        }
         for name in names {
             validate_symbol(name)?;
-            info!("Emacs: Removing package '{}'...", name);
-
-            let lisp = format!(
-                "(progn \
-                    (require 'package) \
-                    (package-initialize) \
-                    (let ((p (cadr (assoc '{} package-alist)))) \
-                        (if p (package-delete p))) \
-                )",
-                name
-            );
-
-            self.core
-                .executor
-                .run_exclusive("emacs", "emacs", &["--batch", "--eval", &lisp], false)
-                .await?;
         }
+        info!("Emacs: Removing {} package(s)...", names.len());
+        let lisp = format!(
+            "(progn (require 'package) (package-initialize)              (dolist (n '({}))                (let ((p (cadr (assoc n package-alist)))) (if p (package-delete p)))))",
+            names.join(" ")
+        );
+        self.core
+            .executor
+            .run_exclusive("emacs", "emacs", &["--batch", "--eval", &lisp], false)
+            .await?;
         Ok(())
     }
 }
@@ -276,4 +276,74 @@ pub fn register(
             .with_metadata_provider(core.clone())
             .build(),
     ));
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    use crate::core::executor::MockExecutor;
+    use dashmap::DashMap;
+
+    fn wired() -> (Arc<EmacsBackendCore>, Arc<MockExecutor>) {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let exec =
+            CommandExecutor::with_layer(false, false, mock.clone(), vfs, Arc::new(DashMap::new()));
+        (Arc::new(EmacsBackendCore::new(exec)), mock)
+    }
+
+    /// `Q46`. Each install spawned a whole Emacs **and** a `package-refresh-contents`, which is
+    /// a network fetch of the archive. Ten packages meant ten startups and ten refreshes of an
+    /// archive that had not changed. One `--batch` with a `dolist` does all of it; verified
+    /// against GNU Emacs 29.3 in a container before this was written.
+    #[tokio::test]
+    async fn a_batch_of_packages_is_one_emacs_and_one_archive_refresh() {
+        let (core, mock) = wired();
+        let specs = vec![
+            crate::core::PackageSpec { name: "csv-mode".into(), backend: "emacs".into(), ..Default::default() },
+            crate::core::PackageSpec { name: "rainbow-mode".into(), backend: "emacs".into(), ..Default::default() },
+        ];
+        EmacsInstallable { core: core.clone() }.install(&specs, false).await.unwrap();
+
+        let calls = mock.get_calls().await;
+        assert_eq!(calls.len(), 1, "one Emacs for the batch, got {:?}", calls);
+        assert_eq!(
+            calls[0].matches("package-refresh-contents").count(),
+            1,
+            "the archive is fetched once, not once per package: {:?}",
+            calls
+        );
+        assert!(calls[0].contains("csv-mode") && calls[0].contains("rainbow-mode"), "{:?}", calls);
+    }
+
+    /// Removal batches the same way.
+    #[tokio::test]
+    async fn a_batch_of_removals_is_one_emacs() {
+        let (core, mock) = wired();
+        EmacsInstallable { core }
+            .remove(&["csv-mode".to_string(), "rainbow-mode".to_string()], false)
+            .await
+            .unwrap();
+        let calls = mock.get_calls().await;
+        assert_eq!(calls.len(), 1, "{:?}", calls);
+        assert!(calls[0].contains("package-delete"), "{:?}", calls);
+    }
+
+    /// **The names are interpolated into evaluated Lisp, so one bad name must stop the whole
+    /// batch** — not fail after the good ones have already been written into the form. This is
+    /// the property batching could most easily have lost.
+    #[tokio::test]
+    async fn one_illegal_name_refuses_the_whole_batch_before_anything_runs() {
+        let (core, mock) = wired();
+        let specs = vec![
+            crate::core::PackageSpec { name: "csv-mode".into(), backend: "emacs".into(), ..Default::default() },
+            crate::core::PackageSpec { name: "evil (shell-command \"rm -rf /\")".into(), backend: "emacs".into(), ..Default::default() },
+        ];
+        let err = EmacsInstallable { core }.install(&specs, false).await;
+        assert!(err.is_err(), "an illegal symbol must refuse the batch");
+        assert!(
+            mock.get_calls().await.is_empty(),
+            "nothing may run when any name in the batch is refused"
+        );
+    }
 }

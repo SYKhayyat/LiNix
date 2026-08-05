@@ -58,17 +58,31 @@ pub struct NixInstallable {
 
 #[async_trait]
 impl Installable for NixInstallable {
+    /// One `nix profile install` for every installable (`Q45`).
+    ///
+    /// Each invocation evaluates nixpkgs and rebuilds the profile generation; N one at a time
+    /// is N evaluations and N generations for a change the user made once.
     async fn install(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
-        for spec in specs {
-            let flake_uri = if spec.name.contains('#') {
-                spec.name.clone()
-            } else {
-                format!("nixpkgs#{}", spec.name)
-            };
-
-            info!("Nix: Installing {} to user profile...", flake_uri);
+        if specs.is_empty() {
+            return Ok(());
+        }
+        let flake_uris: Vec<String> = specs
+            .iter()
+            .map(|spec| {
+                if spec.name.contains('#') {
+                    spec.name.clone()
+                } else {
+                    format!("nixpkgs#{}", spec.name)
+                }
+            })
+            .collect();
+        {
+            info!(
+                "Nix: Installing {} installable(s) to user profile...",
+                flake_uris.len()
+            );
             let mut args = vec!["profile".to_string(), "install".to_string()];
-            crate::core::argv::push_names(&mut args, "nix", [&flake_uri]);
+            crate::core::argv::push_names(&mut args, "nix", flake_uris.iter().map(String::as_str));
             let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
@@ -117,11 +131,23 @@ impl Installable for NixInstallable {
                 .await?;
         }
 
-        // Fallback path: remove by attribute name (modern `nix profile remove <name>`).
-        for name in by_name {
-            info!("Nix: Removing package by name ({})", name);
+        // Modern `nix profile remove <name> <name>` — one call, and the names are resolved
+        // against the profile as it was, so nothing renumbers under them (`Q45`). Verified
+        // against real nix 2.x in a container:
+        //
+        //     removing 'flake:nixpkgs#legacyPackages.x86_64-linux.hello'
+        //     removing 'flake:nixpkgs#legacyPackages.x86_64-linux.ripgrep'
+        //     removed 2 packages, kept 17 packages
+        //
+        // **The indexed path above is deliberately left one at a time.** Its highest-first
+        // ordering exists because positional indices renumber, and no nix that still reports
+        // them was available to prove a batched form safe — a wrong guess there removes a
+        // package the user did not name. Modern nix reports no indices at all, so this is the
+        // path that actually runs.
+        if !by_name.is_empty() {
+            info!("Nix: Removing {} package(s) by name...", by_name.len());
             let mut args = vec!["profile".to_string(), "remove".to_string()];
-            crate::core::argv::push_names(&mut args, "nix", [name]);
+            crate::core::argv::push_names(&mut args, "nix", by_name.iter().copied());
             let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
@@ -451,5 +477,42 @@ mod tests {
     fn nix_search_empty_is_ok() {
         assert!(parse_nix_search("{}").unwrap().is_empty());
         assert!(parse_nix_search("").unwrap().is_empty());
+    }
+
+    /// Q45. **One `nix profile install` for the batch, and one `remove` for the by-name path.**
+    ///
+    /// Each invocation evaluates nixpkgs and cuts a new profile generation, so N one at a time
+    /// is N evaluations and N generations for one change the user made.
+    ///
+    /// The by-name removal was verified against real nix 2.x in a container before it was
+    /// batched — `nix profile remove hello ripgrep` reported `removed 2 packages, kept 17` and
+    /// left the one it was not given. The *indexed* path stays one at a time on purpose: its
+    /// highest-index-first ordering exists because positional indices renumber, and no nix that
+    /// still reports them was available to prove a batched form safe.
+    #[tokio::test]
+    async fn a_batch_of_installables_is_one_nix_call() {
+        let vfs = Arc::new(dashmap::DashMap::new());
+        let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(dashmap::DashMap::new()),
+        );
+        let core = Arc::new(NixBackendCore::new(exec, "30d".to_string()));
+        let specs = vec![
+            crate::core::PackageSpec { name: "hello".into(), backend: "nix".into(), ..Default::default() },
+            crate::core::PackageSpec { name: "ripgrep".into(), backend: "nix".into(), ..Default::default() },
+        ];
+        NixInstallable { core: core.clone() }
+            .install(&specs, false)
+            .await
+            .unwrap();
+
+        let calls = mock.get_calls().await;
+        assert_eq!(calls.len(), 1, "one install for the batch, got {:?}", calls);
+        assert!(calls[0].contains("nixpkgs#hello"), "{:?}", calls);
+        assert!(calls[0].contains("nixpkgs#ripgrep"), "{:?}", calls);
     }
 }

@@ -113,30 +113,46 @@ pub struct VscodeInstallable {
 
 #[async_trait]
 impl Installable for VscodeInstallable {
+    /// One `code` process for every extension (`Q45`).
+    ///
+    /// **The flag repeats; the operand does not.** `--install-extension a --install-extension b`
+    /// is how VS Code takes several, so the names cannot simply be appended the way an operand
+    /// list is — which is why this does not go through the generic batching.
+    ///
+    /// Each launch of `code` starts an Electron process and re-scans the extension host, so N
+    /// extensions one at a time is N of those.
     async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
+        if specs.is_empty() {
+            return Ok(());
+        }
+        let mut args = vec!["--force".to_string()];
         for spec in specs {
             // VS Code supports pinning an extension version: `publisher.ext@1.2.3`.
             let target = match spec.options.get("version") {
                 Some(v) if crate::backends::concrete_version(v) => format!("{}@{}", spec.name, v),
                 _ => spec.name.clone(),
             };
-            info!("VSCode: Installing extension '{}'...", target);
-            let mut args = vec!["--force".to_string(), "--install-extension".to_string()];
+            args.push("--install-extension".to_string());
             crate::core::argv::push_names(&mut args, "code", [&target]);
-            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-            self.core.executor.run("code", &arg_refs, false).await?;
         }
+        info!("VSCode: Installing {} extension(s)...", specs.len());
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        self.core.executor.run("code", &arg_refs, false).await?;
         Ok(())
     }
 
     async fn remove(&self, names: &[String], _: bool) -> Result<()> {
-        for name in names {
-            info!("VSCode: Uninstalling extension '{}'...", name);
-            let mut args = vec!["--uninstall-extension".to_string()];
-            crate::core::argv::push_names(&mut args, "code", [name]);
-            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-            self.core.executor.run("code", &arg_refs, false).await?;
+        if names.is_empty() {
+            return Ok(());
         }
+        let mut args = Vec::new();
+        for name in names {
+            args.push("--uninstall-extension".to_string());
+            crate::core::argv::push_names(&mut args, "code", [name]);
+        }
+        info!("VSCode: Uninstalling {} extension(s)...", names.len());
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        self.core.executor.run("code", &arg_refs, false).await?;
         Ok(())
     }
 }
@@ -323,5 +339,60 @@ mod tests {
             ]
         );
         assert!(!crate::core::argv::terminates_options("code"));
+    }
+
+    /// Q45, and the one whose argv is not a name list.
+    ///
+    /// **The flag repeats; the operand does not.** VS Code takes several extensions as
+    /// `--install-extension a --install-extension b`, so this cannot go through the generic
+    /// name-appending batcher — and each `code` launch starts an Electron process and rescans
+    /// the extension host, which is what N launches costs.
+    #[tokio::test]
+    async fn a_batch_of_extensions_is_one_code_process() {
+        let vfs = Arc::new(dashmap::DashMap::new());
+        let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(dashmap::DashMap::new()),
+        );
+        let core = Arc::new(VscodeBackendCore::new(exec));
+        let specs = vec![
+            crate::core::PackageSpec {
+                name: "rust-lang.rust-analyzer".into(),
+                backend: "vscode".into(),
+                ..Default::default()
+            },
+            crate::core::PackageSpec {
+                name: "tamasfe.even-better-toml".into(),
+                backend: "vscode".into(),
+                ..Default::default()
+            },
+        ];
+        VscodeInstallable { core: core.clone() }
+            .install(&specs, false)
+            .await
+            .unwrap();
+        VscodeInstallable { core: core.clone() }
+            .remove(
+                &["rust-lang.rust-analyzer".to_string(), "tamasfe.even-better-toml".to_string()],
+                false,
+            )
+            .await
+            .unwrap();
+
+        let calls = mock.get_calls().await;
+        assert_eq!(calls.len(), 2, "one process each way, got {:?}", calls);
+        assert_eq!(
+            calls[0].matches("--install-extension").count(),
+            2,
+            "the flag has to repeat per extension: {:?}",
+            calls
+        );
+        assert!(calls[0].contains("rust-lang.rust-analyzer"), "{:?}", calls);
+        assert!(calls[0].contains("tamasfe.even-better-toml"), "{:?}", calls);
+        assert_eq!(calls[1].matches("--uninstall-extension").count(), 2, "{:?}", calls);
     }
 }

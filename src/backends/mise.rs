@@ -70,37 +70,46 @@ pub struct MiseInstallable {
 
 #[async_trait]
 impl Installable for MiseInstallable {
+    /// One `mise use -g` for every tool (`Q45`). `mise use -g node@22 go@1.23` is one
+    /// resolution and one write to the global config; one call each rewrites that file N times.
     async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
-        for spec in specs {
-            let version = spec
-                .options
-                .get("version")
-                .map(|v| v.as_str())
-                .unwrap_or("latest");
-            let tool_spec = format!("{}@{}", spec.name, version);
-            info!("Mise: Installing global tool {}...", tool_spec);
-            let mut args = vec!["use".to_string(), "-g".to_string()];
-            crate::core::argv::push_names(&mut args, "mise", [&tool_spec]);
-            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-            self.core
-                .executor
-                .run_exclusive("mise", "mise", &arg_refs, false)
-                .await?;
+        if specs.is_empty() {
+            return Ok(());
         }
+        let tool_specs: Vec<String> = specs
+            .iter()
+            .map(|spec| {
+                let version = spec
+                    .options
+                    .get("version")
+                    .map(|v| v.as_str())
+                    .unwrap_or("latest");
+                format!("{}@{}", spec.name, version)
+            })
+            .collect();
+        info!("Mise: Installing {} global tool(s)...", tool_specs.len());
+        let mut args = vec!["use".to_string(), "-g".to_string()];
+        crate::core::argv::push_names(&mut args, "mise", tool_specs.iter().map(String::as_str));
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        self.core
+            .executor
+            .run_exclusive("mise", "mise", &arg_refs, false)
+            .await?;
         Ok(())
     }
 
     async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
-        for name in names {
-            info!("Mise: Uninstalling tool {}...", name);
-            let mut args = vec!["uninstall".to_string()];
-            crate::core::argv::push_names(&mut args, "mise", [name]);
-            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-            self.core
-                .executor
-                .run_exclusive("mise", "mise", &arg_refs, false)
-                .await?;
+        if names.is_empty() {
+            return Ok(());
         }
+        info!("Mise: Uninstalling {} tool(s)...", names.len());
+        let mut args = vec!["uninstall".to_string()];
+        crate::core::argv::push_names(&mut args, "mise", names.iter().map(String::as_str));
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        self.core
+            .executor
+            .run_exclusive("mise", "mise", &arg_refs, false)
+            .await?;
         Ok(())
     }
 }
@@ -444,5 +453,44 @@ mod tests {
         assert!(pkgs.iter().any(|p| p.name == "node"));
         assert!(pkgs.iter().any(|p| p.name == "nodejs"));
         assert!(pkgs.iter().all(|p| p.backend == "mise"));
+    }
+
+    /// Q45: **one command for N packages, not N commands.**
+    ///
+    /// The generic backend batches; this one is hand-written and did not. `mise` takes a
+    /// list, so N one at a time is N of whatever that command costs — and where it runs under
+    /// `run_exclusive`, N serialised lock acquisitions on top.
+    #[tokio::test]
+    async fn a_batch_of_tools_is_one_mise_call() {
+        let vfs = Arc::new(dashmap::DashMap::new());
+        let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(dashmap::DashMap::new()),
+        );
+        let core = Arc::new(MiseBackendCore::new(exec));
+        let specs = vec![
+            crate::core::PackageSpec { name: "node".into(), backend: "mise".into(), ..Default::default() },
+            crate::core::PackageSpec { name: "go".into(), backend: "mise".into(), ..Default::default() },
+        ];
+        MiseInstallable { core: core.clone() }.install(&specs, false).await.unwrap();
+        MiseInstallable { core: core.clone() }
+            .remove(&["node".to_string(), "go".to_string()], false)
+            .await
+            .unwrap();
+
+        let calls = mock.get_calls().await;
+        assert_eq!(
+            calls.len(),
+            2,
+            "expected 2 command(s) for the whole batch, got {}: {:?}",
+            calls.len(),
+            calls
+        );
+        assert!(calls[0].contains("node@latest") && calls[0].contains("go@latest"), "{:?}", calls);
+        assert!(calls[1].contains("node") && calls[1].contains("go"), "{:?}", calls);
     }
 }

@@ -242,6 +242,9 @@ pub fn apt() -> ExitPolicy {
 /// Fedora/RHEL — `dnf` and `yum`.
 pub fn dnf() -> ExitPolicy {
     ExitPolicy {
+        // `dnf check-update` exits 100 when it FINDS updates. It is dnf's answer, not its
+        // failure, and unmarked it makes a successful update check look like a broken one.
+        benign_exits: vec![100],
         transient_markers: vec![
             "failed to synchronize cache",
             "cannot download",
@@ -1024,6 +1027,39 @@ mod tests {
                 b""
             )),
             Retryability::Permanent
+        );
+    }
+}
+
+#[cfg(test)]
+mod outdated_exit_tests {
+    use super::*;
+
+    /// `dnf check-update` exits **100** when it finds updates. That is dnf's answer, and
+    /// unmarked it makes a successful update check indistinguishable from a broken one.
+    #[test]
+    fn dnf_reports_finding_updates_with_an_exit_code_that_is_not_a_failure() {
+        assert!(
+            dnf().is_benign(Some(100)),
+            "exit 100 is `there are updates`, not `check-update failed`"
+        );
+        // And the codes that really are failures stay failures.
+        assert!(!dnf().is_benign(Some(1)));
+        assert!(!dnf().is_benign(None), "a signal kill chose no code");
+    }
+
+    /// The exit-code axis added for `Q41` must not have made every manager's codes benign.
+    #[test]
+    fn a_transient_code_is_not_thereby_a_benign_one() {
+        let p = winget();
+        let internal = 0x8A15_0001_u32 as i32;
+        assert_eq!(
+            p.retryability_of(Some(internal), ""),
+            Retryability::Transient
+        );
+        assert!(
+            !p.is_benign(Some(internal)),
+            "worth retrying and `not a failure` are different claims"
         );
     }
 }

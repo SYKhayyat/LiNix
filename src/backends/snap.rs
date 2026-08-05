@@ -241,17 +241,23 @@ impl Installable for SnapInstallable {
         Ok(())
     }
 
+    /// One `snap remove` for every snap (`Q45`).
+    ///
+    /// **Removal batches; install does not.** `snap install` above has to choose per package
+    /// between `install` and `refresh --channel=` depending on what is already present (D13,
+    /// Q20), so those specs cannot share a command. Removal asks no such question.
     async fn remove(&self, names: &[String], sudo: bool) -> Result<()> {
-        for name in names {
-            info!("Snap: Removing {}...", name);
-            let mut args = vec!["remove".to_string()];
-            crate::core::argv::push_names(&mut args, "snap", [name]);
-            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-            self.core
-                .executor
-                .run_exclusive("snap", "snap", &arg_refs, sudo)
-                .await?;
+        if names.is_empty() {
+            return Ok(());
         }
+        info!("Snap: Removing {} snap(s)...", names.len());
+        let mut args = vec!["remove".to_string()];
+        crate::core::argv::push_names(&mut args, "snap", names.iter().map(String::as_str));
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        self.core
+            .executor
+            .run_exclusive("snap", "snap", &arg_refs, sudo)
+            .await?;
         Ok(())
     }
 }
@@ -600,5 +606,32 @@ mod tests {
     fn a_snap_named_like_a_flag_stays_a_name() {
         let args = install_args(&spec_with("--classic", &[]));
         assert_eq!(args, ["install", "--", "--classic"]);
+    }
+
+    /// Q45. Removal batches; install does not, and the asymmetry is the point — `snap install`
+    /// has to choose per package between `install` and `refresh --channel=` depending on what
+    /// is already there (D13, Q20), so those specs cannot share a command. Removal asks no
+    /// such question.
+    #[tokio::test]
+    async fn a_batch_of_snaps_is_one_remove_call() {
+        let vfs = Arc::new(dashmap::DashMap::new());
+        let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(dashmap::DashMap::new()),
+        );
+        let core = Arc::new(SnapBackendCore::new(exec));
+
+        SnapInstallable { core: core.clone() }
+            .remove(&["code".to_string(), "firefox".to_string()], false)
+            .await
+            .unwrap();
+
+        let calls = mock.get_calls().await;
+        assert_eq!(calls.len(), 1, "one removal for the batch, got {:?}", calls);
+        assert_eq!(calls[0], "snap remove -- code firefox");
     }
 }

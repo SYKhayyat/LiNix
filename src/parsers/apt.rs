@@ -131,3 +131,74 @@ mod tests {
         );
     }
 }
+
+/// `apt list --upgradable` (`Q44`).
+///
+/// ```text
+/// Listing...
+/// gzip/noble-updates,noble-security 1.12-1ubuntu3.2 amd64 [upgradable from: 1.12-1ubuntu3.1]
+/// ```
+///
+/// The name is what precedes the `/`; everything after it is the suite list, not part of the
+/// name. The version taken is the *first* one — the second, inside the brackets, is what is
+/// installed, and reading that one reports every package as already current.
+pub fn parse_apt_outdated(output: &str) -> Vec<Package> {
+    crate::utils::text::sanitize(output)
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            // apt's own progress banner, and its warning about an unstable CLI.
+            if line.is_empty() || line.starts_with("Listing") || line.starts_with("WARNING") {
+                return None;
+            }
+            let (name, rest) = line.split_once('/')?;
+            let version = rest.split_whitespace().nth(1)?;
+            if name.is_empty() || version.is_empty() {
+                return None;
+            }
+            Some(Package::with_version(name.trim(), version, "apt"))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod outdated_tests {
+    use super::*;
+
+    /// Verbatim from `apt list --upgradable` in an `ubuntu:24.04` container.
+    const APT: &str = "\
+Listing...
+gzip/noble-updates,noble-security 1.12-1ubuntu3.2 amd64 [upgradable from: 1.12-1ubuntu3.1]
+libc-bin/noble-updates,noble-security 2.39-0ubuntu8.8 amd64 [upgradable from: 2.39-0ubuntu8.7]
+libpam-runtime/noble-updates,noble-security 1.5.3-5ubuntu5.6 all [upgradable from: 1.5.3-5ubuntu5.5]
+";
+
+    #[test]
+    fn apt_reports_the_available_version_not_the_installed_one() {
+        let p = parse_apt_outdated(APT);
+        assert_eq!(p.len(), 3);
+        assert_eq!(p[0].name, "gzip");
+        assert_eq!(
+            p[0].version.as_deref(),
+            Some("1.12-1ubuntu3.2"),
+            "the bracketed version is what is INSTALLED; reading it reports everything as \
+             already up to date"
+        );
+        assert_eq!(p[2].name, "libpam-runtime");
+        assert_eq!(p[2].version.as_deref(), Some("1.5.3-5ubuntu5.6"));
+    }
+
+    /// The suite list is not part of the name, and `Listing...` is not a package.
+    #[test]
+    fn the_suite_and_the_banner_are_not_packages() {
+        let p = parse_apt_outdated(APT);
+        assert!(!p.iter().any(|x| x.name.contains('/')), "{:?}", p);
+        assert!(!p.iter().any(|x| x.name.starts_with("Listing")), "{:?}", p);
+    }
+
+    #[test]
+    fn nothing_upgradable_is_nothing() {
+        assert!(parse_apt_outdated("").is_empty());
+        assert!(parse_apt_outdated("Listing...\n").is_empty());
+    }
+}

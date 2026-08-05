@@ -58,31 +58,43 @@ pub struct BrewInstallable {
 
 #[async_trait]
 impl Installable for BrewInstallable {
+    /// One `brew install` for every formula, not one each (`Q45`).
+    ///
+    /// brew resolves the dependency graph per invocation, and this runs under
+    /// `run_exclusive` — so N packages one at a time is N resolutions *and* N serialised
+    /// lock acquisitions, for a command that takes a list.
     async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
-        for spec in specs {
-            // Best-effort version pin via brew's versioned formulae (e.g. `python@3.11`).
-            // Only some formulae publish versioned variants; otherwise brew installs latest.
-            let target = match spec.options.get("version") {
+        if specs.is_empty() {
+            return Ok(());
+        }
+        // Best-effort version pin via brew's versioned formulae (e.g. `python@3.11`).
+        // Only some formulae publish versioned variants; otherwise brew installs latest.
+        let targets: Vec<String> = specs
+            .iter()
+            .map(|spec| match spec.options.get("version") {
                 Some(v) if crate::backends::concrete_version(v) => format!("{}@{}", spec.name, v),
                 _ => spec.name.clone(),
-            };
-            info!("Brew: Installing {}...", target);
-            let mut args = vec!["install".to_string()];
-            crate::core::argv::push_names(&mut args, "brew", [&target]);
-            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-            self.core
-                .executor
-                .run_exclusive("brew", "brew", &arg_refs, false)
-                .await?;
-        }
+            })
+            .collect();
+        info!("Brew: Installing {} formula(e)...", targets.len());
+        let mut args = vec!["install".to_string()];
+        crate::core::argv::push_names(&mut args, "brew", targets.iter().map(String::as_str));
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        self.core
+            .executor
+            .run_exclusive("brew", "brew", &arg_refs, false)
+            .await?;
         Ok(())
     }
 
     async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
-        for name in names {
-            info!("Brew: Uninstalling {}...", name);
+        if names.is_empty() {
+            return Ok(());
+        }
+        {
+            info!("Brew: Uninstalling {} formula(e)...", names.len());
             let mut args = vec!["uninstall".to_string()];
-            crate::core::argv::push_names(&mut args, "brew", [name]);
+            crate::core::argv::push_names(&mut args, "brew", names.iter().map(String::as_str));
             let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
@@ -195,6 +207,16 @@ impl Searchable for BrewSearchable {
             .search_output("brew", &arg_refs, false)
             .await?;
         Ok(parse_brew_search(&output))
+    }
+
+    /// `brew outdated --json=v2` — every formula and cask with an update, in one call (`Q44`).
+    async fn outdated_all(&self) -> Result<Option<Vec<Package>>> {
+        let output = self
+            .core
+            .executor
+            .run_output("brew", &["outdated", "--json=v2"], false)
+            .await?;
+        Ok(Some(crate::parsers::common::parse_brew_outdated(&output)))
     }
 }
 
@@ -328,5 +350,44 @@ mod tests {
         assert_eq!(pkgs.len(), 3);
         assert!(pkgs.iter().all(|p| !p.name.starts_with("==>")));
         assert_eq!(pkgs[0].name, "ripgrep");
+    }
+
+    /// Q45: **one command for N packages, not N commands.**
+    ///
+    /// The generic backend batches; this one is hand-written and did not. `brew` takes a
+    /// list, so N one at a time is N of whatever that command costs — and where it runs under
+    /// `run_exclusive`, N serialised lock acquisitions on top.
+    #[tokio::test]
+    async fn a_batch_of_formulae_is_one_brew_call() {
+        let vfs = Arc::new(dashmap::DashMap::new());
+        let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(dashmap::DashMap::new()),
+        );
+        let core = Arc::new(BrewBackendCore::new(exec));
+        let specs = vec![
+            crate::core::PackageSpec { name: "jq".into(), backend: "brew".into(), ..Default::default() },
+            crate::core::PackageSpec { name: "ripgrep".into(), backend: "brew".into(), ..Default::default() },
+        ];
+        BrewInstallable { core: core.clone() }.install(&specs, false).await.unwrap();
+        BrewInstallable { core: core.clone() }
+            .remove(&["jq".to_string(), "ripgrep".to_string()], false)
+            .await
+            .unwrap();
+
+        let calls = mock.get_calls().await;
+        assert_eq!(
+            calls.len(),
+            2,
+            "expected 2 command(s) for the whole batch, got {}: {:?}",
+            calls.len(),
+            calls
+        );
+        assert!(calls[0].contains("jq") && calls[0].contains("ripgrep"), "{:?}", calls);
+        assert!(calls[1].contains("jq") && calls[1].contains("ripgrep"), "{:?}", calls);
     }
 }

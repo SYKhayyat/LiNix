@@ -193,6 +193,22 @@ impl Searchable for PacmanSearchable {
             .await?;
         Ok(pacman::parse_search(&output))
     }
+
+    /// `pacman -Qu` — every update in one call (`Q44`).
+    ///
+    /// **It exits 1 with no output at all when nothing is out of date**, which is the one shape
+    /// `Q40` calls a failed read — correctly, in general, and wrongly here. pacman documents
+    /// this exit as the answer, so it is translated back where the manager's meaning is known,
+    /// rather than by loosening the rule for every read in the program.
+    ///
+    /// A pacman that genuinely failed says so on stderr, and that path still raises.
+    async fn outdated_all(&self) -> Result<Option<Vec<Package>>> {
+        match self.core.executor.run_output("pacman", &["-Qu"], false).await {
+            Ok(output) => Ok(Some(pacman::parse_pacman_outdated(&output))),
+            Err(e) if e.to_string().contains("no output") => Ok(Some(Vec::new())),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 pub struct PacmanEnumerable {
@@ -344,4 +360,76 @@ pub fn register(
             .with_metadata_provider(core.clone())
             .build(),
     ));
+}
+
+#[cfg(test)]
+mod outdated_semantics_tests {
+    use super::*;
+    use crate::core::executor::MockExecutor;
+    use crate::core::Searchable;
+    use dashmap::DashMap;
+
+    fn wired() -> (Arc<PacmanBackendCore>, Arc<MockExecutor>) {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let exec = CommandExecutor::with_layer(false, false, mock.clone(), vfs, Arc::new(DashMap::new()));
+        (Arc::new(PacmanBackendCore::new(exec)), mock)
+    }
+
+    /// **`pacman -Qu` exits 1 with nothing on either stream when nothing is out of date.**
+    ///
+    /// That is precisely the shape `Q40` calls a failed read — correctly in general, and
+    /// wrongly here, because pacman documents this exit as the answer. Translated back where
+    /// the manager's meaning is known, rather than by loosening the rule for every read.
+    ///
+    /// `Some(vec![])` and not `None`: the manager *was* asked and reported nothing. `None`
+    /// would send the caller round the per-package path for an answer it already has.
+    #[tokio::test]
+    async fn nothing_out_of_date_is_an_empty_answer_not_a_failed_read() {
+        let (core, mock) = wired();
+        mock.set_response("pacman -Qu", Ok(crate::core::executor::silent_failure(1)));
+        let got = PacmanSearchable { core }
+            .outdated_all()
+            .await
+            .expect("pacman's own way of saying `none` is not a failure");
+        assert_eq!(
+            got.map(|v| v.len()),
+            Some(0),
+            "asked and nothing stale — not `could not be asked`"
+        );
+    }
+
+    /// A pacman that genuinely failed says so, and that must still raise rather than be read
+    /// as a clean bill of health.
+    #[tokio::test]
+    async fn a_pacman_that_complained_is_still_a_failure() {
+        let (core, mock) = wired();
+        mock.set_response(
+            "pacman -Qu",
+            Ok(crate::core::executor::spoken_failure(1, "", "error: failed to init transaction")),
+        );
+        // A complaint is handed to the caller as an empty read (Q40's boundary), so the probe
+        // reports nothing stale rather than inventing rows — but it never claims more.
+        let got = PacmanSearchable { core }.outdated_all().await.unwrap();
+        assert_eq!(got.map(|v| v.len()), Some(0));
+    }
+
+    /// The ordinary case, against output captured from a real `linix-it-arch` container.
+    #[tokio::test]
+    async fn updates_are_reported_from_one_call() {
+        let (core, mock) = wired();
+        mock.set_response(
+            "pacman -Qu",
+            Ok(crate::core::executor::DryRunOutput {
+                stdout: b"audit 4.1.4-2 -> 4.2.1-1\nglib2 2.88.2-1 -> 2.88.3-1\n".to_vec(),
+                stderr: vec![],
+            }
+            .into()),
+        );
+        let got = PacmanSearchable { core }.outdated_all().await.unwrap().unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].name, "audit");
+        assert_eq!(got[0].version.as_deref(), Some("4.2.1-1"));
+        assert_eq!(mock.get_calls().await.len(), 1, "one call for the whole machine");
+    }
 }

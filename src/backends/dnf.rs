@@ -184,6 +184,20 @@ impl Searchable for DnfSearchable {
             .await?;
         Ok(dnf::parse_dnf_search(&output))
     }
+
+    /// `dnf check-update -q` — every update in one call (`Q44`).
+    ///
+    /// **It exits 100 when it finds something.** That is dnf saying "there are updates", not a
+    /// failure, so this goes through `run_output`, which judges a read by whether it produced
+    /// an answer rather than by its exit code.
+    async fn outdated_all(&self) -> Result<Option<Vec<Package>>> {
+        let output = self
+            .core
+            .executor
+            .run_output("dnf", &["check-update", "-q"], false)
+            .await?;
+        Ok(Some(dnf::parse_dnf_outdated(&output)))
+    }
 }
 
 pub struct DnfRepoManager {

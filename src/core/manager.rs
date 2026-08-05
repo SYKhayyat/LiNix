@@ -271,6 +271,25 @@ pub trait Searchable: Send + Sync {
     /// `pip index versions` — overrides this and pays one round trip instead of a full search.
     /// `None` means this manager looked and does not have the name; an `Err` means it could not
     /// tell, which the resolver treats as a different answer from "no".
+    /// Everything this manager has a newer version for, asked **once** (`Q44`).
+    ///
+    /// `None` — the default — means this manager has no such verb, and the caller must fall
+    /// back to asking about each package separately. `Some(vec![])` is a different answer: the
+    /// manager was asked, and nothing is out of date.
+    ///
+    /// Each returned `Package` carries the name and the version *available*, not the installed
+    /// one; the caller already knows what is installed and only needs the other half.
+    ///
+    /// **This exists because asking per package is not a slower way to get the same answer, it
+    /// is the wrong question.** [`lookup`](Self::lookup) defaults to a whole `search` for one
+    /// name, so `list --outdated` ran one registry search per installed package: measured on a
+    /// Windows host, **771.4s against 2.9s for a plain `list`**. Nearly every manager answers
+    /// the entire question in one command — `apt list --upgradable`, `pacman -Qu`,
+    /// `npm outdated -g --json` — and the ones that cannot are the exception worth naming.
+    async fn outdated_all(&self) -> Result<Option<Vec<Package>>> {
+        Ok(None)
+    }
+
     async fn lookup(&self, name: &str) -> Result<Option<Package>> {
         let results = self.search(name).await?;
         Ok(results.into_iter().find(|p| p.name == name))

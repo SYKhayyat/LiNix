@@ -172,3 +172,138 @@ mod tests {
         assert_eq!(res[1].name, "foo.bar");
     }
 }
+
+/// `dnf check-update -q` (`Q44`).
+///
+/// ```text
+/// Upgrades
+/// audit-libs.x86_64                  4.2.1-1.fc44     updates
+/// coreutils.x86_64                   9.10-5.fc44      updates
+/// ```
+///
+/// **The arch is stripped, because the installed listing strips it** — a row reported as
+/// `audit-libs.x86_64` matches nothing the caller holds, so it would silently report zero
+/// updates on a machine that has them.
+///
+/// `dnf check-update` exits **100** when it finds updates. That is an answer, not a fault, and
+/// it is why this is read through a reader that tolerates a non-zero exit that still spoke.
+pub fn parse_dnf_outdated(output: &str) -> Vec<Package> {
+    sanitize(output)
+        .lines()
+        .filter_map(|line| {
+            let mut f = line.split_whitespace();
+            let name_arch = f.next()?;
+            let version = f.next()?;
+            // A section banner ("Upgrades", "Obsoleting Packages") has no second field.
+            let _repo = f.next()?;
+            let name = strip_rpm_arch(name_arch);
+            // dnf wraps a long name onto its own line; the continuation has no dot-arch and
+            // reads as a package with the version of whatever followed it.
+            if name.is_empty() || !name_arch.contains('.') {
+                return None;
+            }
+            Some(Package::with_version(name, version, "dnf"))
+        })
+        .collect()
+}
+
+/// `zypper --non-interactive list-updates` (`Q44`).
+///
+/// ```text
+/// S  | Repository | Name         | Current Version | Available Version | Arch
+/// ---+------------+--------------+-----------------+-------------------+-------
+/// v  | repo-oss   | curl         | 8.17.0-1.1      | 8.18.0-1.1        | x86_64
+/// ```
+///
+/// Six pipe-separated columns, and the one wanted is *Available*, not *Current*. Both are
+/// versions and they sit next to each other, which is exactly the shape that gets read off by
+/// one column and reports every package as already up to date.
+pub fn parse_zypper_outdated(output: &str) -> Vec<Package> {
+    sanitize(output)
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("---"))
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split('|').collect();
+            if parts.len() < 5 {
+                return None;
+            }
+            let name = parts[2].trim();
+            let available = parts[4].trim();
+            // The header names its own columns and would otherwise become a package.
+            if name.is_empty() || name == "Name" || available.is_empty() {
+                return None;
+            }
+            Some(Package::with_version(name, available, "zypper"))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod outdated_tests {
+    use super::*;
+
+    /// Verbatim from `dnf check-update -q` in a `fedora:latest` container.
+    const DNF: &str = "\
+Upgrades
+audit-libs.x86_64                  4.2.1-1.fc44     updates
+coreutils.x86_64                   9.10-5.fc44      updates
+curl.x86_64                        8.18.0-8.fc44    updates
+";
+
+    #[test]
+    fn dnf_strips_the_arch_so_the_name_matches_the_listing() {
+        let p = parse_dnf_outdated(DNF);
+        assert_eq!(p.len(), 3);
+        assert_eq!(p[0].name, "audit-libs");
+        assert_eq!(p[0].version.as_deref(), Some("4.2.1-1.fc44"));
+        assert!(
+            !p.iter().any(|x| x.name.contains(".x86_64")),
+            "an arch-qualified name matches nothing the caller holds: {:?}",
+            p
+        );
+    }
+
+    /// `Upgrades` is a section banner, not a package.
+    #[test]
+    fn a_dnf_section_banner_is_not_a_package() {
+        assert!(!parse_dnf_outdated(DNF).iter().any(|p| p.name == "Upgrades"));
+    }
+
+    /// Header shape verbatim from `zypper list-updates` in a `linix-it-opensuse` container.
+    const ZYPPER: &str = "\
+S  | Repository                 | Name               | Current Version | Available Version | Arch
+---+----------------------------+--------------------+-----------------+-------------------+-------
+v  | repo-oss                   | curl               | 8.17.0-1.1      | 8.18.0-1.1        | x86_64
+v  | repo-oss                   | glibc              | 2.42-1.1        | 2.43-1.1          | x86_64
+";
+
+    #[test]
+    fn zypper_reads_available_and_not_current() {
+        let p = parse_zypper_outdated(ZYPPER);
+        assert_eq!(p.len(), 2);
+        assert_eq!(p[0].name, "curl");
+        assert_eq!(
+            p[0].version.as_deref(),
+            Some("8.18.0-1.1"),
+            "Current and Available sit next to each other; reading the wrong one reports \
+             every package as already up to date"
+        );
+        assert_eq!(p[1].version.as_deref(), Some("2.43-1.1"));
+    }
+
+    #[test]
+    fn a_zypper_header_row_is_not_a_package() {
+        assert!(!parse_zypper_outdated(ZYPPER).iter().any(|p| p.name == "Name"));
+    }
+
+    #[test]
+    fn nothing_outdated_is_nothing() {
+        assert!(parse_dnf_outdated("").is_empty());
+        assert!(parse_zypper_outdated("").is_empty());
+        // zypper prints its header and nothing beneath when everything is current.
+        assert!(parse_zypper_outdated(
+            "S  | Repository | Name | Current Version | Available Version | Arch\n"
+        )
+        .is_empty());
+    }
+}

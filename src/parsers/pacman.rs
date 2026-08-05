@@ -89,3 +89,52 @@ mod tests {
         assert_eq!(res[1].name, "vim");
     }
 }
+
+/// `pacman -Qu` (`Q44`): `name installed -> available`, one per line.
+pub fn parse_pacman_outdated(output: &str) -> Vec<Package> {
+    crate::utils::text::sanitize(output)
+        .lines()
+        .filter_map(|line| {
+            let (head, available) = line.split_once("->")?;
+            let name = head.split_whitespace().next()?;
+            let available = available.trim();
+            if name.is_empty() || available.is_empty() {
+                return None;
+            }
+            Some(Package::with_version(name, available, "pacman"))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod outdated_tests {
+    use super::*;
+
+    /// Verbatim from `pacman -Qu` in a `linix-it-arch` container.
+    const PACMAN: &str = "\
+archlinux-keyring 20260707.1-1 -> 20260727-1
+audit 4.1.4-2 -> 4.2.1-1
+gcc 16.1.1+r581+gb73ad535acaa-1 -> 16.1.1+r595+g171d15ac6959-1
+";
+
+    #[test]
+    fn pacman_reads_the_right_side_of_the_arrow() {
+        let p = parse_pacman_outdated(PACMAN);
+        assert_eq!(p.len(), 3);
+        assert_eq!(p[0].name, "archlinux-keyring");
+        assert_eq!(p[0].version.as_deref(), Some("20260727-1"));
+        // A version containing `+r581+g...` must survive intact — it is arch's own shape for
+        // a VCS build and splitting it differently loses the identity.
+        assert_eq!(
+            p[2].version.as_deref(),
+            Some("16.1.1+r595+g171d15ac6959-1")
+        );
+    }
+
+    #[test]
+    fn nothing_upgradable_is_nothing() {
+        assert!(parse_pacman_outdated("").is_empty());
+        // `pacman -Qu` prints nothing at all when everything is current.
+        assert!(parse_pacman_outdated("\n\n").is_empty());
+    }
+}

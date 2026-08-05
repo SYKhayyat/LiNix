@@ -719,3 +719,105 @@ mod pixi_real_output_tests {
         assert!(pixi_search("", "pixi").is_empty());
     }
 }
+
+/// pixi `global list --json`: an array of environments, each with its dependencies (`Q43`).
+///
+/// **The environment is the package, and its version comes from the dependency of the same
+/// name.** That is what the text form prints as `ripgrep: 15.2.0`, and this must not widen it:
+/// an environment may pull in dependencies nobody declared, and reporting those as installed
+/// packages is the fault [`pixi_list`] already had to fix once, where `exposes: rg` became a
+/// package named `exposes` at version `rg`.
+pub fn pixi_list_json(output: &str, backend: &str) -> Vec<Package> {
+    let Ok(envs) = serde_json::from_str::<serde_json::Value>(output) else {
+        return Vec::new();
+    };
+    let Some(envs) = envs.as_array() else {
+        return Vec::new();
+    };
+    envs.iter()
+        .filter_map(|env| {
+            let name = env.get("name")?.as_str()?.trim();
+            if name.is_empty() {
+                return None;
+            }
+            let version = env
+                .get("dependencies")
+                .and_then(|d| d.as_array())
+                .and_then(|deps| {
+                    deps.iter()
+                        .find(|d| d.get("name").and_then(|n| n.as_str()) == Some(name))
+                })
+                .and_then(|d| d.get("version"))
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|v| !v.is_empty());
+            Some(match version {
+                Some(v) => Package::with_version(name, v, backend),
+                None => Package::new(name, backend),
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod pixi_json_tests {
+    use super::*;
+
+    /// Verbatim from `pixi global list --json` on the host this was written on.
+    const REAL: &str = r#"[
+      { "name": "ripgrep",
+        "dependencies": [ { "name": "ripgrep", "version": "15.2.0" } ],
+        "exposed": [ { "exposed_name": "rg", "executable": "rg" } ] }
+    ]"#;
+
+    #[test]
+    fn an_environment_is_one_package_at_its_own_version() {
+        let pkgs = pixi_list_json(REAL, "pixi");
+        assert_eq!(pkgs.len(), 1);
+        assert_eq!(pkgs[0].name, "ripgrep");
+        assert_eq!(pkgs[0].version.as_deref(), Some("15.2.0"));
+        assert_eq!(pkgs[0].backend, "pixi");
+    }
+
+    /// The JSON form must report exactly what the text form does — a difference between them
+    /// is a machine that changes shape depending on which pixi is installed.
+    #[test]
+    fn the_json_and_the_tree_agree_about_the_same_machine() {
+        let tree = "Global environments as specified in '/tmp/pixi-global.toml'\n\
+                    └── ripgrep: 15.2.0 \n    └─ exposes: rg\n";
+        let from_tree = pixi_list(tree, "pixi");
+        let from_json = pixi_list_json(REAL, "pixi");
+        assert_eq!(
+            from_tree.iter().map(|p| (&p.name, &p.version)).collect::<Vec<_>>(),
+            from_json.iter().map(|p| (&p.name, &p.version)).collect::<Vec<_>>(),
+        );
+    }
+
+    /// `exposes` is what the environment puts on PATH, not a second tool. The tree parser
+    /// reported it as a package once; the JSON parser must not find a new way to.
+    #[test]
+    fn what_an_environment_exposes_is_not_a_package() {
+        let pkgs = pixi_list_json(REAL, "pixi");
+        assert!(!pkgs.iter().any(|p| p.name == "rg" || p.name == "exposed"));
+    }
+
+    /// A dependency that is not the environment's own name is a dependency, not something the
+    /// user asked for. Adopting those would write a dependency graph into a manifest.
+    #[test]
+    fn a_pulled_in_dependency_is_not_reported_as_installed() {
+        let json = r#"[{"name":"ripgrep","dependencies":[
+            {"name":"ripgrep","version":"15.2.0"},
+            {"name":"libgcc","version":"14.1"}]}]"#;
+        let pkgs = pixi_list_json(json, "pixi");
+        assert_eq!(pkgs.len(), 1, "got {:?}", pkgs);
+        assert_eq!(pkgs[0].name, "ripgrep");
+    }
+
+    #[test]
+    fn malformed_or_empty_json_reports_nothing_rather_than_guessing() {
+        assert!(pixi_list_json("", "pixi").is_empty());
+        assert!(pixi_list_json("not json", "pixi").is_empty());
+        assert!(pixi_list_json("[]", "pixi").is_empty());
+        assert!(pixi_list_json(r#"{"name":"x"}"#, "pixi").is_empty());
+    }
+}

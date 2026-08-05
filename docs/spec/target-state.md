@@ -45,6 +45,19 @@ backend and the program it now runs, and `check health` answers for the replacem
 for the built-in it displaced. Snapshot providers, init systems and secret stores are unchanged —
 they still never shadow a built-in.
 
+**A definition in `adapters/backends.toml` may declare every capability a built-in has**
+(U2, extended 2026-08-05 by `Q43`/`Q44`). `outdated_args` is the manager's own "what has an
+update" verb; `machine_list_args` a machine-readable listing to prefer over `list_args`, with
+`machine_list_parser` beside it. **Absent means *this backend cannot answer that*, never *the
+answer is none*** — a definition with no `outdated_args` is asked per package, which is slower
+and still an answer, while one that reported an empty set would mark the whole backend current.
+A `machine_list_args` without its own parser is refused by name rather than read with the text
+parser, which would hand JSON to a column reader and report an empty machine. And a definition
+that declares an outdated verb is reachable through it **even with no `search_args`** — a
+manager that lists updates but has no catalogue to search is an ordinary shape, and gating the
+capability on search alone made its updates silently unreportable. `search` itself still refuses
+by name when it was never configured.
+
 **Every file above may begin with a byte-order mark, and it is read anyway** (Q22). Notepad
 writes one by default and no editor shows it, so before this the three bytes became part of the
 first name on the first line and the refusal named two strings that render identically. The mark
@@ -1724,6 +1737,25 @@ its output pipe is bounded by the same clock, on the same silence: readers that 
 nothing for `command_idle_timeout_secs` are abandoned and the command **fails by name**. A bound
 that ends before the read ends is a bound a command can walk around, and the walk-around was
 silent *and* returned the child's exit code — so the command reported **success** (V.131).
+
+**A question about the whole machine is asked of each manager once, not of each package**
+(2026-08-05, `Q44`). `list --outdated` asked every manager for one package's latest version at a
+time — and `lookup` defaults to a whole `search`, so it ran one registry search per installed
+package: **771.4s, against 2.9s for the `list` that fed it**. Nearly every manager answers the
+entire question in one command, and where one does the manager's verdict stands — LiNix does not
+re-compare versions it was already told about, because `> 3.13.5` is a version winget really
+prints. A manager with no such verb keeps the per-package path, **concurrently**. Measured after:
+25.6s. **Not knowing and finding nothing stay different answers**, here as everywhere.
+
+**Where a manager offers a machine-readable listing, LiNix asks for it — and negotiates**
+(2026-08-05, `Q43`). pixi, dotnet and scoop each print a listing drawn for a human and will hand
+over JSON on request, but the flag that asks for it arrived in some version of the tool and LiNix
+does not choose which one is installed. So it asks, and a manager that refuses is read from its
+text listing instead, once per run. **Never assume the flag.** An unsupported flag fails with a
+usage message, which every reader here hands back as an empty result — so assuming it would
+report an empty machine to exactly the users on older tooling, which is `Q40` under a new name.
+Each machine-format parser is its own function, never the text parser made lenient: one parser
+that accepts two shapes is how a malformed answer in one is silently read as the other.
 
 **A read has its own bound** (2026-08-05, `Q42`). `query_idle_timeout_secs`, default 120, `0`
 disables, never longer than the bound above. The number above is sized for `Checkpoint-Computer`,

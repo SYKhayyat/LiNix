@@ -764,35 +764,88 @@ pub(crate) struct Outdated {
 /// Find managed packages whose backend reports a newer version than what's installed. Backends
 /// without a `Searchable` capability (no "latest" source) are honestly skipped, not guessed at.
 pub(crate) async fn compute_outdated(app: &App, list: &[linix::core::Package]) -> Vec<Outdated> {
-    use version_compare::{compare, Cmp};
-    let mut out = Vec::new();
+    use futures::stream::{self, StreamExt};
+    use std::collections::HashMap;
+
+    // Grouped by backend, because the question is per manager and was being asked per package.
+    // `Searchable::lookup` defaults to a whole `search` for one name, so this ran one registry
+    // search per installed package: measured 771.4s, against 2.9s for the `list` that fed it.
+    // Nearly every manager answers the whole question in one command (Q44).
+    let mut by_backend: HashMap<String, Vec<&linix::core::Package>> = HashMap::new();
     for p in list {
-        let Some(cur) = p.version.as_deref() else {
-            continue;
-        };
-        let Some(b) = app.registry.get(&p.backend) else {
-            continue;
-        };
-        let Some(s) = b.as_searchable() else {
-            continue;
-        };
-        let Ok(Some(remote)) = s.lookup(&p.name).await else {
-            continue;
-        };
-        let Some(latest) = remote.version.as_deref() else {
-            continue;
-        };
-        // A newer remote version than installed → outdated. Unparseable versions compare
-        // unequal safely and are simply not reported.
-        if compare(latest, cur) == Ok(Cmp::Gt) {
-            out.push(Outdated {
-                backend: p.backend.clone(),
-                name: p.name.clone(),
-                installed: cur.to_string(),
-                latest: latest.to_string(),
-            });
+        if p.version.is_some() {
+            by_backend.entry(p.backend.clone()).or_default().push(p);
         }
     }
+
+    let cap = app.config.max_parallel.max(1);
+    let per_backend = stream::iter(by_backend)
+        .map(|(backend, installed)| async move {
+            let b = app.registry.get(&backend)?;
+            // No `Searchable` means no source for "latest" at all — honestly skipped, never
+            // guessed at.
+            let s = b.as_searchable()?;
+
+            // One call for the whole manager, where it has such a verb.
+            if let Ok(Some(available)) = s.outdated_all().await {
+                let latest: HashMap<&str, &str> = available
+                    .iter()
+                    .filter_map(|p| Some((p.name.as_str(), p.version.as_deref()?)))
+                    .collect();
+                return Some(
+                    installed
+                        .iter()
+                        .filter_map(|p| {
+                            let cur = p.version.as_deref()?;
+                            let newest = latest.get(p.name.as_str())?;
+                            // The manager has already decided this is an update. Comparing
+                            // again would second-guess it with a version grammar it does not
+                            // use — and `> 3.13.5` is a version winget really prints.
+                            Some(Outdated {
+                                backend: p.backend.clone(),
+                                name: p.name.clone(),
+                                installed: cur.to_string(),
+                                latest: (*newest).to_string(),
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                );
+            }
+
+            // No such verb — ask per package, but concurrently rather than one after another.
+            // This is the honest answer for `cargo`, which has no outdated check at all.
+            let rows = stream::iter(installed)
+                .map(|p| {
+                    let s = s.clone();
+                    async move {
+                        let cur = p.version.as_deref()?;
+                        let remote = s.lookup(&p.name).await.ok()??;
+                        let newest = remote.version.as_deref()?;
+                        (version_compare::compare(newest, cur)
+                            == Ok(version_compare::Cmp::Gt))
+                        .then(|| Outdated {
+                            backend: p.backend.clone(),
+                            name: p.name.clone(),
+                            installed: cur.to_string(),
+                            latest: newest.to_string(),
+                        })
+                    }
+                })
+                .buffer_unordered(cap)
+                .filter_map(|r| async move { r })
+                .collect::<Vec<_>>()
+                .await;
+            Some(rows)
+        })
+        .buffer_unordered(cap)
+        .filter_map(|r| async move { r })
+        .collect::<Vec<Vec<Outdated>>>()
+        .await;
+
+    let mut out: Vec<Outdated> = per_backend.into_iter().flatten().collect();
+    // The fan-out finishes in whatever order the managers do, and a listing whose order
+    // depends on which manager answered quickest changes between runs.
+    out.sort_by(|a, b| (&a.backend, &a.name).cmp(&(&b.backend, &b.name)));
     out
 }
 

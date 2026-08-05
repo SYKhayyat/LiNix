@@ -672,3 +672,257 @@ mod export_tests {
         assert_eq!(pkgs[0].name, "jq.jq");
     }
 }
+
+/// `scoop export`'s JSON (`Q43`).
+///
+/// Same fields as `scoop list`, already parsed: `{"apps":[{"Name","Version","Source","Info"}]}`.
+///
+/// **The two filters below are not tidiness; they are the bug `parse_scoop_list` exists to
+/// prevent.** scoop keeps a failed install in its listing forever, with `Info` saying so and
+/// `Version` empty. Read by whitespace-splitting, one such row became a package named `jq` at
+/// version `2026-07-21`, `adopt` wrote it into a manifest, and no `jq` was ever on PATH. The
+/// JSON says the same thing in named fields — which is the point — but only if it is asked the
+/// same questions.
+pub fn parse_scoop_export(json: &str) -> Vec<Package> {
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let Some(apps) = doc.get("apps").and_then(|a| a.as_array()) else {
+        return Vec::new();
+    };
+    apps.iter()
+        .filter_map(|a| {
+            let name = a.get("Name")?.as_str()?.trim();
+            if name.is_empty() {
+                return None;
+            }
+            let info = a
+                .get("Info")
+                .and_then(|i| i.as_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if info.contains("failed") {
+                return None;
+            }
+            let version = a.get("Version").and_then(|v| v.as_str()).unwrap_or("").trim();
+            // No version means scoop has a directory and no installed manifest — the same
+            // half-state by a different route.
+            if version.is_empty() {
+                return None;
+            }
+            Some(Package::with_version(name, version, "scoop"))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod scoop_export_tests {
+    use super::*;
+
+    /// Shaped from a real `scoop export` on this host, with the two half-states added back.
+    const EXPORT: &str = r#"{
+        "buckets": [ { "Name": "main", "Source": "https://github.com/ScoopInstaller/Main.git" } ],
+        "apps": [
+            { "Info": "", "Source": "main", "Name": "7zip",    "Version": "26.00" },
+            { "Info": "Install failed", "Source": "main", "Name": "jq", "Version": "" },
+            { "Info": "", "Source": "main", "Name": "halfway", "Version": "" },
+            { "Info": "", "Source": "main", "Name": "fd",      "Version": "10.4.2" }
+        ]
+    }"#;
+
+    #[test]
+    fn an_export_yields_the_installed_apps() {
+        let pkgs = parse_scoop_export(EXPORT);
+        let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["7zip", "fd"]);
+        assert_eq!(pkgs[0].version.as_deref(), Some("26.00"));
+        assert!(pkgs.iter().all(|p| p.backend == "scoop"));
+    }
+
+    /// The scar. A failed install stays in scoop's listing forever and is not installed
+    /// software; `adopt` wrote one into a manifest once.
+    #[test]
+    fn a_failed_install_is_not_an_installed_package() {
+        assert!(!parse_scoop_export(EXPORT).iter().any(|p| p.name == "jq"));
+    }
+
+    /// The same half-state by the other route — a directory with no installed manifest.
+    #[test]
+    fn an_app_with_no_version_is_not_an_installed_package() {
+        assert!(!parse_scoop_export(EXPORT).iter().any(|p| p.name == "halfway"));
+    }
+
+    /// Both readers answer for the same machine, so they must answer alike — including about
+    /// the rows that are not packages.
+    #[test]
+    fn the_export_and_the_table_agree_about_the_same_machine() {
+        let table = "Installed apps:\n\n\
+                     Name     Version         Source Updated             Info\n\
+                     ----     -------         ------ -------             ----\n\
+                     7zip     26.00           main   2026-04-19 07:09:55     \n\
+                     jq                              2026-07-21 13:48:29 Install failed\n\
+                     halfway                         2026-07-21 13:48:29     \n\
+                     fd       10.4.2          main   2026-07-08 15:15:49     \n";
+        let a = parse_installed("scoop", table);
+        let b = parse_scoop_export(EXPORT);
+        assert_eq!(
+            a.iter().map(|p| (&p.name, &p.version)).collect::<Vec<_>>(),
+            b.iter().map(|p| (&p.name, &p.version)).collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn a_malformed_or_appless_export_yields_nothing() {
+        assert!(parse_scoop_export("").is_empty());
+        assert!(parse_scoop_export("not json").is_empty());
+        assert!(parse_scoop_export(r#"{"buckets":[]}"#).is_empty());
+        assert!(parse_scoop_export(r#"{"apps":[]}"#).is_empty());
+    }
+}
+
+/// `winget upgrade`: the same table as `list`, with `Available` filled in (`Q44`).
+///
+/// The Id, not the Name — a declaration is written with the Id, and `7-Zip 25.01 (x64)` is not
+/// a name `winget install` takes. The version reported is the one *available*; the caller
+/// already knows what is installed.
+pub fn parse_winget_outdated(output: &str) -> Vec<Package> {
+    parse_winget_table(output, &["Id", "Available"])
+        .into_iter()
+        .filter_map(|row| {
+            let (id, available) = (&row[0], &row[1]);
+            if id.is_empty() || available.is_empty() {
+                return None;
+            }
+            Some(Package::with_version(id, available, "winget"))
+        })
+        .collect()
+}
+
+/// `scoop status`: Name / Installed Version / Latest Version / Missing Dependencies / Info.
+///
+/// Sliced by header offsets like every other scoop table here, and for the same reason — the
+/// two rightmost columns are routinely empty, and whitespace-splitting an empty cell shifts
+/// every later value one place left.
+pub fn parse_scoop_outdated(output: &str) -> Vec<Package> {
+    let known = [
+        "Name",
+        "Installed Version",
+        "Latest Version",
+        "Missing Dependencies",
+        "Info",
+    ];
+    slice_fixed_table(
+        output,
+        &known,
+        |line| line.contains("Name") && line.contains("Latest Version"),
+        &["Name", "Latest Version"],
+    )
+    .into_iter()
+    .filter_map(|row| {
+        let (name, latest) = (&row[0], &row[1]);
+        if name.is_empty() || latest.is_empty() {
+            return None;
+        }
+        Some(Package::with_version(name, latest, "scoop"))
+    })
+    .collect()
+}
+
+/// `choco outdated -r`: `name|current|available|pinned`, one per line.
+///
+/// A pinned package is deliberately held at its version, so reporting it as outdated invites
+/// the user to fix something they chose.
+pub fn parse_choco_outdated(output: &str) -> Vec<Package> {
+    sanitize(output)
+        .lines()
+        .filter_map(|line| {
+            let mut f = line.trim().split('|');
+            let name = f.next()?.trim();
+            let _current = f.next()?;
+            let available = f.next()?.trim();
+            let pinned = f.next().unwrap_or("false").trim().eq_ignore_ascii_case("true");
+            if name.is_empty() || available.is_empty() || pinned {
+                return None;
+            }
+            Some(Package::with_version(name, available, "choco"))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod outdated_tests {
+    use super::*;
+
+    /// Verbatim from `winget upgrade` on this host.
+    const WINGET: &str = "\
+Name                                                         Id                                    Version                       Available                     Source
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+7-Zip 25.01 (x64)                                            7zip.7zip                             25.01                         26.02                         winget
+Adobe Acrobat (64-bit)                                       Adobe.Acrobat.Pro                     25.001.21111                  26.001.21771                  winget
+";
+
+    #[test]
+    fn winget_reports_the_id_and_the_available_version() {
+        let p = parse_winget_outdated(WINGET);
+        assert_eq!(p.len(), 2);
+        assert_eq!(p[0].name, "7zip.7zip");
+        assert_eq!(p[0].version.as_deref(), Some("26.02"));
+        assert_eq!(p[1].name, "Adobe.Acrobat.Pro");
+        assert_eq!(p[1].version.as_deref(), Some("26.001.21771"));
+    }
+
+    /// The display Name is not an identifier `winget install` accepts, and a declaration is
+    /// written with the Id. Reporting `7-Zip 25.01 (x64)` would name a package nothing has.
+    #[test]
+    fn winget_never_reports_the_display_name() {
+        assert!(!parse_winget_outdated(WINGET)
+            .iter()
+            .any(|p| p.name.contains(' ')));
+    }
+
+    /// Verbatim from `scoop status` on this host, banner included.
+    const SCOOP: &str = "\
+WARN  Scoop bucket(s) out of date. Run 'scoop update' to get the latest changes.
+
+Name    Installed Version Latest Version Missing Dependencies Info
+----    ----------------- -------------- -------------------- ----
+7zip    26.00             26.02                                   
+kubectl 1.36.2            1.36.3                                  
+";
+
+    #[test]
+    fn scoop_reports_the_latest_not_the_installed_version() {
+        let p = parse_scoop_outdated(SCOOP);
+        assert_eq!(p.len(), 2);
+        assert_eq!(p[0].name, "7zip");
+        assert_eq!(
+            p[0].version.as_deref(),
+            Some("26.02"),
+            "the Latest column, not Installed — they sit next to each other and this table \
+             has two columns whose header both end in `Version`"
+        );
+        assert_eq!(p[1].version.as_deref(), Some("1.36.3"));
+    }
+
+    /// A pin is a decision. Offering to undo it reads as LiNix not knowing you made it.
+    #[test]
+    fn a_pinned_choco_package_is_not_reported_as_outdated() {
+        let out = "git|2.54.0|2.55.0|false\nnodejs|20.0.0|22.0.0|true\n";
+        let p = parse_choco_outdated(out);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].name, "git");
+        assert_eq!(p[0].version.as_deref(), Some("2.55.0"));
+    }
+
+    #[test]
+    fn nothing_outdated_parses_as_nothing_rather_than_a_row() {
+        assert!(parse_winget_outdated("").is_empty());
+        assert!(parse_scoop_outdated("").is_empty());
+        assert!(parse_choco_outdated("").is_empty());
+        // Header with no rows beneath it.
+        assert!(parse_scoop_outdated(
+            "Name    Installed Version Latest Version Missing Dependencies Info\n----    ----------------- -------------- -------------------- ----\n"
+        )
+        .is_empty());
+    }
+}

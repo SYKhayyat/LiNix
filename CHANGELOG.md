@@ -11,6 +11,23 @@ to be. LiNix spends its entire runtime waiting on other people's processes and o
 networks, so all of this is one of four shapes: don't ask twice, don't ask one at a time, don't
 ask at all, ask in one breath.*
 
+- **`list --outdated` asks each manager once instead of each package** (`Q44`). It walked the
+  installed set calling `lookup(name)` — and `lookup` defaults to a whole *search* for that one
+  name, so a 280-package machine ran 280 registry searches. Measured **771.4 s, against 2.9 s for
+  the `list` that fed it**; after, **25.6 s**. Thirteen managers now answer in one call, and every
+  parser but brew's is written against output captured from the real tool (apt, dnf, pacman, apk
+  and zypper from containers). A manager with no such verb is still asked per package, but
+  concurrently — `cargo` has no outdated check at all, and that is stated rather than hidden.
+- **Five backends stopped running one command per package** (`Q45`) — brew, nix, mise, vscode and
+  snap's removal. `brew install a b c` resolves the dependency graph once; one at a time was N
+  resolutions and, under `run_exclusive`, N serialised lock acquisitions. Verified by running the
+  real tool in containers for nix (`removed 2 packages, kept 17`), mise and brew; vscode and snap
+  are argv-tested only and the register says so. `snap install` still cannot batch — it chooses
+  per package between `install` and `refresh --channel=`.
+- **pixi, dotnet and scoop are read from JSON where the tool offers it** (`Q43`), instead of a
+  box-drawing tree and two fixed-width tables. **Asked for, never assumed:** the flags are
+  version-dependent, so a manager that refuses is read from its text listing, once per run.
+
 - **Packages going to the same manager in the same wave now share one command line** (`Y1`).
   Measured before: six declared packages produced **six separate `apt` processes** and
   12,465 ms, against **3,161 ms** for `apt install` of eight packages as one command — and one
@@ -86,6 +103,25 @@ ask at all, ask in one breath.*
 
 
 ### Fixed
+- **A read that fails no longer becomes an empty answer** (`Q40`). `run_output` ignored exit
+  status by design — "no such package" is an ordinary non-zero reply — but it ignored the *silent*
+  failures too. Measured without LiNix present: 3 of 16 concurrent cold-start `winget list` exit
+  `0x8A150001` having written zero bytes anywhere. Through LiNix that became `Ok("")` → no
+  packages → **`linix list --backend winget` printing nothing and exiting 0 on a machine with 280
+  packages**, and `info` reporting an installed package as absent. Now a non-zero exit that said
+  nothing on either stream is a failure; one that printed keeps what it printed. Fixed at the
+  primitive and at the three callers that turned it into a claim.
+- **Retryability is read from the exit code as well as the output** (`Q41`), and a read
+  classified transient is retried (`read_retry_attempts`, default 3). Every marker list was text,
+  and the failure above writes none — so the one signal present was read by nothing but
+  `is_benign`. Reads only: a read is idempotent, a mutation retried on a guess installs twice.
+- **`adopt` declares only what a manager can put back** (`Q36`). `winget list` reports 186 of 280
+  rows as `ARP\…`/`MSIX\…` identifiers it synthesises from the registry; `winget uninstall` takes
+  them and **`winget install` refuses every one**. `adopt` now reads `winget export` — 78
+  declarations that all work — and names what it left out and why.
+- **`gem` no longer reports `default: 4.0.10` as a version.** RubyGems marks the gems shipped with
+  Ruby, and the marker is not part of the version — no `@version=` could ever match it.
+
 
 - **A command that stops talking no longer stops LiNix forever.** An uninstall sat 76 minutes on
   a Windows restore point that had already been written; nothing in LiNix bounded a child
@@ -101,6 +137,14 @@ ask at all, ask in one breath.*
   shell, `$EDITOR`, the history TUI, the bisect oracle) are unchanged.
 
 ### Added
+- **`query_idle_timeout_secs`** (default 120) — a read's own bound on silence (`Q42`).
+  `command_idle_timeout_secs` is sized for `Checkpoint-Computer`, a mutation legitimately silent
+  for minutes, and every read inherited it, so a wedged 1.5 s listing cost fifteen minutes.
+- **`read_retry_attempts`** (default 3) — how many times a transient read is asked again.
+- **`outdated_args` and `machine_list_args` in `adapters/backends.toml`** — a custom backend can
+  declare the same two capabilities the built-ins gained. Absent means *cannot be asked*, never
+  *nothing to report*.
+
 
 - **`command_idle_timeout_secs`** (default `900`, `0` disables). Bounds **silence, not
   duration** — a build that prints for an hour is never touched, a manager that has stopped

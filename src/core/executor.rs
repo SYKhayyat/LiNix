@@ -74,7 +74,7 @@ pub(crate) fn silent_failure(code: i32) -> StdOutput {
 
 /// A run that exited non-zero and still produced its answer.
 #[cfg(test)]
-fn spoken_failure(code: i32, stdout: &str, stderr: &str) -> StdOutput {
+pub(crate) fn spoken_failure(code: i32, stdout: &str, stderr: &str) -> StdOutput {
     StdOutput {
         status: fabricate_status(code),
         stdout: stdout.as_bytes().to_vec(),
@@ -1105,6 +1105,26 @@ impl CommandExecutor {
             backoff *= 3;
         }
         unreachable!("the loop returns on its last attempt")
+    }
+
+    /// A read that must distinguish "this manager will not do that" from "it did it and found
+    /// nothing" — the question `run_output` deliberately refuses to answer.
+    ///
+    /// Used to ask a manager for a machine-readable listing it may be too old to support
+    /// (`Q43`). An unsupported flag exits non-zero with a usage message, which every other
+    /// reader here hands back as an empty result — correct for them, and the exact bug `Q40`
+    /// closed if a caller then treats it as the listing. So negotiation gets its own primitive
+    /// rather than a looser rule for everybody.
+    ///
+    /// Not retried and not classified: the answer being sought *is* the failure.
+    pub async fn probe_output(&self, cmd: &str, args: &[&str]) -> Result<String> {
+        let output = self.read_raw(cmd, args, false).await?;
+        if !output.status.success() && !self.exit_policy.is_benign(output.status.code()) {
+            return Err(self.answerless_read(cmd, args, &output));
+        }
+        Ok(crate::utils::text::sanitize(&String::from_utf8_lossy(
+            &output.stdout,
+        )))
     }
 
     /// The failure for a read that exited non-zero without producing an answer.

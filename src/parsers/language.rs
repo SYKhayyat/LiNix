@@ -208,7 +208,13 @@ fn parse_gem_list(output: &str) -> Vec<Package> {
                 .trim_matches(|c| c == '(' || c == ')')
                 .split(',')
                 .next()?;
-            Some(Package::with_version(name.trim(), ver.trim(), "gem"))
+            // `bundler (default: 4.0.10)` — RubyGems marks the gems that ship with Ruby,
+            // and the marker is not part of the version. Kept as one, `linix list` printed
+            // `default: 4.0.10` in its version column: an `@version=` can never match it,
+            // and `list --outdated` shows it beside a real version, which reads as LiNix
+            // not knowing what is installed.
+            let ver = ver.trim().strip_prefix("default:").unwrap_or(ver).trim();
+            Some(Package::with_version(name.trim(), ver, "gem"))
         })
         .collect()
 }
@@ -410,5 +416,233 @@ Done in 0.05s.
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].name, "laravel/installer");
         assert_eq!(res[0].version, Some("v4.0.0".into()));
+    }
+}
+
+/// `pip list --outdated --format=json` (`Q44`).
+///
+/// ```json
+/// [{"name": "pip", "version": "26.1.2", "latest_version": "26.2.1", "latest_filetype": "wheel"}]
+/// ```
+///
+/// `latest_version`, never `version` — the second is what is installed, and reporting it as the
+/// available one makes every package look current.
+pub fn parse_pip_outdated(output: &str) -> Vec<Package> {
+    let Ok(items) = serde_json::from_str::<Value>(output) else {
+        return Vec::new();
+    };
+    let Some(items) = items.as_array() else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|p| {
+            let name = p.get("name")?.as_str()?.trim();
+            let latest = p.get("latest_version")?.as_str()?.trim();
+            if name.is_empty() || latest.is_empty() {
+                return None;
+            }
+            Some(Package::with_version(name, latest, "pip"))
+        })
+        .collect()
+}
+
+/// `npm outdated -g --json` / `pnpm outdated -g --json` (`Q44`).
+///
+/// ```json
+/// {"typescript": {"current": "5.4.0", "wanted": "5.6.0", "latest": "5.7.2"}}
+/// ```
+///
+/// **`latest`, not `wanted`.** `wanted` is the newest release satisfying the range in a
+/// package.json, and a global install has no package.json to constrain it — reporting `wanted`
+/// would hide a major version behind a caret nobody wrote.
+///
+/// `npm outdated` exits non-zero when it *finds* something, which is why this is read through
+/// `run_output` rather than a status-checked reader.
+pub fn parse_npm_outdated(output: &str, backend: &str) -> Vec<Package> {
+    let Ok(doc) = serde_json::from_str::<Value>(output) else {
+        return Vec::new();
+    };
+    let Some(map) = doc.as_object() else {
+        return Vec::new();
+    };
+    map.iter()
+        .filter_map(|(name, v)| {
+            let latest = v.get("latest")?.as_str()?.trim();
+            if name.trim().is_empty() || latest.is_empty() {
+                return None;
+            }
+            Some(Package::with_version(name.trim(), latest, backend))
+        })
+        .collect()
+}
+
+/// `gem outdated`: `name (installed < latest)`, one per line (`Q44`).
+pub fn parse_gem_outdated(output: &str) -> Vec<Package> {
+    sanitize(output)
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let (name, rest) = line.split_once(" (")?;
+            let latest = rest.trim_end_matches(')').split('<').nth(1)?.trim();
+            if name.is_empty() || latest.is_empty() {
+                return None;
+            }
+            Some(Package::with_version(name.trim(), latest, "gem"))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod outdated_tests {
+    use super::*;
+
+    /// Verbatim from `pip list --outdated --format=json` on this host.
+    const PIP: &str =
+        r#"[{"name": "pip", "version": "26.1.2", "latest_version": "26.2.1", "latest_filetype": "wheel"}]"#;
+
+    #[test]
+    fn pip_reports_the_latest_version_not_the_installed_one() {
+        let p = parse_pip_outdated(PIP);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].name, "pip");
+        assert_eq!(
+            p[0].version.as_deref(),
+            Some("26.2.1"),
+            "`version` is what is installed; reading it as the available one makes every \
+             package look current"
+        );
+    }
+
+    /// `wanted` is the newest release inside a package.json range. A global install has no
+    /// package.json, so honouring a caret nobody wrote would hide a major version.
+    #[test]
+    fn npm_reports_latest_rather_than_the_range_satisfying_wanted() {
+        let out = r#"{"typescript":{"current":"5.4.0","wanted":"5.6.0","latest":"5.7.2"}}"#;
+        let p = parse_npm_outdated(out, "npm");
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].name, "typescript");
+        assert_eq!(p[0].version.as_deref(), Some("5.7.2"));
+        assert_eq!(p[0].backend, "npm");
+    }
+
+    /// Verbatim from `gem outdated` on this host.
+    #[test]
+    fn gem_reads_the_right_side_of_the_comparison() {
+        let out = "bigdecimal (4.0.1 < 4.1.2)\nbundler (4.0.10 < 4.0.18)\ncsv (3.3.5 < 3.3.6)\n";
+        let p = parse_gem_outdated(out);
+        assert_eq!(p.len(), 3);
+        assert_eq!(p[0].name, "bigdecimal");
+        assert_eq!(p[0].version.as_deref(), Some("4.1.2"));
+        assert_eq!(p[2].version.as_deref(), Some("3.3.6"));
+    }
+
+    /// Nothing outdated is a real answer and every one of these has its own way of saying it.
+    #[test]
+    fn nothing_outdated_is_nothing_not_a_row() {
+        assert!(parse_pip_outdated("[]").is_empty());
+        assert!(parse_pip_outdated("").is_empty());
+        assert!(parse_npm_outdated("{}", "npm").is_empty());
+        assert!(parse_npm_outdated("", "npm").is_empty());
+        assert!(parse_gem_outdated("").is_empty());
+        // gem prints nothing at all when everything is current.
+        assert!(parse_gem_outdated("\n\n").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod gem_default_tests {
+    use super::*;
+
+    /// `gem list --local` marks the gems that ship with Ruby, and the marker is not part of
+    /// the version. Verbatim from this host.
+    #[test]
+    fn a_default_gem_reports_its_version_and_not_the_marker() {
+        let out = "bigdecimal (4.0.1)\nbundler (default: 4.0.10)\ncsv (3.3.5, 3.3.4)\n";
+        let p = parse_installed("gem", out);
+        assert_eq!(p.len(), 3);
+        assert_eq!(p[0].version.as_deref(), Some("4.0.1"));
+        assert_eq!(
+            p[1].version.as_deref(),
+            Some("4.0.10"),
+            "`default:` is RubyGems saying the gem ships with Ruby, not part of the version"
+        );
+        // The existing behaviour for a multi-version gem is unchanged: the newest wins.
+        assert_eq!(p[2].version.as_deref(), Some("3.3.5"));
+    }
+}
+
+/// `composer global outdated --format=json` (`Q44`).
+///
+/// ```json
+/// {"installed":[{"name":"psr/log","version":"1.1.4","latest":"3.0.2",
+///                "latest-status":"update-possible"}]}
+/// ```
+///
+/// **`latest`, not `version`** — the second is what is installed. And the JSON is *found*, not
+/// assumed: composer prints `Changed current directory to /root/.composer` ahead of it, so a
+/// strict parse fails and reports nothing outdated on every machine with a global config dir,
+/// which is all of them.
+pub fn parse_composer_outdated(output: &str) -> Vec<Package> {
+    let text = sanitize(output);
+    let Some(start) = text.find('{') else {
+        return Vec::new();
+    };
+    let Ok(doc) = serde_json::from_str::<Value>(&text[start..]) else {
+        return Vec::new();
+    };
+    let Some(items) = doc.get("installed").and_then(|i| i.as_array()) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|p| {
+            let name = p.get("name")?.as_str()?.trim();
+            let latest = p.get("latest")?.as_str()?.trim();
+            if name.is_empty() || latest.is_empty() {
+                return None;
+            }
+            Some(Package::with_version(name, latest, "composer"))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod composer_outdated_tests {
+    use super::*;
+
+    /// Verbatim from `composer global outdated --format=json` in an `ubuntu:24.04` container,
+    /// banner included — composer really does print that line first.
+    const REAL: &str = r#"Changed current directory to /root/.composer
+{
+    "installed": [
+        {
+            "name": "psr/log",
+            "direct-dependency": true,
+            "version": "1.1.4",
+            "latest": "3.0.2",
+            "latest-status": "update-possible"
+        }
+    ]
+}"#;
+
+    #[test]
+    fn composer_reads_latest_past_its_own_banner() {
+        let p = parse_composer_outdated(REAL);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].name, "psr/log");
+        assert_eq!(
+            p[0].version.as_deref(),
+            Some("3.0.2"),
+            "`version` is what is installed; `latest` is the answer"
+        );
+        assert_eq!(p[0].backend, "composer");
+    }
+
+    #[test]
+    fn nothing_outdated_is_nothing() {
+        assert!(parse_composer_outdated("").is_empty());
+        assert!(parse_composer_outdated("Changed current directory to /x\n").is_empty());
+        assert!(parse_composer_outdated(r#"{"installed":[]}"#).is_empty());
     }
 }

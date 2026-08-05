@@ -73,3 +73,82 @@ mod tests {
         assert_eq!(res[0].version.as_deref(), Some("8.0.0"));
     }
 }
+
+/// `dotnet tool list --global --format json` (SDK 10+, `Q43`).
+///
+/// ```json
+/// {"version":1,"data":[{"packageId":"dotnetsay","version":"3.0.3","commands":["dotnetsay"]}]}
+/// ```
+///
+/// The table form above is read by splitting on whitespace, which is safe only because NuGet
+/// ids never contain spaces — a property of NuGet, not of the format. This reads the id.
+pub fn parse_dotnet_list_json(output: &str) -> Vec<Package> {
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(output) else {
+        return Vec::new();
+    };
+    let Some(items) = doc.get("data").and_then(|d| d.as_array()) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|t| {
+            let id = t.get("packageId")?.as_str()?.trim();
+            if id.is_empty() {
+                return None;
+            }
+            let version = t
+                .get("version")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|v| !v.is_empty());
+            Some(match version {
+                Some(v) => Package::with_version(id, v, "dotnet"),
+                None => Package::new(id, "dotnet"),
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod json_tests {
+    use super::*;
+
+    /// Verbatim from `dotnet tool list --global --format json` on SDK 10.0.301.
+    const REAL: &str =
+        r#"{"version":1,"data":[{"packageId":"dotnetsay","version":"3.0.3","commands":["dotnetsay"]}]}"#;
+
+    #[test]
+    fn a_tool_is_its_package_id_and_version() {
+        let pkgs = parse_dotnet_list_json(REAL);
+        assert_eq!(pkgs.len(), 1);
+        assert_eq!(pkgs[0].name, "dotnetsay");
+        assert_eq!(pkgs[0].version.as_deref(), Some("3.0.3"));
+        assert_eq!(pkgs[0].backend, "dotnet");
+    }
+
+    /// The two forms describe the same machine, so they must report the same thing. A
+    /// difference here is a listing that changes shape with the installed SDK.
+    #[test]
+    fn the_json_and_the_table_agree_about_the_same_machine() {
+        let table = "Package Id      Version      Commands \n\
+                     --------------------------------------\n\
+                     dotnetsay       3.0.3        dotnetsay\n";
+        let a = parse_dotnet_list(table);
+        let b = parse_dotnet_list_json(REAL);
+        assert_eq!(
+            a.iter().map(|p| (&p.name, &p.version)).collect::<Vec<_>>(),
+            b.iter().map(|p| (&p.name, &p.version)).collect::<Vec<_>>(),
+        );
+    }
+
+    /// An SDK too old for `--format json` fails rather than printing the table, so this never
+    /// sees one — but if the negotiation ever regressed, reading a table as JSON must report
+    /// nothing rather than inventing a package from a header row.
+    #[test]
+    fn a_table_fed_to_the_json_reader_yields_nothing() {
+        assert!(parse_dotnet_list_json("Package Id  Version\n----\nx  1.0\n").is_empty());
+        assert!(parse_dotnet_list_json("").is_empty());
+        assert!(parse_dotnet_list_json(r#"{"version":1,"data":[]}"#).is_empty());
+        assert!(parse_dotnet_list_json(r#"{"version":1}"#).is_empty());
+    }
+}

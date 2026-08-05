@@ -7,7 +7,7 @@ use crate::parsers::OutputParser;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// How a backend expresses an exact version at install time, for reproducible
 /// (locked) installs. `{name}` / `{version}` are substituted.
@@ -191,6 +191,65 @@ pub enum ExportFormat {
     WingetJson,
 }
 
+impl std::fmt::Debug for MachineListing {
+    /// The reader is a closure and has no useful rendering; the argv is what identifies this.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MachineListing")
+            .field("binary", &self.binary)
+            .field("args", &self.args)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The one command that names everything this manager has an update for (`Q44`).
+///
+/// **A different question from `search`, not a faster route to the same answer.** Without this,
+/// `list --outdated` asks each manager about one package at a time — and `Searchable::lookup`
+/// defaults to a whole search for that one name, so a machine with 280 packages ran 280
+/// registry searches. Measured: 771.4s, against 2.9s for the plain listing that fed it.
+#[derive(Clone)]
+pub struct OutdatedProbe {
+    /// `None` falls back to `list_binary`, then the backend name.
+    pub binary: Option<String>,
+    pub args: Vec<String>,
+    /// Reads the manager's answer into `(name, version available)` pairs. The installed
+    /// version is not taken from here — the caller already has it, and a manager that reports
+    /// its own idea of "current" has been wrong about it before.
+    pub parse: PackageReader,
+}
+
+/// A machine-readable listing this manager *may* support, and how to read it (`Q43`).
+///
+/// **Asked for, not assumed.** Every one of these is a flag that arrived in some version of the
+/// tool — `dotnet tool list --format json` needs SDK 10, `pixi global list --json` a recent
+/// pixi — and LiNix does not control which version is installed. Passing an unsupported flag
+/// makes the command fail with a usage message, and a caller that reads that as the listing has
+/// reproduced `Q40`: a manager silently reporting an empty machine, for users on older tooling
+/// only, who are the least likely to notice.
+///
+/// So it is a negotiation. Ask; if the manager refuses, use [`ManagerConfig::list_args`] and say
+/// so at `debug`. It costs one failed invocation on old tooling and nothing on current, and it
+/// needs no version table to go stale. The listing memo makes "once per run" free — a run asks
+/// each manager for its listing exactly once either way.
+/// Reads a manager's output into packages.
+///
+/// An `Arc<dyn Fn>` rather than a `fn` pointer because a custom backend's parser is a runtime
+/// `ParserSpec` it has to close over, and the onboarder's whole claim is that a custom backend
+/// is a first-class peer of a built-in (U2). A `fn` pointer would have made these two fields
+/// the exception.
+pub type PackageReader = std::sync::Arc<dyn Fn(&str) -> Vec<Package> + Send + Sync>;
+
+#[derive(Clone)]
+pub struct MachineListing {
+    /// `None` falls back to `list_binary`, then the backend name.
+    pub binary: Option<String>,
+    pub args: Vec<String>,
+    /// Reads what those args produce. A *different* function from the text parser, never the
+    /// same one made lenient: one parser that accepts two shapes is how a malformed answer in
+    /// one of them gets silently read as the other.
+    pub parse: PackageReader,
+}
+
 /// A dry run of the manager's own orphan verb, and how to read the names back out of it.
 ///
 /// `apt-get autoremove --dry-run` prints `Remv libfoo1 [1.2-3]` per package; the prefix is
@@ -271,6 +330,12 @@ pub struct ManagerConfig {
     /// Properties `info` learns by asking the manager a second question. Empty for a manager
     /// that reports none, which is most of them.
     pub property_probes: Vec<PropertyProbe>,
+    /// A machine-readable listing to try before [`Self::list_args`], where the manager may
+    /// have one (`Q43`). `None` means the text listing is all there is.
+    pub machine_list: Option<MachineListing>,
+    /// The manager's own "what has an update" command, where it has one (`Q44`). `None` means
+    /// callers must ask about each package separately.
+    pub outdated: Option<OutdatedProbe>,
     /// Where `search` gets its answers. Defaults to running `search_args`.
     pub search_source: SearchSource,
     /// This manager has no upgrade-all verb: upgrading means re-installing each installed
@@ -734,6 +799,28 @@ impl Queryable for GenericQueryable {
     }
 
     async fn fetch_installed(&self) -> Result<Vec<Package>> {
+        // Ask for the machine-readable listing first, if this manager might have one (Q43).
+        // A refusal is an answer — this tool is too old — and costs one invocation per run,
+        // because the listing memo means a run gets here once per manager.
+        if let Some(machine) = &self.core.config.machine_list {
+            let bin = machine
+                .binary
+                .as_deref()
+                .or(self.core.config.list_binary.as_deref())
+                .unwrap_or(self.core.binary());
+            let args: Vec<&str> = machine.args.iter().map(|s| s.as_str()).collect();
+            match self.core.executor.probe_output(bin, &args).await {
+                Ok(output) => return Ok((machine.parse)(&output)),
+                Err(e) => debug!(
+                    "`{} {}` was refused, so `{}` is being read from its text listing instead \
+                     — an older {} that does not have the flag: {e}",
+                    bin,
+                    machine.args.join(" "),
+                    self.core.name,
+                    self.core.name,
+                ),
+            }
+        }
         let args: Vec<&str> = self
             .core
             .config
@@ -963,6 +1050,15 @@ impl GenericQueryable {
     }
 }
 
+impl std::fmt::Debug for OutdatedProbe {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OutdatedProbe")
+            .field("binary", &self.binary)
+            .field("args", &self.args)
+            .finish_non_exhaustive()
+    }
+}
+
 /// A property of an installed package that only the manager can answer, and the command that
 /// asks it.
 ///
@@ -1039,11 +1135,38 @@ impl Searchable for GenericSearchable {
             .search_binary
             .as_deref()
             .unwrap_or(self.core.binary());
+        // A backend reachable as `Searchable` only because it declared an outdated verb has
+        // no search command, and running its binary with a bare query would be a different
+        // command entirely. "Not configured" is refused by name, never answered as "no
+        // results" — the same distinction U2 draws for every other optional capability.
+        if self.core.config.search_args.is_empty() {
+            return Err(Error::Validation(format!(
+                "`{}` was not told how to search, so it cannot answer what it carries. Add                  `search_args` to its definition.",
+                self.core.name
+            )));
+        }
         let mut owned: Vec<String> = self.core.config.search_args.clone();
         crate::core::argv::push_names(&mut owned, bin, [query]);
         let args: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
         let output = self.core.executor.search_output(bin, &args, false).await?;
         Ok(self.core.parser.parse_search(&output))
+    }
+
+    async fn outdated_all(&self) -> Result<Option<Vec<Package>>> {
+        let Some(probe) = &self.core.config.outdated else {
+            return Ok(None);
+        };
+        let bin = probe
+            .binary
+            .as_deref()
+            .or(self.core.config.list_binary.as_deref())
+            .unwrap_or(self.core.binary());
+        let args: Vec<&str> = probe.args.iter().map(|s| s.as_str()).collect();
+        // `run_output`, not `probe_output`: several managers report "there are updates" with a
+        // non-zero exit — `dnf check-update` returns 100 — and that is an answer, not a fault.
+        // A genuine failure still arrives as an error, because Q40 made silence one.
+        let output = self.core.executor.run_output(bin, &args, false).await?;
+        Ok(Some((probe.parse)(&output)))
     }
 }
 
@@ -1117,19 +1240,40 @@ impl Upgradable for GenericUpgradable {
                 config: cfg,
                 parser: self.core.parser.clone(),
             });
-            for pkg in installed {
-                let spec = PackageSpec {
+            let specs: Vec<PackageSpec> = installed
+                .into_iter()
+                .map(|pkg| PackageSpec {
                     name: pkg.name,
                     backend: self.core.name.clone(),
                     ..Default::default()
-                };
-                // Deliberately not `?`: one package that will not reinstall must not stop the
-                // other forty. The executor has already reported which one and why.
-                let _ = GenericInstallable {
-                    core: reinstaller.clone(),
-                }
-                .install(&[spec], sudo)
-                .await;
+                })
+                .collect();
+            if specs.is_empty() {
+                return Ok(());
+            }
+            let installer = GenericInstallable {
+                core: reinstaller.clone(),
+            };
+            // One command for the lot — `npm install -g a b c` is one resolution and one
+            // registry conversation, where forty global packages meant forty of each (`Q46`).
+            //
+            // **The per-package loop below is not dead code, and removing it would lose the
+            // property the old loop existed for**: one package that will not reinstall must
+            // not stop the other thirty-nine. So the batch is tried first and the loop is what
+            // happens when it fails — the fast path in the ordinary case, the isolating path
+            // exactly when something is wrong, which is the only time it was ever worth paying
+            // for.
+            if installer.install(&specs, sudo).await.is_ok() {
+                return Ok(());
+            }
+            debug!(
+                "`{}` could not upgrade {} package(s) in one command; re-trying them                  individually so one bad package does not hold up the rest",
+                self.core.name,
+                specs.len()
+            );
+            for spec in specs {
+                // Deliberately not `?`: the executor has already reported which one and why.
+                let _ = installer.install(&[spec], sudo).await;
             }
             return Ok(());
         }
@@ -1539,6 +1683,8 @@ mod tests {
                 extra_probes: None,
                 upgrade_reinstall_args: None,
                 property_probes: Vec::new(),
+                machine_list: None,
+            outdated: None,
                 search_source: SearchSource::Command,
                 flag_map: HashMap::new(),
             },
@@ -1654,6 +1800,108 @@ mod tests {
         GenericQueryable {
             core: Arc::new(core),
         }
+    }
+
+    /// Q43: **a manager too old for the machine-readable listing must fall back, not vanish.**
+    ///
+    /// `--format json` needs dotnet SDK 10, `--json` a recent pixi, and LiNix does not choose
+    /// which is installed. An unsupported flag exits non-zero with a usage message, and every
+    /// other reader here hands that back as an empty result — so asking for the better format
+    /// without negotiating would report an empty machine to exactly the users on older
+    /// tooling, which is `Q40` wearing a new hat.
+    #[tokio::test]
+    async fn a_manager_that_refuses_the_machine_format_is_read_from_its_text_listing() {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        // The new flag is rejected, the way an older CLI rejects one it has never heard of.
+        mock.set_response(
+            "dpkg-query --format json",
+            Ok(crate::core::executor::spoken_failure(
+                2,
+                "",
+                "error: unexpected argument '--format' found",
+            )),
+        );
+        // ...and the listing it does understand still answers.
+        mock.set_response(
+            "dpkg-query -W -f=${Package} ${Version}\n",
+            Ok(DryRunOutput {
+                stdout: b"jq 1.7.1
+ripgrep 15.2.0
+".to_vec(),
+                stderr: vec![],
+            }
+            .into()),
+        );
+
+        let mut core = apt_like_core(mock.clone(), vfs);
+        core.config.list_binary = Some("dpkg-query".into());
+        core.config.list_args = vec!["-W".into(), "-f=${Package} ${Version}\n".into()];
+        core.config.machine_list = Some(MachineListing {
+            binary: None,
+            args: vec!["--format".into(), "json".into()],
+            parse: std::sync::Arc::new(|_: &str| vec![Package::new("WRONG", "apt")]),
+        });
+        core.parser = Arc::new(crate::parsers::apt::AptParser);
+        let q = GenericQueryable {
+            core: Arc::new(core),
+        };
+
+        let names: Vec<String> = q
+            .list_installed()
+            .await
+            .expect("a refused flag is not a failed listing")
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        assert_eq!(
+            names,
+            vec!["jq", "ripgrep"],
+            "the text listing must answer when the machine format is refused"
+        );
+        let calls = mock.get_calls().await;
+        assert!(
+            calls.iter().any(|c| c.contains("--format json")),
+            "the machine format was never asked for: {calls:?}"
+        );
+    }
+
+    /// The other side: when the manager *does* support it, the text listing is never run.
+    /// Asking both every time would double every listing on every current machine.
+    #[tokio::test]
+    async fn a_manager_that_answers_the_machine_format_is_not_asked_twice() {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        mock.set_response(
+            "dpkg-query --format json",
+            Ok(DryRunOutput {
+                stdout: b"[]".to_vec(),
+                stderr: vec![],
+            }
+            .into()),
+        );
+
+        let mut core = apt_like_core(mock.clone(), vfs);
+        core.config.list_binary = Some("dpkg-query".into());
+        core.config.list_args = vec!["-W".into()];
+        core.config.machine_list = Some(MachineListing {
+            binary: None,
+            args: vec!["--format".into(), "json".into()],
+            parse: std::sync::Arc::new(|_: &str| vec![Package::new("from-json", "apt")]),
+        });
+        core.parser = Arc::new(crate::parsers::apt::AptParser);
+        let q = GenericQueryable {
+            core: Arc::new(core),
+        };
+
+        let pkgs = q.list_installed().await.unwrap();
+        assert_eq!(pkgs.len(), 1);
+        assert_eq!(pkgs[0].name, "from-json");
+        let calls = mock.get_calls().await;
+        assert!(
+            !calls.iter().any(|c| c == "dpkg-query -W"),
+            "the text listing ran even though the machine format worked: {calls:?}"
+        );
     }
 
     /// The link that turned an executor detail into a wrong answer about the machine.
@@ -2370,5 +2618,56 @@ mod tests {
         assert!(!is_concrete_version("latest"));
         assert!(!is_concrete_version("*"));
         assert!(!is_concrete_version(""));
+    }
+
+    /// `Q46`: **upgrading by reinstalling is one command, and still isolates a bad package.**
+    ///
+    /// A manager with no upgrade-all verb upgrades by re-installing what it has. That ran one
+    /// `npm install -g <name>` per package — forty global packages, forty resolutions, forty
+    /// registry conversations. Batching alone would have thrown away the reason the loop
+    /// existed: one package that will not reinstall must not stop the other thirty-nine. So the
+    /// batch is the fast path and the loop is the recovery, which costs nothing when everything
+    /// works and loses nothing when it does not.
+    #[tokio::test]
+    async fn upgrading_by_reinstall_is_one_command_when_it_works() {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let mut core = apt_like_core(mock.clone(), vfs);
+        core.name = "npm".into();
+        core.config.name = "npm".into();
+        core.config.list_binary = None;
+        core.config.list_args = vec!["ls".into()];
+        core.config.install_args = vec!["install".into(), "-g".into()];
+        core.config.upgrade_reinstall_args = Some(vec!["install".into(), "-g".into()]);
+        core.parser = Arc::new(crate::parsers::LambdaParser {
+            installed_fn: |_| {
+                vec![
+                    Package::new("a", "npm"),
+                    Package::new("b", "npm"),
+                    Package::new("c", "npm"),
+                ]
+            },
+            search_fn: |_| Vec::new(),
+        });
+        let u = GenericUpgradable {
+            core: Arc::new(core),
+        };
+        u.upgrade(false).await.unwrap();
+
+        let installs: Vec<String> = mock
+            .get_calls()
+            .await
+            .into_iter()
+            .filter(|c| c.contains("install"))
+            .collect();
+        assert_eq!(
+            installs.len(),
+            1,
+            "three packages must be one command, got {:?}",
+            installs
+        );
+        for name in ["a", "b", "c"] {
+            assert!(installs[0].contains(name), "{:?}", installs);
+        }
     }
 }

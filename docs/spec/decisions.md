@@ -290,7 +290,11 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q41** | Retryability was classified only from output *text*, and the one failure that matters here has no text at all — so an empty haystack fell to `Unknown` while the exit code, the only signal present, was read by nothing but `is_benign`. — RULED: **classify by exit code too**, and retry a transient *read* (idempotent; a mutation is not). | 2026-08-05 |
 | **Q42** | `command_idle_timeout_secs` (900) was chosen for `Checkpoint-Computer`, a mutation that legitimately runs silent for minutes, and every **read** inherited it — so a wedged 1.5s listing cost fifteen minutes. — RULED: **reads get their own bound**, `query_idle_timeout_secs`, default 120, `0` disables. | 2026-08-05 |
 
-| **Q43** | Three backends parse a human table where the tool offers a machine format — pixi (`--json`), dotnet (`--format json`), scoop (`export`). All three are **version-dependent flags** and LiNix has no capability probe, so shipping them blind reproduces `Q40` (a silently empty listing) on older tooling. — **OPEN.** Recommendation: negotiate once per backend per run, falling back to the text form. | — |
+| **Q43** | Three backends parse a human table where the tool offers a machine format — pixi (`--json`), dotnet (`--format json`), scoop (`export`). All three are **version-dependent flags** and LiNix had no capability probe, so shipping them blind would reproduce `Q40` (a silently empty listing) on older tooling. — RULED: **negotiate once per backend per run**, falling back to the text listing when the manager refuses. | 2026-08-05 |
+
+| **Q44** | `linix list --outdated` asked every manager for one package's latest version at a time, serially — and `Searchable::lookup` defaults to a whole `search`, so it was one registry search per installed package. **Measured: 771.4s against 2.9s for a plain `list`.** — RULED: **ask the manager once**, where it has such a verb; fall back to per-package but concurrent where it does not. **Measured after: 25.6s.** | 2026-08-05 |
+| **Q45** | Five backends installed and/or removed **one package per command** where the manager takes a list — `brew`, `nix`, `mise`, `vscode`, `snap`. — RULED: **one command for the batch**, built for all five. Three verified against the real tool in containers (nix, mise, brew); vscode and snap are argv-tested only and the entry says so. The first sweep named thirteen backends including dnf and pacman and **was wrong**. | 2026-08-05 |
+| **Q46** | `upgrade` on a manager with no upgrade-all verb re-installed **one package per command** — npm, pnpm, yarn, cargo, pubdart. Forty global npm packages meant forty resolutions. In `generic`, so it was never a hand-written-backend problem. — RULED: **batch, and fall back to the per-package loop only when the batch fails**, which keeps the failure isolation the loop existed for. | 2026-08-05 |
 
 *Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
 this file exists to prevent, found on 2026-07-30 by adding a row to it.*
@@ -5433,6 +5437,257 @@ them as declarations.
 because such a declaration is false the moment the package updates. The narrow form: skip
 `MSIX\` and `ARP\` pseudo-ids at adoption and say how many were skipped and why.
 
+## Q46
+
+**Status: ANSWERED — ruled 2026-08-05, and built the same day.**
+
+**`upgrade` re-installed one package per command.** A manager with no upgrade-all verb upgrades
+by re-installing what it has — `dart pub global activate <name>`, `npm install -g <name>` — and
+`GenericUpgradable::upgrade` looped that over the installed set. Forty global npm packages meant
+forty resolutions and forty registry conversations. It affects npm, pnpm, yarn, cargo and
+pubdart, and it lives in `generic`, so `Q45`'s framing — *hand-written backends that never picked
+up the generic batching* — did not cover it.
+
+**Batching alone would have been a regression, and that is the point of the entry.** The loop
+carried a deliberate comment: *"Deliberately not `?`: one package that will not reinstall must
+not stop the other forty."* One command for forty packages fails all forty when one of them is
+broken. So the batch is tried first and the loop is what happens when it fails: one command in
+the ordinary case, per-package isolation exactly when something is wrong, which is the only time
+it was ever worth paying for.
+
+**How it was found matters more than the fix.** It was not in any sweep. `Q45` swept `install`
+and `remove`; nobody had asked the same question of `upgrade`, and the sweep was reported as
+complete twice before the third verb was checked at all. The lesson is the one `Q45`'s own
+correction already recorded, one level up: **a sweep is only as complete as the list of things it
+thought to ask about.**
+
+**So the list was finally enumerated rather than remembered.** Every trait method that takes a
+single name, and whether any caller loops it:
+
+| verb | verdict |
+|---|---|
+| `install`, `remove` | per-item in five hand-written backends — `Q45` |
+| `upgrade` | per-item in `generic` — this entry |
+| `info` | looped, and correct: it is answered from the once-per-run listing memo, so N calls are **one** manager invocation |
+| `lookup` | the N+1 behind `Q44`; batched wherever the manager has an outdated verb |
+| `add_repo`, `remove_repo`, `get_dependencies` | not looped — `get_dependencies` reads as looped to a grep only because `handle_info` prints properties in a loop just above it |
+
+That table is the deliverable, not the fix. Two of the six were wrong, and neither was found by
+looking harder at the code that had already been examined — they were found by writing down every
+verb and going through them.
+
+**And then the same enumeration one layer out**, over every `for` loop in the tree whose own body
+spawns a command (brace-matched, so a loop that merely *builds* an argv does not count — the
+mistake that made `Q45`'s first sweep name thirteen backends instead of five). Thirty-four
+survive, and the triage is:
+
+- **`emacs` — fixed here.** Each install spawned a whole `emacs --batch` *and* a
+  `package-refresh-contents`, which is a network fetch of the package archive. Ten packages meant
+  ten startups and ten refreshes of an archive that had not changed. One `--batch` with a
+  `dolist` does all of it, verified against GNU Emacs 29.3 in a container. **The names are
+  interpolated into evaluated Lisp**, so every one is validated before any of them runs —
+  a batch has to be refused whole, not part-way through, and that is pinned by a test.
+- **`go` — must not be batched, and now there is a reason on file rather than a hunch.**
+  `go install a@latest b@latest` answers *"All packages must be provided by the same module"*.
+  Its per-item loop is correct.
+- **Inherent, not deferred:** `btrfs`, `storage` (zfs/lvm), `setting`, `service`, `web`,
+  `github`, `appimage`. One subvolume is one subvolume; one registry value is one write; one
+  download is one download. These are not a to-do list and should not be re-raised as one.
+- **Already ruled, with their reasons recorded:** `snap install` (chooses per package between
+  `install` and `refresh --channel=`, D13/Q20) and `nix`'s indexed removal (positional indices
+  renumber; no nix that still reports them was available to test).
+
+
+## Q44
+
+**Status: ANSWERED — ruled 2026-08-05, and built the same day.**
+
+**Ruled: ask the manager once.** `Searchable::outdated_all` is the manager's own answer to the
+whole question, wired for winget, scoop, choco, npm, pnpm, pip and gem. A manager without such
+a verb keeps the per-package path — but concurrently, bounded by `max_parallel`, rather than one
+after another. **771.4s to 25.6s on the same host, a 30x cut**, and `cargo` (which has no
+outdated check at all) is the honest exception that still pays.
+
+`None` from `outdated_all` means *this manager cannot be asked*; `Some(vec![])` means it was
+asked and nothing is out of date. Conflating those would report a manager's whole set as current
+the moment its verb was missing.
+
+Where the manager answers, LiNix does **not** re-compare the versions itself. The manager has
+already decided; a second opinion from a version grammar it does not use is how `> 3.13.5` —
+which is what winget really prints for `Python.Launcher` — becomes a wrong answer.
+
+Wired for **thirteen** managers, and every parser but one is written against output captured
+from the real tool rather than from documentation:
+
+| manager | one call | fixture from |
+|---|---|---|
+| apt | `apt list --upgradable` | `ubuntu:24.04` container |
+| dnf | `dnf check-update -q` (exits **100** when it finds some) | `fedora:latest` container |
+| pacman | `pacman -Qu` | `linix-it-arch` container |
+| apk | `apk version -l '<'` | `linix-it-alpine` container |
+| zypper | `zypper --non-interactive list-updates` | `linix-it-opensuse` container |
+| winget | `winget upgrade` | this host |
+| scoop | `scoop status` | this host |
+| choco | `choco outdated -r` | this host |
+| pip | `pip list --outdated --format=json` | this host |
+| gem | `gem outdated` | this host |
+| npm / pnpm | `npm outdated -g --json` | this host |
+| brew | `brew outdated --json=v2` | shape from docs; **banner behaviour** measured |
+
+**brew is the one exception and it earned a defence.** Nothing was outdated in the container, so
+the JSON shape comes from brew's documentation — but the container did show brew printing
+`==> Auto-updating Homebrew...` ahead of the payload, which a strict parse would choke on. So the
+parser locates the JSON rather than assuming the whole output is JSON, and that behaviour *is*
+measured. `flatpak` is left unwired, and now for a measured reason rather than caution. It does support
+`remote-ls --updates --columns=application,version`, and the column exists — but run against
+flathub in a container, the version column comes back **empty**:
+
+```
+$ flatpak remote-ls flathub --app --columns=application,version | cat -A
+ai.jan.Jan$
+ai.lmstudio.lm-studio$
+```
+
+The `$` sits straight after the id: no tab, no version. Most flathub apps carry no version in the
+remote listing, so flatpak can say *that* something has an update and not *to what*. An `Outdated`
+row needs both, so flatpak keeps the per-package path. `cargo` is the other honest exception — no
+outdated check exists at all.
+
+**The sweep is now complete rather than opportunistic, and that distinction was a real gap.** The
+first pass wired the managers there happened to be fixtures for and was written up as though it
+had covered the field. Every remaining backend was then asked the same question, and most of the
+answers are *no such verb* — which is information, not an omission:
+
+| manager | answer | how it was settled |
+|---|---|---|
+| **composer** | `global outdated --format=json` — **wired** | container, with a real global package |
+| bun | `bun outdated` reports a *workspace's* dependencies; LiNix manages bun **globals** | container |
+| yarn | `yarn global outdated` → `error Invalid subcommand` | container |
+| uv | no such verb (`upgrade --dry-run` does not exist) | container |
+| pipx | `upgrade` / `upgrade-all` only — nothing that *lists* | container |
+| pixi | `global update` only — nothing that lists | container |
+| flatpak | has the verb; the version column comes back **empty** | container |
+| cargo | none | documented |
+| dotnet | no outdated verb for tools | this host |
+
+**Unprobed, and named rather than left implied:** `mas` and `macports` (macOS), `pkg`,
+`pkg_add`, `pkgin` (BSD), `emerge`, `eopkg`, `guix`, `slackpkg` (distro-specific), and
+`asdf`, `krew`, `luarocks`, `mix`, `nimble`, `pubdart`, `spack`. Several of those plainly do have
+one — `port outdated`, `mas outdated`, `eopkg list-upgrades`, `mix hex.outdated` — but no host or
+container here runs them, and this session's standing rule is that a parser ships against
+captured output or not at all. They stay on the per-package path, which is slower and correct.
+
+Custom backends get the same field (`outdated_args`), because U2's claim is that a custom backend
+is a first-class peer of a built-in, and a capability built-ins have and definitions cannot
+declare makes that claim false. **And it works with the verb and without it:** no `outdated_args`
+means `None`, so the caller asks per package. A gap found while testing that — `Searchable` was
+attached only when `search_args` was set, so a definition declaring an outdated verb and no search
+got no capability at all and its updates were silently unreportable. The gate now admits either,
+and `search` refuses by name when it was never configured rather than answering "no results".
+
+**`list --outdated` asks per package what every manager will answer in one call.**
+`compute_outdated` is a serial `for` loop over installed packages calling `s.lookup(&p.name)`
+once each — many of those are network round trips to a registry.
+
+Measured on this host, same machine, same minute:
+
+```
+linix list --outdated : 771.4s
+linix list            :   2.9s
+```
+
+**266x**, and the 771s is not parallelism lost — it is the wrong question asked N times. Nearly
+every manager has a one-call answer:
+
+| manager | one call |
+|---|---|
+| apt | `apt list --upgradable` |
+| dnf | `dnf check-update` (exit 100 means "there are some" — a benign exit) |
+| pacman | `pacman -Qu` |
+| winget | `winget upgrade` |
+| choco | `choco outdated` |
+| scoop | `scoop status` |
+| npm / pnpm | `npm outdated -g --json` |
+| pip | `pip list --outdated --format=json` |
+| brew | `brew outdated --json` |
+| gem | `gem outdated` |
+| flatpak | `flatpak remote-ls --updates` |
+
+Two separate wins, and they compose: **batch** turns N registry lookups into one manager call,
+and **parallel** runs the remaining ~10 manager calls at once instead of in sequence. The
+2026-08-02 ruling — *as parallel as possible, as efficient as possible, as fast as possible;
+restructure if it takes that* — covers the second; the first is not parallelism at all.
+
+`cargo` is the honest exception: it has no built-in outdated check, so its packages stay on the
+per-package path or go unreported, and that should be said rather than papered over.
+
+## Q45
+
+**Status: ANSWERED — ruled 2026-08-05, and built the same day.**
+
+**Ruled: one command for the batch.** Built for all five, and three of them verified by running
+the real tool in a container rather than by asserting the argv LiNix builds:
+
+```
+nix   : nix profile remove hello ripgrep
+        -> removed 2 packages, kept 17 packages          (rc=0, jq untouched)
+mise  : mise use -g -- jq@latest shellcheck@latest
+        -> tools: jq@1.8.2, shellcheck@0.11.0            (one config write, rc=0)
+        mise uninstall -- jq@latest shellcheck@latest    -> both gone, rc=0
+brew  : brew install --dry-run jq ripgrep
+        -> one dependency resolution covering both       (rc=0)
+```
+
+**`vscode` and `snap` are argv-tested only**, and that is weaker. VS Code's repeated
+`--install-extension` and `snap remove a b` are both documented and unambiguous, but no
+container here runs an Electron host or snapd, so what is pinned is the command LiNix builds,
+not the manager accepting it. Said plainly rather than left to look like the other three.
+
+**Two things were deliberately left alone.** `snap install` chooses per package between
+`install` and `refresh --channel=` depending on what is already present (D13, Q20), so those
+specs genuinely cannot share a command. And nix's *indexed* removal keeps its
+highest-index-first loop: positional indices renumber, no nix that still reports them was
+available to prove a batched form safe, and a wrong guess there removes a package the user did
+not name. Modern nix reports no indices at all, so the batched by-name path is the one that runs.
+
+
+
+**Five backends run one command per package where the manager takes a list.** The generic
+backend is correct — `install_group` builds one argv with every name, with deliberate exceptions
+for per-line version pins and signature opt-outs. Five hand-written ones never got it:
+
+```rust
+// brew.rs:62
+async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
+    for spec in specs {
+        ...run_exclusive("brew", &["install", one_name]).await?;
+```
+
+`brew install a b c` resolves the dependency graph once. One at a time is N resolutions and,
+because it is `run_exclusive`, N serialised lock acquisitions.
+
+| can batch, does not | why it is worth it |
+|---|---|
+| **brew** | `brew install a b c` / `brew uninstall a b c`; one resolve, one lock |
+| **nix** | `nix profile install` takes several installables |
+| **mise** | `mise use -g a@1 b@2` |
+| **vscode** | `code --install-extension a --install-extension b` — a repeated flag, one process |
+| **snap** | `snap install a b`, `snap remove a b` |
+
+**Not on the list, and not a to-do:** `btrfs`, `setting`, `storage`, `web`, `github` are not
+package managers — one subvolume is one subvolume, one download is one download. `emacs` and
+`go` are maybes with real caveats (`go install` constrains multiple `@version` arguments) and
+are left alone rather than guessed at.
+
+**The first sweep of this said thirteen backends and named `dnf` and `pacman` among them. That
+was wrong.** The detector matched a `for` loop followed anywhere in the function by a `run(`
+call — and `dnf`'s loop is `for name in &names { args.push(name) }`, which *builds* the batched
+argv. Both dnf and pacman batch correctly. Re-run with brace matching so a loop counts only when
+the invocation is inside its own body. Recorded because the wrong version of this entry existed
+for an hour and the correction is the useful part: a per-item loop and a loop that assembles one
+command look identical to a grep.
+
+
 ## Q40
 
 **Status: ANSWERED — ruled 2026-08-05, and built the same day.**
@@ -5530,7 +5785,19 @@ does.
 
 ## Q43
 
-**Status: OPEN — raised 2026-08-05, swept and measured.**
+**Status: ANSWERED — ruled 2026-08-05, and built the same day.**
+
+**Ruled: negotiate once, per backend, per run.** Ask for the machine-readable listing; if the
+manager refuses, read the text listing and say so at `debug`. Built for all three — pixi
+(`global list --json`), dotnet (`tool list --format json`), scoop (`export`). The listing memo
+makes "once per run" free: a run asks each manager for its listing exactly once either way.
+
+The negotiation needed its own primitive. `probe_output` is the only reader that treats a
+non-zero exit as a failure regardless of what was printed — because here the failure *is* the
+answer being sought, and every other reader deliberately hands a complaint back as an empty
+result (`Q40`). Each JSON parser is a separate function from its text sibling, never one parser
+made lenient, and each is pinned by a test asserting the two agree about the same machine —
+including about the rows that are not packages, which is where scoop's old scar was.
 
 **Three backends parse a human table where the tool offers a machine format, and LiNix cannot
 safely ask for it.** The sweep of all 40 registered backends found exactly three gaps, all

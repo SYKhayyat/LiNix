@@ -18,10 +18,14 @@
 //     list_args    = ["status", "numbered"]
 //     search_args  = ["-Ss"]
 //     needs_root   = false
+//     outdated_args = ["list", "--upgradable"]   # what has an update, in ONE call (Q44)
+//     machine_list_args = ["list", "--json"]     # preferred over list_args if accepted (Q43)
 //     [backend.parser]
 //     format = "columns"                  # "name version" per line
 //     name_col = 0
 //     version_col = 1
+//     [backend.machine_list_parser]       # REQUIRED with machine_list_args
+//     format = "json"
 //
 // Custom backends are registered LAST, and a name already in use is skipped with a warning —
 // so a stray config cannot hijack `apt` or `brew` by being named `apt` or `brew`.
@@ -377,6 +381,31 @@ pub struct CustomBackendDef {
     /// chose and not the dependency graph. Absent ⇒ adoption skips this backend (the safe
     /// default that every custom backend had before U2).
     pub manual: Option<ManualListingDef>,
+
+    /// The one command that names everything with an update available (`Q44`). Absent ⇒ this
+    /// backend cannot say, and `list --outdated` asks it about each package separately — which
+    /// is the slow answer, not a wrong one.
+    ///
+    /// **Not "nothing is outdated".** Same distinction as every field above it: a manager that
+    /// cannot be asked is not a manager with nothing to report.
+    pub outdated_args: Option<Vec<String>>,
+    /// How to read `outdated_args` output. Defaults to `parser`, which is right whenever the
+    /// manager prints its updates in the same shape as its listing.
+    pub outdated_parser: Option<ParserSpec>,
+    /// Binary for `outdated_args`, when updates are reported by a separate program.
+    pub outdated_binary: Option<String>,
+
+    /// A machine-readable listing to prefer over `list_args`, where this manager has one and
+    /// might be too old to (`Q43`). It is *asked for*, and a manager that refuses is read from
+    /// `list_args` instead — so naming a flag a user's version lacks costs one failed call, not
+    /// an empty machine.
+    pub machine_list_args: Option<Vec<String>>,
+    /// How to read `machine_list_args` output. Required alongside it: the whole point of the
+    /// machine format is that it is a *different* shape, so defaulting to `parser` here would
+    /// hand JSON to a column reader.
+    pub machine_list_parser: Option<ParserSpec>,
+    /// Binary for `machine_list_args`, when the machine format comes from a separate program.
+    pub machine_list_binary: Option<String>,
 }
 
 /// TOML mirror of [`crate::backends::generic::OrphanDryRun`].
@@ -627,6 +656,48 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
     let has_search = !def.search_args.is_empty();
     let has_upgrade = !def.upgrade_args.is_empty();
 
+    // Built before `def.parser` is consumed below. A reader closes over the spec and the
+    // backend name, which is why these are `PackageReader`s and not `fn` pointers: a custom
+    // backend's parser exists only at runtime, and U2 says it is a first-class peer.
+    let backend_name = def.name.clone();
+    let outdated = def.outdated_args.clone().map(|args| {
+        // Defaults to `parser`: a manager that prints its updates in the same shape as its
+        // listing is the common case, and requiring a second identical spec is a way to get
+        // one of them wrong.
+        let spec = def
+            .outdated_parser
+            .clone()
+            .or_else(|| def.parser.clone())
+            .unwrap_or_default();
+        let name = backend_name.clone();
+        crate::backends::generic::OutdatedProbe {
+            binary: def.outdated_binary.as_deref().map(expand_binary),
+            args,
+            parse: Arc::new(move |o: &str| spec.parse(o, &name)),
+        }
+    });
+    // No `or(parser)` fallback here, deliberately. The point of a machine format is that it is
+    // a *different* shape, so silently reading JSON with the column parser configured for the
+    // text listing would report nothing and look like an empty machine (Q40's class).
+    let machine_list = match (def.machine_list_args.clone(), def.machine_list_parser.clone()) {
+        (Some(args), Some(spec)) => {
+            let name = backend_name.clone();
+            Some(crate::backends::generic::MachineListing {
+                binary: def.machine_list_binary.as_deref().map(expand_binary),
+                args,
+                parse: Arc::new(move |o: &str| spec.parse(o, &name)),
+            })
+        }
+        (Some(_), None) => {
+            warn!(
+                "backend `{}`: `machine_list_args` needs `machine_list_parser` beside it — a                  machine-readable listing is a different shape from the text one, and reading                  it with the text parser reports an empty machine. Using `list_args`.",
+                def.name
+            );
+            None
+        }
+        _ => None,
+    };
+
     let parser = ConfiguredParser {
         backend: def.name.clone(),
         installed: def.parser.clone().unwrap_or_default(),
@@ -670,6 +741,8 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
         extra_probes: None,
         upgrade_reinstall_args: None,
         property_probes: Vec::new(),
+        machine_list,
+        outdated,
         search_source: SearchSource::Command,
         flag_map: HashMap::new(),
     };
@@ -689,7 +762,13 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
     if has_list {
         builder = builder.with_queryable(Arc::new(GenericQueryable { core: core.clone() }));
     }
-    if has_search {
+    // Searchable carries two different things: `search`, and the manager's own "what has
+    // an update" verb (`Q44`). A definition may declare the second without the first — a
+    // corporate manager that lists updates but has no catalogue to search is an ordinary
+    // shape — and gating on `search_args` alone meant its updates were silently never
+    // reported. `search` itself still refuses below when it was never configured, so this
+    // does not turn "not configured" into "no results".
+    if has_search || core.config.outdated.is_some() {
         builder = builder.with_searchable(Arc::new(GenericSearchable { core: core.clone() }));
     }
     if has_upgrade {
@@ -1271,5 +1350,142 @@ mod adapter_folder_tests {
             assert!(f.starts_with(cfg.config_root()), "{:?} escaped the repo", f);
             assert!(f.parent().unwrap().ends_with("adapters"), "{:?}", f);
         }
+    }
+
+    /// U2 + `Q44`: **a definition works with the batch verb and without it.**
+    ///
+    /// With `outdated_args`, the manager is asked once. Without, the caller falls back to
+    /// asking per package — slower, but an answer. What must never happen is the third case:
+    /// a definition that declared an outdated verb and got no `Searchable` at all, because the
+    /// capability was gated on `search_args`. Its updates were then silently never reported,
+    /// which looks exactly like a machine with nothing out of date.
+    #[tokio::test]
+    async fn a_definition_reports_updates_with_a_batch_verb_and_without_one() {
+        let toml_src = r#"
+[[backend]]
+name = "corp"
+binary = "corpctl"
+install_args = ["add"]
+list_args = ["ls"]
+outdated_args = ["ls", "--stale"]
+[backend.parser]
+format = "columns"
+name_col = 0
+version_col = 1
+"#;
+        let parsed: CustomBackendsFile =
+            toml::from_str(toml_src).expect("a definition using the new keys must parse");
+        let def = parsed.backend.into_iter().next().unwrap();
+
+        let vfs = std::sync::Arc::new(dashmap::DashMap::new());
+        let mock = std::sync::Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        mock.set_response(
+            "corpctl ls --stale",
+            Ok(crate::core::executor::DryRunOutput {
+                stdout: b"widget 2.0
+gadget 3.1
+".to_vec(),
+                stderr: vec![],
+            }
+            .into()),
+        );
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            std::sync::Arc::new(dashmap::DashMap::new()),
+        );
+        let caps = build_capabilities(def, &exec);
+
+        // It declared no `search_args`, and it is searchable anyway — because the outdated
+        // verb lives on that capability.
+        let s = caps
+            .as_searchable()
+            .expect("a definition with an outdated verb must be reachable through Searchable");
+        let stale = s
+            .outdated_all()
+            .await
+            .expect("the probe runs")
+            .expect("a declared verb means Some, never None");
+        let names: Vec<&str> = stale.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["widget", "gadget"]);
+        assert_eq!(stale[0].version.as_deref(), Some("2.0"));
+
+        // ...and `search` itself is refused by name rather than answered as "no results",
+        // because it was never configured.
+        let err = s.search("widget").await.unwrap_err().to_string();
+        assert!(err.contains("not told how to search"), "{err}");
+    }
+
+    /// Without the verb: `None`, which is the caller's signal to ask per package. It must not
+    /// be `Some(vec![])` — that would say "asked, nothing stale" and mark the whole backend
+    /// current.
+    #[tokio::test]
+    async fn a_definition_without_an_outdated_verb_says_it_cannot_be_asked() {
+        let toml_src = r#"
+[[backend]]
+name = "corp3"
+binary = "corpctl"
+list_args = ["ls"]
+search_args = ["find"]
+[backend.parser]
+format = "columns"
+name_col = 0
+version_col = 1
+"#;
+        let parsed: CustomBackendsFile = toml::from_str(toml_src).unwrap();
+        let def = parsed.backend.into_iter().next().unwrap();
+        let vfs = std::sync::Arc::new(dashmap::DashMap::new());
+        let mock = std::sync::Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock,
+            vfs,
+            std::sync::Arc::new(dashmap::DashMap::new()),
+        );
+        let caps = build_capabilities(def, &exec);
+        let s = caps.as_searchable().expect("it declared search_args");
+        assert!(
+            s.outdated_all().await.unwrap().is_none(),
+            "no verb means `cannot be asked`, never `asked and nothing is stale`"
+        );
+    }
+
+    /// A machine-readable listing without a parser for it is refused by name rather than read
+    /// with the *text* parser — which would hand JSON to a column reader, find nothing, and
+    /// report an empty machine (`Q40`'s class, arriving through a config file).
+    #[test]
+    fn a_machine_listing_without_its_own_parser_is_refused_not_guessed() {
+        let toml_src = r#"
+[[backend]]
+name = "corp2"
+list_args = ["ls"]
+machine_list_args = ["ls", "--json"]
+[backend.parser]
+format = "columns"
+name_col = 0
+version_col = 1
+"#;
+        let parsed: CustomBackendsFile = toml::from_str(toml_src).unwrap();
+        let def = parsed.backend.into_iter().next().unwrap();
+        assert!(def.machine_list_args.is_some());
+        assert!(
+            def.machine_list_parser.is_none(),
+            "the fixture is the case being guarded: args without a parser"
+        );
+
+        let vfs = std::sync::Arc::new(dashmap::DashMap::new());
+        let mock = std::sync::Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock,
+            vfs,
+            std::sync::Arc::new(dashmap::DashMap::new()),
+        );
+        // Builds without panicking, and falls back to `list_args`; the warning names the file.
+        let _ = build_capabilities(def, &exec);
     }
 }

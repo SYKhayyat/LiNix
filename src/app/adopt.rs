@@ -735,6 +735,8 @@ mod tests {
             extra_probes: None,
             upgrade_reinstall_args: None,
             property_probes: Vec::new(),
+            machine_list: None,
+            outdated: None,
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         };

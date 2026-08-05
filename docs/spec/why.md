@@ -3400,3 +3400,64 @@ never turn into 'so skip it'."* The same question, asked and answered correctly,
 where it was being answered wrongly.
 
 ---
+
+## `Q44`–`Q45` — asking N times what the manager answers once
+
+**The measurement that started it.** `linix list --outdated`, on the same host, in the same
+minute as the listing that feeds it:
+
+```
+linix list --outdated : 771.4s
+linix list            :   2.9s
+```
+
+Thirteen minutes. And the loop that spent them was not slow — it was asking the wrong question.
+`compute_outdated` walked the installed set calling `Searchable::lookup(name)`, and `lookup`
+**defaults to a whole `search` for that one name**. So a machine with 280 packages ran 280
+registry searches to answer a question every one of those managers will answer in a single
+command: `apt list --upgradable`, `pacman -Qu`, `winget upgrade`, `npm outdated -g --json`.
+
+Batching it is 771.4s to **25.6s**. The remaining 25 seconds are the managers with no such verb,
+still asked per package but now concurrently instead of one after another — `cargo` has no
+outdated check at all, and that is a fact about cargo worth stating rather than hiding.
+
+**Two distinctions the fix had to keep.** `None` from `outdated_all` means *this manager cannot
+be asked*; `Some(vec![])` means *it was asked and nothing is stale*. Collapsing them would mark
+a manager's entire set current the moment its verb went missing — the same shape as `Q40`, where
+a failed listing became an empty machine. And where the manager does answer, LiNix does **not**
+re-compare the versions: the manager already decided, and a second opinion from a version grammar
+it does not use is how `> 3.13.5`, which is genuinely what winget prints for `Python.Launcher`,
+turns into a wrong answer.
+
+**Then the same question one layer down.** If a manager answers about many packages at once, it
+probably *acts* on many at once too. Five hand-written backends were running one command per
+package where the tool takes a list — `brew` under `run_exclusive`, so N packages meant N
+dependency resolutions **and** N serialised lock acquisitions. The generic backend had batched
+correctly all along; these predate it and never picked it up.
+
+**The sweep was wrong the first time, and that is the useful part.** It reported thirteen
+backends, `dnf` and `pacman` among them, and built a story about hand-written backends drifting
+from the generic one. The detector matched a `for` loop followed *anywhere in the function* by a
+`run()` call. dnf's loop is:
+
+```rust
+for name in &names { args.push(name) }   // builds the batched argv
+```
+
+A loop that spawns per item and a loop that assembles one command are indistinguishable to a
+grep. Re-run with brace matching so the invocation has to sit inside the loop's own body, the
+count fell from thirteen to five. **A finding that names the wrong files is worse than no
+finding**, because the next person spends their afternoon confirming it.
+
+**And the evidence bar moved mid-task.** These five do not exist on the Windows host, so the
+plan was argv-shape tests and an honest note that nothing had actually been run. WSL Docker made
+that unnecessary for three of them, and one of those changed a decision: nix's removal was going
+to be left alone entirely, because its per-item loop carries a comment about positional indices
+renumbering under a batched call. Real nix 2.x settled it — `nix profile remove hello ripgrep`
+reported `removed 2 packages, kept 17 packages` and left `jq` alone, and modern `nix profile
+list` shows no indices at all. So the by-name path batches on evidence, and the indexed path
+keeps its careful ordering because no nix that still reports indices was there to test.
+`vscode` and `snap` stayed argv-only, and the register says so rather than letting them borrow
+the confidence of the three that were run.
+
+---
