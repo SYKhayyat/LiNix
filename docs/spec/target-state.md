@@ -1334,6 +1334,18 @@ under the flag, which is how this was found.
 **Base-image packages ARE adopted** — `grub-pc`, `linux-image-generic`. They keep the
 machine bootable, and `purge-unmanaged` deletes what isn't declared.
 
+**A bare `adopt` takes only what a manager can attribute to a choice** (2026-08-05, `Q39`).
+The table above is the first half of that rule — a manager that cannot separate a dependency
+from a decision adopts nothing. The second half is a manager that lists perfectly well, where
+*being on the machine is not evidence anybody chose it*: an init reports the services that are
+running and never who started them. Those are skipped, with the count, the reason, and the
+command that takes them.
+
+**`linix adopt <backend>` takes exactly that backend**, opt-out included — a skip is a default,
+never a refusal. **`--enabled-only`** narrows it to what this machine starts on its own, which
+is the closest thing an init keeps to a record of a decision; a backend that cannot answer that
+question is skipped and named rather than quietly widened back to everything. (V.134.)
+
 **Output:** one `modules/adopted.txt`, grouped by backend with comment headers, sorted.
 Header states: this is an estimate; deleting a line uninstalls; `linix forget` is the way
 out. A second section lists OS-essential packages, commented out.
@@ -1987,6 +1999,24 @@ rolls the transaction back. **V.115.**
 **The telemetry says when packages shared a command.** Several packages reporting the same
 duration to the millisecond is the truth about a batch and was a lie about a serialised run; the
 line says which. **V.115.**
+
+**Recovery finishes interrupted work, and runs on the same engine as everything else**
+(2026-08-05, `Q33`). `heal` completes what a run that died left half-done — `InProgress` and
+`Abandoned`. A **failed** attempt is not interrupted: it reached an outcome and reported it, the
+package is not installed, and its declaration is still in the manifest, so the next `sync`
+schedules it again. Retrying it in recovery was the same work twice. And recovery is a graph
+like any other change: batched per manager, run in parallel, with the dependency edges the
+journal's own specs carry. It differs from a `sync` in exactly two ways, and both follow from
+what it is — it does not roll back, and one entry nobody can finish does not leave the others
+unfinished. **V.135.**
+
+**A failure names the declaration it happened for** (2026-08-05, `Q34`). Not the manager, not
+the command — the `backend:name` and the file and line it was written on. `install X` converges
+the whole configuration, which is the model working and stays; the consequence is that a line
+nobody has looked at can stop the install someone just typed, and until this the error was that
+line's manager talking about a command the user never asked for. `install` also says outright
+when the failure is not about what was asked for, and never advises taking back the line that
+was: the one thing worse than keeping a wedged line is deleting a good one. **V.136.**
 
 **Nothing is fetched for a decision already made** (2026-08-05, `Q37`). A refusal that reads only
 the destination is asked before the first byte, not after the artifact is on disk and unpacked.

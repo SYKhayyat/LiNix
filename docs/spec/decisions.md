@@ -278,13 +278,13 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q29** | Is the statement set closed, with all future computation routed through `generate:`? — **HALF RULED.** The *resource-kind* set is ruled **open — more prefixes may be added**; a ratchet holds Part II to `KEYWORDS` instead. The *computation* half is still open. | 2026-08-04 |
 | **Q31** | `unmanaged` names two different numbers on two screens, and a command is named after the meaning the register did *not* choose. Which word goes where? — **OPEN.** | — |
 | **Q32** | Q24's bound watched a child's **exit** and not the read of its output, so a manager that detaches left LiNix on a pipe no clock covered — 64s against a 20s bound, **reported as SUCCESS**. — RULED: **the same silence bound runs over the readers**, and a command LiNix stopped waiting on fails by name instead of reporting success. | 2026-08-05 |
-| **Q33** | `heal` acts on `Failed` entries as well as interrupted ones, and every failed attempt writes a *new* operation — 22 for one package in a single sweep, all 22 reinstalled. **HALF RULED 2026-08-05:** 22 entries naming one operation are one recovery, not 22, and that half shipped. Whether `heal` acts on a `Failed` entry at all is still **OPEN.** | — |
-| **Q34** | `install X` converges the whole manifest, so one unresolvable declaration fails every later install — seven backends were falsely reported as defects in one run. Does `install X` mean X? — **OPEN.** | — |
+| **Q33** | `heal` acted on `Failed` entries as well as interrupted ones, and every failed attempt wrote a *new* operation — 22 for one package, all 22 reinstalled, serially. — RULED: **recovery finishes interrupted work only** (`InProgress`/`Abandoned`), one recovery per operation, and it runs on the transaction engine rather than a serial loop beside it. `Failed` becomes terminal and ages out. | 2026-08-05 |
+| **Q34** | `install X` converges the whole manifest, so one unresolvable declaration fails every later install, and the error named the innocent package. — RULED: **the model stays; the message changes.** A failure names the declaration and its file and line, and `install` says outright when what failed is not what you asked for — and never advises taking back the line that was. | 2026-08-05 |
 | **Q35** | U40 lets a mutation share stdin because `sudo` asks on the terminal; `sudo` is never inserted on Windows, where the sharing cost a 900s silence — 48ms vs 21.9s measured. — RULED: **no, the reason does not reach Windows.** Windows mutations get a closed stdin; Unix keeps U40 exactly as ruled. | 2026-08-05 |
 | **Q36** | `adopt` writes 186 winget declarations whose identity embeds a version (`MSIX\Microsoft.Winget.Source_2026.805.1050.50_...`). The package updated the same day; the line can now never converge, and it feeds Q34's cascade on every real machine. — **OPEN.** | — |
 | **Q37** | `github:` downloaded the whole release artifact and *then* refused to deploy because the destination is not LiNix's — a refusal that needs zero downloaded bytes. Measured 61s and 119s, silent. — RULED: **ask the destination before spending the network**, in `github:`, `web:` and `appimage:` alike. | 2026-08-05 |
 | **Q38** | `watch --once` printed `watch: reconcile failed` and **exited 0**. — RULED: **a failed reconcile is a non-zero exit**, on `watch --once` as everywhere. The looping form still warns and carries on. | 2026-08-05 |
-| **Q39** | `adopt` writes 150 `service:X@status=running` lines; converging one ran `sc start` on an already-running service. **HALF RULED 2026-08-05:** already being in the declared state is success, so LiNix now asks the init before acting and forgives `1056`/`1062` when it does — measured, 150 placements to 2. Whether `adopt` should take 150 services nobody chose is still **OPEN.** | — |
+| **Q39** | `adopt` wrote 150 `service:X@status=running` lines and converging one ran `sc start` on an already-running service. — RULED, both halves: already being in the declared state is success (150 placements to 2), **and** a bare `adopt` does not take a backend where being on the machine is not evidence of a choice. `linix adopt service` takes them; `--enabled-only` narrows to what starts at boot. | 2026-08-05 |
 
 *Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
 this file exists to prevent, found on 2026-07-30 by adding a row to it.*
@@ -5234,8 +5234,26 @@ one.
 
 ## Q33
 
-**Status: HALF RULED, 2026-08-05.** The duplicate-recovery half is ruled and built; whether `heal`
-should act on a `Failed` entry at all is still **OPEN**.
+**Status: ANSWERED — ruled 2026-08-05, and built the same day.**
+
+**Ruled: recovery finishes interrupted work, and nothing else.** `heal` acts on `InProgress` and
+`Abandoned`. A `Failed` entry reached an outcome and reported it; the package is not installed
+and its line is still in the manifest, so the very next `sync` schedules it again — retrying it
+in recovery was the same work twice, not extra coverage. The trigger and the work are now one
+predicate, which is what stopped one unrecoverable interrupted entry from running a full
+recovery of every past failure in front of every sync. `Failed` becomes terminal and ages out
+like `Completed`; `InProgress` is still never purged at any age.
+
+**And: recovery runs on the transaction engine.** The `for` loop with `install(from_ref(spec))`
+in it is deleted. Recovery builds a graph — dependency edges from the journal's own specs — and
+hands it to `Transaction`, which batches per manager and runs the waves in parallel. Two
+settings differ from a sync's and both follow from what recovery is: no rollback, and
+`continue_on_error`, so one entry nobody can finish does not leave the others unfinished. A node
+whose dependency failed is reported as skipped, naming the one that stopped it. Full reasoning
+in V.135.
+
+**Already shipped before the ruling, and kept:** 22 journal entries naming one operation are one
+recovery, not 22 — they are one operation attempted 22 times. Below is the original entry.
 
 **Ruled: 22 journal entries naming one operation are one recovery, not 22.** They are not 22
 operations — they are one operation attempted 22 times, because `record_start` mints a fresh id
@@ -5272,7 +5290,23 @@ twenty-third.
 
 ## Q34
 
-**Status: OPEN — raised 2026-08-05, from the same sweep.**
+**Status: ANSWERED — ruled 2026-08-05, and built the same day.**
+
+**Ruled: no change to the model; change what the failure says.** `install X` still converges the
+whole configuration — that is what declarative means, and converging only X would let your files
+and your machine disagree with no command noticing. What changes is the reporting:
+
+- a failure now names **the declaration it happened for, and its file and line** — appended to
+  the message and to nothing else, because `retry` and `absent_name` are what decide whether a
+  line is withdrawn and a wrapper that loses them turns a withdrawable line into a wedge;
+- `install` says outright when what failed is not what you asked for;
+- and it no longer advises taking back the line you just wrote. `WhyKept::NameAbsentElsewhere` —
+  the branch whose own name says the missing package belongs to a *different* declaration — was
+  telling users to `linix unmanage` the one line that was fine. Found while building the check
+  above. The withdrawal logic itself was already careful and says why; the advice beside it was
+  not.
+
+Full reasoning in V.136. Below is the original entry.
 
 **One unresolvable declaration fails every later install of anything.** `linix -y install
 bun:sort-package-json` planned this:
@@ -5441,8 +5475,31 @@ nobody is reading the output.
 
 ## Q39
 
-**Status: HALF RULED, 2026-08-05.** The convergence half is ruled and built; the `adopt` half is
-still the owner's and is still **OPEN**.
+**Status: ANSWERED — ruled 2026-08-05, both halves, and built the same day.**
+
+**The second half, ruled: a bare `adopt` does not take a machine's services.** The rule it needed
+already existed — `adopt` refuses a backend that cannot separate a user's choices from its
+dependency closure — and this is that question one step along: not *can you tell a dependency
+from a decision*, but *is being on the machine evidence of a decision at all*. The service
+backend answered "yes I can" while its own `manual_source` read *"no init records which you
+chose"*.
+
+A default and not a refusal. Measured on the same host, isolated config and state:
+
+```
+linix adopt                          316 declarations, 0 services, and a line naming
+                                     the backend it skipped and how to ask for it
+linix adopt service                  149
+linix adopt service --enabled-only   113
+```
+
+`--enabled-only` reads the machine's own record of what it starts at boot, in one command rather
+than one per service. It drops the 36 demand-start services — `smphost` among them — and does
+**not** drop `gpsvc`, which Windows marks `Automatic` and stops anyway when it idles. That is
+Windows disagreeing with itself, and it is recorded rather than papered over: the filter narrows
+the guess, it does not turn the list into a record of anybody's decision. V.134.
+
+**The first half, ruled and built earlier the same day:**
 
 **Ruled: already being in the state the line asks for is success, and LiNix asks before it acts.**
 Two changes, and the first is the one that mattered:

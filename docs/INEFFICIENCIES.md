@@ -73,7 +73,7 @@ entry is an audit nobody can finish.
 
 | tier | finding | state |
 |---|---|---|
-| 2 | **I-48** `heal` bypasses the DAG — serial, one package per command, and doomed | **PART DONE 2026-08-05** — the *doomed* third is fixed: `heal` collapses its unresolved entries to one recovery per operation, so 23 `scoop install` round trips for one name became one. Still **NOT DONE**: it is still serial and still one package per command. The fix for those is to route recovery through the transaction engine, not to parallelise a second copy of it; the loop deciding *which* entries to run is `Q33`, whose remaining half is OPEN and is the same loop. **They land together.** |
+| 2 | **I-48** `heal` bypasses the DAG — serial, one package per command, and doomed | **DONE 2026-08-05.** All three: the hand-rolled loop is deleted and recovery builds a graph for `Transaction`, so it batches per manager and runs its waves in parallel like every other change; it recovers once per operation rather than once per past attempt (23 `scoop install` round trips for one name became one); and it no longer acts on `Failed` entries at all (`Q33`). |
 | 2 | **I-49** `github:`/`web:`/`appimage:` download and extract, then ask whether they may deploy | **DONE 2026-08-05** — the refusal is asked before the first byte in all three, through one `ensure_deployable` that `deploy_executable` also calls. One case still pays: a `github:` release resolving to several deployable artifacts names each after the program inside it, which is unknowable before the archive is open. Ruled as `Q37`; the ordering is held by `tests/deploy_refusal_precedes_the_download_tests.rs`. |
 
 ## What was not done, and why
@@ -1661,9 +1661,20 @@ Note also what the 205s is *not*: only 33s of it is inside child commands. The r
 
 **This is the "two of everything" shape the repo keeps finding**, not merely a missing
 `join_all`: the fix is to route recovery through the transaction engine rather than to
-parallelise a second copy of it. The 2026-08-02 ruling covers this — *restructure if it takes
-that* — but the loop that decides **which** entries to run is `Q33`, which is OPEN, and it is the
-same loop. They should land together.
+parallelise a second copy of it.
+
+**Done, 2026-08-05, with `Q33`, because it was the same loop.** The loop is deleted. Recovery
+builds a `StableDiGraph` — dependency edges read off the journal's own specs, keyed
+`backend:name` exactly as `ChangePlanner` keys them — and hands it to `Transaction`, which
+already batches per manager and runs the waves under the parallelism cap. It differs from a
+sync in two settings and both follow from what recovery is: `auto_rollback: false`, because
+undoing an entry that succeeded to punish one that failed moves the machine further from what
+was wanted; and `continue_on_error: true`, new and off everywhere else, because one operation
+nobody can finish must not leave the other twenty-nine unfinished. A node whose dependency
+failed is reported as skipped, naming the one that stopped it.
+
+The other two thirds went with it: one recovery per operation instead of one per past attempt,
+and `Failed` entries are not recovery's work at all.
 
 ## I-49 · `github:` downloads the artifact, then checks whether it may deploy it **[MEASURED HERE]**
 

@@ -3146,3 +3146,145 @@ in both now, and the ledger answers only the case the probe cannot: a resource n
 asked about has been applied, or it has not, and only one of those is work.
 
 ---
+
+**V.134 — Why a bare `adopt` does not take a machine's services.** *(Owner ruling, 2026-08-05 —
+`Q39`, second half. Rule in II.9.)*
+
+`adopt` is the command that hands a machine to LiNix, and what it writes is a file the user is
+then told to read, because *deleting a line from it undoes the thing*. So the file is a claim
+about intent, and every line in it had better be one.
+
+Measured on a Windows host, fully isolated config and state:
+
+```
+adopt              161 declarations, 150 of them service:<name>@status=running
+```
+
+**93% of it was every service Windows happened to be running.** Nobody chose those. Two of them
+— `gpsvc` and `smphost` — had stopped again on their own twenty minutes later, because Windows
+starts them on a trigger and stops them when idle, so those two lines asked LiNix to keep
+restarting something the OS deliberately shuts down.
+
+**The rule this needed already existed and was already written down.** `manual_listings` refuses
+a backend that cannot separate a user's choices from its dependency closure, and says why:
+*"Adopting nothing costs the user a manual manifest entry; adopting a dependency graph costs
+them their system."* The service backend answered `tracks_manual() == true` while its own
+`manual_source()` read *"every service systemd reports as running (no init records which you
+chose)"* — contradicting itself in its own words, one method apart. `adopted_unasked` is that
+same question one step along: not *can you tell a dependency from a decision*, but *is being on
+the machine evidence of a decision at all*.
+
+**A default, not a refusal.** `linix adopt service` takes them. After the change, on the same
+host:
+
+```
+linix adopt                          316 declarations, 0 services, and one line saying
+                                     which backend was skipped and how to ask for it
+linix adopt service                  149
+linix adopt service --enabled-only   113
+```
+
+**And `--enabled-only` is honest rather than complete.** It reads the machine's own record of
+what it starts at boot — `systemctl list-unit-files --state=enabled`, OpenRC's default runlevel,
+`StartType -eq 'Automatic'` on Windows — in **one** command, because asking per service is a
+process spawn each and there were 150 of them. It drops the 36 demand-start services, `smphost`
+among them. It does **not** drop `gpsvc`, which Windows marks `Automatic` and stops anyway. That
+is Windows disagreeing with itself, not the filter failing, and it is written down here rather
+than left for the next person to discover: the filter narrows the guess, it does not make the
+list a record of anybody's decision.
+
+A backend that cannot answer the question at all is skipped and named. A filter that silently
+falls back to everything is how you adopt 150 services believing you asked for 40.
+
+---
+
+**V.135 — Why recovery finishes interrupted work only, and why it runs on the engine.**
+*(Owner ruling, 2026-08-05 — `Q33`. Rule in II.19.)*
+
+Two halves, and the second is only reachable because of the first.
+
+**`Failed` is not interrupted.** `get_incomplete_actions` returned `InProgress | Failed |
+Abandoned`, and `record_start` mints a fresh id per attempt, so a declaration that fails on every
+sync appended a new operation every time and none was ever purged: one sweep's journal held **22
+operations for a single `scoop:linix-no-such-pkg-zzz`**, all 22 of which `heal` then reinstalled.
+
+The argument that decides it is not that failures are hopeless — a mirror goes down, a network
+drops, and those are worth another go. It is that **retrying them here is the same work twice.**
+The package is not installed and its line is still in the manifest, so the `sync` that runs
+immediately afterwards schedules it again. Recovery retrying it first buys nothing but a longer
+wait and an error in a command nobody asked to install anything with.
+
+And it compounded, which is what made it expensive rather than merely redundant. `needs_recovery`
+asked a *different* question from `get_incomplete_actions` — `InProgress | Abandoned` — so an
+interrupted entry that can never be recovered stays `InProgress` for ever, keeps `needs_recovery`
+true for ever, and runs a full recovery of every failure the machine has ever recorded in front
+of **every sync**. `watch --once` cost 208 seconds on this host doing exactly that. The trigger
+and the work are one predicate now, because when they disagreed this is what the disagreement
+bought.
+
+`Failed` therefore becomes terminal and ages out on the same rule as `Completed`. Keeping it for
+ever once nothing reads it would trade an unbounded retry for an unbounded file. `InProgress` is
+still never purged at any age: it is the only record that something on this machine is half-done.
+
+**And recovery is a graph like any other change.** It was a `for` loop with the install awaited
+inside it and `install(std::slice::from_ref(spec))` at the bottom — serial, one package per
+command, standing next to a batched parallel DAG and getting none of it. Measured on one host in
+one minute:
+
+```
+sync --dry-run   2.65s wall ·  21 child command(s) summing to 10.35s · 3.9x overlap ·  2 wave(s)
+heal           205.14s wall ·  27 child command(s) summing to 33.31s · 0.2x overlap · 27 wave(s)
+```
+
+**27 waves for 27 commands is the definition of serial.** The fix is not a `join_all` over the
+same loop — that is the second copy of the engine getting a second copy of the engine's
+features. The loop is deleted; recovery builds a graph and hands it to `Transaction`, and gets
+per-manager batching, the parallelism cap, the retry policy and the rollback history for free.
+Its dependency edges come from the journal's own specs, keyed `backend:name` exactly as
+`ChangePlanner` keys them — the bare name would have matched nothing and produced an edgeless
+graph, which is a plan that runs in the wrong order rather than one that fails.
+
+**Two settings differ from a sync's, and both follow from what recovery is.** It does not roll
+back: each entry is a separate piece of work a dead run left behind, and undoing one that
+succeeded to punish one that failed moves the machine further from what was wanted. And it
+continues past a failure — `continue_on_error`, off everywhere else — because one operation
+nobody can finish must not leave the other twenty-nine unfinished. A node whose *dependency*
+failed is still never attempted, and is reported as skipped naming the one that stopped it,
+because "jq failed" about a package no command was ever run for is the misattribution V.136 is
+about.
+
+---
+
+**V.136 — Why a failure names the declaration and not just the command.** *(Owner ruling,
+2026-08-05 — `Q34`. Rule in II.19.)*
+
+`install X` converges the whole configuration. That is not a bug to be fixed — it is what
+declarative means, and the alternative (converge only X) turns LiNix into a package manager that
+happens to keep notes, where your files and your machine can disagree with no command noticing.
+
+The consequence is real all the same: a line nobody has looked at can stop the install somebody
+just typed. Measured:
+
+```
+$ linix -y install bun:sort-package-json
+Error: `sc` failed (exit 1056): [SC] StartService FAILED 1056:
+```
+
+Nothing in that names a declaration, a file, or a reason the user should care about `sc`. The
+transaction knew which node it was and threw it away one line before returning the error.
+
+So the failure carries it: `` while applying `scoop:linix-no-such-pkg-zzz`
+(modules/starter.txt:11) ``. Appended to the message and to nothing else — `retry` and
+`absent_name` are what every caller downstream reads to decide whether to try again and whether
+to withdraw the line, and a wrapper that stringifies the error into `Other` turns a withdrawable
+line into a permanent wedge.
+
+**And the half only the caller knows.** `install` compares what failed against what was asked
+for and says outright when they differ. That check found a second defect while being written:
+`WhyKept::NameAbsentElsewhere` — the branch whose *name* says the missing package belongs to some
+other declaration — told the user *"`sync` will keep failing the same way until the line naming
+it is corrected or removed with `linix unmanage bun:sort-package-json`"*. It pointed at the one
+line that was fine. The withdrawal logic itself was already careful, and says why: *"Withdrawing
+on a guess is the one outcome worse than keeping a line."* The advice beside it was not.
+
+---

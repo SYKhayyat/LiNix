@@ -6332,3 +6332,66 @@ and 180 version-bearing winget pseudo-ids (`Q36`); whether `heal` should act on 
 at all (`Q33`'s other half); and whether `install X` failing on an unrelated member should report
 `X` as the failure (`Q34`). `I-48`'s remaining two thirds — recovery is still serial and still one
 package per command — share their loop with `Q33` and land with it.
+
+## 2026-08-05 (later still) — the three rulings, and what the sweep found underneath them
+
+The owner ruled all three open questions from the morning's work, and a Windows sweep run against
+the fixes turned up two defects the old cascade had been hiding.
+
+**`Q33` + `I-48` — recovery.** Ruled: `heal` finishes interrupted work only. A `Failed` entry
+reached an outcome and reported it; the package is not installed and its line is still in the
+manifest, so the next `sync` schedules it again — retrying it in recovery was the same work
+twice. The trigger and the work are now one predicate, which is what had let a single
+unrecoverable interrupted entry run a full recovery of every past failure in front of every
+sync. `Failed` became terminal and ages out; keeping it once nothing reads it would have traded
+an unbounded retry for an unbounded file.
+
+And the loop is gone. Recovery builds a graph and hands it to `Transaction` — per-manager
+batching, the parallelism cap, dependency edges off the journal's own specs. Two settings differ
+from a sync's: no rollback, and `continue_on_error`, which is new, off everywhere else, and
+exists because one entry nobody can finish must not leave the others unfinished. A node whose
+dependency failed is reported as skipped, naming the one that stopped it.
+
+**`Q39`, second half — `adopt`.** Ruled: a bare `adopt` does not take a backend where being on
+the machine is not evidence of a choice. The rule it needed already existed one method away —
+the service backend answered `tracks_manual() == true` while its own `manual_source()` read *"no
+init records which you chose"*. Measured on this host: **316 declarations and 0 services**, where
+before it was 161 of which 150 were services. `linix adopt service` takes them (149);
+`--enabled-only` narrows to what the machine starts at boot (113), in one command rather than
+150. It drops `smphost` and does **not** drop `gpsvc`, which Windows marks `Automatic` and stops
+anyway — written down rather than papered over.
+
+**`Q34` — attribution.** Ruled: the model stays, the message changes. A failure names the
+declaration and its file and line; `install` says outright when what failed is not what was
+asked for. Building the check found a second defect: `WhyKept::NameAbsentElsewhere` — the branch
+whose own name says the missing package belongs to a *different* declaration — was advising
+`linix unmanage` on the one line that was fine.
+
+### The sweep, re-run against all of it
+
+`pass=242 fail=4 soft=26`, from `238/8` and, before any of this, `234/13`. The `Q39` cascade is
+gone: `bun`, `dotnet`, `pnpm`, `winget` and `yarn` all install. What is left is four things, and
+only one of them was a product defect nobody knew about:
+
+- **`yarn: list shows catj` — real, and it had been true for ever.** `parse_yarn_list` was given
+  `--json` and written for an ASCII tree, and yarn 1 emits neither. Measured on a host with
+  `catj` installed: the JSON stream's only `list` record is `{"type":"bins-catj","items":
+  ["catj"]}` — the binaries, not the package — and the one line carrying the name is the plain
+  output's `info "catj@1.0.4" has binaries:`, which the parser's filter dropped because it
+  contains the word `info`. So `linix list -b yarn` returned nothing on a machine with yarn
+  packages on it, and `remove` is gated on `info`, which reads the same listing. **bun had the
+  identical bug for the identical reason**, and the comment recording that fix is four lines
+  above the one that was still broken. Fixed and verified against the real yarn, both directions.
+- `yarn: still on PATH after removal (at )` — the empty `(at )` is the answer: nothing is on
+  PATH. The pre-existing copy went too, because with yarn there is only one installation to
+  remove. A harness expectation, not a product defect.
+- `nimble:nimjson` fails its own nim build. Ecosystem.
+- **The lifecycle ratchet fell to 2 of 5, and the cause is the harness eroding itself.** Almost
+  every backend is now skipped with *"already installed on this host — left alone rather than
+  removed"*: each sweep leaves its test packages behind, and the next one then refuses to
+  exercise them. The sweep gets weaker every time it runs on a developer box. Not yet fixed.
+
+**Still open:** `Q36` — `adopt` writes winget identities that embed their own version
+(`MSIX\Microsoft.Winget.Source_2026.805.1333.19_...`). Three distinct values for that one package
+in a single day were recorded across two sessions. The cascade it used to feed is fixed, so it
+now costs a line that can never converge rather than every later install.
