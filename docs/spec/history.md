@@ -6269,3 +6269,18 @@ breakdown at all, and is why three stalls read as wedges.
 Both are `I-48` and `I-49` in `docs/INEFFICIENCIES.md`, added to its disposition table so that
 document's own rule holds: nothing unmarked. Neither is fixed — `I-48` shares its loop with `Q33`
 and `I-49` is `Q37`, and both are the owner's.
+
+**Confirmation run, same day, with the exit-policy fix in and no human present:** `pass=238
+fail=8 soft=23`, against the first run's `234/13/23` — and **zero stall snapshots**, because no
+call exceeded 150s. Five failures resolved: the unresolvable name is now withdrawn, the journal
+leaves nothing open (`10 recorded, 4 failed-and-retryable`), `activate` converges, and `github:`
+and `pub:` install. `nimble` moved from *unclassified* to *failed permanently* — the policy
+working, over a nim build that genuinely fails.
+
+**Five of the remaining eight are one cause, and it is not the one I named.** `bun`, `dotnet`,
+`pnpm`, `winget` and `yarn` fail on `sc` exit **1056** — `adopt` wrote 150
+`service:<name>@status=running` lines, one per running Windows service, and converging one starts
+a service that is already started. 1056 is the desired state; nothing calls it benign, and
+`for_manager` has no `"service"` arm at all. `Q39`, and it means **after `adopt`, every `install`
+fails**. The first run's failures were attributed to the scoop leftover; the re-run is what showed
+that was only part of it. A cascade with one identified source is not a cascade with one source.
