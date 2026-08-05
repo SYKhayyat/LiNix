@@ -1,4 +1,4 @@
-# The decision register — all 144, two of them open
+# The decision register — all 150, two of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -15,9 +15,9 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **2** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **1** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **140** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **143** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -73,7 +73,8 @@ status loses that, so it is kept here:
 
 ## Index
 
-**One is open — `Z1`, raised 2026-08-03.** All 144 are accounted for: **140 ANSWERED, 2 PARKED, 1 BUILT NEVER RULED, 1 OPEN** — and this line
+**Two are open — `Z1`, raised 2026-08-03, and `Q31`, raised 2026-08-04.** All 150 are accounted
+for: **143 ANSWERED, 2 PARKED, 1 BUILT NEVER RULED, 2 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -275,6 +276,7 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q28** | Is a command that reports success while leaving the user with a false picture of their machine a *defect class*, with rules of its own? — RULED: **yes.** | 2026-08-03 |
 | **Q30** | Should the `--` terminator be decided by which `VersionPin` variant a backend picked, and should the terminator table be keyed per verb? — RULED: **read it off the tokens; one key per binary.** Per-verb rejected on measurement. | 2026-08-04 |
 | **Q29** | Is the statement set closed, with all future computation routed through `generate:`? — **HALF RULED.** The *resource-kind* set is ruled **open — more prefixes may be added**; a ratchet holds Part II to `KEYWORDS` instead. The *computation* half is still open. | 2026-08-04 |
+| **Q31** | `unmanaged` names two different numbers on two screens, and a command is named after the meaning the register did *not* choose. Which word goes where? — **OPEN.** | — |
 
 *Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
 this file exists to prevent, found on 2026-07-30 by adding a row to it.*
@@ -5118,3 +5120,52 @@ and without the terminator and compares exit code, operand echo and the presence
 It reads its argvs from the registry rather than a list, and CI points it at the `tools` image,
 where thirty managers live instead of a runner's eight. That gap is why `luarocks`, `mix` and
 `asdf` went unasked: not a missing gate, a gate never pointed at a machine that could answer.
+
+---
+
+## Q31
+
+**Status: OPEN — raised 2026-08-04, from `docs/GRADE-2026-08-04.md` §3.2.**
+
+**One word, two numbers, and the command is named after the losing one.** On the same machine in
+the same minute:
+
+```
+linix check           ->  ok  unmanaged   everything you chose is managed
+linix check drift     ->  ? unmanaged — installed but not in your manifests (34):
+linix check unmanaged ->  1 package(s) `linix adopt` would take
+                          33 package(s) the OS reports as essential are left alone
+```
+
+Neither number is wrong. They answer different questions and **both questions have a command
+that acts on them**:
+
+- **what `adopt` would take** — `adopter().discover().adopt`. This is what `check unmanaged` and
+  the `check` rollup report, and `verbs/check.rs:3` records that it was *chosen* for the word:
+  the section used to answer the other question, `unmanaged` and `adopt` disagreed by a factor of
+  four, and E6 asked for this one.
+- **everything installed that nothing declares** — `installed_but_unmanaged()`. This is what
+  `check drift` lists, what `readme.md:670` defines the word as, and — the awkward part — what
+  **`purge-unmanaged` deletes**.
+
+So the register chose one meaning for the word and the most destructive command in the program is
+named after the other. The fix that was applied for E6 reached one of the three surfaces; this is
+the same class the grade calls *"the correct behaviour already exists at a different site"*, one
+layer up, in the vocabulary rather than the code.
+
+**Why it is not the builder's.** Every way out renames something a user reads or types:
+
+1. **`check drift` stops using the word.** Cheapest. `? installed and not declared —
+   `purge-unmanaged` would remove (34)`, and `readme.md:670` moves with it. But `purge-unmanaged`
+   then names a set the word `unmanaged` no longer describes anywhere.
+2. **`purge-unmanaged` is renamed** to whatever the second meaning is called. Honest, and it is a
+   published verb name that scripts run.
+3. **`check unmanaged` gives the word back** and becomes `check adoptable`. Reverses E6's choice,
+   which was made on a measurement.
+
+**Recommendation: (1) plus (2)** — pick one word for "installed and nothing declares it", use it
+on `check drift`, in the readme, and in the command name, and leave `unmanaged` meaning what E6
+ruled it means. Two meanings need two words; which two is the owner's call, because all three
+routes change what a user reads and one changes what they type.
+
+**Do not answer this in code.** Nothing was changed for it.
