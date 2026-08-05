@@ -6105,3 +6105,23 @@ it is in `decisions.md` as OPEN with a recommendation and nothing was changed fo
   crash and two-writer checks apply there (`sudo` does not — LiNix escalates only off Windows).
   A check on one harness is a check on one platform.
 - `zfs` still needs a kernel with the module; the BSDs still need VMs. Detected, not assumed.
+
+### One intermittent failure, recorded rather than chased
+
+`grade2_info_tests::info_agrees_with_list_about_every_backend_not_only_the_first` failed once on
+Windows during this session and passed on every other run of the same suite the same night:
+
+```
+1 of 16 backend(s) contradict their own listing:
+  `info winget:7zip.7zip` denies a row `list` just printed under `winget`
+```
+
+Not caused by anything here — nothing in this session touches `winget`, `info` or `list`, and the
+full suite ran green before and after. What separates the two runs is **load**: the failing one
+took 141s for that target while a container image was building on the same box, the passing one
+46s idle. That is the interesting half. Either the oracle is flaky because `winget list` answers
+differently under contention, or `info` runs out of time and reports *not installed* — and an
+`info` that answers "no" when it means "I did not finish" is a wrong answer rather than a slow
+one, which is W37's family with a timer attached.
+
+Not diagnosed. Recorded so the next person does not have to rediscover that it is load-dependent.
