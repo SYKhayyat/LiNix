@@ -791,6 +791,37 @@ impl<'a> SyncEngine<'a> {
 
             let verb = if is_install { "reinstalled" } else { "removed" };
             if remediation_res.is_ok() {
+                // The ledger, not only the log. `execute_transaction` records ownership through
+                // `state.add` for every install it performs; recovery performs the same install
+                // by a different route and recorded nothing, so a package `heal` put back was on
+                // the machine and under nobody's management. Measured, with a control:
+                //
+                //   no crash:  linix -y uninstall apt:pv        -> remove 1, gone
+                //   SIGKILL + heal, then the same command       -> "already up to date", still there
+                //   linix why apt:dos2unix -> 'apt:dos2unix' is not under LiNix management.
+                //
+                // Nothing looked wrong: the sync after `heal` converges, because the package IS
+                // installed. The damage only appears when you try to take it away — the machine
+                // keeps it for ever and the one command for removing it reports success. That is
+                // Q28's class exactly, on the path that runs when nobody is watching.
+                match &entry.action {
+                    crate::core::journal::JournalAction::Install(spec) => {
+                        let source = spec.options.get("__source").cloned();
+                        let mut state = self.state.lock().await;
+                        state.add(
+                            &spec.backend,
+                            &spec.name,
+                            None,
+                            spec.options.clone(),
+                            source,
+                            false,
+                        );
+                    }
+                    crate::core::journal::JournalAction::Remove { name, backend } => {
+                        let mut state = self.state.lock().await;
+                        state.remove(backend, name);
+                    }
+                }
                 let mut j = self.journal.lock().await;
                 let _ = j.record_success(&entry.id);
                 info!(
@@ -829,6 +860,17 @@ impl<'a> SyncEngine<'a> {
                 kept.len(),
                 kept.join(", ")
             );
+        }
+        // And it reaches disk. The registry lives in memory until somebody serialises it, and
+        // `heal` is a whole command — nothing runs after it to write what it changed, so an
+        // ownership record made above and not written here dies with the process and the orphan
+        // comes straight back. Same shape as the finalisation in `run`: serialised under the
+        // lock, written outside it.
+        if !recovered.is_empty() || !kept.is_empty() {
+            let to_write = self.state.lock().await.snapshot()?;
+            tokio::task::spawn_blocking(move || to_write.write())
+                .await
+                .map_err(|e| Error::Other(format!("writing the registry after heal: {}", e)))??;
         }
         {
             let mut j = self.journal.lock().await;
