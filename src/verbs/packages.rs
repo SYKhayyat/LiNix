@@ -108,8 +108,49 @@ pub(crate) async fn handle_install(
 
     if let Err(e) = &synced {
         withdraw_what_can_never_succeed(app, e, &edits).await;
+        // Only where the advice above has not already said it. `NameAbsentElsewhere` names the
+        // other declaration in its own words; adding this after it is the same paragraph twice.
+        if why_kept(e) != WhyKept::NameAbsentElsewhere {
+            say_if_the_failure_was_not_yours(app, e, &lines).await;
+        }
     }
     synced
+}
+
+/// When the sync that follows `install X` fails on something other than X, say so.
+///
+/// `install X` converges the **whole** configuration, and that is the model working — LiNix is
+/// declarative and your files are the truth. The consequence is that a line you have never
+/// looked at can stop the install you just typed, and the error is then the failing line's
+/// manager talking about a command you did not ask for. Measured: `linix -y install
+/// bun:sort-package-json` on a machine with one unconvergeable `service:` line reported `` `sc`
+/// failed (exit 1056) `` and nothing at all about bun (`Q34`).
+///
+/// The transaction now names the declaration in the failure itself. This adds the half only the
+/// caller knows: whether that declaration is the one the user asked for.
+///
+/// **How it decides, stated because it is a heuristic and not a proof:** the failure's own text
+/// now carries `backend:name`, so this asks whether any spec the user named appears in it. A
+/// wrong guess costs one extra paragraph of explanation and never changes what happened — which
+/// is the only reason a substring test is acceptable here.
+async fn say_if_the_failure_was_not_yours(app: &App, e: &anyhow::Error, lines: &[String]) {
+    let said = e.to_string();
+    let mut asked_for: Vec<String> = Vec::new();
+    for line in lines {
+        for spec in app.resolve_spec(line).await.unwrap_or_default() {
+            asked_for.push(format!("{}:{}", spec.backend, spec.name));
+        }
+    }
+    if asked_for.is_empty() || asked_for.iter().any(|k| said.contains(k)) {
+        return;
+    }
+    warn!(
+        "that failure is not about {}. `install` writes your line and then converges your \
+         whole configuration, so a declaration you never touched can stop it — the one that \
+         failed is named above, with the file it lives in. Your line was written and stays \
+         written. Fix or `linix unmanage` the declaration that failed, then re-run.",
+        asked_for.join(", ")
+    );
 }
 
 /// Whether a failed sync says the name it was given does not exist.
@@ -319,10 +360,18 @@ fn kept_line_advice(why: WhyKept, line: &str, file: &std::path::Path) -> String 
              `sync` unchanged will refuse identically.",
             where_it_is, line
         ),
+        // **Elsewhere is the whole point of this branch, and the text used to lose it.** A line
+        // whose own name is the missing one has already been withdrawn by
+        // `withdraw_what_can_never_succeed` and never reaches here, so anything that does is
+        // being kept because some *other* declaration named a package that does not exist.
+        // Saying "run `linix unmanage <this line>`" then points at the one line that is fine —
+        // measured: `install bun:sort-package-json` on a config holding one bad `scoop:` line
+        // advised unmanaging bun (`Q34`).
         WhyKept::NameAbsentElsewhere => format!(
-            "{}, and the failure above says a package name does not exist. `sync` will keep \
-             failing the same way until the line naming it is corrected or removed with \
-             `linix unmanage {}`.",
+            "{}, and it is not what failed. The failure above is a package name that does not \
+             exist in a *different* declaration — the error names it and the file it lives in. \
+             `sync` will keep failing the same way until that one is corrected or removed; \
+             `linix unmanage {}` would only take back the line you just wrote.",
             where_it_is, line
         ),
         WhyKept::Transient => format!(

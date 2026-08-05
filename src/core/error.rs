@@ -165,6 +165,45 @@ impl Error {
         }
     }
 
+    /// Say which declaration a failure happened for, without changing what the failure *is*.
+    ///
+    /// The message gains a line; `retry` and `absent_name` are untouched, and that is the whole
+    /// point of doing it this way. Those two are what every caller downstream reads to decide
+    /// whether to retry and whether to withdraw the line, so a wrapper — `Error::Other(format!(
+    /// "while doing X: {e}"))` — turns a withdrawable line into a permanent wedge. This edits
+    /// the sentence and nothing else.
+    ///
+    /// `install X` converges the whole configuration, which is the model working: LiNix is
+    /// declarative and your file is the truth. But it means a line you have never looked at can
+    /// stop the install you just typed, and before this the error named the *command* — `sc`
+    /// failed (exit 1056) — with nothing to say which declaration ran it or where that line
+    /// lives (`Q34`).
+    pub fn about_declaration(self, key: &str, origin: Option<&str>) -> Self {
+        let where_from = match origin {
+            Some(o) => format!(" ({})", o),
+            None => String::new(),
+        };
+        let note = format!("
+    while applying `{}`{}.", key, where_from);
+        match self {
+            Error::CommandFailed {
+                message,
+                retry,
+                absent_name,
+            } => Error::CommandFailed {
+                message: format!("{}{}", message, note),
+                retry,
+                absent_name,
+            },
+            Error::Refused(m) => Error::Refused(format!("{}{}", m, note)),
+            Error::Validation(m) => Error::Validation(format!("{}{}", m, note)),
+            // Anything else already says what it is in its own words, and the variants above
+            // are the ones a backend produces. Left alone rather than stringified into `Other`,
+            // which would cost the caller the variant it reads.
+            other => other,
+        }
+    }
+
     /// A command failure whose output says the name is not there. The one command failure
     /// that withdraws a declaration.
     pub fn command_failed_absent(message: impl Into<String>) -> Self {
