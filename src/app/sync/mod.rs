@@ -1,8 +1,8 @@
-use crate::core::LockFile;
 use crate::app::diagnostics::FailureDiagnosticEngine;
 use crate::app::{LuaHooks, MetricsCollector};
 use crate::backends::BackendRegistry;
 use crate::config::Config;
+use crate::core::LockFile;
 use crate::core::{
     CommandExecutor, Error, GraphAction, Journal, PackageSpec, Result, Retryability,
     SnapshotManager, StateRegistry, Transaction, TransactionConfig,
@@ -707,6 +707,14 @@ impl<'a> SyncEngine<'a> {
         // Packages whose interrupted removal the guard refused: kept, not removed (owner
         // decision), and the entry resolved so heal completes rather than sticking.
         let mut kept: Vec<String> = Vec::new();
+        // Entries recovery cannot act on at all — the manager is not registered on this machine,
+        // or it is registered and cannot install or remove. Until 2026-08-04 the loop below was
+        // two nested `if let`s with **no `else` on either**, so such an entry was neither
+        // recovered, nor failed, nor mentioned: `heal` did nothing about it and returned Ok.
+        // That is W36's finding one branch over — W36 was "says it could not recover and exits
+        // 0", this is "says nothing and exits 0", and the second is worse because there is
+        // nothing in the output to read.
+        let mut unreachable: Vec<String> = Vec::new();
         for entry in incomplete_actions {
             let (backend, package, is_install) = match &entry.action {
                 crate::core::journal::JournalAction::Install(spec) => {
@@ -718,80 +726,91 @@ impl<'a> SyncEngine<'a> {
             };
             let key = format!("{}:{}", backend, package);
 
-            if let Some(backend_cap) = self.registry.get(&backend) {
-                if let Some(handler) = backend_cap.as_installable() {
-                    let sudo = backend_cap.sudo_for_write();
+            let Some(backend_cap) = self.registry.get(&backend) else {
+                unreachable.push(format!(
+                    "{} (no manager named `{}` is set up on this machine, so there is nothing to \
+                     complete the operation with)",
+                    key, backend
+                ));
+                continue;
+            };
+            let Some(handler) = backend_cap.as_installable() else {
+                unreachable.push(format!(
+                    "{} (`{}` cannot install or remove, so an interrupted install of it is not \
+                     something recovery can finish)",
+                    key, backend
+                ));
+                continue;
+            };
+            let sudo = backend_cap.sudo_for_write();
 
-                    // Completing an interrupted *removal* routes through the guard, so a
-                    // protected package is never removed even during recovery. On refusal we
-                    // KEEP the package and treat the entry as resolved — recovery completes,
-                    // protection holds, and heal never gets stuck retrying a removal it will
-                    // always refuse.
-                    if !is_install {
-                        let removal = [(backend.clone(), package.clone())];
-                        if let Err(objection) = guard::enforce(
-                            self.config,
-                            &self.registry,
-                            &removal,
-                            guard::GuardScope::Heal,
-                        )
-                        .await
-                        {
-                            let reason = objection
-                                .to_string()
-                                .lines()
-                                .find(|l| l.trim_start().starts_with("- "))
-                                .map(|l| l.trim().trim_start_matches("- ").to_string())
-                                .unwrap_or_else(|| "protected".to_string());
-                            info!(
-                                "keeping {} — its interrupted removal is refused ({}).",
-                                key, reason
-                            );
-                            let mut j = self.journal.lock().await;
-                            let _ = j.record_success(&entry.id);
-                            kept.push(key.clone());
-                            continue;
-                        }
-                    }
-
-                    // V.64: recovery reinstates what was wanted and does not delete to get
-                    // there. Re-running the install over a half-installed package is what
-                    // every manager LiNix drives can do; uninstalling first was a removal the
-                    // plan could not show and the guard never saw (S24).
-                    let remediation_res = if is_install {
-                        if let crate::core::journal::JournalAction::Install(spec) = &entry.action {
-                            handler.install(std::slice::from_ref(spec), sudo).await
-                        } else {
-                            Ok(())
-                        }
-                    } else {
-                        handler.remove(std::slice::from_ref(&package), sudo).await
-                    };
-
-                    let verb = if is_install { "reinstalled" } else { "removed" };
-                    if remediation_res.is_ok() {
-                        let mut j = self.journal.lock().await;
-                        let _ = j.record_success(&entry.id);
-                        info!(
-                            "{} {} (completing an interrupted {}).",
-                            verb,
-                            key,
-                            if is_install { "install" } else { "removal" }
-                        );
-                        recovered.push(format!("{} {}", verb, key));
-                    } else {
-                        let e = remediation_res.err();
-                        error!(
-                            "could not recover {} — {}. {} The entry stays recorded as \
-                             interrupted, so nothing claims this package is installed.",
-                            key,
-                            e.as_ref()
-                                .map_or("no reason given".to_string(), |e| e.to_string()),
-                            what_to_do_about(e.as_ref(), &key),
-                        );
-                        failed.push(key);
-                    }
+            // Completing an interrupted *removal* routes through the guard, so a protected
+            // package is never removed even during recovery. On refusal we KEEP the package and
+            // treat the entry as resolved — recovery completes, protection holds, and heal never
+            // gets stuck retrying a removal it will always refuse.
+            if !is_install {
+                let removal = [(backend.clone(), package.clone())];
+                if let Err(objection) = guard::enforce(
+                    self.config,
+                    &self.registry,
+                    &removal,
+                    guard::GuardScope::Heal,
+                )
+                .await
+                {
+                    let reason = objection
+                        .to_string()
+                        .lines()
+                        .find(|l| l.trim_start().starts_with("- "))
+                        .map(|l| l.trim().trim_start_matches("- ").to_string())
+                        .unwrap_or_else(|| "protected".to_string());
+                    info!(
+                        "keeping {} — its interrupted removal is refused ({}).",
+                        key, reason
+                    );
+                    let mut j = self.journal.lock().await;
+                    let _ = j.record_success(&entry.id);
+                    kept.push(key.clone());
+                    continue;
                 }
+            }
+
+            // V.64: recovery reinstates what was wanted and does not delete to get there.
+            // Re-running the install over a half-installed package is what every manager LiNix
+            // drives can do; uninstalling first was a removal the plan could not show and the
+            // guard never saw (S24).
+            let remediation_res = if is_install {
+                if let crate::core::journal::JournalAction::Install(spec) = &entry.action {
+                    handler.install(std::slice::from_ref(spec), sudo).await
+                } else {
+                    Ok(())
+                }
+            } else {
+                handler.remove(std::slice::from_ref(&package), sudo).await
+            };
+
+            let verb = if is_install { "reinstalled" } else { "removed" };
+            if remediation_res.is_ok() {
+                let mut j = self.journal.lock().await;
+                let _ = j.record_success(&entry.id);
+                info!(
+                    "{} {} (completing an interrupted {}).",
+                    verb,
+                    key,
+                    if is_install { "install" } else { "removal" }
+                );
+                recovered.push(format!("{} {}", verb, key));
+            } else {
+                let e = remediation_res.err();
+                error!(
+                    "could not recover {} — {}. {} The entry stays recorded as interrupted, so \
+                     nothing claims this package is installed.",
+                    key,
+                    e.as_ref()
+                        .map_or("no reason given".to_string(), |e| e.to_string()),
+                    what_to_do_about(e.as_ref(), &key),
+                );
+                failed.push(key);
             }
         }
 
@@ -820,13 +839,27 @@ impl<'a> SyncEngine<'a> {
         // told a script the opposite of what it told the person reading it — `linix heal &&
         // echo ok` printed ok. U21 gave this program an exit vocabulary; the recovery path
         // was the last one not using it.
-        if !failed.is_empty() {
+        //
+        // `unreachable` is here for the same reason and it is the harder half: those entries
+        // produced no error to print, so before they were collected the only evidence that
+        // anything had been skipped was a number in the journal nobody was reading.
+        if !failed.is_empty() || !unreachable.is_empty() {
+            let mut named: Vec<String> = Vec::new();
+            named.extend(failed.iter().cloned());
+            named.extend(unreachable.iter().cloned());
+            let advice = if unreachable.is_empty() {
+                "Each is still recorded as interrupted, so `heal` will try again — read the \
+                 error above for the one that says what to change."
+            } else {
+                "Each is still recorded as interrupted. `heal` will try again, but an operation \
+                 whose manager is not set up here cannot complete until that manager is — \
+                 `linix check health` says which are."
+            };
             return Err(Error::Other(format!(
-                "{} interrupted operation(s) could not be recovered: {}. Each is still \
-                 recorded as interrupted, so `heal` will try again — read the error above \
-                 for the one that says what to change.",
-                failed.len(),
-                failed.join(", ")
+                "{} interrupted operation(s) could not be recovered: {}. {}",
+                named.len(),
+                named.join(", "),
+                advice
             )));
         }
         Ok(())
