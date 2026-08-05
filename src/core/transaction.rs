@@ -23,6 +23,15 @@ pub struct TransactionConfig {
     pub initial_backoff: Duration,
     pub max_backoff: Duration,
     pub auto_rollback: bool,
+    /// Finish every node that still can, instead of stopping at the first failure.
+    ///
+    /// Off for `sync`, and it must stay off: a plan is one change to one machine, so a member
+    /// that fails makes the whole plan wrong and the rest of it must not be half-applied.
+    /// Recovery is the opposite shape — each entry is a separate piece of interrupted work
+    /// left by a run that already died, and one that cannot be finished is not a reason to
+    /// leave the others unfinished. A node whose *dependency* failed is still never attempted;
+    /// it is reported as skipped, naming the one that stopped it.
+    pub continue_on_error: bool,
     /// Remove also destroys configuration (`[remove] purge`, or `uninstall --purge`). A
     /// backend that draws no such distinction removes as usual — the decision cannot be
     /// per-package because a removal happens after the line that carried it is gone.
@@ -49,6 +58,7 @@ impl TransactionConfig {
             initial_backoff: Duration::from_millis(500),
             max_backoff: Duration::from_secs(30),
             auto_rollback: true,
+            continue_on_error: false,
             purge: false,
         }
     }
@@ -290,6 +300,7 @@ impl Transaction {
                 // fails every package in it, and reporting only the first would make the
                 // summary say one package did not install when six did not.
                 let mut first_failure: Option<Error> = None;
+                let mut failed_now: Vec<(NodeIndex, String)> = Vec::new();
                 for task_data in results {
                     if task_data.result.is_ok() {
                         trace!(
@@ -339,9 +350,47 @@ impl Transaction {
                     if first_failure.is_none() {
                         self.diagnostics
                             .print_suggestions(&error_msg, &task_data.backend_name);
-                        first_failure = Some(task_data.result.clone().err().unwrap());
+                        // Named here because this is the only place that still knows which
+                        // node it was. `install X` converges the whole configuration, so the
+                        // line that failed is often not the one anybody typed, and the error
+                        // used to arrive as the manager's own words about a command the user
+                        // never asked for (`Q34`).
+                        let origin = match &self.graph[task_data.node_index] {
+                            GraphAction::Install(s) => s.options.get("__source").cloned(),
+                            GraphAction::Remove { .. } => None,
+                        };
+                        first_failure = Some(task_data.result.clone().err().unwrap().about_declaration(
+                            &format!("{}:{}", task_data.backend_name, task_data.package_name),
+                            origin.as_deref(),
+                        ));
                     }
+                    failed_now.push((
+                        task_data.node_index,
+                        format!("{}:{}", task_data.backend_name, task_data.package_name),
+                    ));
                     telemetry_results.push(task_data);
+                }
+
+                if self.config.continue_on_error {
+                    // A failed node is terminal: it will not be retried and nothing waiting on
+                    // it can run, so both it and everything downstream come off the board here
+                    // — otherwise the loop below never reaches `total_nodes` and reports a
+                    // cycle that does not exist.
+                    for (idx, named) in failed_now {
+                        in_progress.remove(&idx);
+                        self.completed_indices.insert(idx);
+                        for skipped in self.unreachable_from(idx) {
+                            if self.completed_indices.insert(skipped) {
+                                telemetry_results.push(Self::skipped_result(
+                                    &self.graph[skipped],
+                                    skipped,
+                                    &named,
+                                ));
+                            }
+                        }
+                    }
+                    ready.sort();
+                    continue;
                 }
 
                 if let Some(final_err) = first_failure {
@@ -362,6 +411,51 @@ impl Transaction {
             }
         }
         Ok(telemetry_results)
+    }
+
+    /// Every node that can only be reached through `failed` — the work a failure has just made
+    /// impossible. Excludes `failed` itself, which the caller has already accounted for.
+    fn unreachable_from(&self, failed: NodeIndex) -> Vec<NodeIndex> {
+        let mut out = Vec::new();
+        let mut stack: Vec<NodeIndex> = self
+            .graph
+            .neighbors_directed(failed, Direction::Outgoing)
+            .collect();
+        let mut seen: HashSet<NodeIndex> = HashSet::new();
+        while let Some(idx) = stack.pop() {
+            if !seen.insert(idx) {
+                continue;
+            }
+            out.push(idx);
+            stack.extend(self.graph.neighbors_directed(idx, Direction::Outgoing));
+        }
+        out.sort();
+        out
+    }
+
+    /// A node nobody attempted, reported as itself. Not a success and not a failure of its own:
+    /// the reason names the node that stopped it, because "jq failed" about a package LiNix
+    /// never ran a command for is the attribution problem this engine is meant to be free of.
+    fn skipped_result(action: &GraphAction, idx: NodeIndex, blocked_by: &str) -> TaskResult {
+        let (backend_name, package_name) = match action {
+            GraphAction::Install(s) => (s.backend.clone(), s.name.clone()),
+            GraphAction::Remove { backend, name } => (backend.clone(), name.clone()),
+        };
+        TaskResult {
+            node_index: idx,
+            result: Err(Error::Transaction(format!(
+                "not attempted: it needs `{}`, which could not be completed",
+                blocked_by
+            ))),
+            backend_name,
+            package_name,
+            retries: 0,
+            duration: Duration::ZERO,
+            bytes_downloaded: 0,
+            start_time: chrono::Utc::now(),
+            prior: Prior::Unknown,
+            batch_size: 0,
+        }
     }
 
     /// The most packages LiNix will put on one manager command line.

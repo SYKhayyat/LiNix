@@ -254,36 +254,59 @@ impl Journal {
         Ok(())
     }
 
-    /// Everything that touched the system and did not finish — what `heal` can act on.
+    /// Work that started, touched the system, and never reached an outcome — what `heal`
+    /// finishes.
     ///
-    /// `Pending` is excluded because it never reached a backend. `Abandoned` is included:
-    /// it is an `InProgress` entry that `cleanup` aged out at 4h, and aging out is a
-    /// statement about how long ago the process died, not about whether the package it was
-    /// mutating is still half-removed. Excluding it meant a crash left unattended over
-    /// lunch stopped being healable at all — the case where the machine is least likely to
-    /// have been put right by hand in the meantime.
-    pub fn get_incomplete_actions(&self) -> Vec<JournalEntry> {
+    /// `Pending` is excluded because it never reached a backend. `Abandoned` is included: it is
+    /// an `InProgress` entry that `cleanup` aged out at 4h, and aging out is a statement about
+    /// how long ago the process died, not about whether the package it was mutating is still
+    /// half-removed. Excluding it meant a crash left unattended over lunch stopped being
+    /// healable at all — the case where the machine is least likely to have been put right by
+    /// hand in the meantime.
+    ///
+    /// **`Failed` is not interrupted** (owner ruling, 2026-08-05 — `Q33`). A failed attempt
+    /// reached an outcome and reported it to the user in their own words at the moment it
+    /// happened; the package is not installed and its declaration is still in the manifest, so
+    /// the very next `sync` schedules it again. Recovering it here was duplicated work rather
+    /// than extra coverage — and it compounded, because an interrupted entry that can never be
+    /// recovered stays `InProgress` for ever, which keeps [`needs_recovery`](Self::needs_recovery)
+    /// true and so ran a full recovery of every past failure in front of every sync. One sweep
+    /// spent 208 seconds of a `watch --once` doing exactly that.
+    pub fn interrupted_actions(&self) -> Vec<JournalEntry> {
         self.entries
             .values()
-            .filter(|e| {
-                matches!(
-                    e.status,
-                    ActionStatus::InProgress | ActionStatus::Failed | ActionStatus::Abandoned
-                )
-            })
+            .filter(|e| Self::is_interrupted(e))
             .cloned()
             .collect()
     }
 
-    /// True makes `sync` run `heal` on its own, without asking.
-    pub fn needs_recovery(&self) -> bool {
-        self.entries
-            .values()
-            .any(|e| matches!(e.status, ActionStatus::InProgress | ActionStatus::Abandoned))
+    fn is_interrupted(e: &JournalEntry) -> bool {
+        matches!(
+            e.status,
+            ActionStatus::InProgress | ActionStatus::Abandoned
+        )
     }
 
-    /// InProgress and Failed entries are NEVER purged until they are resolved. Returns whether
-    /// anything was dropped, which is also whether the log on disk was rewritten.
+    /// True makes `sync` run `heal` on its own, without asking.
+    ///
+    /// The same predicate `interrupted_actions` filters on, and it has to be: when the trigger
+    /// and the work disagreed, `heal` ran for an interrupted entry and then also re-attempted
+    /// every failure the machine had ever recorded.
+    pub fn needs_recovery(&self) -> bool {
+        self.entries.values().any(Self::is_interrupted)
+    }
+
+    /// `InProgress` entries are NEVER purged: they are the record that something on this
+    /// machine is half-done, and dropping one loses the only evidence of it.
+    ///
+    /// `Failed` is purged on the same age rule as `Completed`, because it is terminal for the
+    /// same reason — an outcome was reached and reported. It was kept before because `heal`
+    /// retried it; now that it does not (`Q33`), keeping it for ever would have traded an
+    /// unbounded retry for an unbounded file. Nothing else in the program reads a `Failed`
+    /// entry, and every recovery attempt writes a fresh one.
+    ///
+    /// Returns whether anything was dropped, which is also whether the log on disk was
+    /// rewritten.
     pub fn cleanup_expired_logs(&mut self, days_threshold: i64) -> Result<bool> {
         let cutoff = Utc::now() - ChronoDuration::days(days_threshold);
         let cutoff_ts = cutoff.timestamp();
@@ -291,8 +314,10 @@ impl Journal {
         let initial_count = self.entries.len();
 
         self.entries.retain(|id, entry| {
-            let is_terminal =
-                entry.status == ActionStatus::Completed || entry.status == ActionStatus::Abandoned;
+            let is_terminal = matches!(
+                entry.status,
+                ActionStatus::Completed | ActionStatus::Abandoned | ActionStatus::Failed
+            );
 
             if is_terminal {
                 let terminal_time = entry.finished_at_unix.unwrap_or(entry.started_at_unix);
@@ -356,6 +381,111 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+
+    /// A failed attempt is not interrupted work (owner ruling, 2026-08-05 — `Q33`).
+    ///
+    /// It reached an outcome and said so; the package is not installed and its line is still in
+    /// the manifest, so the next `sync` schedules it again. Recovering it here was the same work
+    /// twice — and it compounded, because one interrupted entry that can never be recovered
+    /// keeps `needs_recovery` true for ever, so every sync ran a full recovery of every failure
+    /// the machine had ever recorded in front of it. 208 seconds of one `watch --once`.
+    #[test]
+    fn recovery_finishes_interrupted_work_and_does_not_retry_failures() {
+        let tmp = tempdir().unwrap();
+        let mut journal = Journal::at(tmp.path().join("journal.json")).unwrap();
+
+        let spec = |name: &str| {
+            crate::core::PackageSpec {
+                name: name.to_string(),
+                backend: "apt".to_string(),
+                options: Default::default(),
+                requires: Vec::new(),
+                present: true,
+            }
+        };
+        let interrupted = journal
+            .record_start(JournalAction::Install(spec("half-done")))
+            .unwrap();
+        let failed = journal
+            .record_start(JournalAction::Install(spec("typo")))
+            .unwrap();
+        journal.record_failure(&failed, "no such package").unwrap();
+        let done = journal
+            .record_start(JournalAction::Install(spec("fine")))
+            .unwrap();
+        journal.record_success(&done).unwrap();
+
+        let offered: Vec<String> = journal
+            .interrupted_actions()
+            .into_iter()
+            .map(|e| e.id)
+            .collect();
+        assert_eq!(
+            offered,
+            vec![interrupted.clone()],
+            "only the entry that started and never reached an outcome is recovery's to finish"
+        );
+        assert!(
+            journal.needs_recovery(),
+            "the trigger and the work must be the same predicate — when they disagreed, one \
+             interrupted entry pulled every past failure along with it"
+        );
+
+        // And with the interrupted one resolved, nothing runs at all.
+        journal.record_success(&interrupted).unwrap();
+        assert!(!journal.needs_recovery());
+        assert!(journal.interrupted_actions().is_empty());
+    }
+
+    /// A `Failed` entry is terminal, so it ages out like any other terminal entry. Kept for ever
+    /// it would have traded an unbounded retry for an unbounded file: nothing else in the program
+    /// reads one, and every recovery attempt writes a fresh one.
+    ///
+    /// `InProgress` is the one status that is never purged at any age — it is the only record
+    /// that something on this machine is half-done.
+    #[test]
+    fn a_failed_entry_ages_out_and_a_half_done_one_never_does() {
+        let tmp = tempdir().unwrap();
+        let mut journal = Journal::at(tmp.path().join("journal.json")).unwrap();
+
+        let spec = |name: &str| crate::core::PackageSpec {
+            name: name.to_string(),
+            backend: "apt".to_string(),
+            options: Default::default(),
+            requires: Vec::new(),
+            present: true,
+        };
+        let failed = journal
+            .record_start(JournalAction::Install(spec("typo")))
+            .unwrap();
+        journal.record_failure(&failed, "no such package").unwrap();
+        let completed = journal
+            .record_start(JournalAction::Install(spec("fine")))
+            .unwrap();
+        journal.record_success(&completed).unwrap();
+        let half_done = journal
+            .record_start(JournalAction::Install(spec("half-done")))
+            .unwrap();
+
+        let ancient = (Utc::now() - ChronoDuration::days(30)).timestamp();
+        for id in [&failed, &completed, &half_done] {
+            let e = journal.entries.get_mut(id).unwrap();
+            e.started_at_unix = ancient;
+            e.finished_at_unix = Some(ancient);
+        }
+
+        assert!(journal.cleanup_expired_logs(7).unwrap());
+        assert!(
+            !journal.entries.contains_key(&failed),
+            "a failed attempt is terminal — nothing reads it and heal no longer retries it"
+        );
+        assert!(!journal.entries.contains_key(&completed));
+        assert!(
+            journal.entries.contains_key(&half_done),
+            "an unresolved InProgress entry is the only record that a package is half-installed"
+        );
+    }
+
     #[test]
     fn an_aged_out_crash_is_still_healable() {
         // R23: `cleanup` flips an InProgress entry to Abandoned after 4h. That must not take
@@ -386,7 +516,7 @@ mod tests {
             "an abandoned mutation must still trigger a heal"
         );
         assert!(
-            journal.get_incomplete_actions().iter().any(|e| e.id == id),
+            journal.interrupted_actions().iter().any(|e| e.id == id),
             "an abandoned mutation must still be offered to heal"
         );
     }

@@ -701,12 +701,12 @@ impl<'a> SyncEngine<'a> {
         // They are not 22 operations. They are one operation attempted 22 times, so one attempt
         // decides all of them: on success every entry that named the same thing is resolved,
         // because the package it named is now installed.
-        let incomplete_actions = {
+        let interrupted = {
             let j = self.journal.lock().await;
-            Self::one_per_operation(j.get_incomplete_actions())
+            Self::one_per_operation(j.interrupted_actions())
         };
 
-        if incomplete_actions.is_empty() {
+        if interrupted.is_empty() {
             debug!("nothing to heal");
             return Ok(());
         }
@@ -717,9 +717,9 @@ impl<'a> SyncEngine<'a> {
         if self.config.dry_run {
             info!(
                 "[DRY-RUN] would recover {} interrupted operation(s) from a previous run:",
-                incomplete_actions.len()
+                interrupted.len()
             );
-            for (entry, _) in &incomplete_actions {
+            for (entry, _) in &interrupted {
                 match &entry.action {
                     crate::core::journal::JournalAction::Install(spec) => {
                         info!("[DRY-RUN]   reinstall {}:{}", spec.backend, spec.name)
@@ -741,7 +741,7 @@ impl<'a> SyncEngine<'a> {
         // whole document is about (P3). Report every action taken, by name, and summarize.
         info!(
             "recovering {} interrupted operation(s) from a previous run.",
-            incomplete_actions.len()
+            interrupted.len()
         );
         let mut recovered: Vec<String> = Vec::new();
         let mut failed: Vec<String> = Vec::new();
@@ -756,7 +756,12 @@ impl<'a> SyncEngine<'a> {
         // 0", this is "says nothing and exits 0", and the second is worse because there is
         // nothing in the output to read.
         let mut unreachable: Vec<String> = Vec::new();
-        for (entry, ids) in incomplete_actions {
+        // Two passes, because they answer different questions and only the second one costs a
+        // process. This one decides what recovery can even attempt: a manager that is not set up
+        // here, a manager that cannot install or remove, and a removal the guard refuses are all
+        // settled without touching the machine.
+        let mut runnable: Vec<(crate::core::journal::JournalEntry, Vec<String>)> = Vec::new();
+        for (entry, ids) in interrupted {
             let (backend, package, is_install) = match &entry.action {
                 crate::core::journal::JournalAction::Install(spec) => {
                     (spec.backend.clone(), spec.name.clone(), true)
@@ -775,15 +780,14 @@ impl<'a> SyncEngine<'a> {
                 ));
                 continue;
             };
-            let Some(handler) = backend_cap.as_installable() else {
+            if backend_cap.as_installable().is_none() {
                 unreachable.push(format!(
                     "{} (`{}` cannot install or remove, so an interrupted install of it is not \
                      something recovery can finish)",
                     key, backend
                 ));
                 continue;
-            };
-            let sudo = backend_cap.sudo_for_write();
+            }
 
             // Completing an interrupted *removal* routes through the guard, so a protected
             // package is never removed even during recovery. On refusal we KEEP the package and
@@ -817,76 +821,189 @@ impl<'a> SyncEngine<'a> {
                     continue;
                 }
             }
+            runnable.push((entry, ids));
+        }
 
+        if !runnable.is_empty() {
+            // **The recovery runs on the transaction engine, and not on a second copy of it.**
+            // This loop used to be `for entry in ... { handler.install(from_ref(spec)).await }`
+            // — serial, one package per command, beside a batched parallel DAG. Measured on one
+            // host in one minute: `sync --dry-run` 3.9x overlap over 2 waves, `heal` **0.2x over
+            // 27 waves for 27 commands**, which is the definition of serial. 23 of those 30
+            // attempts were the same package.
+            //
+            // Two settings differ from a sync's, and both follow from what recovery *is*. It
+            // does not roll back: each entry is a separate piece of work a dead run left behind,
+            // and undoing a recovery that succeeded to punish one that failed would put the
+            // machine further from what was wanted, not closer. And it continues past a failure
+            // for the same reason — one operation nobody can finish must not leave every other
+            // one unfinished.
+            //
             // V.64: recovery reinstates what was wanted and does not delete to get there.
             // Re-running the install over a half-installed package is what every manager LiNix
             // drives can do; uninstalling first was a removal the plan could not show and the
             // guard never saw (S24).
-            let remediation_res = if is_install {
-                if let crate::core::journal::JournalAction::Install(spec) = &entry.action {
-                    handler.install(std::slice::from_ref(spec), sudo).await
-                } else {
-                    Ok(())
-                }
-            } else {
-                handler.remove(std::slice::from_ref(&package), sudo).await
-            };
-
-            let verb = if is_install { "reinstalled" } else { "removed" };
-            if remediation_res.is_ok() {
-                // The ledger, not only the log. `execute_transaction` records ownership through
-                // `state.add` for every install it performs; recovery performs the same install
-                // by a different route and recorded nothing, so a package `heal` put back was on
-                // the machine and under nobody's management. Measured, with a control:
-                //
-                //   no crash:  linix -y uninstall apt:pv        -> remove 1, gone
-                //   SIGKILL + heal, then the same command       -> "already up to date", still there
-                //   linix why apt:dos2unix -> 'apt:dos2unix' is not under LiNix management.
-                //
-                // Nothing looked wrong: the sync after `heal` converges, because the package IS
-                // installed. The damage only appears when you try to take it away — the machine
-                // keeps it for ever and the one command for removing it reports success. That is
-                // Q28's class exactly, on the path that runs when nobody is watching.
-                match &entry.action {
+            use petgraph::stable_graph::{NodeIndex, StableDiGraph};
+            let mut graph: StableDiGraph<GraphAction, ()> = StableDiGraph::new();
+            let mut nodes: Vec<(NodeIndex, crate::core::journal::JournalEntry, Vec<String>)> =
+                Vec::new();
+            for (entry, ids) in runnable {
+                let action = match &entry.action {
                     crate::core::journal::JournalAction::Install(spec) => {
-                        let source = spec.options.get("__source").cloned();
-                        let mut state = self.state.lock().await;
-                        state.add(
-                            &spec.backend,
-                            &spec.name,
-                            None,
-                            spec.options.clone(),
-                            source,
-                            false,
-                        );
+                        GraphAction::Install(spec.clone())
                     }
                     crate::core::journal::JournalAction::Remove { name, backend } => {
-                        let mut state = self.state.lock().await;
-                        state.remove(backend, name);
+                        GraphAction::Remove {
+                            name: name.clone(),
+                            backend: backend.clone(),
+                        }
+                    }
+                };
+                nodes.push((graph.add_node(action), entry, ids));
+            }
+            // An interrupted install whose dependency is also interrupted must wait for it, or
+            // recovery reproduces the ordering failure that a dependency edge exists to prevent.
+            // Only edges *inside* the recovery set: a requirement that is already installed is
+            // not this run's to schedule.
+            // Keyed `backend:name`, which is the form `requires` is written in — the same
+            // lookup `ChangePlanner::wire_requires` does against its own install map. Keying it
+            // by the bare name would have matched nothing and silently produced an edgeless
+            // graph, which is a plan that runs but in the wrong order.
+            let by_key: std::collections::HashMap<String, NodeIndex> = nodes
+                .iter()
+                .filter_map(|(idx, entry, _)| match &entry.action {
+                    crate::core::journal::JournalAction::Install(spec) => {
+                        Some((format!("{}:{}", spec.backend, spec.name), *idx))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let mut edges: Vec<(NodeIndex, NodeIndex)> = Vec::new();
+            for (idx, entry, _) in &nodes {
+                if let crate::core::journal::JournalAction::Install(spec) = &entry.action {
+                    for req in &spec.requires {
+                        if let Some(dep) = by_key.get(req) {
+                            if dep != idx {
+                                edges.push((*dep, *idx));
+                            }
+                        }
                     }
                 }
-                let mut j = self.journal.lock().await;
-                for id in &ids {
-                    let _ = j.record_success(id);
+            }
+            for (from, to) in edges {
+                graph.add_edge(from, to, ());
+            }
+
+            let mut tx = Transaction::with_config(
+                graph,
+                self.registry.clone(),
+                self.journal.clone(),
+                self.diagnostics.clone(),
+                Arc::new(self.config.clone()),
+                TransactionConfig {
+                    max_concurrent: self.config.max_parallel.max(1),
+                    auto_rollback: false,
+                    continue_on_error: true,
+                    ..TransactionConfig::patient()
+                },
+            );
+            let results = tx.execute_with_telemetry().await?;
+
+            let mut outcome: std::collections::HashMap<NodeIndex, Result<()>> =
+                std::collections::HashMap::new();
+            for res in results {
+                self.metrics.record_operation(
+                    &res.package_name,
+                    &res.backend_name,
+                    res.start_time,
+                    res.result.is_ok(),
+                    res.result.as_ref().err().map(|e| e.to_string()),
+                    res.retries,
+                    res.bytes_downloaded,
+                    res.batch_size,
+                );
+                outcome.insert(res.node_index, res.result);
+            }
+
+            for (idx, entry, ids) in nodes {
+                let (key, verb, is_install) = match &entry.action {
+                    crate::core::journal::JournalAction::Install(spec) => (
+                        format!("{}:{}", spec.backend, spec.name),
+                        "reinstalled",
+                        true,
+                    ),
+                    crate::core::journal::JournalAction::Remove { name, backend } => {
+                        (format!("{}:{}", backend, name), "removed", false)
+                    }
+                };
+                match outcome.remove(&idx) {
+                    Some(Ok(())) => {
+                        // The ledger, not only the log. `execute_transaction` records ownership
+                        // through `state.add` for every install it performs; recovery performs
+                        // the same install by a different route and recorded nothing, so a
+                        // package `heal` put back was on the machine and under nobody's
+                        // management. Measured, with a control:
+                        //
+                        //   no crash:  linix -y uninstall apt:pv   -> remove 1, gone
+                        //   SIGKILL + heal, then the same command  -> "already up to date", still there
+                        //   linix why apt:dos2unix -> 'apt:dos2unix' is not under LiNix management.
+                        //
+                        // Nothing looked wrong: the sync after `heal` converges, because the
+                        // package IS installed. The damage only appears when you try to take it
+                        // away — the machine keeps it for ever and the one command for removing
+                        // it reports success. That is Q28's class exactly, on the path that runs
+                        // when nobody is watching.
+                        match &entry.action {
+                            crate::core::journal::JournalAction::Install(spec) => {
+                                let source = spec.options.get("__source").cloned();
+                                let mut state = self.state.lock().await;
+                                state.add(
+                                    &spec.backend,
+                                    &spec.name,
+                                    None,
+                                    spec.options.clone(),
+                                    source,
+                                    false,
+                                );
+                            }
+                            crate::core::journal::JournalAction::Remove { name, backend } => {
+                                let mut state = self.state.lock().await;
+                                state.remove(backend, name);
+                            }
+                        }
+                        let mut j = self.journal.lock().await;
+                        for id in &ids {
+                            let _ = j.record_success(id);
+                        }
+                        info!(
+                            "{} {} (completing an interrupted {}).",
+                            verb,
+                            key,
+                            if is_install { "install" } else { "removal" }
+                        );
+                        recovered.push(format!("{} {}", verb, key));
+                    }
+                    outcome => {
+                        let e = match outcome {
+                            Some(Err(e)) => Some(e),
+                            // A node the engine returned nothing for is one it never reached.
+                            // Silence here is what let an unhandled branch report success in
+                            // 2026-08-04; it is an error with a reason, not an absence.
+                            _ => None,
+                        };
+                        error!(
+                            "could not recover {} — {}. {} The entry stays recorded as \
+                             interrupted, so nothing claims this package is installed.",
+                            key,
+                            e.as_ref().map_or(
+                                "the recovery did not reach it".to_string(),
+                                |e| e.to_string()
+                            ),
+                            what_to_do_about(e.as_ref(), &key),
+                        );
+                        failed.push(key);
+                    }
                 }
-                info!(
-                    "{} {} (completing an interrupted {}).",
-                    verb,
-                    key,
-                    if is_install { "install" } else { "removal" }
-                );
-                recovered.push(format!("{} {}", verb, key));
-            } else {
-                let e = remediation_res.err();
-                error!(
-                    "could not recover {} — {}. {} The entry stays recorded as interrupted, so \
-                     nothing claims this package is installed.",
-                    key,
-                    e.as_ref()
-                        .map_or("no reason given".to_string(), |e| e.to_string()),
-                    what_to_do_about(e.as_ref(), &key),
-                );
-                failed.push(key);
             }
         }
 

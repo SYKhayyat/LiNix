@@ -44,16 +44,18 @@ const LEDGER: &[Accounted] = &[
                      any kind is dispatched (W21) — including the shim a package line asks \
                      for with `@shim`/`@sandbox`, which resolves to a `shim:` extra (G-1)",
     },
-    Accounted {
-        file: "src/app/sync/mod.rs",
-        calls: 1,
-        guarded_by: "the Heal removal at :700 is enforced at :664",
-    },
+    // `src/app/sync/mod.rs` used to be here: `heal` called `handler.remove` from a serial loop
+    // of its own. That loop is gone — recovery runs on the transaction engine — so the call
+    // moved into `transaction.rs` below and this file now reaches no removal itself. **The gate
+    // did not move**: `heal` still enforces per entry, before an interrupted removal is put in
+    // the graph at all, which is what the entry below records.
     Accounted {
         file: "src/core/transaction.rs",
         calls: 3,
         guarded_by: "the purge/remove pair at :500-502 executes a plan enforced at \
-                     sync/mod.rs:141; the rollback removal at :714 is enforced at :688",
+                     sync/mod.rs:141 — or, for a recovery, per entry at sync/mod.rs:798 \
+                     (GuardScope::Heal) before that entry becomes a node; the rollback \
+                     removal at :714 is enforced at :688",
     },
     Accounted {
         file: "src/verbs/cleanup.rs",
@@ -230,9 +232,15 @@ fn the_enumeration_can_actually_see_a_removal() {
 
     // And it must find something in the real tree: a scan whose patterns silently stopped
     // matching would report an empty map and pass the test above for the worst reason.
+    //
+    // The floor is a floor and not a count — it is the "did the scan still work" question, not
+    // the "is every site accounted for" one, which the ledger above answers exactly. It came
+    // down from 8 to 7 when `heal` stopped issuing its own removals and started scheduling
+    // them through the engine: one fewer *file* reaching a removal is the fix landing, not the
+    // scan breaking.
     let found = removal_sites();
     assert!(
-        found.len() >= 8,
+        found.len() >= 7,
         "the scan found only {} file(s) with removals, which is fewer than this program has: {:?}",
         found.len(),
         found.keys().collect::<Vec<_>>()
