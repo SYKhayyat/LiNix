@@ -216,9 +216,21 @@ impl RawExecutor {
     }
 
     /// The layer behind `run`/`run_exclusive`.
+    ///
+    /// U40 lets a mutation — and only a mutation — share stdin, because `sudo` asks for a
+    /// password on the terminal it was started from. `run_on` never inserts `sudo` on Windows
+    /// (`if sudo && !cfg!(windows)`), so no Windows mutation has that question to ask, while
+    /// the shared terminal stayed and cost the full `command_idle_timeout_secs` any time a
+    /// manager asked something else. Measured on one install: 48ms with stdin closed, 21.9s
+    /// with a real console — at the shipped bound, a fifteen-minute silence ending in failure
+    /// anyway. Closing it means the manager's own prompt is captured and reported instead.
     pub fn mutator() -> Self {
         Self {
-            stdin: ChildStdin::Interactive,
+            stdin: if cfg!(windows) {
+                ChildStdin::Closed
+            } else {
+                ChildStdin::Interactive
+            },
             idle: command_idle_timeout(),
         }
     }
@@ -269,10 +281,10 @@ impl RawExecutor {
             }
         }
 
-        let last = Arc::new(SyncMutex::new(Instant::now()));
+        let last: Arc<SyncMutex<Instant>> = Arc::new(SyncMutex::new(Instant::now()));
         let out_pipe = child.stdout.take();
         let err_pipe = child.stderr.take();
-        let out_task = tokio::spawn({
+        let mut out_task = tokio::spawn({
             let last = last.clone();
             async move {
                 match out_pipe {
@@ -281,7 +293,7 @@ impl RawExecutor {
                 }
             }
         });
-        let err_task = tokio::spawn({
+        let mut err_task = tokio::spawn({
             let last = last.clone();
             async move {
                 match err_pipe {
@@ -317,15 +329,66 @@ impl RawExecutor {
                 }
             },
         };
+        // The child has exited; its *output* may not have. A manager that hands stdout to a
+        // background process and returns leaves a pipe held by something outside this process
+        // tree — `child.wait()` is done, there is nothing left to kill, and an unclocked
+        // `await` here waits on an EOF that never comes. Measured: a 20s bound, a 64s wall,
+        // and the install reported as a success. So the same clock keeps running over the
+        // readers, on silence rather than duration, so a command still printing is never cut.
+        let mut stalled = false;
+        let out = Self::drain_watched(&mut out_task, &last, idle, &mut stalled).await;
+        let err = Self::drain_watched(&mut err_task, &last, idle, &mut stalled).await;
+        if stalled {
+            out_task.abort();
+            err_task.abort();
+            return Err(Error::command_failed_permanently(format!(
+                "`{}` exited, but something still holds its output open and has printed \
+                 nothing for {}s; LiNix stopped waiting. This is what a command that hands \
+                 its work to a background process looks like from here. If it is legitimately \
+                 silent for longer, raise `command_idle_timeout_secs` (0 disables the bound).",
+                cmd,
+                idle.map_or(0, |d| d.as_secs()),
+            )));
+        }
         let joined = |r: std::result::Result<std::io::Result<Vec<u8>>, tokio::task::JoinError>| {
             r.map_err(|e| Error::Other(format!("output reader failed: {}", e)))?
                 .map_err(Error::from)
         };
         Ok(StdOutput {
             status,
-            stdout: joined(out_task.await)?,
-            stderr: joined(err_task.await)?,
+            stdout: joined(out.expect("not stalled, so the reader finished"))?,
+            stderr: joined(err.expect("not stalled, so the reader finished"))?,
         })
+    }
+
+    /// Await one output reader under the same silence bound the wait used.
+    ///
+    /// `stalled` latches: once either reader has gone quiet past the bound the other is not
+    /// waited on at all, because the failure is already decided and waiting again would spend
+    /// a second `idle` proving it.
+    async fn drain_watched(
+        task: &mut tokio::task::JoinHandle<std::io::Result<Vec<u8>>>,
+        last: &Arc<std::sync::Mutex<std::time::Instant>>,
+        idle: Option<std::time::Duration>,
+        stalled: &mut bool,
+    ) -> Option<std::result::Result<std::io::Result<Vec<u8>>, tokio::task::JoinError>> {
+        if *stalled {
+            return None;
+        }
+        let Some(idle) = idle else {
+            return Some(task.await);
+        };
+        loop {
+            let quiet = last.lock().unwrap_or_else(|e| e.into_inner()).elapsed();
+            let remaining = idle.saturating_sub(quiet);
+            if remaining.is_zero() {
+                *stalled = true;
+                return None;
+            }
+            if let Ok(done) = tokio::time::timeout(remaining, &mut *task).await {
+                return Some(done);
+            }
+        }
     }
 }
 
@@ -790,6 +853,15 @@ impl CommandExecutor {
     /// the 2026-08-04 conversion with every argv assertion green.
     pub fn classifies_absent_names(&self) -> bool {
         !self.exit_policy.absent_markers.is_empty()
+    }
+
+    /// Whether this executor's manager means `code` as an outcome that is not a failure.
+    ///
+    /// Exposed for the reason [`classifies_absent_names`](Self::classifies_absent_names) is: a
+    /// backend that never attached its policy runs identical argv, so nothing else can observe
+    /// the loss.
+    pub fn forgives_exit(&self, code: i32) -> bool {
+        self.exit_policy.is_benign(Some(code))
     }
 
     pub fn with_exit_policy(mut self, policy: ExitPolicy) -> Self {
@@ -1359,6 +1431,7 @@ mod windows_shim_tests {
 #[cfg(test)]
 mod child_process_tests {
     use super::{ChildStdin, CommandExecutor, ExecutionLayer, MockExecutor, RawExecutor};
+    use crate::core::Retryability;
     use dashmap::DashMap;
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -1558,15 +1631,24 @@ mod child_process_tests {
     /// machine: 3s failed under three concurrent `cargo test` jobs, 5s failed under one sharing
     /// the box with a container build, and the next constant fails on the next busier day. The
     /// property under test never changed: a child that runs *longer* than the idle bound while
-    /// still printing survives it. Twelve ticks at 500ms is six seconds of talking against a
-    /// three-second margin, so the fixture outlives the bound whatever start-up cost.
+    /// still printing survives it.
+    ///
+    /// **How long it talks is derived from the bound, not written down either** — and that is the
+    /// second calibration this test needed. A fixed twelve ticks was six seconds of talking
+    /// against a bound of *measured start-up + 3s*, which holds only while the fixture's own
+    /// start-up matches the one the calibration measured. Under a full `cargo test
+    /// --no-fail-fast` they diverged — the calibration caught a 4.6s start-up and the fixture a
+    /// 1.5s one — so the run finished **29ms under** its own bound and the self-test below
+    /// correctly said the test had proved nothing. Talking for the whole bound plus the margin is
+    /// true whatever either start-up turns out to be.
     #[tokio::test]
     async fn a_child_that_keeps_talking_outlives_the_bound() {
         let margin = std::time::Duration::from_secs(3);
         let bound = interpreter_start_up_cost().await + margin;
+        let ticks = ((bound + margin).as_millis() / 500) as usize;
 
         let layer = RawExecutor::with_idle(ChildStdin::Closed, Some(bound));
-        let (cmd, args) = chatty_for_a_while(12);
+        let (cmd, args) = chatty_for_a_while(ticks);
         let started = std::time::Instant::now();
         let out = layer
             .execute(cmd, &args, &HashMap::new())
@@ -1583,7 +1665,7 @@ mod child_process_tests {
         assert!(out.status.success());
         assert_eq!(
             String::from_utf8_lossy(&out.stdout).matches("tick").count(),
-            12
+            ticks
         );
     }
 
@@ -1612,12 +1694,7 @@ mod child_process_tests {
     /// nimble:nimjson` at zero CPU with **no children**, while three orphaned `nim.exe` ran
     /// outside its process tree. Then reproduced to a number — a 20s bound and a child that
     /// detached for 60s took 64s and reported SUCCESS.
-    /// **Ignored because it fails, and it is meant to.** It pins Q32, which is OPEN: the fix
-    /// changes when a command reports failure, so it is the owner's to rule. Remove the
-    /// `ignore` in the same commit as the fix — an ignored test is a check that does not run,
-    /// and this one is only tolerable while its entry is unruled.
     #[tokio::test]
-    #[ignore = "pins Q32 (OPEN): the idle bound does not cover the read, so this waits 10s on a 2s bound"]
     async fn a_detached_grandchild_cannot_hold_the_read_open_past_the_bound() {
         const HOLD: usize = 10;
         let (cmd, args) = detaches_holding_stdout(HOLD);
@@ -1641,7 +1718,7 @@ mod child_process_tests {
         let layer =
             RawExecutor::with_idle(ChildStdin::Closed, Some(std::time::Duration::from_secs(2)));
         let started = std::time::Instant::now();
-        let _ = layer.execute(&cmd, &args, &HashMap::new()).await;
+        let outcome = layer.execute(&cmd, &args, &HashMap::new()).await;
         let waited = started.elapsed();
 
         // Above the bound and below the orphan's lifetime: this asserts that *a* bound applied,
@@ -1651,6 +1728,21 @@ mod child_process_tests {
             "waited {:?} for a child that had already exited, on a 2s bound — the bound covers \
              the wait but not the read, so an orphan holding the pipe sets the duration",
             waited
+        );
+        // The separable half, and the worse one: the child exits 0, so before the bound reached
+        // the readers this returned SUCCESS after waiting out the orphan. A command LiNix
+        // stopped waiting on did not do what it was asked (Q28).
+        let err = outcome.expect_err("a command LiNix gave up on must not report success");
+        let said = err.to_string();
+        assert!(
+            said.contains(&cmd) && said.contains("holds its output open"),
+            "the failure must name the command and why LiNix stopped: {}",
+            said
+        );
+        assert_eq!(
+            err.retryability(),
+            Retryability::Permanent,
+            "a second attempt spends another bound reproducing this"
         );
     }
 
@@ -1681,16 +1773,34 @@ mod child_process_tests {
     #[test]
     fn the_reader_layer_never_shares_stdin() {
         assert_eq!(RawExecutor::reader().stdin, ChildStdin::Closed);
-        assert_eq!(RawExecutor::mutator().stdin, ChildStdin::Interactive);
+        // U40's *reason* is `sudo`'s password prompt, and `run_on` never inserts `sudo` on
+        // Windows — so the rule reaches only the platform the reason reaches.
+        assert_eq!(
+            RawExecutor::mutator().stdin,
+            if cfg!(windows) {
+                ChildStdin::Closed
+            } else {
+                ChildStdin::Interactive
+            }
+        );
     }
 
     /// The two layers a `CommandExecutor` builds must be the two policies, not one policy
     /// twice — routing reads through the mutating layer is how the parsers were starved.
+    ///
+    /// The mutating layer shares stdin wherever `sudo` can be inserted, and only there: on
+    /// Windows `run_on` never inserts it, so the terminal buys nothing and costs the whole
+    /// idle bound the first time a manager asks a question (Q35).
     #[test]
     fn a_real_executor_wires_a_reader_and_a_mutator() {
         let e = CommandExecutor::new(false, false);
         assert!(!e.reader.shares_stdin(), "a read took the terminal");
-        assert!(e.inner.shares_stdin(), "sudo cannot ask for a password");
+        assert_eq!(
+            e.inner.shares_stdin(),
+            !cfg!(windows),
+            "sudo must be able to ask for a password on the platforms it is inserted on, and \
+             nothing may hold the terminal on the one where it is not"
+        );
     }
 
     /// The lock is a shared, guessable name by design — that is what makes it a lock. It must
