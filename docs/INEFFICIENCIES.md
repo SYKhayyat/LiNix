@@ -69,6 +69,13 @@ entry is an audit nobody can finish.
 | 5 | **I-30** build profile correct | nothing to do, and now with a narrower tokio. |
 | 5 | **I-31** a 3 MB dump inside `src/` | **FIXED by deletion** — there were two, `src/` and `tests/`. |
 
+**Added 2026-08-05**, after the audit above, and marked so this table stays complete:
+
+| tier | finding | state |
+|---|---|---|
+| 2 | **I-48** `heal` bypasses the DAG — serial, one package per command, and doomed | **NOT DONE** — measured 205.14s wall, 0.2x overlap, 27 waves against the DAG's 3.9x / 2 waves on the same host. The fix is to route recovery through the transaction engine, not to parallelise a second copy of it; the loop deciding *which* entries to run is `Q33`, which is OPEN and is the same loop. **They land together.** |
+| 2 | **I-49** `github:`/`web:`/`appimage:` download and extract, then ask whether they may deploy | **NOT DONE** — 180 of one `heal`'s 205s. The refusal is already a pure function of the destination; hoisting it above the fetch is the whole change. Raised as `Q37` because it changes when a command fails. |
+
 ## What was not done, and why
 
 Stated because an audit that quietly drops entries is worse than one that never listed them.

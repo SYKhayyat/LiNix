@@ -6245,3 +6245,27 @@ LiNix hands Windows children for a `sudo` that never runs there (`Q35`).
 **Owed.** `Q32`–`Q38` are OPEN in `decisions.md` with measurements and recommendations. The
 `§1a` policy gap needs no ruling — Q1 already ruled it — and should land first, because several
 of the others shrink when it does.
+
+**And the speed half, under the standing 2026-08-02 ruling** (*as parallel as possible, as
+efficient as possible, as fast as possible; restructure if it takes that*). LiNix's own
+`--timings`, one host, one minute:
+
+```
+sync --dry-run (466 declarations)    2.65s wall ·  21 children · 3.9x overlap ·  2 wave(s)
+heal                               205.14s wall ·  27 children · 0.2x overlap · 27 wave(s)
+```
+
+The engine is fine and `heal` is not part of it. **27 waves for 27 commands is fully serial**, and
+each call is `install(std::slice::from_ref(spec))` — one package per command, so I-1's batching is
+bypassed as well. 23 of the 30 attempts were the same package. `heal` re-implements install
+dispatch by hand next to the batched parallel engine, which is the two-of-everything shape this
+repo keeps finding: the fix is to route recovery through the transaction engine, not to
+parallelise a second copy of it.
+
+Only 33s of that 205s is inside child commands. The rest is the in-process GitHub download of an
+artifact that was always going to be refused — which, being in-process, never appears in the
+breakdown at all, and is why three stalls read as wedges.
+
+Both are `I-48` and `I-49` in `docs/INEFFICIENCIES.md`, added to its disposition table so that
+document's own rule holds: nothing unmarked. Neither is fixed — `I-48` shares its loop with `Q33`
+and `I-49` is `Q37`, and both are the owner's.
