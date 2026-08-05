@@ -7,8 +7,8 @@
 //   * `why`   — provenance (which manifest/module/imperative action pulled a package in)
 //               plus cross-package reverse dependencies.
 
-use crate::core::LockFile;
 use crate::app::App;
+use crate::core::LockFile;
 use crate::core::{Error, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;

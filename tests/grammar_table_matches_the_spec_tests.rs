@@ -63,7 +63,10 @@ fn fenced_block_after(text: &str, heading: &str) -> String {
 /// The reserved words the spec lists, grouped the way the spec groups them: each `#` comment
 /// line opens a group, and the group's role is read from the comment's first word.
 fn documented_words_by_role() -> Vec<(String, KeywordRole)> {
-    let block = fenced_block_after(&spec(), "### A bare word that is a keyword is not a package");
+    let block = fenced_block_after(
+        &spec(),
+        "### A bare word that is a keyword is not a package",
+    );
     let mut out = Vec::new();
     let mut role = None;
     for line in block.lines() {
@@ -245,7 +248,10 @@ fn the_scans_can_actually_fail() {
     assert!(!block.contains("BACKEND"), "fixture drifted");
 
     let missing_close = std::panic::catch_unwind(|| {
-        fenced_block_after("### Statements\n\n```\nshim:NAME  a shim\n", "### Statements")
+        fenced_block_after(
+            "### Statements\n\n```\nshim:NAME  a shim\n",
+            "### Statements",
+        )
     });
     assert!(
         missing_close.is_err(),

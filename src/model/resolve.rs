@@ -1,4 +1,3 @@
-use crate::core::LockFile;
 use super::conflict::{reconcile, Declared};
 use super::dated::dating_of;
 use super::layout::Layout;
@@ -10,6 +9,7 @@ use crate::config::grammar::{
     Selector, Statement,
 };
 use crate::config::parser::HostFacts;
+use crate::core::LockFile;
 use crate::core::PackageSpec;
 use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, BTreeSet, HashMap};

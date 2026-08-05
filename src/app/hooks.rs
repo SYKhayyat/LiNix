@@ -1,6 +1,6 @@
-use crate::core::LockFile;
 use crate::config::Config;
 use crate::core::hook_lock::{hash_script, hook_id, refusal, HookLedger};
+use crate::core::LockFile;
 use crate::core::{Error, Result};
 use mlua::Lua;
 use rhai::{Engine, Scope};

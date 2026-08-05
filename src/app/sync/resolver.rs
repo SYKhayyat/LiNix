@@ -1,9 +1,9 @@
-use crate::core::LockFile;
 use crate::app::vocab::Vocab;
 use crate::backends::BackendRegistry;
 use crate::config::grammar::{statement, Candidates, Gates, GrammarError, Origin, Statement};
 use crate::config::parser::HostFacts;
 use crate::config::Config;
+use crate::core::LockFile;
 use crate::core::{Error, PackageSpec, Result, Validator};
 use crate::model::resolve::{to_spec, Provenance, BARE};
 use crate::model::{DesiredState, Layout, Priority};
@@ -1503,8 +1503,8 @@ mod tests {
     }
 
     mod silent_managers {
-        use crate::backends::generic::SearchSource;
         use super::*;
+        use crate::backends::generic::SearchSource;
         use crate::backends::generic::{
             GenericBackendCore, GenericSearchable, ManagerConfig, ManualListing,
         };

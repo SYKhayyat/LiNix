@@ -18,9 +18,9 @@
 //! **Approved before it runs, like everything else the repo can execute (II.12).** Same ledger,
 //! same rule, no exception for "it's only a notification".
 
-use crate::core::LockFile;
 use crate::config::Config;
 use crate::core::hook_lock::{event_id, hash_script, refusal, HookLedger};
+use crate::core::LockFile;
 use crate::core::{Error, Result};
 use crate::model::event::{Event, Payload};
 use std::path::{Path, PathBuf};

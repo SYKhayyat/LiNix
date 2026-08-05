@@ -587,8 +587,8 @@ impl Adopter {
 
 #[cfg(test)]
 mod tests {
-    use crate::backends::generic::SearchSource;
     use super::*;
+    use crate::backends::generic::SearchSource;
     use crate::backends::generic::{
         GenericBackendCore, GenericQueryable, ManagerConfig, ManualFormat, ManualListing,
     };

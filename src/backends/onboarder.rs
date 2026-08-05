@@ -38,13 +38,12 @@
 use crate::backends::generic::{
     GenericBackendCore, GenericEnumerable, GenericInstallable, GenericQueryable,
     GenericRepoManager, GenericSearchable, GenericUpgradable, ManagerConfig, ManualListing,
-    SearchSource,
-    VersionPin,
+    SearchSource, VersionPin,
 };
 use crate::backends::BackendRegistry;
 use crate::core::{BackendCapabilities, CommandExecutor, Package};
-use crate::utils::text::sanitize;
 use crate::parsers::OutputParser;
+use crate::utils::text::sanitize;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -1137,7 +1136,7 @@ list_args = ["-Qm"]
     #[test]
     fn a_repo_definition_registers_once_it_is_approved() {
         use crate::core::hook_lock::{adapter_id, hash_script, HookLedger};
-    use crate::core::LockFile;
+        use crate::core::LockFile;
         let tmp = tempfile::tempdir().unwrap();
         let (_, exec) = mock_exec();
         write_repo(tmp.path(), PARU_TOML);

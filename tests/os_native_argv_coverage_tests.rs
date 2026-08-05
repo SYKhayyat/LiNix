@@ -157,7 +157,11 @@ fn every_registrar_has_an_argv_row_or_a_written_reason() {
     let defined = registrars(&src);
 
     assert!(
-        defined.iter().filter(|r| r.starts_with("register_")).count() > 20,
+        defined
+            .iter()
+            .filter(|r| r.starts_with("register_"))
+            .count()
+            > 20,
         "found too few generic registrars — the scan is broken, not the code"
     );
     assert!(

@@ -819,7 +819,9 @@ impl Queryable for GenericQueryable {
                         .next()
                         .is_some_and(|s| s.eq_ignore_ascii_case(name)))
         });
-        let Some(mut pkg) = found else { return Ok(None) };
+        let Some(mut pkg) = found else {
+            return Ok(None);
+        };
         for probe in &self.core.config.property_probes {
             if let Some(value) = probe.resolve(&self.core, name).await {
                 pkg.properties.insert(probe.property.clone(), value);
@@ -866,7 +868,11 @@ impl PropertyProbe {
         if base.is_empty() {
             return None;
         }
-        Some(self.template.replace("{base}", base).replace("{name}", name))
+        Some(
+            self.template
+                .replace("{base}", base)
+                .replace("{name}", name),
+        )
     }
 }
 

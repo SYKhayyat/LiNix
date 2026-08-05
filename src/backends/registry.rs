@@ -4,7 +4,7 @@ use crate::app::LuaHooks;
 use crate::backends::generic::ManualFormat;
 use crate::backends::generic::{
     GenericBackendCore, GenericInstallable, GenericQueryable, GenericRepoManager,
-    GenericSearchable, GenericUpgradable, PropertyProbe, ManagerConfig, ManualListing,
+    GenericSearchable, GenericUpgradable, ManagerConfig, ManualListing, PropertyProbe,
     SearchSource, VersionPin,
 };
 use crate::backends::generic::{GenericEnumerable, OrphanDryRun};
@@ -192,8 +192,7 @@ pub async fn create_default_registry(
 fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "apt".into(),
-        executor: executor
-            .duplicate(),
+        executor: executor.duplicate(),
         config: ManagerConfig {
             name: "apt".into(),
             binary: None,
@@ -255,10 +254,10 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
-        extra_probes: None,
-        upgrade_reinstall_args: None,
-        property_probes: Vec::new(),
-        search_source: SearchSource::Command,
+            extra_probes: None,
+            upgrade_reinstall_args: None,
+            property_probes: Vec::new(),
+            search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(crate::parsers::apt::AptParser),
@@ -317,8 +316,7 @@ fn register_aur_helper(
     let core = Arc::new(GenericBackendCore {
         name: name.into(),
         // AUR helpers speak pacman's flags, and they speak pacman's complaints too.
-        executor: executor
-            .duplicate(),
+        executor: executor.duplicate(),
         config: ManagerConfig {
             name: name.into(),
             binary: None,
@@ -357,10 +355,10 @@ fn register_aur_helper(
             needs_root: false,
             is_exclusive: true,
             install_source_option: None,
-        extra_probes: None,
-        upgrade_reinstall_args: None,
-        property_probes: Vec::new(),
-        search_source: SearchSource::Command,
+            extra_probes: None,
+            upgrade_reinstall_args: None,
+            property_probes: Vec::new(),
+            search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -382,8 +380,7 @@ fn register_aur_helper(
 fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "apk".into(),
-        executor: executor
-            .duplicate(),
+        executor: executor.duplicate(),
         config: ManagerConfig {
             name: "apk".into(),
             binary: None,
@@ -437,10 +434,10 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
-        extra_probes: None,
-        upgrade_reinstall_args: None,
-        property_probes: Vec::new(),
-        search_source: SearchSource::Command,
+            extra_probes: None,
+            upgrade_reinstall_args: None,
+            property_probes: Vec::new(),
+            search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -510,10 +507,10 @@ fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
-        extra_probes: None,
-        upgrade_reinstall_args: None,
-        property_probes: Vec::new(),
-        search_source: SearchSource::Command,
+            extra_probes: None,
+            upgrade_reinstall_args: None,
+            property_probes: Vec::new(),
+            search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -536,8 +533,7 @@ fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "winget".into(),
-        executor: executor
-            .duplicate(),
+        executor: executor.duplicate(),
         config: ManagerConfig {
             name: "winget".into(),
             binary: None,
@@ -587,10 +583,10 @@ fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: false,
             is_exclusive: false,
             install_source_option: None,
-        extra_probes: None,
-        upgrade_reinstall_args: None,
-        property_probes: Vec::new(),
-        search_source: SearchSource::Command,
+            extra_probes: None,
+            upgrade_reinstall_args: None,
+            property_probes: Vec::new(),
+            search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -612,8 +608,7 @@ fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "scoop".into(),
-        executor: executor
-            .duplicate(),
+        executor: executor.duplicate(),
         config: ManagerConfig {
             name: "scoop".into(),
             binary: None,
@@ -649,10 +644,10 @@ fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: false,
             is_exclusive: false,
             install_source_option: None,
-        extra_probes: None,
-        upgrade_reinstall_args: None,
-        property_probes: Vec::new(),
-        search_source: SearchSource::Command,
+            extra_probes: None,
+            upgrade_reinstall_args: None,
+            property_probes: Vec::new(),
+            search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -674,8 +669,7 @@ fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "choco".into(),
-        executor: executor
-            .duplicate(),
+        executor: executor.duplicate(),
         config: ManagerConfig {
             name: "choco".into(),
             binary: None,
@@ -727,10 +721,10 @@ fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
-        extra_probes: None,
-        upgrade_reinstall_args: None,
-        property_probes: Vec::new(),
-        search_source: SearchSource::Command,
+            extra_probes: None,
+            upgrade_reinstall_args: None,
+            property_probes: Vec::new(),
+            search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -784,10 +778,10 @@ fn register_mas(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: false,
             is_exclusive: false,
             install_source_option: None,
-        extra_probes: None,
-        upgrade_reinstall_args: None,
-        property_probes: Vec::new(),
-        search_source: SearchSource::Command,
+            extra_probes: None,
+            upgrade_reinstall_args: None,
+            property_probes: Vec::new(),
+            search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -843,10 +837,10 @@ fn register_pip(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: false,
             is_exclusive: false,
             install_source_option: None,
-        extra_probes: None,
-        upgrade_reinstall_args: None,
-        property_probes: Vec::new(),
-        search_source: SearchSource::Command,
+            extra_probes: None,
+            upgrade_reinstall_args: None,
+            property_probes: Vec::new(),
+            search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -867,8 +861,7 @@ fn register_pip(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 fn register_gem(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "gem".into(),
-        executor: executor
-            .duplicate(),
+        executor: executor.duplicate(),
         config: ManagerConfig {
             name: "gem".into(),
             binary: None,
@@ -899,10 +892,10 @@ fn register_gem(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: false,
             is_exclusive: false,
             install_source_option: None,
-        extra_probes: None,
-        upgrade_reinstall_args: None,
-        property_probes: Vec::new(),
-        search_source: SearchSource::Command,
+            extra_probes: None,
+            upgrade_reinstall_args: None,
+            property_probes: Vec::new(),
+            search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -955,10 +948,10 @@ fn register_bun(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: false,
             is_exclusive: false,
             install_source_option: None,
-        extra_probes: None,
-        upgrade_reinstall_args: None,
-        property_probes: Vec::new(),
-        search_source: SearchSource::Command,
+            extra_probes: None,
+            upgrade_reinstall_args: None,
+            property_probes: Vec::new(),
+            search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -1017,10 +1010,10 @@ fn register_macports(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
-        extra_probes: None,
-        upgrade_reinstall_args: None,
-        property_probes: Vec::new(),
-        search_source: SearchSource::Command,
+            extra_probes: None,
+            upgrade_reinstall_args: None,
+            property_probes: Vec::new(),
+            search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -1075,10 +1068,10 @@ fn register_pkgin(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
-        extra_probes: None,
-        upgrade_reinstall_args: None,
-        property_probes: Vec::new(),
-        search_source: SearchSource::Command,
+            extra_probes: None,
+            upgrade_reinstall_args: None,
+            property_probes: Vec::new(),
+            search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -1140,10 +1133,10 @@ fn register_pkg_freebsd(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
-        extra_probes: None,
-        upgrade_reinstall_args: None,
-        property_probes: Vec::new(),
-        search_source: SearchSource::Command,
+            extra_probes: None,
+            upgrade_reinstall_args: None,
+            property_probes: Vec::new(),
+            search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -1206,10 +1199,10 @@ fn register_pkg_add_openbsd(reg: &mut BackendRegistry, executor: &CommandExecuto
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
-        extra_probes: None,
-        upgrade_reinstall_args: None,
-        property_probes: Vec::new(),
-        search_source: SearchSource::Command,
+            extra_probes: None,
+            upgrade_reinstall_args: None,
+            property_probes: Vec::new(),
+            search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -1272,10 +1265,10 @@ fn register_dotnet(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             needs_root: false,
             is_exclusive: false,
             install_source_option: None,
-        extra_probes: None,
-        upgrade_reinstall_args: None,
-        property_probes: Vec::new(),
-        search_source: SearchSource::Command,
+            extra_probes: None,
+            upgrade_reinstall_args: None,
+            property_probes: Vec::new(),
+            search_source: SearchSource::Command,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -1465,8 +1458,7 @@ fn register_luarocks(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     cfg.search_args = vec!["search".into(), "--porcelain".into()];
     let core = Arc::new(GenericBackendCore {
         name: "luarocks".into(),
-        executor: executor
-            .duplicate(),
+        executor: executor.duplicate(),
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "luarocks"),
@@ -1487,8 +1479,7 @@ fn register_nimble(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     cfg.list_args = vec!["list".into(), "--installed".into()];
     let core = Arc::new(GenericBackendCore {
         name: "nimble".into(),
-        executor: executor
-            .duplicate(),
+        executor: executor.duplicate(),
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::ecosystem::nimble_list(o, "nimble"),
@@ -1517,8 +1508,7 @@ fn register_pixi(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     cfg.upgrade_args = vec!["global".into(), "update".into()];
     let core = Arc::new(GenericBackendCore {
         name: "pixi".into(),
-        executor: executor
-            .duplicate(),
+        executor: executor.duplicate(),
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::ecosystem::pixi_list(o, "pixi"),
@@ -1599,8 +1589,7 @@ fn register_helm(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     cfg.list_args = vec!["plugin".into(), "list".into()];
     let core = Arc::new(GenericBackendCore {
         name: "helm".into(),
-        executor: executor
-            .duplicate(),
+        executor: executor.duplicate(),
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "helm"),
@@ -2639,7 +2628,12 @@ mod tests {
                 Runs("guix install"),
                 Runs("guix remove"),
             ),
-            ArgvCase::pkg("emerge", &register_emerge, Runs("emerge"), Runs("--unmerge")),
+            ArgvCase::pkg(
+                "emerge",
+                &register_emerge,
+                Runs("emerge"),
+                Runs("--unmerge"),
+            ),
             ArgvCase::pkg(
                 "eopkg",
                 &register_eopkg,
@@ -3040,8 +3034,20 @@ mod tests {
             let removed = inst.remove(&[case.subject.to_string()], false).await;
             let calls = mock.get_calls().await;
 
-            check(name, "install", &case.install, installed, &calls[..after_install]);
-            check(name, "remove", &case.remove, removed, &calls[after_install..]);
+            check(
+                name,
+                "install",
+                &case.install,
+                installed,
+                &calls[..after_install],
+            );
+            check(
+                name,
+                "remove",
+                &case.remove,
+                removed,
+                &calls[after_install..],
+            );
         }
     }
 
@@ -3321,7 +3327,11 @@ mod tests {
         let before = seen.len();
         seen.sort_unstable();
         seen.dedup();
-        assert_eq!(before, seen.len(), "a backend has two rows in the argv table");
+        assert_eq!(
+            before,
+            seen.len(),
+            "a backend has two rows in the argv table"
+        );
     }
 
     /// The leading word of a repository command is a program, and for two backends it was a

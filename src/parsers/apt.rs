@@ -1,6 +1,6 @@
 use crate::core::Package;
-use crate::utils::text::sanitize;
 use crate::parsers::OutputParser;
+use crate::utils::text::sanitize;
 
 /// apt's parser. A dedicated struct rather than a `LambdaParser` because apt is the one
 /// backend that can also report which packages dpkg itself refuses to lose.

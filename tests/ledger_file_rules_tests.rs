@@ -14,8 +14,9 @@
 //! Flipping it inside the library's unit-test binary would flip it for every test sharing that
 //! binary, and the ones it would break are the ones that write files.
 
-use linix::core::{ArtifactLedger, BareLock, ExecLedger, ExtrasLedger, HookLedger, LockFile,
-                  RegexLock};
+use linix::core::{
+    ArtifactLedger, BareLock, ExecLedger, ExtrasLedger, HookLedger, LockFile, RegexLock,
+};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
@@ -67,7 +68,9 @@ fn family() -> Vec<(&'static str, SaveTo, LoadFrom)> {
 #[test]
 fn a_missing_file_loads_empty_for_every_ledger() {
     for (name, _, load) in family() {
-        let missing = PathBuf::from("no").join("such").join(format!("{name}.toml"));
+        let missing = PathBuf::from("no")
+            .join("such")
+            .join(format!("{name}.toml"));
         assert!(
             load(&missing),
             "{name}: a missing ledger must load empty, not fail"

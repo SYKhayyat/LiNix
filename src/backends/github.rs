@@ -1,8 +1,8 @@
-use crate::core::LockFile;
 use crate::backends::artifact::{
     self, default_formats, system_pkg, ArtifactOptions, Asset as ArtifactAsset, AssetPattern,
     Entry as ArchiveEntry, Format, FormatOrder, Platform, Request as SelectRequest,
 };
+use crate::core::LockFile;
 use crate::core::{
     security::{generate_checksum, verify_checksum},
     verify_set, ArtifactLedger, ArtifactLock, BackendCore, CommandExecutor, Error, HealthReport,
