@@ -73,8 +73,8 @@ entry is an audit nobody can finish.
 
 | tier | finding | state |
 |---|---|---|
-| 2 | **I-48** `heal` bypasses the DAG — serial, one package per command, and doomed | **NOT DONE** — measured 205.14s wall, 0.2x overlap, 27 waves against the DAG's 3.9x / 2 waves on the same host. The fix is to route recovery through the transaction engine, not to parallelise a second copy of it; the loop deciding *which* entries to run is `Q33`, which is OPEN and is the same loop. **They land together.** |
-| 2 | **I-49** `github:`/`web:`/`appimage:` download and extract, then ask whether they may deploy | **NOT DONE** — 180 of one `heal`'s 205s. The refusal is already a pure function of the destination; hoisting it above the fetch is the whole change. Raised as `Q37` because it changes when a command fails. |
+| 2 | **I-48** `heal` bypasses the DAG — serial, one package per command, and doomed | **PART DONE 2026-08-05** — the *doomed* third is fixed: `heal` collapses its unresolved entries to one recovery per operation, so 23 `scoop install` round trips for one name became one. Still **NOT DONE**: it is still serial and still one package per command. The fix for those is to route recovery through the transaction engine, not to parallelise a second copy of it; the loop deciding *which* entries to run is `Q33`, whose remaining half is OPEN and is the same loop. **They land together.** |
+| 2 | **I-49** `github:`/`web:`/`appimage:` download and extract, then ask whether they may deploy | **DONE 2026-08-05** — the refusal is asked before the first byte in all three, through one `ensure_deployable` that `deploy_executable` also calls. One case still pays: a `github:` release resolving to several deployable artifacts names each after the program inside it, which is unknowable before the archive is open. Ruled as `Q37`; the ordering is held by `tests/deploy_refusal_precedes_the_download_tests.rs`. |
 
 ## What was not done, and why
 
@@ -1638,6 +1638,13 @@ and gets none of it:
 - **doomed** — it acts on `Failed` entries as well as interrupted ones, and every failed attempt
   writes a *new* journal operation, so the work grows without bound (`Q33`).
 
+**The third of these is fixed (2026-08-05).** `heal` now collapses its unresolved entries by what
+a recovery would actually do — backend, name, install-or-remove — acts once, and resolves every
+entry that named the same thing. 23 real `scoop install` round trips for one name became one, and
+the cost stopped growing with the number of past attempts. The other two are untouched: recovery
+is still serial and still sends one package per command. Whether it should act on a `Failed` entry
+at all is the half of `Q33` that is still the owner's.
+
 **Measured on this host, both numbers from LiNix:**
 
 ```
@@ -1680,7 +1687,10 @@ timeout, correctly (a large download must not be capped by wall clock), which le
 *avoidable* download both unbounded and silent. Three stalls were misdiagnosed as wedges because
 of it.
 
-**Fix:** hoist the ownership test above the fetch. It is already a pure function of `dest`.
+**Fixed 2026-08-05.** The refusal moved into `utils::ensure_deployable`, which `deploy_executable`
+now calls and which each backend asks *before* its first byte. The table below is the state it was
+found in; the ordering is now held by a scan, because it is an ordering and a missing line and
+neither is visible inside the function that refuses.
 
 **All three download backends share the ordering — checked, not assumed:**
 

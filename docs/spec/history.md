@@ -6284,3 +6284,51 @@ a service that is already started. 1056 is the desired state; nothing calls it b
 `for_manager` has no `"service"` arm at all. `Q39`, and it means **after `adopt`, every `install`
 fails**. The first run's failures were attributed to the scoop leftover; the re-run is what showed
 that was only part of it. A cascade with one identified source is not a cascade with one source.
+
+## 2026-08-05 (later) — the hang, the silent success, and the reason `adopt` broke `install`
+
+Six entries were built from the register in one pass, on the owner's instruction to address
+whatever stops LiNix being parallel, whatever makes it hang, and whatever makes it do something
+other than what it says.
+
+**`Q39` — after `adopt`, every `install` failed.** The cause turned out to be one layer above the
+exit code. `in_effect` had no `service:` arm, so a `service:` line was *unverifiable* — and
+unverifiable **places**. Every adopted service was therefore applied on the next sync whatever
+the machine looked like: 150 `sc start` calls on 150 services that were already running, the
+first of which returns 1056 and fails the transaction. `in_effect` now asks the init off the
+listing the run already holds, and the service backend forgives `1056` on a start and `1062` on a
+stop — per verb, because each is an ordinary failure on the other. Measured on this host after an
+`adopt` that wrote 150 service lines: **150 resource(s) to place → 2**, and the two are real
+drift (`gpsvc` and `smphost`, trigger-start services Windows had idled out in the twenty minutes
+since `adopt` ran).
+
+Found by the same change: `Extras::changes` short-circuited on "never applied" and placed without
+probing, while `Dependents::apply` has never consulted the ledger at all — so `plan` was promising
+150 placements `sync` would not have made. The probe now runs first in both.
+
+**`Q32` — the bound covered the wait and not the read.** The same silence clock now runs over the
+output readers after the child has exited, and a pipe an orphan still holds fails **by name**
+instead of returning success. The committed test lost its `#[ignore]` and gained the assertions
+that pin the second half: the failure names the command, says why, and is `Permanent`.
+
+**`Q37` — 180 seconds fetching a file it would refuse.** The ownership refusal is now one
+function, `ensure_deployable`, asked before the first byte by `github:`, `web:` and `appimage:`
+alike. A `github:` release with several deployable artifacts still pays, because each is named
+after the program inside it and no metadata answers that.
+
+**`Q35`** — Windows mutations get a closed stdin. **`Q38`** — `watch --once` returns the
+reconcile's failure. **`Q33`, half** — `heal` collapses its unresolved journal entries to one
+recovery per operation, so 23 `scoop install` round trips for one name became one.
+
+Two tests that could mislead were repaired rather than deleted. `a_child_that_keeps_talking_
+outlives_the_bound` calibrated its bound from a measured start-up and its fixture from a constant;
+under a full suite the two diverged and it finished 29ms under its own bound, where its self-test
+caught it. And `grade5_adopt_takes_services` asserted on the string `0 removal(s)`, which the
+`Q39` fix removed by making the plan *empty* — the stronger outcome, and a summary that does not
+print a count.
+
+**Still the owner's:** whether `adopt` should take 150 services nobody chose (`Q39`'s other half)
+and 180 version-bearing winget pseudo-ids (`Q36`); whether `heal` should act on a `Failed` entry
+at all (`Q33`'s other half); and whether `install X` failing on an unrelated member should report
+`X` as the failure (`Q34`). `I-48`'s remaining two thirds — recovery is still serial and still one
+package per command — share their loop with `Q33` and land with it.

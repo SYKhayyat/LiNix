@@ -277,14 +277,14 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q30** | Should the `--` terminator be decided by which `VersionPin` variant a backend picked, and should the terminator table be keyed per verb? — RULED: **read it off the tokens; one key per binary.** Per-verb rejected on measurement. | 2026-08-04 |
 | **Q29** | Is the statement set closed, with all future computation routed through `generate:`? — **HALF RULED.** The *resource-kind* set is ruled **open — more prefixes may be added**; a ratchet holds Part II to `KEYWORDS` instead. The *computation* half is still open. | 2026-08-04 |
 | **Q31** | `unmanaged` names two different numbers on two screens, and a command is named after the meaning the register did *not* choose. Which word goes where? — **OPEN.** | — |
-| **Q32** | Q24's bound watches a child's **exit** and not the read of its output, so a manager that detaches leaves LiNix on a pipe no clock covers — 64s measured against a 20s bound, **reported as SUCCESS**. Does the bound cover the read? — **OPEN.** | — |
-| **Q33** | `heal` acts on `Failed` entries as well as interrupted ones, and every failed attempt writes a *new* operation — 22 for one package in a single sweep, all 22 reinstalled. Is a failed attempt interrupted work? — **OPEN.** | — |
+| **Q32** | Q24's bound watched a child's **exit** and not the read of its output, so a manager that detaches left LiNix on a pipe no clock covered — 64s against a 20s bound, **reported as SUCCESS**. — RULED: **the same silence bound runs over the readers**, and a command LiNix stopped waiting on fails by name instead of reporting success. | 2026-08-05 |
+| **Q33** | `heal` acts on `Failed` entries as well as interrupted ones, and every failed attempt writes a *new* operation — 22 for one package in a single sweep, all 22 reinstalled. **HALF RULED 2026-08-05:** 22 entries naming one operation are one recovery, not 22, and that half shipped. Whether `heal` acts on a `Failed` entry at all is still **OPEN.** | — |
 | **Q34** | `install X` converges the whole manifest, so one unresolvable declaration fails every later install — seven backends were falsely reported as defects in one run. Does `install X` mean X? — **OPEN.** | — |
-| **Q35** | U40 lets a mutation share stdin because `sudo` asks on the terminal; `sudo` is never inserted on Windows, where the sharing costs a 900s silence — 48ms vs 21.9s measured. Does U40's reason reach Windows? — **OPEN.** | — |
+| **Q35** | U40 lets a mutation share stdin because `sudo` asks on the terminal; `sudo` is never inserted on Windows, where the sharing cost a 900s silence — 48ms vs 21.9s measured. — RULED: **no, the reason does not reach Windows.** Windows mutations get a closed stdin; Unix keeps U40 exactly as ruled. | 2026-08-05 |
 | **Q36** | `adopt` writes 186 winget declarations whose identity embeds a version (`MSIX\Microsoft.Winget.Source_2026.805.1050.50_...`). The package updated the same day; the line can now never converge, and it feeds Q34's cascade on every real machine. — **OPEN.** | — |
-| **Q37** | `github:` downloads the whole release artifact and *then* refuses to deploy because the destination is not LiNix's — a refusal that needs zero downloaded bytes. Measured 61s and 119s, silent, and downloads have no whole-request timeout by design. — **OPEN.** | — |
-| **Q38** | `watch --once` printed `watch: reconcile failed` and **exited 0**. — **OPEN.** | — |
-| **Q39** | `adopt` writes 150 `service:X@status=running` lines; converging one runs `sc start` on an already-running service, which returns **1056** — the desired state — and nothing calls it benign, so the whole transaction fails. After `adopt`, every `install` fails. — **OPEN.** | — |
+| **Q37** | `github:` downloaded the whole release artifact and *then* refused to deploy because the destination is not LiNix's — a refusal that needs zero downloaded bytes. Measured 61s and 119s, silent. — RULED: **ask the destination before spending the network**, in `github:`, `web:` and `appimage:` alike. | 2026-08-05 |
+| **Q38** | `watch --once` printed `watch: reconcile failed` and **exited 0**. — RULED: **a failed reconcile is a non-zero exit**, on `watch --once` as everywhere. The looping form still warns and carries on. | 2026-08-05 |
+| **Q39** | `adopt` writes 150 `service:X@status=running` lines; converging one ran `sc start` on an already-running service. **HALF RULED 2026-08-05:** already being in the declared state is success, so LiNix now asks the init before acting and forgives `1056`/`1062` when it does — measured, 150 placements to 2. Whether `adopt` should take 150 services nobody chose is still **OPEN.** | — |
 
 *Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
 this file exists to prevent, found on 2026-07-30 by adding a row to it.*
@@ -5180,7 +5180,21 @@ routes change what a user reads and one changes what they type.
 
 ## Q32
 
-**Status: OPEN — raised 2026-08-05, from an instrumented Windows sweep.**
+**Status: ANSWERED — ruled 2026-08-05, and built the same day.**
+
+**Ruled: the bound covers the read.** The same silence clock keeps running over the output
+readers once the child has exited — same `command_idle_timeout_secs`, same `Permanent` class, no
+new dial — and a pipe that has produced nothing for the bound and still has not closed gets its
+readers aborted and the command **fails by name**. That second half is the ruling that matters:
+before it the command exited 0 and the install was reported a success.
+
+Silence and not duration, so a command still printing is never cut off; the bound is not reached
+by a slow command, only by a quiet one. Killing the orphan itself — a Windows Job Object, a
+process group on Unix — is still **not** done here: it is platform-specific, it changes what
+"kill" means, and it is a separate decision rather than a rider on this one.
+
+`a_detached_grandchild_cannot_hold_the_read_open_past_the_bound` is no longer `#[ignore]`d and
+now also asserts the failure, its wording and its retryability. Below is why it was raised.
 
 **Q24's bound watches the wrong half of the wait.** `RawExecutor::wait_watched` bounds
 `child.wait()` — the child's *exit*. The read of its output is outside that bound:
@@ -5220,7 +5234,21 @@ one.
 
 ## Q33
 
-**Status: OPEN — raised 2026-08-05, from the same sweep.**
+**Status: HALF RULED, 2026-08-05.** The duplicate-recovery half is ruled and built; whether `heal`
+should act on a `Failed` entry at all is still **OPEN**.
+
+**Ruled: 22 journal entries naming one operation are one recovery, not 22.** They are not 22
+operations — they are one operation attempted 22 times, because `record_start` mints a fresh id
+per attempt. `heal` now collapses its unresolved entries by *what a recovery would do* (backend,
+name, and install-or-remove), acts once, and resolves every entry that named the same thing,
+because a single attempt decides all of them. Two interrupted installs of one spec are one
+reinstall; an interrupted install and an interrupted removal of the same package are not, and
+stay two.
+
+That takes 23 real `scoop install` round trips for one name down to one. It does **not** answer
+the question below, and deliberately: `heal` still acts on `Failed`.
+
+**Still open:** is a failed attempt interrupted work? Below is the case for saying it is not.
 
 **`heal` reinstalls things that are not interrupted, once per attempt ever made.**
 `Journal::get_incomplete_actions()` returns `InProgress | Failed | Abandoned`, and every failed
@@ -5280,7 +5308,16 @@ innocent package.
 
 ## Q35
 
-**Status: OPEN — raised 2026-08-05. Not the cause of the stall it was found chasing.**
+**Status: ANSWERED — ruled 2026-08-05, and built the same day.**
+
+**Ruled: U40's reason does not reach Windows, so neither does its rule.** `RawExecutor::mutator`
+gives a Windows mutation `ChildStdin::Closed`; Unix keeps U40 exactly as written, because that is
+where `sudo` is inserted and where the password prompt it exists for can happen. The visible
+change is that a Windows manager which asks a question now fails fast with its own prompt
+captured, instead of going silent for the whole bound and failing anyway.
+
+Below is why it was raised — including that it was proposed as the cause of a stall and refuted
+by measurement, which is why it stayed in this register instead of being fixed as a diagnosis.
 
 **U40's reason does not reach Windows, but its rule does.** U40 (RULED 2026-07-27) says stdin
 is the one stream a child may share and only a mutation may share it, because *"`sudo` asks for
@@ -5337,7 +5374,21 @@ because such a declaration is false the moment the package updates. The narrow f
 
 ## Q37
 
-**Status: OPEN — raised 2026-08-05, measured twice.**
+**Status: ANSWERED — ruled 2026-08-05, and built the same day.**
+
+**Ruled: check the destination before spending the network.** The refusal is a pure function of
+the destination, so it is asked before the first byte in all three download backends —
+`github:`, `web:` and `appimage:` — through one `ensure_deployable`, which `deploy_executable`
+also calls so the two can never ask different questions.
+
+One case still pays: a `github:` release resolving to *several* deployable artifacts names each
+one after the program inside it, which no metadata can answer before the archive is open. A
+single-artifact release — which is what `github:sharkdp/fd` is, and what the 180 seconds were
+spent on — is answered from the repo name alone.
+
+`tests/deploy_refusal_precedes_the_download_tests.rs` scans the three backends for the ordering,
+because the defect is an ordering and a missing line and neither is visible inside the function
+that refuses. Below is why it was raised.
 
 **The `github:` backend downloads the artifact, then refuses to deploy it.**
 `deploy_executable` takes an already-downloaded, already-extracted `src`, and its refusal —
@@ -5363,7 +5414,15 @@ deploys onto a shared bin directory has the same ordering.
 
 ## Q38
 
-**Status: OPEN — raised 2026-08-05.**
+**Status: ANSWERED — ruled 2026-08-05, and built the same day.**
+
+**Ruled: a failed reconcile is a non-zero exit, on `watch` as everywhere.** `watch --once` returns
+the reconcile's error. The looping form still warns and carries on — one failed tick is not a
+reason to stop reconciling, and it has no exit code anyone reads.
+
+The sibling one line up, `watch: git pull failed`, stays a warning on purpose: the reconcile after
+it still converged the machine to the manifests this host holds, which is what `watch` promises.
+Below is why it was raised.
 
 `linix -y watch --once` printed
 
@@ -5382,7 +5441,43 @@ nobody is reading the output.
 
 ## Q39
 
-**Status: OPEN — raised 2026-08-05, measured. Probably the most user-visible defect on Windows.**
+**Status: HALF RULED, 2026-08-05.** The convergence half is ruled and built; the `adopt` half is
+still the owner's and is still **OPEN**.
+
+**Ruled: already being in the state the line asks for is success, and LiNix asks before it acts.**
+Two changes, and the first is the one that mattered:
+
+1. **`in_effect` learned `service:`.** A `service:` line was `unverifiable`, and unverifiable
+   *places* — so every adopted service was applied on the first sync whatever the machine looked
+   like. It now asks the init, off the listing this run already has: `@status=running` is in
+   effect when the init reports the service, `@status=stopped` when it does not. `@status=restarted`
+   is a transition no listing records and `@enabled=` is a second axis no shipped init reports,
+   so both stay unverifiable — a line that declares either is still applied.
+2. **The service backend forgives the codes that mean "already there".** `sc start` on a running
+   service returns **1056** and `sc stop` on a stopped one **1062**; both are declared per verb in
+   `init_providers.toml`, because each is an ordinary failure on the other verb. The other four
+   shipped inits report the same case as exit 0 and declare nothing, which is now pinned rather
+   than left blank.
+
+Measured on this host, after `linix adopt` wrote 150 `service:` lines out of 207 declarations:
+
+```
+plan  ->  150 resource(s) to place     (before)
+plan  ->    2 resource(s) to place     (after)
+```
+
+The two are real drift — `gpsvc` and `smphost`, trigger-start services that Windows had idled out
+in the twenty minutes since `adopt` ran. Which is the best argument yet for the half below.
+
+**Aligned with it, and found by it:** `Extras::changes` short-circuited on "never applied" and
+placed without probing, while `Dependents::apply` has never consulted the ledger at all — so
+`plan` promised 150 placements `sync` would not have made. The probe now comes first in both, and
+the ledger answers only what the probe cannot.
+
+**Still open — and it is a real ruling, because it changes what `adopt` means on Windows:** should
+`adopt` take every running service in the first place? 150 of them, none chosen by anyone, two of
+them transient by design. Combined with Q36's version-bearing pseudo-ids it is most of what
+`adopt` produces on this machine. Below is the original entry.
 
 **After `linix adopt`, every `linix install` fails.**
 

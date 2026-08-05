@@ -3000,3 +3000,149 @@ implied by this one. It stays open in `decisions.md` rather than being quietly s
 ruling next to it.
 
 ---
+
+**V.130 — Why a Windows mutation does not get the terminal.** *(Owner instruction, 2026-08-05 —
+`Q35`. Rule in II.12c.)*
+
+U40 gave stdin to mutations and to nothing else, and gave a reason: *"`sudo` asks for a password
+on the terminal it was started from."* The reason is sound and it stops at the platform boundary.
+`executor.rs` reads `if sudo && !cfg!(windows) && !Self::is_root()` — **`sudo` is never inserted
+on Windows**, so no Windows mutation has that question to ask, while the shared terminal stayed
+and could still be read from by whatever the manager decided to ask instead.
+
+Measured on one host, the same install both times, with a fake manager that reads stdin:
+
+| LiNix's stdin | result |
+|---|---|
+| not a terminal | **48ms** — the child gets `Stdio::null`, reads EOF, and is done |
+| a real console | **21.9s** — the whole bound elapsing; at the shipped 900, a fifteen-minute silence |
+
+Fifteen minutes of nothing, ending in a failure that would have arrived in 48ms with the
+manager's own prompt captured and printed. **A rule outlives its reason quietly**, which is why
+the reason is written into the rule in II.12c rather than left here: the next reader sees that
+the sharing is for `sudo`, and can check whether `sudo` is in the picture.
+
+This was also proposed as the cause of an observed Windows stall and **was not** — the capture
+showed the wedged process had no child at all (V.131). It is recorded because it is real and
+measured, not because it explained anything.
+
+---
+
+**V.131 — Why the idle bound covers the read and not only the wait.** *(Owner instruction,
+2026-08-05 — `Q32`. Rule in II.12c, beside V.114.)*
+
+V.114's bound watches `child.wait()`. The read of the child's output sits outside it:
+
+```rust
+let status = match idle { ... };     // bounded; kills on silence
+stdout: joined(out_task.await)?,     // no clock of any kind
+```
+
+The `out_task.abort()` that would end it exists only inside the timeout branch, which is
+unreachable once `child.wait()` has returned. So a manager that hands its stdout to a background
+process and exits leaves LiNix reading toward an EOF that never arrives — and this one cannot be
+fixed by killing anything, because **there is no child left to kill**. `kill_on_drop` has nothing
+to drop; the DAG timeout is elsewhere; `command_idle_timeout_secs` has already been satisfied by
+an exit that happened.
+
+Found by photographing a wedged sweep instead of killing it: `linix -y install nimble:nimjson` sat
+at **zero CPU with no children at all** while three orphaned `nim.exe` ran at `PPID 0`, outside
+LiNix's process tree. Reproduced deterministically with a fake manager that detaches — a 20s
+bound, a child holding stdout for 60s, **64s wall**.
+
+**And it exited 0 and reported the install a success**, timing the task at 60771ms. That is the
+half worth the rule. A bound whose expiry is invisible is a bound that has been walked around; a
+bound whose expiry is reported as success is Q28's class with the clock's own name on it. So the
+same clock keeps running over the readers, on silence for the reason V.114 gives, and a pipe that
+has produced nothing for the bound fails the command by name.
+
+**What this deliberately does not do** is kill the orphan. That needs a Windows Job Object or a
+Unix process group, it is platform-specific, and it changes what "kill" means for every command
+in the program. It is a separate decision and is not smuggled in as a rider on this one.
+
+---
+
+**V.132 — Why the deploy refusal is asked before the download.** *(Owner instruction, 2026-08-05
+— `Q37`. Rule in II.19.)*
+
+`deploy_executable` refuses to overwrite a file LiNix did not create, and refuses correctly. Its
+test — `is_ours(dest, owned_root, recorded)` — reads only the **destination**. It needs zero
+downloaded bytes.
+
+It was asked after the download and after the unpack. Measured inside one `heal`, twice, back to
+back:
+
+```
+ 60.9s gap  ->  could not recover github:sharkdp/fd — refusing to deploy `fd.exe`:
+119.1s gap  ->      ...\.local\bin\fd.exe already exists and LiNix did not create it.
+```
+
+**180 of that run's 201 seconds were spent fetching a file it was always going to reject.** Two
+things made it invisible rather than merely wasteful. It is an in-process `reqwest` download, so
+it is not a child command and never appears in the `--timings` breakdown at all — which is why
+the run showed 205s of wall against 33s of children. And downloads correctly have no whole-request
+timeout, because a large download must not be capped by a wall clock — which leaves an
+*avoidable* download both unbounded and silent. Three stalls were misdiagnosed as wedges because
+of exactly this: zero CPU, no child process, nothing in the log.
+
+**This is why reading does not find it.** Every line of `deploy_executable` is right. The defect
+is the order it is called in, which is not visible anywhere inside the function — so the ordering
+is held by a scan across the three backends rather than by review.
+
+---
+
+**V.133 — Why a resource already in its declared state is not work.** *(Owner instruction,
+2026-08-05 — `Q39`, convergence half. Rule in II.19. The other half — whether `adopt` should take
+150 services nobody chose — is still open.)*
+
+`linix adopt` on a Windows host wrote 207 declarations, **150 of them `service:X@status=running`**
+— every running service. The next `install` of anything then failed:
+
+```
+Error: `sc` failed (exit 1056): [SC] StartService FAILED 1056:
+An instance of the service is already running.
+```
+
+Two separate faults, and the order matters because only the second one is obvious.
+
+**LiNix should not have run the command at all.** `in_effect` — the probe that decides whether a
+declared resource needs applying — had arms for `link` and `shim` and fell through to `None` for
+everything else. `None` means *unverifiable*, and unverifiable **places**. So every adopted
+service was applied on the next sync whatever the machine looked like, and the init could have
+answered in one listing the run already had in hand. Measured before and after, on the same host
+and the same manifest: **150 resource(s) to place → 2**, and the two are real drift — `gpsvc` and
+`smphost`, trigger-start services Windows had idled out in the twenty minutes since `adopt` ran.
+
+**And when it does run the command, already-there is success.** Measured elevated on this host,
+both verbs, so the constants in `init_providers.toml` are a reading and not a citation:
+
+```
+sc start Appinfo         -> rc=1056   [SC] StartService FAILED 1056: An instance of the
+                                            service is already running.
+sc stop  AarSvc_1032af   -> rc=1062   [SC] ControlService FAILED 1062: The service has not
+                                            been started.
+```
+
+1056 is `ERROR_SERVICE_ALREADY_RUNNING` and 1062 `ERROR_SERVICE_NOT_ACTIVE`. For a converger both
+are the goal, and neither appeared anywhere in the codebase; `for_manager` had no `"service"` arm at all, so the service backend ran on
+`ExitPolicy::default()` with `benign_exits` empty. The codes are declared **per verb**, in the
+init's own row, because each is an ordinary failure on the other verb — a stop that came back "already running" did not
+stop anything. Writing the pair as one per-provider list is the shortcut that loses that, and
+Windows' hand-written `restart = [stop, start]` row is what exposed it: spelled out, both halves
+were labelled `restart` and neither could be told which code meant "already in that state". The
+row was deleted; the derivation that produces the same two commands labels each with its own verb.
+
+**A third code is not forgiven, and must not be.** Unelevated, both commands return **5** —
+access denied — measured on this host before the elevated run above. That is a real failure:
+nothing converged and LiNix must not claim it did. It does mean an unelevated `adopt` on Windows
+writes a manifest that cannot converge at all, which is one more argument for the half of `Q39`
+that is still open.
+
+**A third thing fell out of it.** `Extras::changes` short-circuited on "never applied" and placed
+without probing, while `Dependents::apply` has never consulted the ledger at all — it skips
+whatever the probe reports in effect. So `plan` promised 150 placements `sync` would not have
+made, on a machine where the two had never disagreed loudly enough to notice. The probe runs first
+in both now, and the ledger answers only the case the probe cannot: a resource nothing can be
+asked about has been applied, or it has not, and only one of those is work.
+
+---

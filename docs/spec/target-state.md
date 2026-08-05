@@ -1663,8 +1663,12 @@ call; it is never decided by what LiNix's own handles happen to be, because a pa
 in CI and not on a person's machine is worse than one that never works — only one of those two
 gets reported.
 
-**stdin is the one stream a child may share, and only a mutating command may share it.** `sudo`
-asks for a password on the terminal it was started from. A read has nothing to ask and nobody to
+**stdin is the one stream a child may share, only a mutating command may share it, and only
+where `sudo` can be inserted** (2026-08-05, `Q35`). `sudo` asks for a password on the terminal it
+was started from — and `sudo` is never inserted on Windows, so a Windows mutation gets a closed
+stdin like a read. The reason is what carries the rule; where the reason does not reach, the
+sharing buys nothing and costs the whole idle bound the first time a manager asks something
+(V.130). A read has nothing to ask and nobody to
 answer it, so a read never takes the terminal. **This binds every spawn in the tree, not only the
 executor's** (2026-08-02): a probe that captures both output streams and leaves stdin inherited
 asks its question where nobody can see it and then waits for an answer that cannot come. Ten
@@ -1690,6 +1694,13 @@ and below the second, and what does separate them is that working commands say s
 bound applies to **every** command, not only those inside the transaction DAG; the DAG's
 `total_timeout` covers the DAG, and every hang on record happened outside it. The number is a
 dial and `0` removes the bound; **that a bound exists is not.**
+
+**The bound covers the read of the output, not only the wait for the exit** (2026-08-05, `Q32`).
+A command whose direct child has exited while something outside LiNix's process tree still holds
+its output pipe is bounded by the same clock, on the same silence: readers that have taken
+nothing for `command_idle_timeout_secs` are abandoned and the command **fails by name**. A bound
+that ends before the read ends is a bound a command can walk around, and the walk-around was
+silent *and* returned the child's exit code — so the command reported **success** (V.131).
 
 ## II.13 History
 
@@ -1976,6 +1987,21 @@ rolls the transaction back. **V.115.**
 **The telemetry says when packages shared a command.** Several packages reporting the same
 duration to the millisecond is the truth about a batch and was a lie about a serialised run; the
 line says which. **V.115.**
+
+**Nothing is fetched for a decision already made** (2026-08-05, `Q37`). A refusal that reads only
+the destination is asked before the first byte, not after the artifact is on disk and unpacked.
+`github:`, `web:` and `appimage:` all deploy onto the same shared bin directory and all ask the
+same question through the same function. Where the answer genuinely needs the archive open — a
+release whose several artifacts are each named after the program inside them — the download is
+the price of the answer and is paid. **V.132.**
+
+**A resource already in the state it declares is not work** (2026-08-05, `Q39`). Before applying
+a resource, LiNix asks the machine whether it is already in effect, and a resource that is gets
+skipped — whatever the applied-resources ledger remembers, because the ledger records what LiNix
+placed and the question is what is *true*. What cannot be asked is applied, and named as
+unverifiable rather than assumed converged. And where the machine answers by exit code instead —
+`sc start` on a running service returns 1056 — that code is success for the verb that asked and
+a failure for every other verb. **V.133.**
 
 **Two knobs, because processes and sockets are not the same thing.** `max_parallel` bounds
 concurrent **processes** and defaults to the core count. `network_parallel` bounds concurrent
