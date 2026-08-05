@@ -659,10 +659,51 @@ impl<'a> SyncEngine<'a> {
         Ok(())
     }
 
+    /// Collapse the journal's unresolved entries to one recovery per operation, carrying every
+    /// id that named it so a single attempt resolves them all.
+    ///
+    /// Keyed on what a recovery would actually *do* — the backend, the name, and whether it is
+    /// an install or a removal. Two interrupted installs of the same spec are one reinstall; an
+    /// interrupted install and an interrupted removal of the same package are not, and must stay
+    /// two. First-seen order is kept so the report reads in the order the journal recorded.
+    fn one_per_operation(
+        entries: Vec<crate::core::journal::JournalEntry>,
+    ) -> Vec<(crate::core::journal::JournalEntry, Vec<String>)> {
+        use crate::core::journal::JournalAction;
+        let mut order: Vec<(crate::core::journal::JournalEntry, Vec<String>)> = Vec::new();
+        let mut seen: std::collections::HashMap<(String, String, bool), usize> =
+            std::collections::HashMap::new();
+        for entry in entries {
+            let key = match &entry.action {
+                JournalAction::Install(s) => (s.backend.clone(), s.name.clone(), true),
+                JournalAction::Remove { name, backend } => (backend.clone(), name.clone(), false),
+            };
+            match seen.get(&key) {
+                Some(&at) => order[at].1.push(entry.id),
+                None => {
+                    seen.insert(key, order.len());
+                    let id = entry.id.clone();
+                    order.push((entry, vec![id]));
+                }
+            }
+        }
+        order
+    }
+
     pub async fn heal(&self) -> Result<()> {
+        // One package, one recovery. `record_start` mints a fresh id per attempt, so a
+        // declaration that fails on every sync appends a *new* operation every time and none of
+        // them is ever purged — one sweep's journal held **22 operations for a single
+        // `scoop:linix-no-such-pkg-zzz`**, and `heal` made 23 real `scoop install` round trips
+        // for that one name. The cost is unbounded in the number of past attempts, on the
+        // command that runs before every `sync` and inside every `watch` tick.
+        //
+        // They are not 22 operations. They are one operation attempted 22 times, so one attempt
+        // decides all of them: on success every entry that named the same thing is resolved,
+        // because the package it named is now installed.
         let incomplete_actions = {
             let j = self.journal.lock().await;
-            j.get_incomplete_actions()
+            Self::one_per_operation(j.get_incomplete_actions())
         };
 
         if incomplete_actions.is_empty() {
@@ -678,7 +719,7 @@ impl<'a> SyncEngine<'a> {
                 "[DRY-RUN] would recover {} interrupted operation(s) from a previous run:",
                 incomplete_actions.len()
             );
-            for entry in &incomplete_actions {
+            for (entry, _) in &incomplete_actions {
                 match &entry.action {
                     crate::core::journal::JournalAction::Install(spec) => {
                         info!("[DRY-RUN]   reinstall {}:{}", spec.backend, spec.name)
@@ -715,7 +756,7 @@ impl<'a> SyncEngine<'a> {
         // 0", this is "says nothing and exits 0", and the second is worse because there is
         // nothing in the output to read.
         let mut unreachable: Vec<String> = Vec::new();
-        for entry in incomplete_actions {
+        for (entry, ids) in incomplete_actions {
             let (backend, package, is_install) = match &entry.action {
                 crate::core::journal::JournalAction::Install(spec) => {
                     (spec.backend.clone(), spec.name.clone(), true)
@@ -769,7 +810,9 @@ impl<'a> SyncEngine<'a> {
                         key, reason
                     );
                     let mut j = self.journal.lock().await;
-                    let _ = j.record_success(&entry.id);
+                    for id in &ids {
+                        let _ = j.record_success(id);
+                    }
                     kept.push(key.clone());
                     continue;
                 }
@@ -823,7 +866,9 @@ impl<'a> SyncEngine<'a> {
                     }
                 }
                 let mut j = self.journal.lock().await;
-                let _ = j.record_success(&entry.id);
+                for id in &ids {
+                    let _ = j.record_success(id);
+                }
                 info!(
                     "{} {} (completing an interrupted {}).",
                     verb,
