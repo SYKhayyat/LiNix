@@ -1312,6 +1312,351 @@ for c in $HELP_CMDS; do
 done
 
 # ==========================================================================
+# 14d. A REAL CRASH IN THE MIDDLE OF A TRANSACTION (GRADER §5)
+# ==========================================================================
+# The twin of `run-in-container.sh`'s 16d, and it is here because a check on one harness is a
+# check on one platform — round 7's own finding, about `winget`. The write-ahead log, the
+# recovery and the data lock are all cross-platform code with a Windows-specific file layer
+# under them, which is exactly where "it works on Linux" stops being evidence.
+#
+# Three things this platform cannot do, each MEASURED here rather than assumed:
+#   * no group kill — `setsid` does not exist on Windows, so the package manager cannot be
+#     taken down with LiNix and the hostile third iteration the container runs is absent.
+#   * no `sudo` section — `run_on` inserts `sudo` only when `!cfg!(windows)`, so there is no
+#     privileged path on this platform to drive. Its absence is correct, not a gap.
+#   * the canaries are scoop's, because scoop is user-scoped and reversible; a machine-wide
+#     manager is not something to crash halfway through on somebody's real computer.
+echo "[14d] SIGKILL mid-transaction, then heal"
+
+JOURNAL="$LINIX_DATA_DIR/journal.jsonl"
+
+# How many operations are still OPEN — and the emphasis is the whole point.
+#
+# `journal.jsonl` is APPEND-ONLY: one line per state change, carrying the same id each time, so
+# a single successful install writes `InProgress` and then `Completed` and both lines stay.
+# Counting `InProgress` lines therefore answers "how many operations ever started", which on a
+# healthy run is every one of them. The first draft of the container twin did exactly that and
+# reported 32 operations open on a run where heal had resolved all of them — a finding
+# manufactured by the instrument. So the question is about the LAST line for each id.
+journal_status_tally() { # awk-condition over the final status of each id
+    [ -f "$JOURNAL" ] || { echo 0; return 0; }
+    sed -n 's/.*"id":"\([^"]*\)".*"status":"\([^"]*\)".*/\1 \2/p' "$JOURNAL" \
+        | awk -v want="$1" '
+            { last[$1] = $2 }
+            END { n = 0; for (k in last) if (index(want, last[k]) > 0) n++; print n + 0 }'
+}
+journal_open()       { journal_status_tally "InProgress Abandoned"; }
+journal_incomplete() { journal_status_tally "InProgress Abandoned Failed"; }
+journal_open_names() {
+    [ -f "$JOURNAL" ] || return 0
+    sed -n 's/.*"id":"\([^"]*\)".*"status":"\([^"]*\)".*/\1 \2/p' "$JOURNAL" \
+        | awk '{ last[$1] = $2 } END { for (k in last) if (last[k] == "InProgress" || last[k] == "Abandoned") print "        | " k }'
+}
+
+# scoop packages whose binary IS the package name, and none of them another canary here: `jq`
+# is scoop's own, `rg` is pixi's, `fd` is github's and `zoxide` is winget's. Two canaries
+# sharing a binary name is the G-3 collision by construction.
+#
+# FILTERED against the machine: this is a developer's real computer, and a package it already
+# has is not a transaction step. What is left is what this host can turn into one.
+CRASH_PKGS=""
+for _c in gron grex tokei; do
+    on_path "$_c" || CRASH_PKGS="$CRASH_PKGS $_c"
+done
+CRASH_N=0
+for _c in $CRASH_PKGS; do CRASH_N=$((CRASH_N + 1)); done
+
+CRASH_POLL=0.1
+sleep 0.1 2>/dev/null || CRASH_POLL=1
+
+crash_declare() {
+    for _p in $CRASH_PKGS; do
+        grep -qx "$BACKEND:$_p" "$IMPERATIVE" 2>/dev/null || echo "$BACKEND:$_p" >> "$IMPERATIVE"
+    done
+}
+crash_undeclare() {
+    [ -f "$IMPERATIVE" ] || return 0
+    for _p in $CRASH_PKGS; do
+        grep -v -x "$BACKEND:$_p" "$IMPERATIVE" > "$IMPERATIVE.tmp" 2>/dev/null
+        mv "$IMPERATIVE.tmp" "$IMPERATIVE"
+    done
+}
+crash_installed() { _n=0; for _p in $CRASH_PKGS; do on_path "$_p" && _n=$((_n + 1)); done; echo "$_n"; }
+crash_missing()   { _m=""; for _p in $CRASH_PKGS; do on_path "$_p" || _m="$_m $_p"; done; echo "$_m"; }
+# UNINSTALL FIRST, undeclare second. `linix uninstall` refuses a package no active file
+# declares — *"nothing was uninstalled: it is not declared in any active file"* — so taking the
+# line out first makes every cleanup refuse. Measured on the container twin, where it cost two
+# thirds of the section's coverage before anyone noticed.
+crash_wipe() {
+    : > /tmp/crash-wipe-win.out
+    for _p in $CRASH_PKGS; do
+        on_path "$_p" || continue
+        {
+            echo "--- uninstall $BACKEND:$_p"
+            echo "    declared in imperative.txt: $(grep -cx "$BACKEND:$_p" "$IMPERATIVE" 2>/dev/null || echo 0)"
+        } >> /tmp/crash-wipe-win.out
+        $TO "$LINIX" -y uninstall "$BACKEND:$_p" >> /tmp/crash-wipe-win.out 2>&1
+        echo "    rc=$? and $_p is now $(on_path "$_p" && echo 'STILL on PATH' || echo 'gone')" >> /tmp/crash-wipe-win.out
+    done
+    crash_undeclare
+}
+
+# crash_run <tag> <when>
+#   when   `open`  kill the moment the log opens a new entry — the manager may not have started
+#          <n>     kill once n of the canaries have reached the filesystem
+crash_run() {
+    _tag="$1"; _when="$2"
+    _open_before=$(journal_open)
+    crash_declare
+    record_argv sync
+
+    # No `timeout` wrapper: killing the wrapper would leave LiNix running and this section
+    # would then be measuring an orphan. The spin budget below is the bound instead.
+    "$LINIX" -y sync >"/tmp/crash-win-$_tag.out" 2>&1 &
+    _pid=$!
+    _spins=0
+    while [ "$_spins" -lt 3000 ]; do
+        if [ "$_when" = open ]; then
+            [ "$(journal_open)" -gt "$_open_before" ] && break
+        else
+            [ "$(crash_installed)" -ge "$_when" ] && break
+        fi
+        kill -0 "$_pid" 2>/dev/null || break
+        sleep "$CRASH_POLL"; _spins=$((_spins + 1))
+    done
+
+    _open_at_kill=$(journal_open)
+    kill -9 "$_pid" 2>/dev/null
+    wait "$_pid" 2>/dev/null
+
+    # The DELTA, not the total: what this iteration is answerable for is what it added.
+    _opened=$((_open_at_kill - _open_before))
+    if [ "$_opened" -lt 1 ]; then
+        soft "crash/$_tag: the kill opened no new entry in the write-ahead log ($_open_before before, $_open_at_kill after), so this iteration measured no recovery"
+        crash_wipe
+        return 0
+    fi
+    PASS=$((PASS + 1))
+    echo "  PASS  crash/$_tag: SIGKILL left $_opened newly-opened operation(s) in the write-ahead log ($_open_at_kill open in all), with $(crash_installed) of $CRASH_N canaries on disk"
+
+    _hout=$(lx heal 2>&1); _hrc=$?
+
+    if printf '%s' "$_hout" | grep -q "could not be recovered"; then
+        if [ "$_hrc" -ne 0 ]; then
+            PASS=$((PASS + 1)); echo "  PASS  crash/$_tag: heal named what it could not recover, and said so in the exit code"
+        else
+            hard "crash/$_tag: heal reported an unrecovered operation and exited 0 (W36)"
+        fi
+    elif [ "$_hrc" -eq 0 ]; then
+        PASS=$((PASS + 1)); echo "  PASS  crash/$_tag: heal recovered the interrupted operation(s)"
+    else
+        hard "crash/$_tag: heal exited $_hrc without naming anything it could not recover"
+    fi
+
+    if printf '%s' "$_hout" | grep -q 'CommandFailed {\|absent_name:\|retry: Permanent\|retry: Transient'; then
+        hard "crash/$_tag: heal printed the journal's own struct at the user — $(printf '%s' "$_hout" | grep -o 'CommandFailed {\|absent_name:\|retry: [A-Za-z]*' | head -1)"
+    else
+        PASS=$((PASS + 1)); echo "  PASS  crash/$_tag: heal's report is in the user's words, not the journal's"
+    fi
+
+    _still=$(journal_open)
+    if [ "$_still" -gt 0 ] && ! printf '%s' "$_hout" | grep -q "could not be recovered"; then
+        hard "crash/$_tag: $_still operation(s) are still open after heal (this crash opened $_opened of them), and heal named none of them"
+        journal_open_names | head -5
+    else
+        PASS=$((PASS + 1)); echo "  PASS  crash/$_tag: nothing is open in the log that heal did not name"
+    fi
+
+    answers "crash/$_tag: the model still parses after the crash" lx check
+
+    if lx -y sync >"/tmp/crash-conv-win-$_tag.out" 2>&1 && [ "$(crash_installed)" -eq "$CRASH_N" ]; then
+        PASS=$((PASS + 1)); echo "  PASS  crash/$_tag: the sync after the crash converged onto all $CRASH_N canaries"
+        # Asked of the PLAN, not of a phrase: a converged machine that also reports one
+        # protected package it left alone prints a different sentence and has done nothing
+        # wrong. What "nothing left to do" means is zero planned changes.
+        lx --dry-run sync >"/tmp/crash-plan-win-$_tag.out" 2>&1
+        if ! grep -q "Planned changes" "/tmp/crash-plan-win-$_tag.out" \
+           || grep -qi "already up to date\|nothing to do" "/tmp/crash-plan-win-$_tag.out" \
+           || grep -q "install 0 *remove 0" "/tmp/crash-plan-win-$_tag.out"; then
+            PASS=$((PASS + 1)); echo "  PASS  crash/$_tag: and the preview after that plans no change at all"
+        else
+            hard "crash/$_tag: a converged machine still has a plan — $(grep -i 'install\|remove' "/tmp/crash-plan-win-$_tag.out" | head -2 | tr '\n' ' ')"
+        fi
+    else
+        hard "crash/$_tag: the sync after the crash did not converge — still missing:$(crash_missing)"
+        excerpt "/tmp/crash-conv-win-$_tag.out" 6
+    fi
+
+    crash_wipe
+    _left=$(crash_installed)
+    if [ "$_left" -eq 0 ]; then
+        PASS=$((PASS + 1)); echo "  PASS  crash/$_tag: the canaries are off the machine again"
+    else
+        hard "crash/$_tag: the cleanup uninstall left $_left of$CRASH_PKGS still on PATH"
+        sed 's/^/        | /' /tmp/crash-wipe-win.out
+    fi
+}
+
+# Before anything is killed: what does the log look like after an ordinary run? Fourteen
+# sections of installs and removals have run above this line and every one of them either
+# finished or failed, and both outcomes close their entry.
+_baseline_open=$(journal_open)
+_baseline_total=$(journal_status_tally "InProgress Abandoned Failed Completed")
+if [ "$_baseline_total" -lt 1 ]; then
+    # An audit of an empty set passes without examining anything — the collapse
+    # `too_few_to_audit` exists for, and the one check of this kind that survived a linix
+    # which fails everything on the container twin.
+    hard "journal: the write-ahead log has no entries at all after fourteen sections of installs and removals — nothing recorded an operation, so there is nothing to audit"
+elif [ "$_baseline_open" -eq 0 ]; then
+    PASS=$((PASS + 1)); echo "  PASS  journal: an ordinary run left nothing open in the write-ahead log ($_baseline_total recorded, $(journal_incomplete) failed-and-retryable)"
+else
+    hard "journal: $_baseline_open operation(s) are still open in the write-ahead log and nothing crashed"
+    journal_open_names | head -5
+fi
+
+# An entry `heal` cannot act on AT ALL — the branch a crash cannot produce on its own. Built
+# from a REAL journal line with its backend renamed, never hand-written: an `Install` entry
+# that omits `options` lands in the corrupt-log branch instead.
+_ghost="$(grep '"action":{"Install"' "$JOURNAL" 2>/dev/null | tail -1)"
+if [ -z "$_ghost" ]; then
+    soft "heal: no real install entry to build an unreachable one from, so the silent-skip branch was not driven"
+else
+    printf '%s\n' "$_ghost" \
+        | sed -e 's/"id":"[^"]*"/"id":"linixnosuchmgr:ghost:00000000000000000000000000000001"/' \
+              -e 's/"backend":"[^"]*"/"backend":"linixnosuchmgr"/g' \
+              -e 's/"name":"[^"]*"/"name":"ghost"/' \
+              -e 's/"status":"[^"]*"/"status":"InProgress"/' \
+        >> "$JOURNAL"
+    _hout=$(lx heal 2>&1); _hrc=$?
+    if printf '%s' "$_hout" | grep -q "linixnosuchmgr"; then
+        PASS=$((PASS + 1)); echo "  PASS  heal: an operation it cannot act on is named rather than skipped in silence"
+    else
+        hard "heal: an entry naming a manager this machine does not have was skipped without a word (rc=$_hrc)"
+        printf '%s\n' "$_hout" | tail -4 | sed 's/^/        | /'
+    fi
+    if [ "$_hrc" -ne 0 ]; then
+        PASS=$((PASS + 1)); echo "  PASS  heal: and it says so in the exit code rather than reporting success"
+    else
+        hard "heal: an operation was left unresolved and heal exited 0 (W36's family)"
+    fi
+    # Taken back out AFTER the assertions, never before one.
+    grep -v linixnosuchmgr "$JOURNAL" > "$JOURNAL.tmp" 2>/dev/null
+    mv "$JOURNAL.tmp" "$JOURNAL"
+fi
+
+if [ "$CRASH_N" -lt 2 ]; then
+    soft "crash/heal: this host already has gron, grex and tokei, so a sync over them is not a multi-step transaction — named rather than run vacuously"
+else
+    # The control. If this cannot converge the fixture is wrong, and every iteration below
+    # would be measuring the fixture instead of the write-ahead log.
+    crash_declare
+    if lx -y sync >/tmp/crash-control-win.out 2>&1 && [ "$(crash_installed)" -eq "$CRASH_N" ]; then
+        PASS=$((PASS + 1)); echo "  PASS  crash/heal: the control sync installs all $CRASH_N canaries ($CRASH_PKGS)"
+        crash_wipe
+        crash_run open open
+        crash_run midway 1
+        soft "crash/groupkill: Windows has no \`setsid\`, so LiNix cannot be put in a process group of its own and the package manager cannot be killed with it — the container twin runs that iteration"
+    else
+        soft "crash/heal: the control sync did not install$CRASH_PKGS on this host, so the crash loop has no fixture — $(tr '\n' ' ' < /tmp/crash-control-win.out | tail -c 300)"
+        crash_wipe
+    fi
+fi
+
+# ==========================================================================
+# 14e. TWO RUNS AT ONCE, AND KILLING THE ONE THAT HOLDS THE LOCK (GRADER §6)
+# ==========================================================================
+# `DataLock` is an OS lock on an open handle, and on Windows that is a different kernel
+# primitive from the one the container twin exercises. Both were asserted only by unit tests
+# inside ONE process, which is the one place a file lock cannot fail.
+#
+# The holder is a real LiNix rather than a `flock`. `flock` exists in this shell, but it locks
+# through the POSIX emulation layer and LiNix locks through `fs2` — whether those two contend
+# is an assumption, and an unverified assumption in the holder makes every assertion below a
+# statement about MSYS. A real LiNix holder needs no such belief.
+echo "[14e] Two runs at once, and killing the lock holder"
+
+LOCKOWNER="$LINIX_DATA_DIR/linix.lock.owner"
+since() { echo $(( $(date +%s) - $1 )); }
+
+if [ "$CRASH_N" -lt 1 ]; then
+    soft "two-writers: no free canary on this host, so a holding sync would have no work and could not be caught holding"
+else
+    rm -f "$LOCKOWNER"
+    crash_declare
+    "$LINIX" -y sync >/tmp/lock-holder-win.out 2>&1 &
+    _holder=$!
+    _spins=0
+    while [ "$_spins" -lt 600 ] && [ ! -s "$LOCKOWNER" ]; do
+        kill -0 "$_holder" 2>/dev/null || break
+        sleep "$CRASH_POLL"; _spins=$((_spins + 1))
+    done
+
+    if [ ! -s "$LOCKOWNER" ] || ! kill -0 "$_holder" 2>/dev/null; then
+        soft "two-writers: the holder finished before it could be caught holding, so there was nothing to contend with"
+        kill -9 "$_holder" 2>/dev/null; wait "$_holder" 2>/dev/null
+    else
+        _stamp="$(cat "$LOCKOWNER")"
+        if printf '%s' "$_stamp" | grep -q "pid"; then
+            PASS=$((PASS + 1)); echo "  PASS  lock: the holder published its own command and pid — $_stamp"
+        else
+            hard "lock: the holder's stamp names no pid — it says '$_stamp'"
+        fi
+
+        # A second writer, while the first is demonstrably holding. Waiting with no reason given
+        # is indistinguishable from hanging, so the message is the assertion.
+        _t0=$(date +%s)
+        $TO "$LINIX" -y sync >/tmp/two-writers-win.out 2>&1
+        _rc=$?
+        _waited=$(since "$_t0")
+        if grep -q "waiting for the data directory" /tmp/two-writers-win.out; then
+            PASS=$((PASS + 1)); echo "  PASS  two-writers: the second run announced the wait instead of going quiet (${_waited}s)"
+        elif kill -0 "$_holder" 2>/dev/null; then
+            hard "two-writers: a second LiNix ran alongside a live one and never named the holder"
+            excerpt /tmp/two-writers-win.out 6
+        else
+            soft "two-writers: the first run finished before the second reached the lock, so there was no overlap to measure"
+        fi
+        kill -9 "$_holder" 2>/dev/null; wait "$_holder" 2>/dev/null
+
+        # SIGKILL the holder. `Drop` never runs, so the stamp outlives the process that wrote
+        # it — and if anything ever decided to wait by reading that FILE rather than by trying
+        # the lock, this is where it costs two minutes.
+        rm -f "$LOCKOWNER"
+        "$LINIX" -y sync >/tmp/lock-holder2-win.out 2>&1 &
+        _corpse=$!
+        _spins=0
+        while [ "$_spins" -lt 600 ] && [ ! -s "$LOCKOWNER" ]; do
+            kill -0 "$_corpse" 2>/dev/null || break
+            sleep "$CRASH_POLL"; _spins=$((_spins + 1))
+        done
+        if [ ! -s "$LOCKOWNER" ]; then
+            soft "lock: the second holder never published a stamp, so the killed-holder check had no corpse to leave behind"
+            kill -9 "$_corpse" 2>/dev/null; wait "$_corpse" 2>/dev/null
+        else
+            kill -9 "$_corpse" 2>/dev/null; wait "$_corpse" 2>/dev/null
+            if [ -s "$LOCKOWNER" ]; then
+                PASS=$((PASS + 1)); echo "  PASS  lock: the stamp outlived the process that wrote it, which is the state under test"
+            else
+                soft "lock: the stamp was already gone after the kill, so the corpse case is weaker than intended"
+            fi
+            _t0=$(date +%s)
+            $TO "$LINIX" -y sync >/tmp/lock-corpse-win.out 2>&1
+            _rc=$?
+            _took=$(since "$_t0")
+            if [ "$_rc" -ne 0 ] && [ "$_rc" -ne 2 ]; then
+                hard "lock: a run after a killed holder failed (rc=$_rc) instead of taking the free lock"
+                excerpt /tmp/lock-corpse-win.out 6
+            elif [ "$_took" -ge 30 ]; then
+                hard "lock: the next run waited ${_took}s on a holder that was already dead — the stale stamp file was believed over the lock"
+            else
+                PASS=$((PASS + 1)); echo "  PASS  lock: a killed holder's lock died with it — the next run took ${_took}s, not the 120s timeout"
+            fi
+        fi
+    fi
+    crash_wipe
+fi
+
+# ==========================================================================
 # 15. COVERAGE AUDIT — what did nothing touch? (IV.1)
 # ==========================================================================
 echo "[15] Coverage audit"

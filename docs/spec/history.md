@@ -6125,3 +6125,42 @@ differently under contention, or `info` runs out of time and reports *not instal
 one, which is W37's family with a timer attached.
 
 Not diagnosed. Recorded so the next person does not have to rediscover that it is load-dependent.
+
+### The Windows twin, and a stall I did not diagnose
+
+`scripts/integration-windows.sh` gets **14d** and **14e**, the twins of the container's 16d and
+16e. Three differences from the container version, each measured on this host before a line was
+written rather than assumed — the rule the two lying instruments above exist to teach:
+
+* the exe honours a POSIX-form `LINIX_DATA_DIR` and bash can read `journal.jsonl` at that path;
+* `kill -9` does reach a native Windows child;
+* `setsid` does **not** exist, so there is no group kill and the hostile third iteration is
+  named as absent rather than quietly skipped.
+
+There is no sudo section and there should not be: `run_on` inserts `sudo` only when
+`!cfg!(windows)`, so the privileged path does not exist on this platform.
+
+**What ran green:** `heal` naming an operation it cannot act on and saying so in its exit code —
+the same fix as the container, confirmed on a second platform — and three of the four lock
+checks, including two real writers contending on a Windows file lock (`the second run announced
+the wait instead of going quiet (120s)`).
+
+**Why the run is not a measurement of the product.** The sweep stalled four times, and each time
+I killed the idle `linix` by hand to let it continue. Those kills are what the baseline check
+then found (`6 operation(s) are still open … and nothing crashed` — six operations I interrupted)
+and what starved the crash fixture, and the lifecycle ratchet fell 5 -> 1 behind them. The
+sections work; the numbers around them are mine.
+
+**The stall is NOT diagnosed, and the first explanation was wrong.** It looked like the harness's
+`timeout 900` failing to signal a native process — so it was measured: `timeout 3 powershell
+-Command "Start-Sleep 60"` returns 124 after three seconds, and the only unwrapped `"$LINIX"`
+calls in the script are the three background lock holders, which are deliberate. So that account
+is refused. What is left is an observation and no cause: an idle `linix` with almost no CPU, a
+log that stops growing, and a sweep that continues the moment the process is killed. The nearest
+documented relative is the 2026-08-02 wedge — `auto_snapshot` runs outside the DAG timeout and a
+Windows restore point is silent for its whole ~51s — but that was recorded as intermittent with
+no known cause then, and nothing here narrows it.
+
+**Until it is understood the Windows sweep cannot run unattended on this host**, which is the
+real reason the native sweep has never been an automated gate. It is the next thing to attack:
+one clean uninterrupted run is worth more than any assertion added to it.
