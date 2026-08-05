@@ -255,7 +255,7 @@ mod tests {
             "plan",
             "heal",
             "rollback",
-            "purge-unmanaged",
+            "purge-undeclared",
         ] {
             assert!(
                 !InstalledListings::cache_may_answer(writer),

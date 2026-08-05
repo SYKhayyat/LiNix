@@ -270,11 +270,11 @@ fn the_class_of_a_command_is_read_off_its_own_variant() {
     enum Fake {
         SelfUpgrade,
         Check { config: bool },
-        PurgeUnmanaged,
+        PurgeUndeclared,
     }
     assert_eq!(subcommand_name(&Fake::SelfUpgrade), "self-upgrade");
     assert_eq!(subcommand_name(&Fake::Check { config: true }), "check");
-    assert_eq!(subcommand_name(&Fake::PurgeUnmanaged), "purge-unmanaged");
+    assert_eq!(subcommand_name(&Fake::PurgeUndeclared), "purge-undeclared");
 
     assert_eq!(Class::of("eval"), Class::ConfigOnly);
     assert_eq!(Class::of("info"), Class::OneBackend);

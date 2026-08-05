@@ -794,7 +794,7 @@ impl App {
     ///
     /// **This is not `unmanaged` (II.8), which is "what `adopt` would adopt".** They are two
     /// questions with very different answers: on a stock Ubuntu this is ~476 packages and
-    /// `adopt` is ~103. Only `purge-unmanaged` wants this one, and its whole job is deleting
+    /// `adopt` is ~103. Only `purge-undeclared` wants this one, and its whole job is deleting
     /// all of it (II.11) — which is why the ratio check exists.
     /// Ask every ready manager what it has installed, all at once, before anything needs it.
     ///
@@ -819,7 +819,7 @@ impl App {
             .await;
     }
 
-    pub async fn installed_but_unmanaged(&self) -> Result<Vec<Package>> {
+    pub async fn installed_but_undeclared(&self) -> Result<Vec<Package>> {
         let backends = self.registry.available();
         let names: Vec<String> = backends
             .iter()
@@ -830,7 +830,7 @@ impl App {
             .query_backends_concurrently(backends, |q| async move { q.list_installed().await })
             .await;
         // A manager that could not be listed contributes nothing, which is the safe direction
-        // for the caller that deletes — `purge-unmanaged` removes less, never more. It is not
+        // for the caller that deletes — `purge-undeclared` removes less, never more. It is not
         // a safe direction for the *sentence*: "nothing here is unmanaged" and "one manager
         // never answered" both come out as an empty list, and only one of them is a clean bill.
         let mut listed = Vec::new();
@@ -845,7 +845,7 @@ impl App {
         }
         // D5: a `.deb`/`.rpm` a download backend handed to a system manager is listed by that
         // manager as installed, but a download declaration owns it — so it is not unmanaged, and
-        // `purge-unmanaged` must defer to the recorded installer rather than delete it. Match by
+        // `purge-undeclared` must defer to the recorded installer rather than delete it. Match by
         // name: the installer is `dpkg`/`rpm`, the lister is `apt`/`dnf`, and the name is the one
         // identity they share.
         let owned = self.owned_system_package_names().await;

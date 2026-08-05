@@ -667,7 +667,7 @@ a number typed into a README does.
 |---|---|
 | `check` | Parse everything the active profiles reach; report errors, change nothing |
 | `why` | Why a package is installed: where it is declared and what depends on it |
-| `unmanaged` | Installed on the OS but not managed by LiNix |
+| `unmanaged` | What `linix adopt` would take: installed, you chose it, nothing declares it |
 | `absent` | Every `absent:` rule in force, and which module it comes from |
 | `conflicts` | The same tool pinned to different versions by different backends |
 | `doctor` | Per-backend readiness, config and layout integrity; `--fix` repairs what is safe |
@@ -683,7 +683,7 @@ a number typed into a README does.
 | `unmanage` | Stop managing a package **without** uninstalling it |
 | `remove-orphans` | Remove what each manager considers orphaned — shows the list and asks first |
 | `clean-cache` | Delete downloaded archives and caches; removes no installed package |
-| `purge-unmanaged` | Delete everything LiNix does not manage. Shows the whole list first |
+| `purge-undeclared` | Delete every installed package nothing declares — a wider set than `unmanaged`, because it includes the dependency closure. Shows the whole list first |
 
 **Plan, lock, reproduce**
 

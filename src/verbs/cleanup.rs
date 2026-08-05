@@ -207,19 +207,19 @@ pub(crate) async fn handle_clean_cache(app: &App, all: bool) -> Result<()> {
 /// about to delete and you have made a mistake, on every machine, at every scale (V.20).
 pub(crate) const PURGE_RATIO: f64 = 0.1;
 
-/// `purge-unmanaged` (II.11): delete everything LiNix does not manage.
+/// `purge-undeclared` (II.11): delete everything LiNix does not manage.
 ///
 /// The residual risk, stated plainly because the docs must state it: `adopt` is an estimate.
 /// If it missed something, this deletes it.
-pub(crate) async fn handle_purge_unmanaged(app: &App, allow_mass_purge: bool) -> Result<()> {
-    let unmanaged = app.installed_but_unmanaged().await?;
-    if unmanaged.is_empty() {
+pub(crate) async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Result<()> {
+    let undeclared = app.installed_but_undeclared().await?;
+    if undeclared.is_empty() {
         println!("Nothing to do: LiNix manages every installed package.");
         return Ok(());
     }
 
     let managed = app.state.lock().await.packages.len();
-    let removals: Vec<(String, String)> = unmanaged
+    let removals: Vec<(String, String)> = undeclared
         .iter()
         .map(|p| (p.backend.clone(), p.name.clone()))
         .collect();
@@ -229,24 +229,24 @@ pub(crate) async fn handle_purge_unmanaged(app: &App, allow_mass_purge: bool) ->
     println!(
         "LiNix manages {} package(s). This will remove {}:\n",
         managed,
-        unmanaged.len()
+        undeclared.len()
     );
-    for p in &unmanaged {
+    for p in &undeclared {
         println!("  {}:{}", p.backend, p.name);
     }
     println!();
 
     // The ratio check, before anything else asks anything.
-    let ratio = managed as f64 / unmanaged.len() as f64;
+    let ratio = managed as f64 / undeclared.len() as f64;
     if ratio < PURGE_RATIO && !allow_mass_purge {
-        let sample: Vec<String> = unmanaged.iter().take(3).map(|p| p.name.clone()).collect();
+        let sample: Vec<String> = undeclared.iter().take(3).map(|p| p.name.clone()).collect();
         return Err(linix::core::Error::Refused(format!(
             "LiNix manages {} packages.\n\
              This will remove {}, including {}.\n\
              That looks like you haven't adopted this machine yet.\n\
              Run `linix adopt` first, or --allow-mass-purge if you're sure.",
             managed,
-            unmanaged.len(),
+            undeclared.len(),
             sample.join(", ")
         ))
         .into());
@@ -258,7 +258,7 @@ pub(crate) async fn handle_purge_unmanaged(app: &App, allow_mass_purge: bool) ->
         &app.config,
         &app.registry,
         &removals,
-        linix::app::sync::guard::GuardScope::PurgeUnmanaged,
+        linix::app::sync::guard::GuardScope::PurgeUndeclared,
     )
     .await?;
 
@@ -271,7 +271,7 @@ pub(crate) async fn handle_purge_unmanaged(app: &App, allow_mass_purge: bool) ->
     // this" is the most important sentence this command can print (II.11).
     let snapshot = match app
         .snapshot_manager
-        .auto_snapshot(linix::core::snapshot::SnapshotLabel::PurgeUnmanaged)
+        .auto_snapshot(linix::core::snapshot::SnapshotLabel::PurgeUndeclared)
         .await
     {
         Ok(Some(snap)) => {
@@ -304,7 +304,7 @@ pub(crate) async fn handle_purge_unmanaged(app: &App, allow_mass_purge: bool) ->
         // the one naming the flag that would have worked.
         if !std::io::stdin().is_terminal() {
             return Err(linix::core::Error::Refused(
-                "Refusing to purge unmanaged packages without confirmation in a \
+                "Refusing to purge undeclared packages without confirmation in a \
                  non-interactive shell. Re-run with --yes to proceed, or --dry-run to preview."
                     .to_string(),
             )
@@ -313,11 +313,11 @@ pub(crate) async fn handle_purge_unmanaged(app: &App, allow_mass_purge: bool) ->
         let typed: String = dialoguer::Input::new()
             .with_prompt(format!(
                 "Type the number of packages to remove ({}) to confirm",
-                unmanaged.len()
+                undeclared.len()
             ))
             .allow_empty(true)
             .interact_text()?;
-        if typed.trim() != unmanaged.len().to_string() {
+        if typed.trim() != undeclared.len().to_string() {
             println!("Aborted. Nothing was removed.");
             return Ok(());
         }
@@ -338,7 +338,7 @@ pub(crate) async fn handle_purge_unmanaged(app: &App, allow_mass_purge: bool) ->
             Ok(_) => gone += 1,
             Err(e) => {
                 failed += 1;
-                warn!("purge-unmanaged: {}:{} — {}", backend_name, name, e);
+                warn!("purge-undeclared: {}:{} — {}", backend_name, name, e);
             }
         }
     }
@@ -697,7 +697,7 @@ pub(crate) async fn handle_protected(app: &App, packages: &[String], json: bool)
 
 #[cfg(test)]
 mod purge_tests {
-    /// The ratio, as `handle_purge_unmanaged` computes it.
+    /// The ratio, as `handle_purge_undeclared` computes it.
     fn reads_as_a_mistake(managed: usize, to_remove: usize) -> bool {
         (managed as f64 / to_remove as f64) < super::PURGE_RATIO
     }

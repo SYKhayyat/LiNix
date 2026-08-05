@@ -1,4 +1,4 @@
-# The decision register — all 158, ten of them open
+# The decision register — all 166, one of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -15,9 +15,9 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **10** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **1** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **143** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **160** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -73,8 +73,8 @@ status loses that, so it is kept here:
 
 ## Index
 
-**Two are open — `Z1`, raised 2026-08-03, and `Q31`, raised 2026-08-04.** All 150 are accounted
-for: **143 ANSWERED, 2 PARKED, 1 BUILT NEVER RULED, 2 OPEN** — and this line
+**One is open — `Z1`, raised 2026-08-03, a licence choice.** All 166 are accounted
+for: **160 ANSWERED, 2 PARKED, 1 BUILT NEVER RULED, 1 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -276,7 +276,7 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q28** | Is a command that reports success while leaving the user with a false picture of their machine a *defect class*, with rules of its own? — RULED: **yes.** | 2026-08-03 |
 | **Q30** | Should the `--` terminator be decided by which `VersionPin` variant a backend picked, and should the terminator table be keyed per verb? — RULED: **read it off the tokens; one key per binary.** Per-verb rejected on measurement. | 2026-08-04 |
 | **Q29** | Is the statement set closed, with all future computation routed through `generate:`? — **HALF RULED.** The *resource-kind* set is ruled **open — more prefixes may be added**; a ratchet holds Part II to `KEYWORDS` instead. The *computation* half is still open. | 2026-08-04 |
-| **Q31** | `unmanaged` names two different numbers on two screens, and a command is named after the meaning the register did *not* choose. Which word goes where? — **OPEN.** | — |
+| **Q31** | `unmanaged` names two different numbers on two screens, and a command is named after the meaning the register did *not* choose. Which word goes where? — RULED: **two meanings, two words.** `unmanaged` keeps E6's meaning; the wider set is `undeclared`, on `check drift`, in the readme, and in the verb — `purge-unmanaged` is now **`purge-undeclared`**, with no alias. | 2026-08-05 |
 | **Q32** | Q24's bound watched a child's **exit** and not the read of its output, so a manager that detaches left LiNix on a pipe no clock covered — 64s against a 20s bound, **reported as SUCCESS**. — RULED: **the same silence bound runs over the readers**, and a command LiNix stopped waiting on fails by name instead of reporting success. | 2026-08-05 |
 | **Q33** | `heal` acted on `Failed` entries as well as interrupted ones, and every failed attempt wrote a *new* operation — 22 for one package, all 22 reinstalled, serially. — RULED: **recovery finishes interrupted work only** (`InProgress`/`Abandoned`), one recovery per operation, and it runs on the transaction engine rather than a serial loop beside it. `Failed` becomes terminal and ages out. | 2026-08-05 |
 | **Q34** | `install X` converges the whole manifest, so one unresolvable declaration fails every later install, and the error named the innocent package. — RULED: **the model stays; the message changes.** A failure names the declaration and its file and line, and `install` says outright when what failed is not what you asked for — and never advises taking back the line that was. | 2026-08-05 |
@@ -295,6 +295,7 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q44** | `linix list --outdated` asked every manager for one package's latest version at a time, serially — and `Searchable::lookup` defaults to a whole `search`, so it was one registry search per installed package. **Measured: 771.4s against 2.9s for a plain `list`.** — RULED: **ask the manager once**, where it has such a verb; fall back to per-package but concurrent where it does not. **Measured after: 25.6s.** | 2026-08-05 |
 | **Q45** | Five backends installed and/or removed **one package per command** where the manager takes a list — `brew`, `nix`, `mise`, `vscode`, `snap`. — RULED: **one command for the batch**, built for all five. Three verified against the real tool in containers (nix, mise, brew); vscode and snap are argv-tested only and the entry says so. The first sweep named thirteen backends including dnf and pacman and **was wrong**. | 2026-08-05 |
 | **Q46** | `upgrade` on a manager with no upgrade-all verb re-installed **one package per command** — npm, pnpm, yarn, cargo, pubdart. Forty global npm packages meant forty resolutions. In `generic`, so it was never a hand-written-backend problem. — RULED: **batch, and fall back to the per-package loop only when the batch fails**, which keeps the failure isolation the loop existed for. | 2026-08-05 |
+| **Q47** | `adopt` wrote OS-essential packages into a **commented-out** section, defending against a deletion `guard::protection_of` already refuses — and the price was that the 33 packages the machine cannot boot without were the only ones outside the model, with no drift detection and nothing to heal. — RULED: **adoption is the claim that LiNix keeps it; the guard is what refuses to remove it.** Essentials are live lines, the header names the exception, the guard is untouched. | 2026-08-05 |
 
 *Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
 this file exists to prevent, found on 2026-07-30 by adding a row to it.*
@@ -5143,7 +5144,27 @@ where thirty managers live instead of a runner's eight. That gap is why `luarock
 
 ## Q31
 
-**Status: OPEN — raised 2026-08-04, from `docs/GRADE-2026-08-04.md` §3.2.**
+**Status: ANSWERED — ruled 2026-08-05, and built the same day.**
+
+**Ruled: recommendation (1) plus (2). Two meanings, two words, and the verb is named after
+what it deletes.** `unmanaged` keeps E6's meaning — what `adopt` would take. The wider set,
+every installed package nothing declares, is **`undeclared`**, and it is the word on `check
+drift`, in the readme, in the JSON key, and in the command name: **`purge-unmanaged` is now
+`purge-undeclared`.** There is no alias for the old verb name — a compatibility spelling is
+exactly the second implementation this repo keeps deleting, and a user typing the old name gets
+clap's unknown-subcommand error rather than the delete they misread.
+
+`installed_but_unmanaged()` follows the word to `installed_but_undeclared()`, as does the
+`SnapshotLabel` (never parsed back, only written), the `GuardScope`, and the
+`never_unattended` default list in `[guard]`.
+
+**Ruled in the same sitting: `Q47`, which shrinks this problem without solving it.** With
+OS-essential packages adopted as live lines, most of the 34 become declared and the two numbers
+converge on this machine. They do not converge in general — a backend that cannot attribute an
+install to a choice still answers the two questions differently — so the rename stands on its
+own and is not made redundant by `Q47`.
+
+Rule in II.11; why in V.138. Below is why it was raised.
 
 **One word, two numbers, and the command is named after the losing one.** On the same machine in
 the same minute:
@@ -5185,8 +5206,6 @@ layer up, in the vocabulary rather than the code.
 on `check drift`, in the readme, and in the command name, and leave `unmanaged` meaning what E6
 ruled it means. Two meanings need two words; which two is the owner's call, because all three
 routes change what a user reads and one changes what they type.
-
-**Do not answer this in code.** Nothing was changed for it.
 
 ## Q32
 
@@ -6027,3 +6046,49 @@ convergence *means*:
    not a manifest anyone wrote — and combined with Q36's 180 decaying pseudo-ids it means 64% of
    what `adopt` produced on this machine cannot converge. This half is a real ruling: it changes
    what `adopt` means on Windows.
+
+## Q47
+
+**Status: ANSWERED — ruled 2026-08-05, and built the same day.**
+
+**Ruled: `adopt` takes OS-essential packages as live lines.** The commented-out second section
+of `modules/adopted.txt` is gone. What the OS calls essential is declared like anything else,
+LiNix keeps it, and the guard is what refuses to remove it — the same arrangement E7 already
+ruled for `protected_packages`, now applied to the branch four lines below it in the same `if`.
+
+The owner's framing was the ruling: *"it should be able to adopt OS-essential stuff, just that
+then it has to keep that profile active."* Adoption is the claim that LiNix keeps the thing.
+Refusing to make that claim about the packages the machine cannot boot without is backwards.
+
+**The stated reason for the comment character was already false.** It read: *"not something to
+hand someone as a line whose deletion means uninstall."* But `guard::protection_of` refuses to
+remove anything a backend reports as essential regardless of what the manifest says, and the
+only way past it is an explicit `unprotected_packages` entry. The comment was defending against
+a deletion the guard already blocks.
+
+**What it cost was not false.** A commented line is not a declaration, so LiNix had no opinion
+about those 33 packages at all — no drift detection, nothing to heal, nothing to put back. The
+packages most worth keeping were the only ones outside the model.
+
+**What changed, and what deliberately did not:**
+
+- The `os_essential` skip branch in `Adopter::discover_scoped` is deleted, and with it the
+  `guard::essential_names` call — one subprocess per backend per `adopt` run, asked for an
+  answer nothing consults any more. The guard re-asks at removal time, where it matters.
+- The manifest header names the exception rather than hiding it: *"a package you protected, or
+  one the OS itself calls essential, is declared here so LiNix keeps it — deleting its line
+  stops LiNix keeping it, and the guard still refuses to remove it."* The old header's flat
+  promise that deleting a line uninstalls was already untrue for protected packages, which
+  `adopt` has taken as live lines since E7.
+- **The guard is untouched.** Nine refusals, same order, same `unprotected_packages` override.
+  Adoption changed; removal did not.
+
+**Sibling swept in the same change:** `check unmanaged` printed *"N package(s) the OS reports as
+essential are left alone"* using `found.skipped.len()` — the total of *every* skip reason,
+including "you already declare it" and "its manager reports a name no line can hold". A count
+explained by a reason belonging to none of its inputs, which is the exact defect `by_reason`
+was written to fix inside `adopt` and which was never carried across to the reader beside it.
+It now prints the same per-reason breakdown `adopt` does.
+
+Rule in II.9; why in V.137. Related: `Q31`, which this shrinks and does not close.
+

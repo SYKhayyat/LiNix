@@ -1,4 +1,3 @@
-use crate::app::sync::guard;
 use crate::backends::BackendRegistry;
 use crate::config::Config;
 use crate::core::{Error, Package, Result, StateRegistry};
@@ -67,7 +66,7 @@ fn print_skipped_backends(skipped: &[(String, String)]) {
     }
 }
 
-fn print_left_alone(skipped: &[Skipped]) {
+pub fn print_left_alone(skipped: &[Skipped]) {
     if skipped.is_empty() {
         return;
     }
@@ -288,20 +287,11 @@ impl Adopter {
         }
 
         // E7/II.9: **protection means one thing — never remove.** Adopt takes every manual
-        // package, protected ones included: the line belongs in your file, and deleting it
-        // is what the guard then refuses (V.26). Routing adoption through
+        // package, protected and OS-essential ones included: the line belongs in your file,
+        // and deleting it is what the guard then refuses (V.26). Routing adoption through
         // `guard::protection_of` unified the code while keeping the word ambiguous — a
         // package you could not adopt and could not remove, for the same reason, which is
         // two opposite meanings wearing one name.
-        //
-        // OS-essential is different, and II.9 says what to do with it: a second section,
-        // commented out. Base-image packages like `grub-pc` ARE adopted — they keep the
-        // machine bootable and `purge-unmanaged` deletes what is not declared — but what
-        // the OS itself calls essential is not something to hand someone as a line whose
-        // deletion means "uninstall".
-        let backends: HashSet<String> = candidates.iter().map(|p| p.backend.clone()).collect();
-        let os_essential =
-            guard::essential_names(&self.registry, &backends, self.config.max_parallel).await;
         let declared = self.declared_outside_the_adoption_manifest().await;
 
         for pkg in candidates {
@@ -309,11 +299,6 @@ impl Adopter {
             if let Some(file) = declared.get(&key) {
                 found.skipped.push(Skipped {
                     reason: format!("you already declare it, in {}", file),
-                    package: pkg,
-                });
-            } else if os_essential.contains(&key) {
-                found.skipped.push(Skipped {
-                    reason: format!("{} reports it as essential to the system", pkg.backend),
                     package: pkg,
                 });
             } else {
@@ -618,6 +603,9 @@ impl Adopter {
 #   LiNix now manages everything on an uncommented line below.
 #   Deleting a line UNDOES it on the next sync: a package is UNINSTALLED, and a
 #   service is STOPPED AND DISABLED.
+#   Except where the guard refuses. A package you protected, or one the OS itself
+#   calls essential, is declared here so LiNix keeps it — deleting its line stops
+#   LiNix keeping it, and the guard still refuses to remove it.
 #   To stop managing a package WITHOUT uninstalling it:
 #       linix unmanage <backend>:<name>
 #
@@ -898,13 +886,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_os_essential_package_is_reported_rather_than_silently_dropped() {
-        // Leaving something out of the manifest is the right call for what the OS itself
-        // calls essential (II.9), but a silent skip leaves the user with a list that is
-        // quietly incomplete and no way to know why.
-        //
-        // This test used to manufacture its skip with `protected_packages`, which is E7's
-        // confusion: protection stops a REMOVAL, and has nothing to say about adoption.
+    async fn an_os_essential_package_is_adopted_like_any_other() {
+        // II.9, ruled 2026-08-05: adoption is a claim that LiNix keeps the thing, and the
+        // guard is what refuses to remove it. Commenting these lines out left LiNix with no
+        // opinion at all about the packages that matter most — nothing declared `bash`, so
+        // nothing would put it back.
         let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
         let mock = Arc::new(MockExecutor::new(vfs));
         mock.set_response(
@@ -939,14 +925,16 @@ mod tests {
         );
         let found = m.discover().await.unwrap();
 
-        assert_eq!(found.adopt.len(), 1, "jq is adopted");
-        assert_eq!(found.adopt[0].name, "jq");
-        assert_eq!(found.skipped.len(), 1, "bash is reported, not dropped");
-        assert_eq!(found.skipped[0].package.name, "bash");
+        let names: Vec<&str> = found.adopt.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["bash", "jq"],
+            "the OS calling `bash` essential is a reason to declare it, not to skip it"
+        );
         assert!(
-            found.skipped[0].reason.contains("essential"),
-            "the reason must say why, got: {}",
-            found.skipped[0].reason
+            found.skipped.is_empty(),
+            "nothing is left alone for being essential: {:?}",
+            found.skipped
         );
     }
 
@@ -1083,9 +1071,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_os_essential_section_is_commented_out() {
-        // II.9: a second section lists OS-essential packages, commented out — listed so you
-        // know they exist, not handed to you as lines whose deletion means "uninstall".
+    async fn an_os_essential_package_is_a_live_line() {
+        // II.9, ruled 2026-08-05. The commented-out section guarded against a deletion the
+        // guard already refuses (V.26) — and bought that redundancy by leaving the machine's
+        // load-bearing packages undeclared, so drift in them was invisible.
         let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
         let mock = Arc::new(MockExecutor::new(vfs));
         mock.set_response(
@@ -1121,16 +1110,21 @@ mod tests {
 
         assert!(text.contains("\napt:jq\n"), "jq is a live line:\n{}", text);
         assert!(
-            !text.contains("\napt:bash\n"),
-            "an OS-essential package must not be a live line:\n{}",
+            text.contains("\napt:bash\n"),
+            "an OS-essential package is a live line too:\n{}",
             text
         );
         assert!(
-            text.contains("#   apt:bash — "),
-            "bash is commented, with a reason:\n{}",
+            !text.contains("#   apt:bash — "),
+            "and it is not also commented out:\n{}",
             text
         );
-        assert!(text.contains("essential"), "{}", text);
+        // The header must not promise a deletion the guard will refuse.
+        assert!(
+            text.contains("Except where the guard refuses"),
+            "the header owes the reader the exception:\n{}",
+            text
+        );
     }
 
     #[tokio::test]

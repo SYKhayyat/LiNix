@@ -1047,7 +1047,7 @@ else, ever.**
 | `rebuild` | remove and reinstall what is declared, one backend at a time (II.11b) |
 | `lock [AXIS] [NAME…] [--list]` | freeze one of the three ledgers, or all of them: `versions`, `backends`, `scripts` (II.6) |
 | `unlock [AXIS] [NAME…] [--list]` | release one of the three, or all of them. `unlock backends` is the one that can move packages (II.6) |
-| `purge-unmanaged` | delete everything LiNix doesn't manage |
+| `purge-undeclared` | delete everything LiNix doesn't manage |
 | `remove-orphans` | the names each backend can say are orphaned — shown, guarded, removed (II.11c) |
 | `clean-cache` | downloaded archives and build caches. Removes no installed package |
 | `add SOURCE` | vendor someone else's module into your repo (U14) — it lands as a file you can read, never as a live reference |
@@ -1091,7 +1091,7 @@ at the less likely of the two meanings. **`undo` is retired rather than reassign
 word that already meant the wrong thing does not improve by meaning a second one.
 
 **The command count is not the complaint, and a consolidation is checked against the running
-program before it is made.** `uninstall`, `remove-orphans`, `purge-unmanaged`, `unmanage`,
+program before it is made.** `uninstall`, `remove-orphans`, `purge-undeclared`, `unmanage`,
 `reset` and `clean-cache` read like a cluster of synonyms and are not: two of them delete
 software, two delete records, one deletes downloads, and no two can be swapped. II.17's list is
 the only approved deletion; anything beyond it is a question, and a question answered from a
@@ -1163,7 +1163,7 @@ so**. A normal line you can read and delete. **Never implicit.**
 there's nothing for it to come back to. Did you mean a plain uninstall?"*
 
 **`--backend` is allowed on read-only and upgrade; REFUSED on anything that removes.**
-`plan`, `list`, `upgrade` → yes. `sync`, `purge-unmanaged` → error: *"scoping a removal
+`plan`, `list`, `upgrade` → yes. `sync`, `purge-undeclared` → error: *"scoping a removal
 isn't safe; use a profile."*
 
 **`clean` goes through the guard** — ask the backend what it intends, check the list against
@@ -1356,7 +1356,7 @@ in the same transaction (`Q34`). So adoption reads the manager's own export wher
 and where entries are dropped it says how many, why, and names some.
 
 **Base-image packages ARE adopted** — `grub-pc`, `linux-image-generic`. They keep the
-machine bootable, and `purge-unmanaged` deletes what isn't declared.
+machine bootable, and `purge-undeclared` deletes what isn't declared.
 
 **A bare `adopt` takes only what a manager can attribute to a choice** (2026-08-05, `Q39`).
 The table above is the first half of that rule — a manager that cannot separate a dependency
@@ -1371,16 +1371,19 @@ is the closest thing an init keeps to a record of a decision; a backend that can
 question is skipped and named rather than quietly widened back to everything. (V.134.)
 
 **Output:** one `modules/adopted.txt`, grouped by backend with comment headers, sorted.
-Header states: this is an estimate; deleting a line uninstalls; `linix forget` is the way
-out. A second section lists OS-essential packages, commented out.
+Header states: this is an estimate; deleting a line uninstalls, *except where the guard
+refuses*; `linix forget` is the way out. A second section lists what was found and left
+alone, commented out, with the count per reason.
 
-**Adopt does NOT consult `protected_packages`.** This resolves **E7**, where "protected"
-means two opposite things: *never remove* in the guard, *never adopt* in `migrate.rs`.
-**Protection means one thing: never remove.** So adopt takes every manual package including
-protected ones; protection then prevents their removal. This is a **change from what Stage 2
-built** — Stage 2 routed adopt's skipping through `guard::protection_of`, which unified the
-code while keeping the word ambiguous. Adopting a protected package is correct: it belongs
-in your file, and deleting that line is refused (V.26).
+**Adopt does NOT consult the guard — not `protected_packages`, and not OS-essential**
+(2026-08-05, `Q47`). This resolves **E7**, where "protected" means two opposite things:
+*never remove* in the guard, *never adopt* in `migrate.rs`. **Protection means one thing:
+never remove.** So adopt takes every manual package including protected and OS-essential
+ones; the guard then prevents their removal. This is a **change from what Stage 2 built** —
+Stage 2 routed adopt's skipping through `guard::protection_of`, which unified the code while
+keeping the word ambiguous. Adopting a guarded package is correct: it belongs in your file,
+deleting that line is refused (V.26), and leaving it undeclared meant nothing in LiNix had an
+opinion about the packages that keep the machine running.
 
 ## II.10 The guard — ten refusals, one function
 
@@ -1507,7 +1510,7 @@ a command that appears hung is the one people kill, which is what arms S24.
 refuses a downloaded file a destination outside the backend's bin directory (SEC1),
 **`require_signed_history`** (default off), which refuses a rollback to a commit git does not
 vouch for (II.13), **and the list of commands that may not run unattended** (K13, ruled
-2026-07-23), shipped as `rebuild` and `purge-unmanaged` and edited by taking a name out. A
+2026-07-23), shipped as `rebuild` and `purge-undeclared` and edited by taking a name out. A
 `schedules` entry naming a command on that list is refused, with the list named in the message
 so the way out is in the error. The default preserves the refusal exactly as it was, so a config
 that says nothing changes no behaviour; what the list adds is that **the set is the user's, not a
@@ -1529,7 +1532,7 @@ false**, and a table that quietly stops describing its own function is how the l
 | `max_installs` exceeded | **cannot skip.** `--allow-mass-install` |
 | hook script new or changed | **cannot skip.** `linix lock` |
 | protected / OS-essential | **nothing overrides** |
-| `purge-unmanaged` | **cannot skip.** Typed confirmation |
+| `purge-undeclared` | **cannot skip.** Typed confirmation |
 | `pinned_only` / `require_snapshot` / `deny_vulnerable` | **cannot skip.** They are refusals (V.43) |
 
 **The plan always leads with the counts** — not a threshold, not a warning, just the plan
@@ -1542,14 +1545,21 @@ Plan: install 30,207 · remove 0 · upgrade 3
        7  cargo
 ```
 
-## II.11 `purge-unmanaged`
+## II.11 `purge-undeclared`
 
-**`sync` is additive; `purge-unmanaged` is exclusive. This is the answer for every backend, and
+**Two questions, two words** (2026-08-05, `Q31`). *Unmanaged* is what `adopt` would take:
+installed, the manager attributes it to a choice, nothing declares it. *Undeclared* is every
+installed package nothing declares, dependency closure and all — a strictly wider set, and the
+one this command deletes. `check unmanaged` answers the first, `check drift` and this command
+answer the second, and **no surface may use one word for the other set.** The verb is named
+after what it deletes; it was `purge-unmanaged`, naming the set it does *not* act on.
+
+**`sync` is additive; `purge-undeclared` is exclusive. This is the answer for every backend, and
 no backend gets its own** (owner ruling, 2026-07-23, N1). A thing LiNix declared and then stopped
 declaring is removed by `sync`, because the ledger knows LiNix put it there. A thing LiNix never
-declared is left alone by `sync` and removed by `purge-unmanaged` — packages, links, services,
+declared is left alone by `sync` and removed by `purge-undeclared` — packages, links, services,
 firewall rules, and whatever the next backend manages. **A backend that wants an exclusive mode
-of its own is asking for a second `purge-unmanaged`**, which is the two-of-everything failure
+of its own is asking for a second `purge-undeclared`**, which is the two-of-everything failure
 wearing a new name; the opt-in already exists and is this command.
 
 - **The guard is a RATIO, not a count:**
@@ -1592,7 +1602,7 @@ the difference is empty (X.1). `rebuild` removes what is declared so it can inst
   independent nodes concurrently and there is no edge between removing a package and
   installing it.
 - **It never touches undeclared software.** Everything it removes, it removes to put back.
-  That is what separates it from `purge-unmanaged` (II.11).
+  That is what separates it from `purge-undeclared` (II.11).
 - **It never removes a protected package.** Those are dropped from the scope and named, along
   with anything declared-but-not-installed (`sync`'s job) and any package nobody declared.
   **The skips are printed, never silent.**
@@ -2164,7 +2174,7 @@ start, so no adopted line declares a start type — a bare `service:` line means
 and enabling rewrites the start type. The manifest header says what deleting a line does in the
 words it does it in: a package is uninstalled, a service is stopped and disabled. **V.124.**
 
-**A resource nobody declared is not something `purge-unmanaged` may sweep.** That command deletes
+**A resource nobody declared is not something `purge-undeclared` may sweep.** That command deletes
 installed packages the model does not name; a `service:`, `link:` or `setting:` is a state rather
 than an artifact, and turning off a service you never named is not the promise it made. Refused by
 that rule, asked of the backend and not of the name — and never again by a test about package

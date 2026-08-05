@@ -439,7 +439,7 @@ impl StateRegistry {
     /// Everything under management, as a set to ask many questions of.
     ///
     /// [`StateRegistry::is_managed`] is a linear scan, which is the right shape for one
-    /// question and the wrong one for a crawl: `installed_but_unmanaged` asked it once per
+    /// question and the wrong one for a crawl: `installed_but_undeclared` asked it once per
     /// *installed* package against every *managed* one — on a stock Ubuntu that is ~476 × ~301,
     /// or about 143,000 double string comparisons, to answer a question a set answers in one
     /// hash each. Borrowed, so building it allocates the table and not the names.

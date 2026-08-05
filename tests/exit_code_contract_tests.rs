@@ -80,7 +80,7 @@ fn asking_for_help_or_version_still_succeeds() {
 fn a_refusal_exits_three_and_not_one() {
     let dir = scratch("refusal-purge");
     assert_eq!(
-        exit_code_in(&dir, &["purge-unmanaged", "--yes"]),
+        exit_code_in(&dir, &["purge-undeclared", "--yes"]),
         3,
         "the unadopted-machine ratio refusal is a decision, not a failure"
     );
@@ -98,7 +98,7 @@ fn a_refusal_exits_three_and_not_one() {
 ///
 /// A list of prompts is an assertion about the ones that are absent from it, and nothing
 /// verifies that half — which is how two of the eight came to be missing the check, including
-/// `purge-unmanaged`, the most destructive command in the program, eighty lines above a
+/// `purge-undeclared`, the most destructive command in the program, eighty lines above a
 /// sibling that does it correctly.
 #[test]
 fn every_prompt_refuses_a_non_interactive_shell() {

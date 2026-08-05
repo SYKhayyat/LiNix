@@ -33,7 +33,7 @@ The map (every command above, by what you are doing):
     lock · unlock · schedule · hooks
 
   Cleaning up
-    clean-cache · purge-unmanaged · reset
+    clean-cache · purge-undeclared · reset
 
   Fleet and LiNix itself
     fleet · completions · self-upgrade
@@ -270,8 +270,8 @@ pub enum Commands {
     /// This is the strict "make this machine exactly match my files" command. It is a
     /// command and not a setting on purpose: no config anyone can flip, inherit, or copy
     /// from a dotfiles repo makes a routine `sync` delete software it did not install.
-    #[command(name = "purge-unmanaged")]
-    PurgeUnmanaged {
+    #[command(name = "purge-undeclared")]
+    PurgeUndeclared {
         /// Proceed even though LiNix manages very little of this machine — which usually
         /// means it has not been adopted yet, not that you want the rest deleted.
         #[arg(long = "allow-mass-purge")]

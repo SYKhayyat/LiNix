@@ -63,7 +63,7 @@ safe and collects almost nothing, because a dependency shared with a still-insta
 is never orphaned at any instant. **These are different features wearing one name.**
 
 **Rebuild never touches undeclared software.** Everything it removes, it removes in order to
-put back. That is what separates it from `purge-unmanaged` (II.11), and the separation must
+put back. That is what separates it from `purge-undeclared` (II.11), and the separation must
 hold even when a package would be caught by both.
 
 ## X.2 Removing a package should be able to remove its cache
@@ -87,7 +87,7 @@ weak evidence you will not — the common shape is uninstall, discover you neede
 within the hour. The preference exists for the machines where disk is the scarce thing.
 
 **It applies to every path that removes** (II.10's list: sync, `absent:`, expiry,
-`purge-unmanaged`, `uninstall`), not to `uninstall` alone. A setting honoured by one command
+`purge-undeclared`, `uninstall`), not to `uninstall` alone. A setting honoured by one command
 is the same failure as a guard on one command.
 
 **Only for backends where "this package's cache" is a question with an answer.** LiNix knows
@@ -144,11 +144,11 @@ you declared* and *software that was already there*, which is the one distinctio
 removal model rests on (II.9, II.11). After a level-3 reset every managed package looks
 unmanaged, and the recovery is `linix adopt` guessing.
 
-Level 4 is not proposed. It is `purge-unmanaged` with different marketing.
+Level 4 is not proposed. It is `purge-undeclared` with different marketing.
 
 **A level-3 reset must print what the machine will look like afterwards** — *"LiNix will forget
 it manages 214 packages. They stay installed. `linix adopt` is how you get them back, and it
-will guess."* — and take the typed confirmation `purge-unmanaged` takes (II.10). K5 decides
+will guess."* — and take the typed confirmation `purge-undeclared` takes (II.10). K5 decides
 whether it may run at all while a config repo exists, or only after the repo is gone.
 
 **BUILT, 2026-07-20.**
@@ -160,7 +160,7 @@ whether it may run at all while a config repo exists, or only after the repo is 
   "and artifacts" is narrowed here on purpose, and the reason is written into the command.
 - **Level 3 is `linix reset`** — a separate command, as X.3 requires. It deletes `registry.json`
   and `snapshots/`, prints the "LiNix will forget it manages N packages" notice, and takes the
-  same typed-the-count confirmation `purge-unmanaged` uses.
+  same typed-the-count confirmation `purge-undeclared` uses.
 - **K5 ruled: it refuses while a config repo exists unless `--force`**, because forgetting the
   registry while the declarations remain leaves LiNix believing it manages nothing and the
   files saying otherwise. The refusal names the repo and says how to proceed. *(This is the

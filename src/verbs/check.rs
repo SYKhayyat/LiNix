@@ -2,10 +2,10 @@ use crate::verbs::prelude::*;
 
 /// `unmanaged` — **what `adopt` would adopt** (II.8), which is the definition E6 asks for.
 ///
-/// It used to answer a different question: every installed package LiNix does not manage,
-/// dependency closure and all. On a stock Ubuntu that is ~476 packages where `adopt` takes
-/// ~103 — so `unmanaged` and `adopt` disagreed by a factor of four about the same word, and
-/// the number you read here was not the number `adopt` would act on. Same crawl, one answer.
+/// The wider question — every installed package nothing declares, dependency closure and all —
+/// is `undeclared`, and `purge-undeclared` is what acts on it (II.11, `Q31`). One word per
+/// question: while both wore this one, the two answers differed by a factor of four and the
+/// number printed here was not the number the delete command would act on.
 pub(crate) async fn handle_unmanaged(app: &App) -> Result<()> {
     let found = app.adopter().discover().await?;
 
@@ -26,11 +26,12 @@ pub(crate) async fn handle_unmanaged(app: &App) -> Result<()> {
         }
     }
 
+    // Every skip carries its own reason, and this line used to attribute all of them to the
+    // one cause it happened to know about — a count explained by a reason belonging to none
+    // of its inputs. Printed from the reasons themselves, as `adopt` prints them.
     if !found.skipped.is_empty() {
-        println!(
-            "\n{} package(s) the OS reports as essential are left alone.",
-            found.skipped.len()
-        );
+        println!();
+        linix::app::adopt::print_left_alone(&found.skipped);
     }
     Ok(())
 }
@@ -265,7 +266,7 @@ pub(crate) async fn check_summary(app: &App, json: bool) -> Result<()> {
         )),
         Ok(found) => findings.push(Finding::attention(
             Section::Unmanaged,
-            format!("{} package(s) LiNix does not manage", found.adopt.len()),
+            format!("{} package(s) `linix adopt` would take", found.adopt.len()),
             "linix adopt",
         )),
         Err(e) => findings.push(Finding::attention(

@@ -85,6 +85,25 @@ ask at all, ask in one breath.*
 
 ### Changed
 
+- **`purge-unmanaged` is now `purge-undeclared`** (`Q31`). **Breaking: there is no alias.** The
+  word `unmanaged` named two different sets on two screens of the same program — *what `adopt`
+  would take* (1 package on the measured host) and *every installed package nothing declares*
+  (34) — and the command that deletes was named after the one it does not act on. `unmanaged`
+  keeps the first meaning; `undeclared` is the second, and it is now the word on `check drift`,
+  in `plan --json`, in the readme and in the verb. Scripts that call the old name get clap's
+  unknown-subcommand error, which is the right outcome for a command that deletes: a
+  compatibility spelling that silently still works is worse than a failure.
+- **`adopt` declares OS-essential packages instead of commenting them out** (`Q47`). They were
+  written into a commented-out section on the grounds that a live line's deletion means
+  uninstall — but the guard already refuses to remove anything a backend reports as essential,
+  so the comment defended against something that could not happen, while leaving the 33 packages
+  the machine cannot boot without outside the model entirely: no drift detection, nothing to
+  heal, nothing to put back. They are now ordinary declarations, the guard is unchanged, and the
+  manifest header names the exception rather than promising a deletion the guard will refuse.
+  `adopt` also stops running one `essential` subprocess per backend it no longer consults.
+- **`check unmanaged`'s skip line stopped blaming every skip on OS-essential.** It printed
+  `found.skipped.len()` — the total across every reason — under a sentence naming one of them.
+  It now prints the same per-reason breakdown `adopt` does.
 - **`data/journal.json` is now `data/journal.jsonl`.** There is no old-format reader (NO
   LEGACY). A journal only records in-flight actions, and a wholly unreadable one is still moved
   aside and named rather than swallowed.

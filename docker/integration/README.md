@@ -36,10 +36,10 @@ says by name what it did not exercise.
 | § | What it proves |
 |---|---|
 | 1–3 | `init` scaffolds the II.1 repo; the read-only verbs run; `--dry-run` really installs nothing |
-| 4 | `purge-unmanaged` is refused on an **unadopted** machine — the only state in which the ratio rule fires — and the refusal names *that* rule |
+| 4 | `purge-undeclared` is refused on an **unadopted** machine — the only state in which the ratio rule fires — and the refusal names *that* rule |
 | 5–7 | Real install → `list` → PATH for the native manager; a second sync is a no-op; a bad name fails and leaves the model parseable |
 | 8 | `adopt` takes the **manual** set: the count is compared against the manager's own user-chosen list and against every installed package, not printed |
-| 9–10 | The guard keeps a protected package; `purge-unmanaged` after adopt is refused by the *protected set*, a different rule than §4's; real uninstall → gone from PATH |
+| 9–10 | The guard keeps a protected package; `purge-undeclared` after adopt is refused by the *protected set*, a different rule than §4's; real uninstall → gone from PATH |
 | 11–12 | git-backed manifest history, `diff`, `rollback`; `rebuild` repairs and writes **no** commit (K14) |
 | 13 | Backend chains and the per-host lock file; `unlock backends`; a pin to a manager this host lacks is not silent |
 | 13b | A manager that could not answer is not one that said no (V.7c) |

@@ -1365,7 +1365,7 @@ mod tests {
         // II.7: what LiNix may remove is what it manages and you stopped declaring, plus
         // `absent:`. Nothing else, ever. `prune_scope = "system"` was a setting that broke
         // that rule — a routine sync deleting software it never installed (V.21). It is
-        // `purge-unmanaged` instead: a command you type, not a mode you inherit.
+        // `purge-undeclared` instead: a command you type, not a mode you inherit.
         let registry = Arc::new(BackendRegistry::new());
         let config = Config::default();
         // Nothing managed, nothing desired: an untouched machine full of software.

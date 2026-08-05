@@ -92,7 +92,7 @@ fn local_naive_to_utc(naive: NaiveDateTime) -> Option<DateTime<Utc>> {
 pub enum SnapshotLabel {
     PreSync,
     PreUpgrade,
-    PurgeUnmanaged,
+    PurgeUndeclared,
     PreCanary,
     PreRebuild,
 }
@@ -102,7 +102,7 @@ impl SnapshotLabel {
         match self {
             SnapshotLabel::PreSync => "pre_sync",
             SnapshotLabel::PreUpgrade => "pre_upgrade",
-            SnapshotLabel::PurgeUnmanaged => "purge-unmanaged",
+            SnapshotLabel::PurgeUndeclared => "purge-undeclared",
             SnapshotLabel::PreCanary => "pre_canary",
             SnapshotLabel::PreRebuild => "pre_rebuild",
         }
@@ -815,7 +815,7 @@ mod tests {
         for l in [
             SnapshotLabel::PreSync,
             SnapshotLabel::PreUpgrade,
-            SnapshotLabel::PurgeUnmanaged,
+            SnapshotLabel::PurgeUndeclared,
             SnapshotLabel::PreCanary,
         ] {
             assert!(

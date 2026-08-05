@@ -505,13 +505,13 @@ nok "dry-run did NOT actually install $PKG" binary_present "$BACKEND" "$PKG" /tm
 # IV.1: this is the only state in which the check tests anything. After `adopt`
 # the machine is nearly all managed, so "delete everything unmanaged" is a small
 # removal and the ratio it exists to catch never fires.
-echo "[4] purge-unmanaged, before adopt (the state that makes it a test)"
-refuses_with_3 "purge-unmanaged is refused on a machine LiNix has not adopted" lx -y purge-unmanaged
+echo "[4] purge-undeclared, before adopt (the state that makes it a test)"
+refuses_with_3 "purge-undeclared is refused on a machine LiNix has not adopted" lx -y purge-undeclared
 # WHICH rule refused matters: a `nok` that accepts any non-zero exit accepts a panic
 # and an unknown flag just as happily. Before adopt the ratio rule is the one that
 # fires, and it says so by name.
 grep_ok "and it is the unadopted-machine ratio that refused" \
-    "adopt\|allow-mass-purge" lx -y purge-unmanaged
+    "adopt\|allow-mass-purge" lx -y purge-undeclared
 
 # --- 5. Imperative install -> list -> coherence ---------------------------
 echo "[5] Install"
@@ -606,8 +606,10 @@ $BACKEND manual set=$MANUAL  $BACKEND installed=$INSTALLED_TOTAL"
         soft "could not count installed packages on $BACKEND — closure proof skipped"
     fi
     if [ "$MANUAL" -gt 0 ]; then
-        # Never MORE than the manual set: adopt may drop a name (protected, unwritable),
-        # but a count above it means something not user-chosen was swept in.
+        # Never MORE than the manual set: adopt may drop a name (already declared elsewhere,
+        # unwritable), but a count above it means something not user-chosen was swept in.
+        # Protected and OS-essential names are NOT dropped — they are adopted like any other
+        # (E7, Q47), which moves this count toward the bound rather than away from it.
         ok "adopt took no more than what $BACKEND calls user-chosen" \
             test "$ADOPTED_NATIVE" -le "$MANUAL"
     else
@@ -656,13 +658,13 @@ else
 fi
 # Post-adopt the ratio no longer fires, so the bare command must still not be a
 # silent mass-delete — the refusal is asserted in both states, for different reasons.
-refuses_with_3 "purge-unmanaged is still not a silent mass-delete after adopt" lx -y purge-unmanaged
+refuses_with_3 "purge-undeclared is still not a silent mass-delete after adopt" lx -y purge-undeclared
 # WHICH rule refuses is still asserted, but the answer depends on how much `adopt`
 # could take on this image: where it adopted well the protected set decides, where it
 # adopted little the ratio still does. Both are named answers; "some error" is not, and
 # that is what a bare `nok` would accept.
 grep_ok "and the refusal after adopt still names its rule" \
-    "protected\|essential\|allow-mass-removal\|allow-mass-purge" lx -y purge-unmanaged
+    "protected\|essential\|allow-mass-removal\|allow-mass-purge" lx -y purge-undeclared
 
 # --- 10. Remove -------------------------------------------------------------
 echo "[10] Remove"

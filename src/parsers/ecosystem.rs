@@ -46,7 +46,7 @@ fn is_placeholder(line: &str) -> bool {
 /// "No global environments found." — a manager saying it has nothing, not a package called
 /// `No`. Every parser here takes the first token of a line, so an unfiltered empty-result
 /// banner becomes a phantom package that `adopt` would write into a manifest and
-/// `purge-unmanaged` would try to delete.
+/// `purge-undeclared` would try to delete.
 ///
 /// Prose, not identifiers: a package line is tokens, never a sentence ending in a period.
 fn is_empty_result_sentence(line: &str) -> bool {
@@ -531,7 +531,7 @@ mod tests {
     fn an_empty_result_banner_is_not_a_package() {
         // `pixi global list` on a machine with nothing installed prints a sentence, and the
         // parser used to take its first token -- reporting a phantom `pixi:No` that `adopt`
-        // would write to a manifest and `purge-unmanaged` would try to delete.
+        // would write to a manifest and `purge-undeclared` would try to delete.
         assert!(pixi_list(
             "No global environments found.
 ",

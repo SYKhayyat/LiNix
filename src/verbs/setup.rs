@@ -371,7 +371,7 @@ max_removals = 20
 # `run =` line, so `run = sync --locked` is untouched by anything below. Both
 # shipped names remove declared software, and a timer runs with nobody there to
 # read a refusal. Take a name out to permit it on this machine.
-# never_unattended = ["rebuild", "purge-unmanaged"]
+# never_unattended = ["rebuild", "purge-undeclared"]
 "#;
 
 pub(crate) async fn handle_path(
@@ -693,7 +693,7 @@ pub(crate) async fn scaffold_dirs(cfg: &linix::config::Config) -> Result<()> {
 ///
 /// Deliberately short. Almost every question the old wizard asked has stopped existing:
 /// "should sync remove drift?" (sync is drift removal — V.34), "how aggressive?" (the
-/// aggressive answer is `purge-unmanaged`, a command, not a mode — V.21), "protect
+/// aggressive answer is `purge-undeclared`, a command, not a mode — V.21), "protect
 /// imperative installs?" (they have a line now, so they are declared like everything else),
 /// "preferred default backend?" (that is `priority`, generated from what this machine has —
 /// V.15). A question whose answer LiNix can work out, or which no longer means anything, is

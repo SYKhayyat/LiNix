@@ -61,7 +61,7 @@ const LEDGER: &[Accounted] = &[
         file: "src/verbs/cleanup.rs",
         calls: 2,
         guarded_by: "enforce at cleanup.rs:57 (RemoveOrphans) and enforce_deliberate at :220 \
-                     (PurgeUnmanaged)",
+                     (PurgeUndeclared)",
     },
     Accounted {
         file: "src/verbs/declare.rs",

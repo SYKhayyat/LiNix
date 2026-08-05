@@ -6095,9 +6095,9 @@ declares and nothing else does, and which `harness-logic-test.sh` already assert
 
 ### One question raised, not answered — `Q31`
 
-`unmanaged` names two different numbers on two screens and `purge-unmanaged` is named after the
+`unmanaged` named two different numbers on two screens and `purge-unmanaged` was named after the
 meaning the register did **not** choose. Every way out renames something a user reads or types, so
-it is in `decisions.md` as OPEN with a recommendation and nothing was changed for it.
+it went to `decisions.md` as OPEN with a recommendation. **Ruled 2026-08-05** — see the entry below.
 
 ### Owed
 
@@ -6395,3 +6395,79 @@ only one of them was a product defect nobody knew about:
 (`MSIX\Microsoft.Winget.Source_2026.805.1333.19_...`). Three distinct values for that one package
 in a single day were recorded across two sessions. The cascade it used to feed is fixed, so it
 now costs a line that can never converge rather than every later install.
+
+---
+
+## 2026-08-05 — two rulings on the same word, and the register's own checker back to green
+
+Two decisions closed in one sitting, related but separable: `Q47` changes what `adopt` declares,
+`Q31` changes what the deleting verb is called. `Q47` shrinks `Q31`; it does not close it, and
+the rename was made on that basis rather than on the measurement of a single host.
+
+### `Q47` — OS-essential packages are declared, not commented out
+
+`adopt` wrote them into a commented-out second section of `modules/adopted.txt`. The reason
+beside them was that a live line is *"a line whose deletion means uninstall"* — **and that was
+already untrue when it was written.** `guard::protection_of` refuses to remove anything a
+backend reports as essential whatever the manifest says; the only route past it is an explicit
+`unprotected_packages` entry. The comment character defended against a deletion the guard
+already blocks.
+
+What it cost was not imaginary. A commented line is not a declaration, so nothing in LiNix had
+an opinion about those packages: no drift detection, nothing to heal, nothing to put back. On
+the measured Windows host that was 33 of them. **The packages the machine could least afford to
+lose were the only ones outside the model, and the mechanism that put them there was filed as a
+safety feature.**
+
+Same shape as E7 one layer out. E7 found "protected" meaning two opposite things — *never
+remove* in the guard, *never adopt* in `migrate.rs` — and fixed it for `protected_packages`,
+leaving the twin branch four lines below it in the same `if` untouched. This is that branch.
+
+- The `os_essential` skip in `Adopter::discover_scoped` is deleted, and with it the
+  `guard::essential_names` call: one subprocess per backend per `adopt`, for an answer nothing
+  reads any more. The guard re-asks at removal time, where the answer is load-bearing.
+- The manifest header names the exception instead of hiding it. The old flat promise that
+  deleting a line uninstalls was **already wrong for protected packages**, which `adopt` has
+  taken as live lines since E7 — so this corrects a sentence that had been untrue for a while
+  and had nothing to do with essentials.
+- The guard is untouched. Nine refusals, same order, same `unprotected_packages` override.
+
+**Sibling swept in the same change.** `check unmanaged` printed *"N package(s) the OS reports as
+essential are left alone"* from `found.skipped.len()` — the total of every skip reason, most of
+which are not that one. A count explained by a reason belonging to none of its inputs. That is
+the exact defect `by_reason` exists to prevent inside `adopt`, written and then never carried
+across to the reader sitting beside it. `print_left_alone` is now shared.
+
+### `Q31` — `purge-unmanaged` is `purge-undeclared`
+
+The word named two different numbers on two screens of the same program in the same minute, and
+neither was wrong: *what `adopt` would take* (E6's ruling for the word) and *every installed
+package nothing declares* (the wider set, dependency closure included). E6's fix reached `check
+unmanaged` and the `check` rollup — and not `check drift`, not the readme, not the command name.
+
+**So the most destructive verb in the program was named after the set it does not act on.**
+A reader seeing `1 unmanaged` and typing `purge-unmanaged` was reaching for a one-package tidy
+and aiming a 34-package delete at their own OS.
+
+Ruled: two meanings, two words. `unmanaged` keeps E6's meaning. `undeclared` is the wider set,
+and it is the word on `check drift`, in the readme, in `plan --json`'s key, and in the verb.
+**No alias for the old name** — a compatibility spelling is the second implementation this repo
+keeps deleting, and the old name silently still working is worse than clap's unknown-subcommand
+error for a command that deletes.
+
+Renamed through: `GuardScope::PurgeUndeclared`, `SnapshotLabel::PurgeUndeclared` (write-only, so
+no reader to migrate), `installed_but_undeclared()`, `handle_purge_undeclared`, the
+`never_unattended` default in `[guard]`, `examples/preferences.toml`, both integration harnesses
+and the docker README. Historical documents keep the old name, because they are records of what
+was true then.
+
+### The register's own drift guard was red, and had been
+
+`scripts/decision-count.sh --check` failed on HEAD with **six** mismatches before either ruling
+was written — 158 stated against 165 held, 143 ANSWERED against 158. The file whose entire job
+is to stop the spec drifting had drifted, in the counts the checker was built to protect, and CI
+runs it on every push. Corrected to the counted figures in `decisions.md`'s title, its prose
+line, its status table, and `SPEC.md`. Now green: **166 entries, 160 ANSWERED, 2 PARKED, 1 BUILT
+NEVER RULED, 1 OPEN.**
+
+That one remaining OPEN is `Z1`, the licence, which is not a builder's decision at any point.

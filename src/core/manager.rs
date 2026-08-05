@@ -231,7 +231,7 @@ pub trait Queryable: Send + Sync {
     /// `(installer, package_name)` pairs. When `github:`/`web:` hands a `.deb` to `dpkg`, the
     /// package shows up in apt's installed list, but it is not unmanaged drift — it is owned
     /// here. The unmanaged crawl subtracts these so it neither reports the file twice nor lets
-    /// `purge-unmanaged` delete a package a download declaration is responsible for. Default:
+    /// `purge-undeclared` delete a package a download declaration is responsible for. Default:
     /// none, for every manager that never hands a file to a second one.
     async fn owned_system_packages(&self) -> Vec<(String, String)> {
         Vec::new()

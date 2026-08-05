@@ -46,7 +46,7 @@ per profile, can't be shared, and puts LiNix's bookkeeping back in a folder you 
 it.** `winget list` answers for Add/Remove-Programs entries with pseudo-IDs like
 `ARP\Machine\X64\Android Studio`. A package name is one word (II.2), so no module line can
 hold that: `adopt` cannot take it, nothing can declare it, and it is therefore **unmanaged
-forever** — which made it a standing `purge-unmanaged` candidate that `linix adopt` could
+forever** — which made it a standing `purge-undeclared` candidate that `linix adopt` could
 never clear. The documented safe sequence, adopt-then-purge, proposed deleting Android Studio.
 
 Removing what you could never have been asked to keep is the inverse of "LiNix only removes
@@ -190,7 +190,7 @@ took 14 packages and a mis-scoped `prune` scheduled all 14 for removal — **und
 limit, none protected, all things you'd cry about**. The count misses it on small machines.
 **Manage 3, delete 576 → you have made a mistake, on every machine, always.**
 
-**V.21 — Why `purge-unmanaged` is a command and not a mode.** **Sync is then never
+**V.21 — Why `purge-undeclared` is a command and not a mode.** **Sync is then never
 dangerous** — not "safe by default", but safe permanently. No setting anyone can flip,
 inherit, or copy from a dotfiles repo makes a routine sync delete something it didn't
 install.
@@ -798,7 +798,7 @@ restored.
 Every recovery path in the binary consumed it. `rebuild` printed *"Rolled back to snapshot X —
 the machine is as it was before the rebuild started"* over a machine whose packages were still
 removed; `upgrade --canary` printed *"System left unchanged"*; `bisect` relied on it between
-steps. Worst is `purge-unmanaged`, which prints *"Snapshot taken: X. That is your undo"* — the
+steps. Worst is `purge-undeclared`, which prints *"Snapshot taken: X. That is your undo"* — the
 command that removes everything unmanaged, offering an undo that does not exist, in the one
 message II.11 calls the most important sentence it can print.
 
@@ -908,7 +908,7 @@ rather than the harness. So the rule is symmetric: every check is called where i
 apply, or it is deleted, and the choice between wiring and deleting is made deliberately per
 check rather than left to whoever greps next.
 
-**V.63 — Why `sync` is additive and `purge-unmanaged` is exclusive, for every backend.**
+**V.63 — Why `sync` is additive and `purge-undeclared` is exclusive, for every backend.**
 *(Owner ruling 2026-07-23, N1; the rule was always true and had never been written.)*
 
 The firewall proposal asked whether a declared perimeter is exclusive — whether a rule LiNix
@@ -918,11 +918,11 @@ the sentence anywhere a reader could find it.**
 
 The split is what makes LiNix safe to point at a machine that already has software on it. `sync`
 only ever removes what the ledger says LiNix put there, which is why running it on an unadopted
-box does not empty it. `purge-unmanaged` removes what LiNix did not declare, which is why it
+box does not empty it. `purge-undeclared` removes what LiNix did not declare, which is why it
 carries a ratio guard, a full listing and a snapshot — it is the one command whose whole job is
 acting on things LiNix does not own.
 
-**The bug this prevents is a second `purge-unmanaged` per backend.** A backend that ships its own
+**The bug this prevents is a second `purge-undeclared` per backend.** A backend that ships its own
 exclusive mode has re-implemented that command with none of its protections: no ratio check
 noticing you have not adopted the machine, no listing, no snapshot, and a different opt-in for
 the user to learn. It would also make the answer to *"will this delete something I made by
@@ -930,7 +930,7 @@ hand?"* depend on which backend the line happened to name — which is the two-o
 failure at the level of a promise rather than a function.
 
 So: **a backend does not decide its own exclusivity.** If a new backend seems to need an
-exclusive mode, the thing it needs is `purge-unmanaged` to learn about its resources.
+exclusive mode, the thing it needs is `purge-undeclared` to learn about its resources.
 
 **V.64 — Why a recovery path may not remove.** *(Owner ruling 2026-07-23, S24; the bug removed
 software on the owner's machine.)*
@@ -1040,7 +1040,7 @@ fourth added without a release.
 
 **The lockout check is this feature's precondition, not one of its features.** LiNix detects the
 port carrying the controlling connection and refuses any plan that would deny it — from `sync`,
-from `purge-unmanaged`, and from an unattended `watch` tick. The tick is the dangerous one:
+from `purge-undeclared`, and from an unattended `watch` tick. The tick is the dangerous one:
 nobody is there to read the refusal, and the machine that locks you out is the machine you can no
 longer reach to fix it. **Building the backend before the check is building the lockout**, which
 is why the check sits at the bottom of the module and everything above it is written against it.
@@ -1392,7 +1392,7 @@ inventory removes real capabilities to fix an overlap that was never there.
 
 The removal verbs are not synonyms, and the proof is that no two of them can be swapped:
 `uninstall` takes a package away; `remove-orphans` takes away what the *manager* considers
-orphaned; `purge-unmanaged` takes away everything LiNix does not manage; `unmanage` takes away
+orphaned; `purge-undeclared` takes away everything LiNix does not manage; `unmanage` takes away
 nothing and forgets one package; `reset` takes away nothing and forgets all of them;
 `clean-cache` takes away archives and no packages at all. Two of those six delete software, two
 delete records, one deletes downloads. A count is not a smell.
@@ -1651,7 +1651,7 @@ the property the table is for. `1` is already published, already means "somethin
 and is true — LiNix did not do what was asked.
 
 Ruled alongside it because it is the same contract: **a refusal that exits 1 is a broken
-promise, not a rounding error.** `purge-unmanaged`'s ratio refusal used `anyhow::bail!` rather
+promise, not a rounding error.** `purge-undeclared`'s ratio refusal used `anyhow::bail!` rather
 than `Error::Refused`, so it never reached the `Exit::Refused` mapping. `3` is distinct from `1`
 precisely so a script that retries on failure does not retry a refusal. **Neither harness could
 see it**: both assert refusals with `nok`, which accepts any non-zero code and cannot tell 1
@@ -1821,7 +1821,7 @@ other is a retry.
 **How it happened is the whole lesson.** Nobody chose `Validation` over `Refused` for these.
 `Validation` is what you reach for when you are writing a check about a URL, and each of the
 nine was written on its own day by someone thinking about that check and not about the exit
-table three files away. E25 found one of them, in `purge-unmanaged`, and fixed that one. The
+table three files away. E25 found one of them, in `purge-undeclared`, and fixed that one. The
 family was never swept, because there was a sentence saying it did not need to be.
 
 **The sentence is the defect.** `main.rs` asserted that the `Error::Refused` arm was the one
@@ -2699,7 +2699,7 @@ are `install → enable + start` and `remove → stop + disable`. So a manifest 
 lines holds 155 triggers, and losing one in a bad merge disables a Windows service on the next
 sync. That is the argument that kept them commented out, and it is a real cost.
 
-**It is also the smaller cost, because the alternative was already worse.** `purge-unmanaged`
+**It is also the smaller cost, because the alternative was already worse.** `purge-undeclared`
 does not read the manifest to find victims — it asks every manager what is installed and sweeps
 what the model does not name. The service backend answers with every running service, so all 155
 were already on that list. The only thing between the list and `sc stop` was `protection_of`'s
@@ -2708,7 +2708,7 @@ is structurally no — a service line is not a package line. A refusal by coinci
 sentence that was false. **Correcting that sentence, which was the obvious tidy-up and is exactly
 what a later reader would have done, would have handed the sweep every service on the machine.**
 Declaring them is what removes the exposure rather than papering over it: a declared service is
-managed, and `purge-unmanaged` only sweeps what is not. The refusal is still written down —
+managed, and `purge-undeclared` only sweeps what is not. The refusal is still written down —
 V.124's second rule — because a service started *after* an adopt is unmanaged again, and that one
 must be refused on purpose rather than by luck.
 
@@ -3459,5 +3459,61 @@ list` shows no indices at all. So the by-name path batches on evidence, and the 
 keeps its careful ordering because no nix that still reports indices was there to test.
 `vscode` and `snap` stayed argv-only, and the register says so rather than letting them borrow
 the confidence of the three that were run.
+
+---
+
+**V.137 — Why `adopt` declares OS-essential packages instead of commenting them out.**
+*(Owner ruling, 2026-08-05 — `Q47`. Rule in II.9.)*
+
+The manifest used to carry OS-essential packages in a commented-out second section, and the
+reason written beside them was that a live line is *"a line whose deletion means uninstall"*.
+That reason was already false when it was written. `guard::protection_of` refuses to remove
+anything a backend reports as essential, whatever the manifest says; the only way past it is an
+explicit `unprotected_packages` entry, which is a sentence somebody types on purpose. So the
+comment character was guarding against a deletion that could not happen.
+
+**What it cost to keep it was real.** A commented line is not a declaration, and LiNix has no
+opinion about a package nothing declares. On the measured host that was 33 packages — the ones
+that keep the machine bootable and logged in — sitting outside the model entirely. If one of
+them was uninstalled behind LiNix's back, `check drift` did not notice, `sync` did not put it
+back, and `heal` had nothing to repair. **The packages given the least protection by the model
+were the ones the machine could least afford to lose**, and the mechanism that did it was
+filed as a safety feature.
+
+This is the same shape as E7 one layer out: protection meant *never remove*, and it had quietly
+grown a second meaning, *never adopt*. E7 removed that ambiguity for `protected_packages` and
+left it standing for OS-essential — the twin branch in the same `if`, four lines down. The
+manifest header now names the exception instead of the comment character: a guarded line is
+declared, LiNix keeps it, and deleting the line stops LiNix keeping it without uninstalling
+anything.
+
+---
+
+**V.138 — Why the command that deletes is named `purge-undeclared`.** *(Owner ruling,
+2026-08-05 — `Q31`. Rule in II.11.)*
+
+`unmanaged` named two different numbers on two screens of the same program, in the same minute:
+
+```
+linix check           ->  ok  unmanaged   everything you chose is managed
+linix check drift     ->  ? unmanaged - installed but not in your manifests (34):
+linix check unmanaged ->  1 package(s) `linix adopt` would take
+```
+
+Neither number was wrong. E6 had already ruled which question the *word* answers — what `adopt`
+would take — and the fix reached `check unmanaged` and the rollup, but not `check drift`, not
+the readme, and not the command name. **So the most destructive verb in the program was named
+after the set it does not act on.** A reader who saw `1 unmanaged` and typed `purge-unmanaged`
+was reaching for a one-package cleanup and pointing a 34-package delete at their own OS.
+
+The word was not the fixable half. Both sets are real and each has a command that acts on it, so
+one word for both was always going to mislead somebody; the only question was which one got a
+new name. The verb did, because a verb is named after what it does, and what it deletes is the
+undeclared set.
+
+**The near-miss worth recording:** `Q47` shrinks the gap — with essentials adopted, most of
+those 34 become declared — but shrinking a gap is not closing it. A backend that cannot separate
+a choice from a dependency still produces two different numbers, and the rename is what keeps
+that a definition rather than a surprise.
 
 ---

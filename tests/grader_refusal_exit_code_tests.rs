@@ -2,7 +2,7 @@
 //!
 //! `readme.md` publishes a four-code contract "so a script can branch on them": 0 converged,
 //! 1 failed, 2 differences, 3 refused. E25 found one refusal returning 1 instead of 3 and it was
-//! fixed for `purge-unmanaged`. The family was not swept.
+//! fixed for `purge-undeclared`. The family was not swept.
 //!
 //! Measured against the release binary:
 //!

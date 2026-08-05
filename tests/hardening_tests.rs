@@ -215,7 +215,7 @@ async fn repo_manager_dispatches_add_command() {
 /// `unmanaged` reports installed packages not under LiNix management (and excludes
 /// managed ones).
 #[tokio::test]
-async fn installed_but_unmanaged_lists_the_dependency_closure_too() {
+async fn installed_but_undeclared_lists_the_dependency_closure_too() {
     let kernel = TestKernel::new().await;
     // cargo reports two installed crates...
     kernel.mock_executor.set_response(
@@ -239,7 +239,7 @@ async fn installed_but_unmanaged_lists_the_dependency_closure_too() {
         );
     }
 
-    let unmanaged = kernel.app.installed_but_unmanaged().await.unwrap();
+    let unmanaged = kernel.app.installed_but_undeclared().await.unwrap();
     assert!(
         unmanaged
             .iter()

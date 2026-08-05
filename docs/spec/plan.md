@@ -106,8 +106,8 @@ what blocks the next one. The reasoning and the measurements are the first entry
    `system_package` in the lock (github) / state (web). `installable_here` gates the handoff on the
    manager existing, so a machine without it falls through to download-only. Dedup/deference ride the
    existing per-backend ownership: `Queryable::owned_system_packages` (default none, overridden by
-   github/web) feeds `installed_but_unmanaged` and `adopt`'s discovery, which subtract those names —
-   so `check` does not double-count and `purge-unmanaged` defers to the recorded installer. Unit-tested
+   github/web) feeds `installed_but_undeclared` and `adopt`'s discovery, which subtract those names —
+   so `check` does not double-count and `purge-undeclared` defers to the recorded installer. Unit-tested
    (argv, lock TOML round-trip, `system_packages()` accessor, installer gating). **Only the live
    `dpkg -i`/`rpm -U` round-trip is deferred to a real apt/rpm box** — the same hardware boundary
    btrfs/zfs restore sits behind. `rpm -U` (not the ruling's literal `rpm -i`) because `-i` refuses an
@@ -454,7 +454,7 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
 - ~~One lease-expiry implementation (C9 — two exist today with different semantics).~~ **Moot —
   leases were removed entirely in Phase 2 (the `lease` command, `LeaseArgs`, and both expiry
   paths are gone; timed absence is now the dated-line machinery, `@expires`/`@until`).**
-- ~~The ratio check and `purge-unmanaged` (II.11).~~ **DONE — `handle_purge_unmanaged` prints the
+- ~~The ratio check and `purge-undeclared` (II.11).~~ **DONE — `handle_purge_undeclared` prints the
   whole list, applies the ratio check (`PURGE_RATIO = 0.1`) with II.11's exact message before
   anything else, uses `enforce_deliberate` (protection + OS-essential apply, `max_removals` does
   not), takes a snapshot first or prints "THERE IS NO UNDO FOR THIS", and requires a typed
@@ -550,7 +550,7 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
   `LINIX_DATA_DIR` isolation, `linix init` to scaffold the II.1 repo, and **HARD** exit-code
   assertions (`ok`/`nok`/`grep_ok`; the run exits non-zero on any hard failure — so G2's
   soft-assertion problem is gone by construction). It covers the Part IV proofs: adopt takes the
-  manual set and python3 survives; a protected package is never removed; `purge-unmanaged` is not
+  manual set and python3 survives; a protected package is never removed; `purge-undeclared` is not
   a silent mass-delete; plus install→list→idempotency→remove, dry-run safety, git rollback/diff,
   read-only verbs, and a command-surface smoke. **Not run here** (needs Docker — untestable on
   Windows). **Remaining:** re-port the old script's comprehensive *multi-backend real-lifecycle
@@ -772,7 +772,7 @@ implementing agent's call; that it goes is not.**
   registry. **F4 is therefore narrower than it was, not done: the README line it also names is
   untouched.**
 
-- **R8 — Rename `--i-really-mean-it` to `--allow-mass-purge`.** `purge-unmanaged` guards itself with
+- **R8 — Rename `--i-really-mean-it` to `--allow-mass-purge`.** `purge-undeclared` guards itself with
   the jokey `--i-really-mean-it` (`cli/args.rs:141`, used at `main.rs:2809`,`:2819`), while every
   sibling destructive gate is sober and consistent: `--allow-mass-removal`, `--allow-mass-install`
   (`args.rs:36`,`:43`). Rename it into that family — `--allow-mass-purge` — and update the flag, its
@@ -833,7 +833,7 @@ implementing agent's call; that it goes is not.**
 
 - **R13 — Fix `uninstall`'s help wording.** Command help says "Imperatively uninstall one or more
   packages" and the arg help says "Names of packages to purge" (`args.rs:307-309`). "purge" collides
-  with the separate `purge-unmanaged` command, and "Imperatively" is jargon that also contradicts the
+  with the separate `purge-undeclared` command, and "Imperatively" is jargon that also contradicts the
   model — uninstall is undeclare + sync, i.e. declarative. Plain: "Uninstall one or more packages" /
   "Names of packages to uninstall."
 
@@ -1242,7 +1242,7 @@ spec carries untrusted URLs and `@`-options to the filesystem with no validation
   PowerShell by interpolation and runs it via `-Command` with elevation: `Checkpoint-Computer
   -Description 'LiNix: {label}'` (`:344` — a `'` in label escapes the quote), and `DeleteStatus({id})`
   / `Restore-Computer -RestorePoint {id}` with `id` interpolated **unquoted** (`:384`,`:392`). Traced:
-  `label` is always a compile-time constant (`pre_sync`, `pre_upgrade`, `purge-unmanaged`, `pre_canary`)
+  `label` is always a compile-time constant (`pre_sync`, `pre_upgrade`, `purge-undeclared`, `pre_canary`)
   and `id` comes from the system's own `SequenceNumber` via list/bisect/canary/undo — **not currently
   attacker-reachable**, so this is latent, not live. But the day any command lets a user pass a
   snapshot label or id straight through, it becomes an elevated-PowerShell injection.
@@ -1252,7 +1252,7 @@ spec carries untrusted URLs and `@`-options to the filesystem with no validation
      returns it and keep it typed through list/bisect/canary/undo. That closes `:384`/`:392` with no
      validation logic to forget at a future call site — the type is the guard.
   2. **`label` becomes an enum**, not a `&str`. There are exactly four values (`pre_sync`,
-     `pre_upgrade`, `purge-unmanaged`, `pre_canary`); an enum with `as_str()` means no caller — a
+     `pre_upgrade`, `purge-undeclared`, `pre_canary`); an enum with `as_str()` means no caller — a
      future `--label` flag included — can reach `:344`'s interpolation with a quote in hand.
 
   Both are pure hardening: no behaviour change, no config key, no escape hatch. By the SEC4 argument
@@ -1541,14 +1541,14 @@ consequential line in a firewall.
 
 **The session-port refusal is not a feature of this item, it is its precondition.** LiNix detects
 the port carrying the controlling connection and refuses any plan that would deny it — on every
-path that can close a port, which N1's ruling means includes `purge-unmanaged` and an unattended
+path that can close a port, which N1's ruling means includes `purge-undeclared` and an unattended
 `watch` tick, **the more dangerous of the two, because nobody is there to read the refusal.**
 Building the backend before this check is building the lockout.
 
 **Exit:** one config opens the same port on a Windows box and a Linux box from one line; a rule
 changed out of band is reported by name rather than by file; a plan that would close the port
 carrying the session is refused naming the port and the rule, from `sync`, from
-`purge-unmanaged`, and from a `watch` tick.
+`purge-undeclared`, and from a `watch` tick.
 
 **7n — the dotfiles directory (XIII.21, U22–U25). DONE 2026-07-24** (`c7dea64`).
 `Statement::Dotfiles` names a tree and stands for as many declarations as it holds;
@@ -1677,7 +1677,7 @@ declaration restores its backup, T1's fix is smaller than it looks.
 
 - ~~**The unattended-refusal set becomes a `[guard]` list (K13, reversed and generalised).**~~
   **DONE 2026-07-23.** `[guard] never_unattended`, defaulted to `["rebuild",
-  "purge-unmanaged"]`; the constant is deleted; the list is threaded into `schedule_config` as an
+  "purge-undeclared"]`; the constant is deleted; the list is threaded into `schedule_config` as an
   argument, so `preferences.toml` is its one home and the check needs no config on disk to test.
   All three exit clauses are asserted, plus two the wording implies: the refusal quotes the key
   *and its current contents*, and an empty list refuses nothing. The template and
@@ -1836,11 +1836,13 @@ set passes. Adding one without a canary or a stated reason raises the count and 
 # Part IV — Verification
 
 **The specific proofs, on the ubuntu image:**
-- After `adopt`, the registry holds ~103 packages, not ~579, and does **not** contain
-  `libperl5.38t64`.
+- After `adopt`, the registry holds what `apt-mark showmanual` reports and not the whole
+  installed set — hundreds, not thousands — and does **not** contain `libperl5.38t64`. Bounded
+  against the manager's own manual count rather than against a fixed number, which moves: `Q47`
+  raised it by adopting the OS-essential names that used to be commented out.
 - `python3` is still installed at the end of the run.
 - A large removal is refused without `--allow-mass-removal`.
-- `purge-unmanaged` with an unadopted machine is refused by the ratio check.
+- `purge-undeclared` with an unadopted machine is refused by the ratio check.
 
 **Grammar:** a test for every error in Part II.2. Each must produce an error, not a guess.
 
@@ -1854,7 +1856,7 @@ set passes. Adding one without a canary or a stated reason raises the count and 
 
 **Every proof above is a proof against a machine, not against a mock.** Each of the four named
 ubuntu proofs is an assertion with a number or a name in it — the adopted count is *compared*,
-not printed; the mass-removal refusal and the `purge-unmanaged` ratio each run in the state that
+not printed; the mass-removal refusal and the `purge-undeclared` ratio each run in the state that
 makes them meaningful (the ratio check on an **unadopted** machine, which means before `adopt`,
 not after) and assert *which* rule refused, because a `nok` that accepts any non-zero exit
 accepts a panic and an unknown flag just as happily.

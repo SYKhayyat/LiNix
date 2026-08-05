@@ -29,7 +29,7 @@ use tracing::{debug, warn};
 pub enum GuardScope {
     Apply,
     RemoveOrphans,
-    PurgeUnmanaged,
+    PurgeUndeclared,
     Sync,
     Watch,
     Upgrade,
@@ -43,13 +43,13 @@ pub enum GuardScope {
 
 impl GuardScope {
     /// The command a user would recognize, for messages. It has to be what they typed:
-    /// a refusal reading "prune refused" to someone running `purge-unmanaged` names a
+    /// a refusal reading "prune refused" to someone running `purge-undeclared` names a
     /// command that does not exist, and gives them nothing to act on.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Apply => "apply",
             Self::RemoveOrphans => "remove-orphans",
-            Self::PurgeUnmanaged => "purge-unmanaged",
+            Self::PurgeUndeclared => "purge-undeclared",
             Self::Sync => "sync",
             Self::Watch => "watch",
             Self::Upgrade => "upgrade",
@@ -74,7 +74,7 @@ pub enum Protection {
     /// never declare it — and what it cannot be asked to keep, it must not take away.
     Undeclarable,
     /// The name declares a resource, not a package: a `service:`, `link:` or `setting:`.
-    /// `purge-unmanaged` deletes packages nobody declared; a service nobody declared is not
+    /// `purge-undeclared` deletes packages nobody declared; a service nobody declared is not
     /// something that was installed, it is the state the machine is already in.
     NotAPackage(String),
 }
@@ -124,7 +124,7 @@ pub fn protection_of(
 ) -> Option<Protection> {
     // Before the escape hatch, because neither of these is a policy: a name no line can hold
     // cannot be declared, so LiNix never manages it and `unprotected_packages` has nothing
-    // to release. Saying yes here would let `purge-unmanaged` remove programs that could
+    // to release. Saying yes here would let `purge-undeclared` remove programs that could
     // never have been adopted in the first place.
     //
     // A resource is refused for a different reason, said out loud because it used to be an
@@ -132,7 +132,7 @@ pub fn protection_of(
     // `service:AppMgmt` is not a package line, and so every running service was refused by a
     // check that was not about services and printed a sentence that was false of them. The
     // moment that sentence was corrected — and it was false, `service:AppMgmt` parses — the
-    // refusal would have evaporated and `purge-unmanaged` could stop and disable every
+    // refusal would have evaporated and `purge-undeclared` could stop and disable every
     // service on the machine. This is that refusal, made on purpose.
     //
     // By backend, not by round-tripping the name: a `setting:` needs `@value=` before any line
@@ -621,7 +621,7 @@ pub async fn enforce_installs(config: &Config, count: usize, scope: GuardScope) 
     ))
 }
 
-/// Enforce for `purge-unmanaged`, where the count is not the question (II.11).
+/// Enforce for `purge-undeclared`, where the count is not the question (II.11).
 ///
 /// `max_removals` catches accidents, and this command is the opposite of an accident: you
 /// typed its name and confirmed it. **`protected_packages` and OS-essential still apply** —
@@ -684,7 +684,7 @@ mod tests {
     fn a_name_no_line_can_hold_is_never_removed() {
         // LiNix must not remove what it could never have been asked to keep: a name that
         // cannot be written down cannot be declared, so it is unmanaged forever and a standing
-        // `purge-unmanaged` candidate through no fault of its owner.
+        // `purge-undeclared` candidate through no fault of its owner.
         //
         // **Y7 moved the boundary, and this test is what says where it is now.** A name with a
         // space in it — `ARP\Machine\X64\Android Studio`, which is what `winget list` answers —
@@ -716,7 +716,7 @@ mod tests {
         }
     }
 
-    /// `purge-unmanaged` sweeps everything LiNix does not manage, and it builds its list from
+    /// `purge-undeclared` sweeps everything LiNix does not manage, and it builds its list from
     /// `list_installed` — which for `service` is every running service. The only thing that
     /// ever stopped it was the declarability test asking a question about *package* lines and
     /// getting the right answer for the wrong reason. Correcting that sentence would have
@@ -946,7 +946,7 @@ mod tests {
             GuardScope::Apply,
             GuardScope::Sync,
             GuardScope::RemoveOrphans,
-            GuardScope::PurgeUnmanaged,
+            GuardScope::PurgeUndeclared,
             GuardScope::Watch,
             GuardScope::Upgrade,
             GuardScope::Canary,
@@ -968,7 +968,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_deliberate_purge_ignores_the_count_but_never_protection() {
-        // II.11: `max_removals` catches accidents, and `purge-unmanaged` is the opposite of
+        // II.11: `max_removals` catches accidents, and `purge-undeclared` is the opposite of
         // an accident — you typed its name. `protected_packages` and OS-essential still
         // apply, and the ratio check is what asks whether you meant it at all.
         let reg = Arc::new(BackendRegistry::new());
@@ -979,14 +979,14 @@ mod tests {
                 &cfg,
                 &reg,
                 &pairs(&["a", "b", "c", "d"]),
-                GuardScope::PurgeUnmanaged
+                GuardScope::PurgeUndeclared
             )
             .await
             .is_ok(),
             "the count is not the question here"
         );
         assert!(
-            enforce_deliberate(&cfg, &reg, &pairs(&["python3"]), GuardScope::PurgeUnmanaged)
+            enforce_deliberate(&cfg, &reg, &pairs(&["python3"]), GuardScope::PurgeUndeclared)
                 .await
                 .is_err(),
             "protection still applies to a deliberate purge"
@@ -1267,7 +1267,7 @@ mod tests {
             }))
             .collect();
         let msg =
-            GuardReport { objections }.message(GuardScope::PurgeUnmanaged, RemovalKind::Package);
+            GuardReport { objections }.message(GuardScope::PurgeUndeclared, RemovalKind::Package);
         let count_line = msg.find("removes 25 packages").expect("count line present");
         let first_pkg = msg.find("apt:pkg0").expect("a package listed");
         assert!(count_line < first_pkg, "the count must lead");

@@ -17,7 +17,7 @@ impl Firewall<'_> {
     /// 1. Work out what would change.
     /// 2. **Ask whether it would close the port carrying this session** — before any command
     ///    runs, on every path that can close a port (N1's ruling makes that `sync`,
-    ///    `purge-unmanaged` and an unattended `watch` tick, the last being the dangerous one
+    ///    `purge-undeclared` and an unattended `watch` tick, the last being the dangerous one
     ///    because nobody is there to read a refusal).
     /// 3. Only then open, close and set policy.
     ///

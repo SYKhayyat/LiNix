@@ -97,7 +97,7 @@ impl ArtifactLedger {
     /// Every system package these declarations installed through a system manager (D5), as
     /// `(installer, package_name)` pairs. The unmanaged crawl and `check` subtract these so a
     /// `.deb` a `github:` line handed to `dpkg` is not also reported as apt-visible drift, and
-    /// `purge-unmanaged` defers to the recorded installer rather than deleting it.
+    /// `purge-undeclared` defers to the recorded installer rather than deleting it.
     pub fn system_packages(&self) -> Vec<(String, String)> {
         self.entries
             .values()

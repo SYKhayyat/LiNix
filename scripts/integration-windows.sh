@@ -586,10 +586,10 @@ ok "install --dry-run shows a plan" lx --dry-run install "$BACKEND:$PKG"
 # --- 4. The guard's ratio rule, on an UNADOPTED machine -------------------
 # IV.1: the only state in which this tests anything. After `adopt` the machine is
 # nearly all managed, so the ratio it exists to catch never fires.
-echo "[4] purge-unmanaged, before adopt"
-refuses_with_3 "purge-unmanaged is refused on a machine LiNix has not adopted" lx -y purge-unmanaged
+echo "[4] purge-undeclared, before adopt"
+refuses_with_3 "purge-undeclared is refused on a machine LiNix has not adopted" lx -y purge-undeclared
 grep_ok "and it is the unadopted-machine ratio that refused" \
-    "adopt\|allow-mass-purge" lx -y purge-unmanaged
+    "adopt\|allow-mass-purge" lx -y purge-undeclared
 
 # --- 5. Install -> list -> remove (real, reversible on scoop) --------------
 echo "[5] Real lifecycle"
@@ -702,12 +702,12 @@ echo "[8] The guard"
 # only that the binary still exists — which it would whatever LiNix did.
 $TO "$LINIX" -y uninstall linix >/dev/null 2>&1 || true
 ok "linix survives an uninstall attempt" on_path "$LINIX"
-refuses_with_3 "purge-unmanaged is still not a silent mass-delete after adopt" lx -y purge-unmanaged
+refuses_with_3 "purge-undeclared is still not a silent mass-delete after adopt" lx -y purge-undeclared
 # WHICH rule refuses is still asserted, but the answer depends on how much `adopt`
 # could take on this host: where it adopted well the protected set decides, where it
 # adopted little the ratio still does. Both are named answers; "some error" is not.
 grep_ok "and the refusal after adopt still names its rule" \
-    "protected\|essential\|allow-mass-removal\|allow-mass-purge" lx -y purge-unmanaged
+    "protected\|essential\|allow-mass-removal\|allow-mass-purge" lx -y purge-undeclared
 
 # --- 9. Git history + rollback --------------------------------------------
 echo "[9] Git history + rollback"

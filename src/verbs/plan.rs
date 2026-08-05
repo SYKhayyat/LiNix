@@ -50,7 +50,7 @@ pub(crate) async fn handle_status(app: &App, json: bool) -> Result<()> {
         planner.plan(&desired, None).await?
     };
     let report = changes.generate_report();
-    let unmanaged = app.installed_but_unmanaged().await.unwrap_or_default();
+    let undeclared = app.installed_but_undeclared().await.unwrap_or_default();
 
     let unverified: Vec<(String, String)> = {
         let state = app.state.lock().await;
@@ -61,7 +61,7 @@ pub(crate) async fn handle_status(app: &App, json: bool) -> Result<()> {
         let out = serde_json::json!({
             "to_install": report.install,
             "to_remove": report.remove,
-            "unmanaged": unmanaged.iter().map(|p| serde_json::json!({"backend": p.backend, "name": p.name})).collect::<Vec<_>>(),
+            "undeclared": undeclared.iter().map(|p| serde_json::json!({"backend": p.backend, "name": p.name})).collect::<Vec<_>>(),
             "unverified": unverified.iter().map(|(b, n)| serde_json::json!({"backend": b, "name": n})).collect::<Vec<_>>(),
             "resources_to_place": resources.place,
             "resources_to_undo": resources.undo,
@@ -75,12 +75,12 @@ pub(crate) async fn handle_status(app: &App, json: bool) -> Result<()> {
     if report.install.is_empty()
         && report.remove.is_empty()
         && report.skipped.is_empty()
-        && unmanaged.is_empty()
+        && undeclared.is_empty()
         && unverified.is_empty()
         && resources.is_empty()
     {
         println!(
-            "System matches your manifests; nothing to install, no drift, no unmanaged packages."
+            "System matches your manifests; nothing to install, no drift, nothing undeclared."
         );
         return Ok(());
     }
@@ -104,9 +104,9 @@ pub(crate) async fn handle_status(app: &App, json: bool) -> Result<()> {
             println!("    {}:{}", e.backend, e.name);
         }
     }
-    // Distinct from `unmanaged` below, and the distinction is the point: an unmanaged package
-    // is one LiNix never took responsibility for, and one of these is a package it manages,
-    // that nothing declares, and that it has decided never to remove (AU1).
+    // Distinct from `undeclared` below, and the distinction is the point: an undeclared
+    // package is one LiNix never took responsibility for, and one of these is a package it
+    // manages, that nothing declares, and that it has decided never to remove (AU1).
     if !report.skipped.is_empty() {
         println!(
             "~ drift — `sync` would leave in place ({}):",
@@ -116,12 +116,12 @@ pub(crate) async fn handle_status(app: &App, json: bool) -> Result<()> {
             println!("    {}  ({})", s.key, s.reason);
         }
     }
-    if !unmanaged.is_empty() {
+    if !undeclared.is_empty() {
         println!(
-            "? unmanaged — installed but not in your manifests ({}):",
-            unmanaged.len()
+            "? undeclared — installed, nothing declares it, `purge-undeclared` removes it ({}):",
+            undeclared.len()
         );
-        for p in &unmanaged {
+        for p in &undeclared {
             println!("    {}:{}", p.backend, p.name);
         }
     }

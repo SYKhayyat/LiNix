@@ -394,8 +394,8 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
         Commands::Reset { force } => handle_reset(app, *force).await,
         Commands::Check { section, json } => handle_check(app, section.as_deref(), *json).await,
         Commands::Vars => handle_vars(app).await,
-        Commands::PurgeUnmanaged { allow_mass_purge } => {
-            handle_purge_unmanaged(app, *allow_mass_purge).await
+        Commands::PurgeUndeclared { allow_mass_purge } => {
+            handle_purge_undeclared(app, *allow_mass_purge).await
         }
         Commands::Protected { packages, json } => handle_protected(app, packages, *json).await,
         Commands::Unmanage { packages, json } => handle_unmanage(app, packages, *json).await,

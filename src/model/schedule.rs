@@ -330,11 +330,11 @@ mod tests {
     }
 
     #[test]
-    fn a_timer_may_not_run_rebuild_or_purge_unmanaged_out_of_the_box() {
+    fn a_timer_may_not_run_rebuild_or_purge_undeclared_out_of_the_box() {
         // K13. Both shipped names, not just the one the ruling was asked about: a check that
-        // covers `rebuild` alone is how `purge-unmanaged` came to be refused by a constant
+        // covers `rebuild` alone is how `purge-undeclared` came to be refused by a constant
         // nobody could edit.
-        for command in ["rebuild --all", "purge-unmanaged"] {
+        for command in ["rebuild --all", "purge-undeclared"] {
             let o = opts(&[("cron", "0 2 * * *"), ("run", command)]);
             let err = schedule_config("nightly", &o, &origin(), &shipped()).unwrap_err();
             let head = command.split_whitespace().next().unwrap();
@@ -355,19 +355,19 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("never_unattended"), "{}", err);
-        assert!(err.contains("rebuild, purge-unmanaged"), "{}", err);
+        assert!(err.contains("rebuild, purge-undeclared"), "{}", err);
     }
 
     /// Taking a name out of the list is how a machine permits that command — the whole point
     /// of the ruling that replaced the constant.
     #[test]
     fn taking_a_name_out_of_the_list_permits_the_command() {
-        let permitting = vec!["purge-unmanaged".to_string()];
+        let permitting = vec!["purge-undeclared".to_string()];
         let o = opts(&[("cron", "0 2 * * *"), ("run", "rebuild --all")]);
         assert!(schedule_config("nightly", &o, &origin(), &permitting).is_ok());
 
         // And the name still in the list is still refused, so the edit is per-command.
-        let o = opts(&[("cron", "0 2 * * *"), ("run", "purge-unmanaged")]);
+        let o = opts(&[("cron", "0 2 * * *"), ("run", "purge-undeclared")]);
         assert!(schedule_config("nightly", &o, &origin(), &permitting).is_err());
     }
 

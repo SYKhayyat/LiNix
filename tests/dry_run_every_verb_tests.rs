@@ -179,7 +179,7 @@ const EXEMPT: &[(&str, &str)] = &[
     ("reset", "refuses without a terminal — asserted in grader_refusal_exit_code_tests"),
     ("check", "read-only — reports, never writes"),
     ("vars", "read-only — prints this host's resolved variables"),
-    ("purge-unmanaged", "needs an adopted machine; refuses on the ratio check first"),
+    ("purge-undeclared", "needs an adopted machine; refuses on the ratio check first"),
     ("protected", "read-only — explains why a name is guarded"),
     // Q15: `plan` is the whole exemption, and the reason is not that the user named the path —
     // they name it for `bundle` too. Its file IS the preview, so a `--dry-run plan` that wrote

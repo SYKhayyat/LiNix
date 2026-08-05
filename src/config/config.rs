@@ -95,11 +95,11 @@ pub struct GuardSettings {
     pub never_unattended: Vec<String>,
 }
 
-/// `rebuild` and `purge-unmanaged`: the two commands that remove declared software. Unattended,
+/// `rebuild` and `purge-undeclared`: the two commands that remove declared software. Unattended,
 /// a failed rebuild leaves a machine missing software at 2am with nobody watching, and a purge
 /// answers a question — "is this machine adopted?" — that only a human can have asked.
 fn default_never_unattended() -> Vec<String> {
-    vec!["rebuild".to_string(), "purge-unmanaged".to_string()]
+    vec!["rebuild".to_string(), "purge-undeclared".to_string()]
 }
 
 fn default_confine_bin() -> bool {
