@@ -6010,3 +6010,98 @@ answering with a chain, is the surviving half of Shift 1: git as enrichment, nev
 `sanitize()`; the live ones do not. Not a brew issue — everything in `src/parsers/` sanitizes,
 and inside `src/backends/` **only `flatpak.rs` and `snap.rs` do.** No case found where it bites,
 and it is recorded in the direction file rather than fixed on a hunch.
+
+## 2026-08-04 — the untested half, and two instruments that lied
+
+The owner's instruction after `docs/GRADE-2026-08-04.md` (**B+**): *"it is crucial that we test —
+real live tests — as much as we can… build the tests that really test everything like a human."*
+The grade's §5 is the list, and it is not a list of bugs — it is a list of **things nothing has
+ever run**: no mid-transaction `SIGKILL` → `heal`, no real `sudo`, no concurrency, and every
+destructive effector argv-tested and unrun.
+
+### Four sections that had no equivalent anywhere
+
+All in `docker/integration/run-in-container.sh`, so CI runs them on every leg without a new job:
+
+- **16d — `SIGKILL` mid-transaction, then `heal`.** Three kill points: the moment the write-ahead
+  log opens, once a package has reached the filesystem, and a `setsid` **group** kill that takes
+  the package manager down mid-write. Each asserts the exit code, that the report is in English
+  rather than Rust `Debug` (W36's family), that nothing is left open that `heal` did not name,
+  that the model still parses, that the next sync converges, and that the one after **that** has
+  nothing to do — the half a single re-sync cannot see.
+- **16e — two writers, and killing the one holding the lock.** `DataLock` was asserted only by
+  unit tests inside one process, which is the one place a file lock cannot fail.
+- **16f — `sudo` with a real password on a real pty.** Every check in this harness runs as root,
+  and `run_on` inserts `sudo` only when `!is_root()`, so the whole privileged path was dead code
+  in every container and had never executed on any platform.
+- **16g — snapshot → mutate → restore, on a real block device.** A lifecycle is install → list →
+  remove and by construction never restores anything.
+
+### The defect that only showed up because someone tried to drive it
+
+**`snapshot restore` was unreachable for every provider but two.** `show_diff_and_confirm`
+matched the provider **by name** — `"btrfs" | "timeshift"`, and `Unsupported snapshot backend`
+for anything else — so `zfs` (`zfs rollback -r`, declared live), `windows_restore`
+(`Restore-Computer`), `apfs`, and every `lvm`/bcachefs row a user writes could be *created* and
+never *restored*. `U27` ruled in as many words that the built-ins *"stop being a hardcoded list
+and become rows"*; the loader did that and this one call site did not.
+
+It is a **summary** that needs a mounted snapshot tree, not the restore. So the summary is now
+`Option<StateDiff>`: a provider with no readable tree gets no package diff, says so, and still
+reaches the `RESTORE` confirmation. `tests/snapshot_restore_reaches_every_provider_tests.rs`
+quantifies over *any* provider rather than today's five — red against the old behaviour
+(`Unsupported snapshot backend: zfs`), green after.
+
+**Narrower than it first read, and the correction is worth keeping.** Two other callers reach
+`SnapshotProvider::restore` without passing through the gallery — `sync`'s health-check revert
+(`sync/mod.rs:524`) and `bisect` — so the *automatic* rollback was never blocked. What was blocked
+is the command a person runs to recover by hand.
+
+### `heal` had two branches that did nothing and said nothing
+
+The recovery loop was `if let Some(cap) = registry.get(&backend) { if let Some(handler) =
+cap.as_installable() { … } }` — two nested `if let`s and **no `else` on either**. An entry naming
+a manager this machine does not have was neither recovered, nor failed, nor mentioned, and `heal`
+returned `Ok`. W36 fixed *"says it could not recover and exits 0"*; this is *"says nothing and
+exits 0"*, which is worse because there is nothing in the output to read. Both now land in the
+same error, with their own sentence.
+
+### Two instruments lied, and both were mine
+
+Neither is in the product, and both are the reason this session's numbers can be trusted.
+
+- **"23 operations still open after `heal`"** — reported on the first run, three times, and
+  **false**. `journal.jsonl` is APPEND-ONLY: one line per state change carrying the same id, so a
+  single successful install writes `InProgress` and then `Completed` and both stay. Counting
+  `InProgress` lines counts operations that ever *started*. Measured directly in a container: the
+  same id appears as `InProgress`, `Failed` **and** `Completed` in one file. The oracle now folds
+  each id to its last status.
+- **"a run after a killed holder waited 120s"** — the lock was held by `flock … -c 'sleep 300'`
+  and the kill went to `flock`; `sleep` is its child, inherited the descriptor, and was still
+  alive. LiNix waited correctly and named the holder. The holder is a real LiNix now, and the
+  kill goes to it.
+
+The rule both break is the one already written down: *do not test your own oracle by assuming it
+works.* Neither would have been caught by a green run — both were **passing checks reporting a
+defect that was not there**, which is the same disease as a check that cannot fail, pointed the
+other way.
+
+### A hazard found before it fired
+
+`scripts/harness-mutation-test.sh` runs this harness **on the host**, from both release scripts —
+the pair that once replaced a developer's git identity. 16f creates a user, sets a password and
+writes `/etc/sudoers.d`. It is gated on `LINIX_IT_IMAGE`, which every integration Dockerfile
+declares and nothing else does, and which `harness-logic-test.sh` already asserts.
+
+### One question raised, not answered — `Q31`
+
+`unmanaged` names two different numbers on two screens and `purge-unmanaged` is named after the
+meaning the register did **not** choose. Every way out renames something a user reads or types, so
+it is in `decisions.md` as OPEN with a recommendation and nothing was changed for it.
+
+### Owed
+
+- **The Windows harness has none of this.** `scripts/integration-windows.sh` is the twin; the
+  crash and two-writer checks apply there (`sudo` does not — LiNix escalates only off Windows).
+  A check on one harness is a check on one platform.
+- `zfs` still needs a kernel with the module; the BSDs still need VMs. Detected, not assumed.

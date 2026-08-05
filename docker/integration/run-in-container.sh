@@ -1732,6 +1732,1004 @@ for c in $HELP_CMDS; do
 done
 
 # ==========================================================================
+# 16d. A REAL CRASH IN THE MIDDLE OF A TRANSACTION (GRADER §5)
+# ==========================================================================
+# The journal is a write-ahead log and nothing had ever killed LiNix while one was open.
+# `heal` was driven only over a journal left by an ORDINARY run — the one state a WAL is not
+# for — and the 2026-08-04 grade named it directly: *"the WAL's entire reason to exist,
+# untested under a real crash."*
+#
+# `kill -9`, never `-15`: a SIGTERM runs whatever LiNix does on the way out, which is the
+# graceful path and is what every other check here already exercises. Only SIGKILL leaves the
+# state this section is about — an entry on disk that says a package is being installed and a
+# process that will never come back to say how it went.
+echo "[16d] SIGKILL mid-transaction, then heal"
+
+JOURNAL="$LINIX_DATA_DIR/journal.jsonl"
+
+# How many operations are still OPEN — and the emphasis is the whole point.
+#
+# `journal.jsonl` is APPEND-ONLY: one line per state change, carrying the same id each time, so
+# a single successful install writes `InProgress` and then `Completed` and both lines stay.
+# Counting `InProgress` lines therefore answers "how many operations ever started", which on a
+# healthy run is every one of them. The first draft of this section did exactly that and
+# reported **32 operations open** on a run where heal had resolved all of them — a finding
+# manufactured by the instrument. Measured and corrected 2026-08-04: the same id appears as
+# `InProgress`, `Failed` and `Completed` in one file.
+#
+# So the question is about the LAST line for each id, which is what `get_incomplete_actions`
+# reads. `InProgress`/`Abandoned` is "open"; `Failed` is resolved-and-retryable and is counted
+# separately, because heal treats them differently and so must this.
+journal_status_tally() { # awk-condition over the final status of each id
+    [ -f "$JOURNAL" ] || { echo 0; return 0; }
+    sed -n 's/.*"id":"\([^"]*\)".*"status":"\([^"]*\)".*/\1 \2/p' "$JOURNAL" \
+        | awk -v want="$1" '
+            { last[$1] = $2 }
+            END { n = 0; for (k in last) if (index(want, last[k]) > 0) n++; print n + 0 }'
+}
+journal_open()       { journal_status_tally "InProgress Abandoned"; }
+journal_incomplete() { journal_status_tally "InProgress Abandoned Failed"; }
+# The names behind the number, for a failure message that can be acted on.
+journal_open_names() {
+    [ -f "$JOURNAL" ] || return 0
+    sed -n 's/.*"id":"\([^"]*\)".*"status":"\([^"]*\)".*/\1 \2/p' "$JOURNAL" \
+        | awk '{ last[$1] = $2 } END { for (k in last) if (last[k] == "InProgress" || last[k] == "Abandoned") print "        | " k }'
+}
+
+# Candidates: package name == binary name, present in the repos of all six distros this
+# harness images, and none of them a section-14 canary. `figlet` was the first draft and it is
+# `nix`'s canary on the tools image — two canaries sharing a binary name is the G-3 collision,
+# and this section's cleanup would then be deciding nix's result.
+#
+# FILTERED against the machine rather than assumed: `pv` in particular ships pre-installed on
+# some images, and a "crash during the install of something already installed" is no install
+# at all. What is left is what this host can actually make into transaction steps.
+CRASH_PKGS=""
+for _c in pv dos2unix ncdu; do
+    on_path "$_c" || CRASH_PKGS="$CRASH_PKGS $_c"
+done
+CRASH_N=0
+for _c in $CRASH_PKGS; do CRASH_N=$((CRASH_N + 1)); done
+
+# Asked, not assumed: busybox `sleep` takes a fraction and some builtins do not. A poll that
+# silently rounds up to a whole second walks straight past the window this section aims at.
+CRASH_POLL=0.1
+sleep 0.1 2>/dev/null || CRASH_POLL=1
+
+crash_declare() {
+    for _p in $CRASH_PKGS; do
+        grep -qx "$BACKEND:$_p" "$IMPERATIVE" 2>/dev/null || echo "$BACKEND:$_p" >> "$IMPERATIVE"
+    done
+}
+crash_undeclare() {
+    [ -f "$IMPERATIVE" ] || return 0
+    for _p in $CRASH_PKGS; do
+        grep -v -x "$BACKEND:$_p" "$IMPERATIVE" > "$IMPERATIVE.tmp" 2>/dev/null
+        mv "$IMPERATIVE.tmp" "$IMPERATIVE"
+    done
+}
+# The machine, asked directly. Never `linix list` — that is the program on trial.
+crash_installed() { _n=0; for _p in $CRASH_PKGS; do on_path "$_p" && _n=$((_n + 1)); done; echo "$_n"; }
+crash_missing()   { _m=""; for _p in $CRASH_PKGS; do on_path "$_p" || _m="$_m $_p"; done; echo "$_m"; }
+# UNINSTALL FIRST, undeclare second — and the order is not cosmetic.
+#
+# `linix uninstall` refuses a package no active file declares: *"nothing was uninstalled:
+# `apt:ncdu` is not declared in any active file."* That is the product being careful, and the
+# first version of this function took the line out first and then asked for the removal, so
+# every cleanup refused, three packages stayed installed, and the two crash iterations after it
+# had no work to interrupt and quietly measured nothing. One inverted pair of lines cost two
+# thirds of this section's coverage.
+#
+# The uninstall output is KEPT for the same reason: without it, a cleanup that left three
+# packages behind could only report that it had.
+# Putting a package manager back together after its own transaction was killed mid-write. The
+# command is the one the manager itself asks for, and it is per-manager because the state it
+# repairs is: dpkg has a half-configured package list, rpm has a stale database lock.
+repair_manager() {
+    case "$BACKEND" in
+        apt)          dpkg --configure -a >/tmp/repair.out 2>&1; return 0 ;;
+        dnf|zypper)   rpm --rebuilddb >/tmp/repair.out 2>&1; return 0 ;;
+        pacman)       rm -f /var/lib/pacman/db.lck >/tmp/repair.out 2>&1; return 0 ;;
+        apk|xbps)     return 0 ;;   # both write atomically; there is nothing half-written to fix
+        *)            return 1 ;;
+    esac
+}
+
+crash_wipe() {
+    : > /tmp/crash-wipe.out
+    for _p in $CRASH_PKGS; do
+        on_path "$_p" || continue
+        # The declaration state BEFORE the attempt. `uninstall` refuses a package no active file
+        # declares, so "did it remove it" and "was it there to remove" are two different
+        # questions and a failure that cannot tell them apart is a failure nobody can act on.
+        {
+            echo "--- uninstall $BACKEND:$_p"
+            echo "    declared in imperative.txt: $(grep -cx "$BACKEND:$_p" "$IMPERATIVE" 2>/dev/null || echo 0)"
+            echo "    active modules: $(tr '\n' ' ' < "$LINIX_CONFIG_DIR/active" 2>/dev/null)"
+        } >> /tmp/crash-wipe.out
+        $TO "$LINIX" -y uninstall "$BACKEND:$_p" >> /tmp/crash-wipe.out 2>&1
+        echo "    rc=$? and $_p is now $(on_path "$_p" && echo 'STILL on PATH' || echo 'gone')" >> /tmp/crash-wipe.out
+    done
+    crash_undeclare
+}
+
+# crash_run <tag> <when> [group]
+#   when   `open`   kill the moment the log has an entry — the manager may not have started
+#          <n>      kill once n of the canaries have reached the filesystem
+#   group  non-empty kills the process GROUP, so the package manager dies mid-write too
+crash_run() {
+    _tag="$1"; _when="$2"; _grp="${3:-}"
+    _open_before=$(journal_open)
+    crash_declare
+    record_argv sync
+
+    # No `timeout` wrapper. Killing the wrapper leaves LiNix running and this section would
+    # then be measuring an orphan; the spin budget below is the bound instead.
+    if [ -n "$_grp" ]; then
+        setsid $LINIX -y sync >"/tmp/crash-$_tag.out" 2>&1 &
+    else
+        $LINIX -y sync >"/tmp/crash-$_tag.out" 2>&1 &
+    fi
+    _pid=$!
+
+    _spins=0
+    while [ "$_spins" -lt 1800 ]; do
+        if [ "$_when" = open ]; then
+            [ "$(journal_open)" -gt "$_open_before" ] && break
+        else
+            [ "$(crash_installed)" -ge "$_when" ] && break
+        fi
+        kill -0 "$_pid" 2>/dev/null || break
+        sleep "$CRASH_POLL"; _spins=$((_spins + 1))
+    done
+
+    _open_at_kill=$(journal_open)
+    if [ -n "$_grp" ]; then
+        kill -9 "-$_pid" 2>/dev/null
+    fi
+    kill -9 "$_pid" 2>/dev/null
+    wait "$_pid" 2>/dev/null
+
+    # The DELTA, not the total. The first draft compared against zero and passed on entries
+    # that were already open before this iteration started — so it would have reported a crash
+    # it never caused. What this iteration is answerable for is what it added.
+    _opened=$((_open_at_kill - _open_before))
+    if [ "$_opened" -lt 1 ]; then
+        # Honest, and deliberately NOT a pass. The kill landed outside a transaction, so
+        # nothing here exercised recovery — scoring it green is the vacuous check IV.1 exists
+        # to refuse.
+        soft "crash/$_tag: the kill opened no new entry in the write-ahead log ($_open_before before, $_open_at_kill after), so this iteration measured no recovery"
+        crash_wipe
+        return 0
+    fi
+    PASS=$((PASS + 1))
+    echo "  PASS  crash/$_tag: SIGKILL left $_opened newly-opened operation(s) in the write-ahead log ($_open_at_kill open in all), with $(crash_installed) of $CRASH_N canaries on disk"
+
+    _hout=$(lx heal 2>&1); _hrc=$?
+
+    # (1) heal's exit code answers for its own failures. W36's rule, and this is the only
+    #     place in the sweep where a recovery can genuinely fail, so it is the only place
+    #     that check has ever been able to mean anything.
+    if printf '%s' "$_hout" | grep -q "could not be recovered"; then
+        if [ "$_hrc" -ne 0 ]; then
+            PASS=$((PASS + 1)); echo "  PASS  crash/$_tag: heal named what it could not recover and said so in the exit code"
+        else
+            hard "crash/$_tag: heal reported an unrecovered operation and exited 0 (W36)"
+        fi
+    elif [ "$_hrc" -eq 0 ]; then
+        PASS=$((PASS + 1)); echo "  PASS  crash/$_tag: heal recovered the interrupted operation(s)"
+    else
+        hard "crash/$_tag: heal exited $_hrc without naming anything it could not recover"
+    fi
+
+    # (2) It says so in the user's words. `Some(CommandFailed { retry: Permanent,
+    #     absent_name: true })` is the journal's vocabulary and W36 found it printed at a
+    #     person; no ordinary run can reach that branch, which is why it survived.
+    if printf '%s' "$_hout" | grep -q 'CommandFailed {\|absent_name:\|retry: Permanent\|retry: Transient'; then
+        hard "crash/$_tag: heal printed the journal's own struct at the user — $(printf '%s' "$_hout" | grep -o 'CommandFailed {\|absent_name:\|retry: [A-Za-z]*' | head -1)"
+    else
+        PASS=$((PASS + 1)); echo "  PASS  crash/$_tag: heal's report is in the user's words, not the journal's"
+    fi
+
+    # (3) Nothing is left open that heal did not name. An entry that stays InProgress is a
+    #     legitimate outcome — heal must not close what it could not verify — but silence
+    #     over one is how a machine and its log disagree for ever.
+    _still=$(journal_open)
+    if [ "$_still" -gt 0 ] && ! printf '%s' "$_hout" | grep -q "could not be recovered"; then
+        hard "crash/$_tag: $_still operation(s) are still open after heal (this crash opened $_opened of them), and heal named none of them"
+        journal_open_names | head -5
+    else
+        PASS=$((PASS + 1)); echo "  PASS  crash/$_tag: nothing is open in the log that heal did not name"
+    fi
+
+    # (4) The model still parses. A crash that wedges the config is E1's family one layer down.
+    answers "crash/$_tag: the model still parses after the crash" lx check
+
+    # (5) The promise the whole loop exists to test: the next sync converges onto the
+    #     declaration, whatever the crash left behind.
+    if lx_slow -y sync >"/tmp/crash-conv-$_tag.out" 2>&1 && [ "$(crash_installed)" -eq "$CRASH_N" ]; then
+        PASS=$((PASS + 1)); echo "  PASS  crash/$_tag: the sync after the crash converged onto all $CRASH_N canaries"
+
+        # (6) ...and there is nothing left to do. A crash that leaves permanent phantom drift is
+        #     indistinguishable from a converged machine until you ask twice, which is the half
+        #     a single re-sync cannot see.
+        #
+        #     Asked of the PLAN, not of a phrase. The first version grepped for "already up to
+        #     date" and went red the day `sudo` joined the image — a converged sync that also
+        #     reports one protected package it left alone prints a different sentence and has
+        #     done nothing wrong. What "nothing left to do" means is zero planned changes.
+        if lx_slow -y sync >"/tmp/crash-idem-$_tag.out" 2>&1; then
+            lx --dry-run sync >"/tmp/crash-plan-$_tag.out" 2>&1
+            # A preview with no `Planned changes` block planned nothing. It is asserted that way
+            # rather than by a phrase because a converged machine that also has one unmanaged
+            # protected package prints the "Left in place" report and no "already up to date" —
+            # correct on both counts, and the second version of this check went red on it.
+            if ! grep -q "Planned changes" "/tmp/crash-plan-$_tag.out" \
+               || grep -qi "already up to date\|nothing to do" "/tmp/crash-plan-$_tag.out" \
+               || grep -q "install 0 *remove 0" "/tmp/crash-plan-$_tag.out"; then
+                PASS=$((PASS + 1)); echo "  PASS  crash/$_tag: and the preview after that plans no change at all"
+            else
+                hard "crash/$_tag: a converged machine still has a plan — $(grep -i 'install\|remove' "/tmp/crash-plan-$_tag.out" | head -2 | tr '\n' ' ')"
+            fi
+        else
+            hard "crash/$_tag: the sync after convergence failed"
+            excerpt "/tmp/crash-idem-$_tag.out" 6
+        fi
+    elif [ -n "$_grp" ]; then
+        # The package manager itself was killed mid-write. LiNix cannot undo that, and the
+        # contract here is smaller and still real: it must say what is wrong in words a person
+        # can act on, and not with a panic. Silence and a stack trace are the two failures.
+        if grep -qi "interrupt\|dpkg\|database\|lock\|run.*configure\|repair" "/tmp/crash-conv-$_tag.out"; then
+            PASS=$((PASS + 1)); echo "  PASS  crash/$_tag: the manager was left broken and LiNix named the manager's own state"
+        elif grep -q "panicked at\|RUST_BACKTRACE" "/tmp/crash-conv-$_tag.out"; then
+            hard "crash/$_tag: killing the package manager mid-write made LiNix panic"
+            excerpt "/tmp/crash-conv-$_tag.out" 6
+        else
+            hard "crash/$_tag: the sync after a mid-write kill neither converged nor said why"
+            excerpt "/tmp/crash-conv-$_tag.out" 6
+        fi
+    else
+        hard "crash/$_tag: the sync after the crash did not converge — still missing:$(crash_missing)"
+        excerpt "/tmp/crash-conv-$_tag.out" 6
+    fi
+
+    # The group kill leaves the PACKAGE MANAGER half-written, which is the whole point of it —
+    # and LiNix's own message says how to put that right (`dpkg was interrupted, you must
+    # manually run 'dpkg --configure -a'`). Following that sentence is itself the check: advice
+    # that does not work is worse than no advice.
+    #
+    # It also has to happen, or every section after this one inherits a machine whose package
+    # manager cannot install anything. On the run that first got this far, one deliberate kill
+    # turned four later checks red across three sections for a reason that was nothing to do
+    # with them — a harness that breaks the machine on purpose owes it a repair.
+    if [ -n "$_grp" ]; then
+        if repair_manager && lx_slow -y sync >/tmp/crash-repair.out 2>&1; then
+            PASS=$((PASS + 1)); echo "  PASS  crash/$_tag: the repair LiNix named put the manager back, and the next sync worked"
+        elif repair_manager; then
+            hard "crash/$_tag: the manager's own repair ran and the sync after it still failed"
+            excerpt /tmp/crash-repair.out 6
+        else
+            soft "crash/$_tag: no repair command is known for \`$BACKEND\`, so the machine stays as the kill left it and the checks after this inherit it"
+        fi
+    fi
+
+    crash_wipe
+    _left=$(crash_installed)
+    if [ "$_left" -eq 0 ]; then
+        PASS=$((PASS + 1)); echo "  PASS  crash/$_tag: the canaries are off the machine again"
+    else
+        # A removal that reports success and leaves the file is the worst outcome this whole
+        # section can produce, so it is hard and it prints what the removal actually said.
+        hard "crash/$_tag: the cleanup uninstall left $_left of$CRASH_PKGS still on PATH"
+        # The WHOLE log, not a tail. A ten-line tail of three uninstalls shows the end of the
+        # last one and nothing about which of them refused or why — which is how one inverted
+        # pair of lines in this function cost two thirds of this section's coverage and took
+        # two full runs to name.
+        sed 's/^/        | /' /tmp/crash-wipe.out
+    fi
+}
+
+# Before anything is killed: what does the log look like after an ordinary run?
+#
+# Nothing above this line crashed. Every sync, install and uninstall in sections 1–16 either
+# finished or failed, and both outcomes close their entry — so a `Completed`/`Failed` log is
+# what a clean run should leave, and every `InProgress` in it is an operation that reached a
+# manager and was never resolved. `needs_recovery()` keys on exactly that, which means a leak
+# here makes `heal` permanently believe it has work.
+#
+# It is checked HERE rather than inside the loop because otherwise the crash checks inherit it
+# and get the blame: the first draft of this section reported "23 operations open" as the
+# crash's doing, and 23 of them were already there.
+_baseline_open=$(journal_open)
+_baseline_total=$(journal_status_tally "InProgress Abandoned Failed Completed")
+if [ "$_baseline_total" -lt 1 ]; then
+    # An audit of an empty set passes without examining anything — the same collapse
+    # `too_few_to_audit` exists for. Sixteen sections of installs and removals have run above
+    # this line, so an empty log means the binary under test never recorded an operation, and
+    # "nothing is open" is then true of a program that did nothing at all. Measured: this was
+    # the one check in this round that survived a linix which fails everything.
+    hard "journal: the write-ahead log has no entries at all after sixteen sections of installs and removals — nothing recorded an operation, so there is nothing to audit"
+elif [ "$_baseline_open" -eq 0 ]; then
+    PASS=$((PASS + 1)); echo "  PASS  journal: an ordinary run left nothing open in the write-ahead log ($_baseline_total recorded, $(journal_incomplete) failed-and-retryable)"
+else
+    hard "journal: $_baseline_open operation(s) are still open in the write-ahead log and nothing crashed — every command in this run either finished or failed, and both close their entry"
+    journal_open_names | head -5
+fi
+
+# An entry `heal` cannot act on AT ALL, which is the branch a crash cannot produce on its own.
+#
+# The recovery loop is `if let Some(cap) = registry.get(&backend) { if let Some(handler) =
+# cap.as_installable() { … } }` — two nested `if let`s and **no `else` on either**. An entry
+# naming a manager this machine does not have is therefore neither recovered, nor failed, nor
+# mentioned, and `heal` returns Ok. That is W36's finding one branch over: W36 was "says it
+# failed and exits 0", this is "says nothing and exits 0".
+#
+# Built from a REAL journal line with its backend renamed, never hand-written: an `Install`
+# entry that omits `options` lands in the corrupt-log branch instead, which is a different
+# check answering a question nobody asked.
+_ghost="$(grep '"action":{"Install"' "$JOURNAL" 2>/dev/null | tail -1)"
+if [ -z "$_ghost" ]; then
+    soft "heal: no real install entry to build an unreachable one from, so the silent-skip branch was not driven"
+else
+    printf '%s\n' "$_ghost" \
+        | sed -e 's/"id":"[^"]*"/"id":"linixnosuchmgr:ghost:00000000000000000000000000000001"/' \
+              -e 's/"backend":"[^"]*"/"backend":"linixnosuchmgr"/g' \
+              -e 's/"name":"[^"]*"/"name":"ghost"/' \
+              -e 's/"status":"[^"]*"/"status":"InProgress"/' \
+        >> "$JOURNAL"
+    _hout=$(lx heal 2>&1); _hrc=$?
+    if printf '%s' "$_hout" | grep -q "linixnosuchmgr"; then
+        PASS=$((PASS + 1)); echo "  PASS  heal: an operation it cannot act on is named rather than skipped in silence"
+    else
+        hard "heal: an entry naming a manager this machine does not have was skipped without a word (rc=$_hrc)"
+        printf '%s\n' "$_hout" | tail -4 | sed 's/^/        | /'
+    fi
+    if [ "$_hrc" -ne 0 ]; then
+        PASS=$((PASS + 1)); echo "  PASS  heal: and it says so in the exit code rather than reporting success"
+    else
+        hard "heal: an operation was left unresolved and heal exited 0 — \`linix heal && echo ok\` prints ok (W36's family)"
+    fi
+    # Taken back out AFTER the assertions, never before one. The scrub that runs first and then
+    # asserts absence is E2, and this harness deleted its last one for that reason.
+    grep -v linixnosuchmgr "$JOURNAL" > "$JOURNAL.tmp" 2>/dev/null
+    mv "$JOURNAL.tmp" "$JOURNAL"
+fi
+
+if [ -n "$SMOKE" ]; then
+    skip_smoke "the crash-and-heal loop (it installs and removes real packages)"
+elif [ "$CRASH_N" -lt 2 ]; then
+    soft "crash/heal: this image already has pv, dos2unix and ncdu, so a sync over them is not a multi-step transaction — named rather than run vacuously"
+else
+    # The control. If this cannot converge the fixture is wrong, and every iteration below
+    # would be measuring the fixture instead of the write-ahead log.
+    crash_declare
+    if lx_slow -y sync >/tmp/crash-control.out 2>&1 && [ "$(crash_installed)" -eq "$CRASH_N" ]; then
+        PASS=$((PASS + 1)); echo "  PASS  crash/heal: the control sync installs all $CRASH_N canaries ($CRASH_PKGS)"
+        crash_wipe
+
+        # The log is open and the manager has done nothing yet.
+        crash_run open open
+        # The manager is part-way through: at least one canary has reached the filesystem.
+        crash_run midway 1
+        # And the hostile one — the manager dies too, mid-write. `setsid` is what puts LiNix
+        # in a group of its own so the kill reaches the child; an image without it says so
+        # rather than quietly running the gentler test twice.
+        if on_path setsid; then
+            crash_run groupkill 1 group
+        else
+            soft "crash/groupkill: this image has no \`setsid\`, so LiNix cannot be put in a process group of its own and the package manager cannot be killed with it"
+        fi
+    else
+        soft "crash/heal: the control sync did not install$CRASH_PKGS on this image, so the crash loop has no fixture — $(tr '\n' ' ' < /tmp/crash-control.out | tail -c 300)"
+        crash_wipe
+    fi
+fi
+
+# ==========================================================================
+# 16e. TWO RUNS AT ONCE, AND KILLING THE ONE THAT HOLDS THE LOCK (GRADER §6)
+# ==========================================================================
+# `DataLock` is an OS lock on an open handle and `main.rs` waits 120s for it. Both facts were
+# asserted only by unit tests inside one process, which is the one place a file lock cannot
+# fail: `try_lock_exclusive` on a handle this process already holds is a different code path
+# from a second *process* arriving. Nothing had ever started two LiNixes.
+#
+# The third check is the one with teeth. The lock is released by the kernel when the holder
+# dies, and the *stamp* beside it is written by a `Drop` that SIGKILL never runs — so after a
+# crash the file on disk still names a process that no longer exists. A wait driven off that
+# file rather than off the lock would hang for two minutes on a corpse.
+echo "[16e] Two runs at once, and killing the lock holder"
+
+LOCKFILE="$LINIX_DATA_DIR/linix.lock"
+LOCKOWNER="$LINIX_DATA_DIR/linix.lock.owner"
+
+# The elapsed-time oracle. `date +%s` is whole seconds everywhere, including busybox.
+since() { echo $(( $(date +%s) - $1 )); }
+
+if [ -n "$SMOKE" ]; then
+    skip_smoke "the two-writers checks (they need a mutating command to hold the lock)"
+elif ! on_path flock; then
+    # Named, not skipped silently. Without `flock` the holder cannot be made deterministic and
+    # every check below would be a race dressed up as an assertion.
+    soft "two-writers: this image has no \`flock\`, so a second writer cannot be held against a lock this harness controls"
+else
+    # --- (a) a second writer waits, and says who it is waiting for -----------
+    # `flock` takes the same OS lock on the same file LiNix does, so the holder is this
+    # harness rather than a second LiNix whose lifetime is a guess.
+    flock "$LOCKFILE" -c 'sleep 12' &
+    _holder=$!
+    sleep 1
+    _t0=$(date +%s)
+    $TO "$LINIX" -y sync >/tmp/two-writers.out 2>&1
+    _rc=$?
+    _waited=$(since "$_t0")
+    kill -9 "$_holder" 2>/dev/null; wait "$_holder" 2>/dev/null
+
+    if grep -q "waiting for the data directory" /tmp/two-writers.out; then
+        PASS=$((PASS + 1)); echo "  PASS  two-writers: the second run announced the wait instead of going quiet"
+    else
+        hard "two-writers: a second writer met a held lock and said nothing about waiting"
+        excerpt /tmp/two-writers.out 6
+    fi
+    # It waited for the holder rather than walking past it. Under 8s means it did not wait for
+    # a 12s holder at all, which is the failure this check exists for — a lock that is taken
+    # and not honoured is worse than no lock, because the message says it is safe.
+    if [ "$_waited" -ge 8 ]; then
+        PASS=$((PASS + 1)); echo "  PASS  two-writers: it waited ${_waited}s for the holder rather than writing alongside it"
+    else
+        hard "two-writers: the second run got past a held lock in ${_waited}s (the holder was to keep it for 12s)"
+    fi
+    # And it got through in the end: a wait that turns into a permanent refusal is a
+    # different bug wearing the same message.
+    #
+    # The `_waited` clause is not decoration. A binary that returns instantly also exits 0, so
+    # "it succeeded" alone passes for a program that never took the lock at all — measured, it
+    # was one of five checks here that survived a do-nothing binary. Succeeding is only the
+    # right answer if it waited first.
+    if { [ "$_rc" -eq 0 ] || [ "$_rc" -eq 2 ]; } && [ "$_waited" -ge 8 ]; then
+        PASS=$((PASS + 1)); echo "  PASS  two-writers: and it proceeded once the lock was free (rc=$_rc, after ${_waited}s)"
+    elif [ "$_rc" -eq 0 ] || [ "$_rc" -eq 2 ]; then
+        hard "two-writers: it succeeded in ${_waited}s without ever waiting for the holder"
+    else
+        hard "two-writers: the second run never recovered after the holder released (rc=$_rc)"
+        excerpt /tmp/two-writers.out 6
+    fi
+
+    # --- (b) and (c) share one holder, and it is a REAL LiNix ----------------
+    # The first draft of (c) held the lock with `flock … -c 'sleep 300'` and killed the `flock`
+    # process. `sleep` is its CHILD and inherits the open descriptor, so the lock was still held
+    # by a live process — LiNix waited its whole 120s and said so, correctly, and the check
+    # scored the product for the harness's mistake. It is the same trap the release notes
+    # already record about killing a wrapper instead of the script. So the holder is LiNix
+    # itself, which is also the only holder whose stamp is worth reading.
+    #
+    # The holder is given WORK, and is then killed the instant its stamp appears. A sync with
+    # nothing to do was the first design and it finished before the poll could catch it holding
+    # — the check reported "no holder to measure" and proved nothing. The stamp is written when
+    # the lock is taken, which is before planning, so the kill still lands well before a package
+    # manager is spawned: a holder killed mid-`apt` would leave *dpkg's* lock behind and the run
+    # after it would fail for a reason that is not the one under test.
+    rm -f "$LOCKOWNER"
+    crash_declare
+    $LINIX -y sync >/tmp/lock-holder.out 2>&1 &
+    _holder=$!
+    _spins=0
+    while [ "$_spins" -lt 600 ] && [ ! -s "$LOCKOWNER" ]; do
+        kill -0 "$_holder" 2>/dev/null || break
+        sleep "$CRASH_POLL"; _spins=$((_spins + 1))
+    done
+
+    if [ ! -s "$LOCKOWNER" ] || ! kill -0 "$_holder" 2>/dev/null; then
+        soft "lock: the holder finished before it could be caught holding, so the by-pid and killed-holder checks had nothing to measure"
+        kill -9 "$_holder" 2>/dev/null; wait "$_holder" 2>/dev/null
+    else
+        _stamp="$(cat "$LOCKOWNER")"
+        # It names the command and the pid, not "another linix". A wait with no name is
+        # indistinguishable from a hang, which is the whole reason the stamp file exists.
+        if printf '%s' "$_stamp" | grep -q "pid $_holder"; then
+            PASS=$((PASS + 1)); echo "  PASS  lock: the holder published its own command and pid — $_stamp"
+        else
+            hard "lock: the holder's stamp does not name pid $_holder — it says '$_stamp'"
+        fi
+
+        # --- (c) SIGKILL the holder ------------------------------------------
+        # `Drop` never runs, so `linix.lock.owner` outlives the process that wrote it. The lock
+        # itself is an OS lock on an open handle and the kernel drops it — so if anything ever
+        # decided to wait by reading that FILE, this is where it costs two minutes.
+        kill -9 "$_holder" 2>/dev/null; wait "$_holder" 2>/dev/null
+        if [ -s "$LOCKOWNER" ]; then
+            PASS=$((PASS + 1)); echo "  PASS  lock: the stamp outlived the process that wrote it, which is the state under test"
+        else
+            soft "lock: the stamp was already gone after the kill, so the corpse case below is weaker than intended"
+        fi
+
+        _t0=$(date +%s)
+        $TO "$LINIX" -y sync >/tmp/lock-corpse.out 2>&1
+        _rc=$?
+        _took=$(since "$_t0")
+        if [ "$_rc" -ne 0 ] && [ "$_rc" -ne 2 ]; then
+            hard "lock: a run after a killed holder failed (rc=$_rc) instead of taking the free lock"
+            excerpt /tmp/lock-corpse.out 6
+        elif [ "$_took" -ge 30 ]; then
+            hard "lock: the next run waited ${_took}s on a holder that was already dead — the stale stamp file was believed over the lock"
+        else
+            PASS=$((PASS + 1)); echo "  PASS  lock: a killed holder's lock died with it — the next run took ${_took}s, not the 120s timeout"
+        fi
+    fi
+    crash_wipe
+fi
+
+# ==========================================================================
+# 16f. sudo, WITH A REAL PASSWORD, ON A REAL TERMINAL (GRADER §4)
+# ==========================================================================
+# Every check above this line runs as root, and `run_on` inserts `sudo` only when
+# `!Self::is_root()` — so the whole privileged path is dead code in this container and has
+# never executed anywhere. It is on every mutation of every system manager.
+#
+# It cannot be tested through a pipe. `ChildStdin::Interactive` exists so that sudo can ask
+# for a password on the terminal LiNix was started from; with no terminal there is nothing to
+# ask, and the check would be measuring the absence of the thing it is for. So this section
+# makes a user with a password, and drives LiNix on a pty.
+echo "[16f] sudo with a real password, on a pty"
+
+SUDO_USER_NAME=linixsudo
+SUDO_PW=linix-harness-pw
+SUDO_CFG=/tmp/linix-sudo-config
+SUDO_STATE=/tmp/linix-sudo-state
+SUDO_DRIVER=/tmp/linix-sudo-drive.sh
+
+# Every one of these is DETECTED. An image without `sudo`, without a way to set a password, or
+# without a pty tool is a fact about the image, and Q17's rule is that an exemption has to be
+# something the harness genuinely cannot do — measured here, never assumed from the distro.
+sudo_blocker() {
+    # THE FIRST CHECK, and it is not about capability. This section creates a real user, sets a
+    # real password and writes a real `/etc/sudoers.d` file — and this script is not only run in
+    # a container: `scripts/harness-mutation-test.sh` executes it ON THE HOST, from both release
+    # scripts, to measure whether its checks can fail. That pair once silently replaced a
+    # developer's git identity and thirteen commits went out under it. A sudoer is worse.
+    #
+    # `LINIX_IT_IMAGE` is set by every integration Dockerfile and by nothing else, and
+    # `harness-logic-test.sh` already asserts each image declares it — so it is the one marker
+    # that means "this machine is disposable" and cannot drift without a red gate.
+    [ -n "${LINIX_IT_IMAGE:-}" ] \
+        || { echo "this is not a disposable image (no LINIX_IT_IMAGE), and these checks add a user and a sudoers file"; return 0; }
+    on_path sudo      || { echo "this image has no \`sudo\`"; return 0; }
+    on_path chpasswd  || { echo "this image cannot set a password (no \`chpasswd\`)"; return 0; }
+    on_path script    || { echo "this image has no \`script\`, so LiNix cannot be given a terminal"; return 0; }
+    on_path useradd || on_path adduser || { echo "this image cannot create a user"; return 0; }
+    echo ""
+}
+
+# `-e` — exit with the CHILD's status — is util-linux's and busybox's `script` does not have
+# it. Every assertion below reads an exit code, and without `-e` that code is `script`'s own:
+# the checks would all pass on an image where LiNix failed every time. So it is a blocker and
+# not a fallback, asked of the binary rather than guessed from the distro.
+SCRIPT_FLAGS=""
+script -qec true /dev/null >/dev/null 2>&1 && SCRIPT_FLAGS="-qec"
+
+# The command goes in a FILE, never in a quoted string handed to `su -c`. `script -qec '…'`
+# inside `su -c "…"` is three levels of quoting over a command that itself contains quotes,
+# and the failure mode is not an error — it is a shell that runs something subtly different
+# and a check that passes for the wrong reason.
+write_sudo_driver() { # $1 = the linix argv, as one string
+    cat > "$SUDO_DRIVER" <<EOF
+#!/bin/sh
+export LINIX_CONFIG_DIR="$SUDO_CFG"
+export LINIX_DATA_DIR="$SUDO_STATE"
+export HOME="/home/$SUDO_USER_NAME"
+script $SCRIPT_FLAGS "$LINIX $1" /dev/null
+EOF
+    chmod 0755 "$SUDO_DRIVER"
+}
+
+# Runs LiNix as the unprivileged user, on a pty, with $1 typed at whatever asks. `$2` is what
+# gets typed; an empty string means the terminal is there and nobody types anything, which is
+# the case that separates "asked and got no answer" from "never asked".
+run_as_sudoer() { # linix-argv  password-to-type  outfile
+    write_sudo_driver "$1"
+    if [ -n "$2" ]; then
+        printf '%s\n' "$2" | su "$SUDO_USER_NAME" -c "$SUDO_DRIVER" >"$3" 2>&1
+    else
+        su "$SUDO_USER_NAME" -c "$SUDO_DRIVER" </dev/null >"$3" 2>&1
+    fi
+}
+
+SUDO_WHY="$(sudo_blocker)"
+if [ -n "$SMOKE" ]; then
+    skip_smoke "the sudo checks (they run a real privileged mutation)"
+elif [ -n "$SUDO_WHY" ]; then
+    soft "sudo: not driven here — $SUDO_WHY"
+elif [ -z "$SCRIPT_FLAGS" ]; then
+    soft "sudo: this image's \`script\` has no -e, so it reports its own exit status rather than LiNix's and every check below would pass regardless of what LiNix did"
+else
+    userdel -r "$SUDO_USER_NAME" >/dev/null 2>&1 || true
+    if on_path useradd; then
+        useradd -m -s /bin/sh "$SUDO_USER_NAME" >/dev/null 2>&1
+    else
+        adduser -D -s /bin/sh "$SUDO_USER_NAME" >/dev/null 2>&1
+    fi
+    printf '%s:%s\n' "$SUDO_USER_NAME" "$SUDO_PW" | chpasswd >/dev/null 2>&1
+
+    # A drop-in rather than a group. `sudo` is `sudo` on debian and `wheel` everywhere else,
+    # and this line says the same thing on all of them. Deliberately WITHOUT `NOPASSWD`: a
+    # passwordless sudoer would make every check below pass without a password ever being
+    # typed, which is the whole subject.
+    mkdir -p /etc/sudoers.d
+    printf '%s ALL=(ALL) ALL\n' "$SUDO_USER_NAME" > /etc/sudoers.d/linix-harness
+    chmod 0440 /etc/sudoers.d/linix-harness
+
+    rm -rf "$SUDO_CFG" "$SUDO_STATE"
+    mkdir -p "$SUDO_CFG" "$SUDO_STATE"
+    chown -R "$SUDO_USER_NAME" "$SUDO_CFG" "$SUDO_STATE" 2>/dev/null || true
+
+    # Prove the fixture before trusting any result from it. A user who cannot sudo at all, or
+    # whose password does not work, would make "LiNix failed" and "the image is wrong"
+    # indistinguishable — and the first reading is the flattering one.
+    cat > /tmp/linix-sudo-probe.sh <<EOF
+#!/bin/sh
+sudo -k
+script $SCRIPT_FLAGS "sudo id -u" /dev/null
+EOF
+    chmod 0755 /tmp/linix-sudo-probe.sh
+    # `tr -d '\r'`: a pty terminates lines with CRLF, so an exact match against `0` fails on
+    # output that is correct. That is the shape of bug that makes a fixture look broken.
+    if printf '%s\n' "$SUDO_PW" | su "$SUDO_USER_NAME" -c /tmp/linix-sudo-probe.sh 2>&1 | tr -d '\r' | grep -qx 0; then
+        # NOT counted as a pass. It is a statement about `sudo` and this image, with no LiNix in
+        # it at all — so it survives a do-nothing binary by construction, and a precondition
+        # that spends coverage budget is a check pretending to be one.
+        echo "        fixture ok: $SUDO_USER_NAME reaches uid 0 by typing a password"
+        SUDO_READY=1
+    else
+        soft "sudo: the unprivileged user could not sudo even outside LiNix, so this image cannot answer the question"
+        SUDO_READY=""
+    fi
+
+    if [ -n "$SUDO_READY" ]; then
+        # `init` first: without a priority file V.15 refuses the backend, and the refusal
+        # would be scored as a sudo failure.
+        run_as_sudoer "-y init" "$SUDO_PW" /tmp/sudo-init.out
+
+        # --- (1) the prompt reaches the screen -------------------------------
+        # `update` and not `install`: it needs root on every system manager, costs seconds,
+        # and depends on no package name. What is under test is the escalation, not apt.
+        su "$SUDO_USER_NAME" -c "sudo -k" >/dev/null 2>&1
+        run_as_sudoer "update" "$SUDO_PW" /tmp/sudo-update.out
+        _rc=$?
+        if grep -qi "password for\|Password:" /tmp/sudo-update.out; then
+            PASS=$((PASS + 1)); echo "  PASS  sudo: the password prompt reached the terminal"
+        else
+            hard "sudo: a privileged mutation ran as a non-root user and no password prompt ever reached the screen"
+            excerpt /tmp/sudo-update.out 8
+        fi
+        # --- (2) and the password reached sudo -------------------------------
+        if [ "$_rc" -eq 0 ]; then
+            PASS=$((PASS + 1)); echo "  PASS  sudo: the typed password reached sudo and the privileged command ran"
+        else
+            hard "sudo: the password was typed at a real prompt and the privileged command still failed (rc=$_rc)"
+            excerpt /tmp/sudo-update.out 8
+        fi
+
+        # --- (3) a wrong password fails loudly, and quickly -------------------
+        # The two failures that matter are silence and a hang. sudo retries three times before
+        # giving up, so the bound is generous and still far under `timeout`'s.
+        su "$SUDO_USER_NAME" -c "sudo -k" >/dev/null 2>&1
+        _t0=$(date +%s)
+        run_as_sudoer "update" "definitely-not-the-password" /tmp/sudo-wrong.out
+        _rc=$?
+        _took=$(since "$_t0")
+        if [ "$_rc" -eq 0 ]; then
+            hard "sudo: a wrong password produced a successful privileged command"
+        elif [ "$_took" -ge 120 ]; then
+            hard "sudo: a wrong password left LiNix waiting ${_took}s instead of reporting a failure"
+        elif grep -qi "sorry, try again\|incorrect password\|authentication fail\|sudo" /tmp/sudo-wrong.out; then
+            PASS=$((PASS + 1)); echo "  PASS  sudo: a wrong password fails in ${_took}s and says which program refused"
+        else
+            hard "sudo: a wrong password failed without naming sudo anywhere in the output"
+            excerpt /tmp/sudo-wrong.out 8
+        fi
+
+        # --- (4) a terminal nobody types at is not a hang ---------------------
+        # The state a CI job is in. sudo has a tty, asks, and gets EOF; the honest outcome is
+        # a prompt and a prompt failure, and the one unacceptable outcome is a wedge.
+        su "$SUDO_USER_NAME" -c "sudo -k" >/dev/null 2>&1
+        _t0=$(date +%s)
+        run_as_sudoer "update" "" /tmp/sudo-silent.out
+        _rc=$?
+        _took=$(since "$_t0")
+        # The output has to name the program that asked. Without that clause "it failed" is
+        # true of a binary that fails at everything, and this passed against one.
+        if [ "$_took" -ge 120 ]; then
+            hard "sudo: a terminal with nobody at it wedged LiNix for ${_took}s"
+        elif [ "$_rc" -ne 0 ] && grep -qi "password\|sudo" /tmp/sudo-silent.out; then
+            PASS=$((PASS + 1)); echo "  PASS  sudo: an unanswered prompt is a bounded failure (${_took}s) that names sudo, not a wedge"
+        elif [ "$_rc" -ne 0 ]; then
+            hard "sudo: the run failed with nobody at the terminal and never mentioned a password or sudo — that is a different failure"
+            excerpt /tmp/sudo-silent.out 6
+        else
+            soft "sudo: an unanswered prompt still succeeded — this host's sudo timestamp was still warm"
+        fi
+
+        # --- (5) one run, one password ----------------------------------------
+        # WITHIN a single LiNix run, not across two. The first version of this check ran
+        # `update` twice and expected the second not to ask — and sudo asked, correctly: its
+        # timestamp is per-tty (`tty_tickets`, on by default) and each drive here gets a fresh
+        # pty. That check was measuring sudo's own design and calling it a LiNix defect.
+        #
+        # What LiNix owes is that ONE command which escalates more than once asks at most once.
+        # A sync carrying both an install and a removal runs the manager twice, so the count of
+        # prompts in one transcript is the measurement.
+        #
+        # **The long-run keepalive is still not covered and this does not pretend to cover it.**
+        # `start_sudo_keepalive` exists for a sync that outlives sudo's 15-minute timestamp, and
+        # nothing here runs for fifteen minutes. Naming that is the point: a proxy that cannot
+        # fail for the reason it claims to test is the vacuous check this harness exists to
+        # refuse.
+        if [ -n "$CRASH_PKGS" ]; then
+            _a=""; _b=""
+            for _c in $CRASH_PKGS; do
+                if [ -z "$_a" ]; then _a="$_c"; elif [ -z "$_b" ]; then _b="$_c"; fi
+            done
+        fi
+        if [ -z "${_b:-}" ]; then
+            soft "sudo: fewer than two canaries free on this host, so no single run performs both an install and a removal"
+        else
+            su "$SUDO_USER_NAME" -c "sudo -k" >/dev/null 2>&1
+            run_as_sudoer "-y install $BACKEND:$_a" "$SUDO_PW" /tmp/sudo-seed.out
+            su "$SUDO_USER_NAME" -c "sudo -k" >/dev/null 2>&1
+            # One run, two manager invocations: $_a comes out, $_b goes in.
+            printf '%s:%s\n' "$BACKEND" "$_b" > "$SUDO_CFG/modules/imperative.txt"
+            chown "$SUDO_USER_NAME" "$SUDO_CFG/modules/imperative.txt" 2>/dev/null || true
+            run_as_sudoer "-y sync" "$SUDO_PW" /tmp/sudo-onerun.out
+            _rc=$?
+            _asks=$(grep -c "password for" /tmp/sudo-onerun.out 2>/dev/null)
+            [ -n "$_asks" ] || _asks=0
+            if [ "$_rc" -ne 0 ]; then
+                soft "sudo: the two-operation run did not complete (rc=$_rc), so the prompt count says nothing — $(tr '\n' ' ' < /tmp/sudo-onerun.out | tail -c 200)"
+            elif [ "$_asks" -le 1 ]; then
+                PASS=$((PASS + 1)); echo "  PASS  sudo: one run that installed and removed asked for a password $_asks time(s)"
+            else
+                hard "sudo: one run asked for a password $_asks times — the timestamp is not being held across a sync's manager calls"
+            fi
+        fi
+
+        # --- (6) and a real package, installed by a user who is not root ------
+        # The end of the path: escalation, the manager, and a file on disk. Whichever crash
+        # canary this host does not already have — and if it has them all, that is said out
+        # loud rather than quietly dropping the only check here that touches a package.
+        _sudo_pkg=""
+        for _c in $CRASH_PKGS; do on_path "$_c" || { _sudo_pkg="$_c"; break; }; done
+        if [ -z "$_sudo_pkg" ]; then
+            soft "sudo: every crash canary is installed on this host, so the privileged install had nothing to install"
+        else
+            su "$SUDO_USER_NAME" -c "sudo -k" >/dev/null 2>&1
+            run_as_sudoer "-y install $BACKEND:$_sudo_pkg" "$SUDO_PW" /tmp/sudo-install.out
+            _rc=$?
+            _sudo_installed=""
+            if [ "$_rc" -eq 0 ] && on_path "$_sudo_pkg"; then
+                PASS=$((PASS + 1)); echo "  PASS  sudo: a non-root user installed $BACKEND:$_sudo_pkg, and the file is on disk"
+                _sudo_installed=1
+            else
+                hard "sudo: the privileged install of $BACKEND:$_sudo_pkg reported rc=$_rc and $(on_path "$_sudo_pkg" && echo 'the binary is there anyway' || echo 'nothing reached PATH')"
+                excerpt /tmp/sudo-install.out 8
+            fi
+            # Removal is the same path and the guard sits on it; a run that only ever installs
+            # leaves the privileged REMOVE untested, which is the more dangerous half.
+            #
+            # Gated on the install having happened. "The binary is not on PATH" is true before
+            # any install too, so without this the check passes against a binary that does
+            # nothing at all — measured: it was one of five survivors of the mutation gate.
+            if [ -z "$_sudo_installed" ]; then
+                soft "sudo: the privileged removal was not driven, because the install it would undo did not happen"
+            else
+                su "$SUDO_USER_NAME" -c "sudo -k" >/dev/null 2>&1
+                run_as_sudoer "-y uninstall $BACKEND:$_sudo_pkg" "$SUDO_PW" /tmp/sudo-remove.out
+                if on_path "$_sudo_pkg"; then
+                    hard "sudo: the privileged uninstall of $BACKEND:$_sudo_pkg left the binary on PATH"
+                    excerpt /tmp/sudo-remove.out 8
+                else
+                    PASS=$((PASS + 1)); echo "  PASS  sudo: and the same user removed it again"
+                fi
+            fi
+        fi
+    fi
+
+    # Put the machine back, declaratively — an empty manifest and a sync, which is the same
+    # path a user takes and one more exercise of the privileged REMOVE. Doing it with `apt`
+    # directly would tidy up without testing anything, and would leave the sections after this
+    # one guessing why their canaries were already installed.
+    if [ -n "${SUDO_READY:-}" ]; then
+        # What this section actually put on the machine, read BEFORE the cleanup. An empty
+        # manifest removing nothing is not a pass — and "nothing is installed" is the state a
+        # do-nothing binary leaves too, which is how this check survived the mutation gate.
+        _had=""
+        for _c in $CRASH_PKGS; do on_path "$_c" && _had="$_had $_c"; done
+        : > "$SUDO_CFG/modules/imperative.txt"
+        chown "$SUDO_USER_NAME" "$SUDO_CFG/modules/imperative.txt" 2>/dev/null || true
+        su "$SUDO_USER_NAME" -c "sudo -k" >/dev/null 2>&1
+        run_as_sudoer "-y sync" "$SUDO_PW" /tmp/sudo-cleanup.out
+        _left=""
+        for _c in $CRASH_PKGS; do on_path "$_c" && _left="$_left $_c"; done
+        if [ -z "$_had" ]; then
+            soft "sudo: this section installed nothing, so an empty manifest had nothing to take back"
+        elif [ -z "$_left" ]; then
+            PASS=$((PASS + 1)); echo "  PASS  sudo: an empty manifest took back everything this section installed —$_had"
+        else
+            hard "sudo: the section's own packages survived an empty manifest —$_left"
+            excerpt /tmp/sudo-cleanup.out 8
+        fi
+    fi
+
+    rm -f /etc/sudoers.d/linix-harness
+    userdel -r "$SUDO_USER_NAME" >/dev/null 2>&1 || true
+fi
+
+# ==========================================================================
+# 16g. A SNAPSHOT, A MUTATION, AND A RESTORE — on a real device (GRADER §5)
+# ==========================================================================
+# `SnapshotProvider::restore` had never executed. Section 13b gives btrfs and lvm real block
+# devices and section 14 installs into them, but a lifecycle is install → list → remove and by
+# construction never restores anything. So the most destructive effector in the program — the
+# one that puts a filesystem back — was argv-tested and unrun, which is exactly what `GRADER`
+# §5 says needs a disposable machine.
+#
+# lvm and not btrfs, and the reason is in the shipped rows rather than in a preference: btrfs's
+# built-in row is create-only (`restore_how`, no `restore` argv) because a live btrfs rollback
+# replaces the root subvolume, and zfs needs an out-of-tree kernel module this container's host
+# does not have. lvm is U27's exemplar USER row — thirty lines of data in `adapters/` — so
+# driving it proves the plugin door as well as the effector, which is the K17/U1 rule.
+echo "[16g] Snapshot → mutate → restore, on a real device"
+
+LVM_ORIGIN=""
+if [ -n "$SMOKE" ]; then
+    skip_smoke "the snapshot restore round-trip (it makes and merges a real volume)"
+elif [ -z "$STORAGE_LVM" ]; then
+    soft "restore: no volume group on this image — 13b said why, and only the \`storage\` image (--privileged) builds one"
+elif ! command -v mkfs.ext4 >/dev/null 2>&1; then
+    soft "restore: no mkfs.ext4 here, so the origin volume has no filesystem to put a marker file in"
+else
+    LVM_ORIGIN=restoreorigin
+    LVM_MNT=/mnt/linix-restore
+    lvremove -y "$STORAGE_LVM/$LVM_ORIGIN" >/dev/null 2>&1
+    mkdir -p "$LVM_MNT"
+    if ! lvcreate -y -n "$LVM_ORIGIN" -L 128M "$STORAGE_LVM" >/tmp/restore-setup.out 2>&1 \
+       || ! mkfs.ext4 -q -F "/dev/$STORAGE_LVM/$LVM_ORIGIN" >>/tmp/restore-setup.out 2>&1; then
+        soft "restore: could not build an origin volume with a filesystem here — $(tr '\n' ' ' < /tmp/restore-setup.out | tail -c 200)"
+        LVM_ORIGIN=""
+    fi
+fi
+
+if [ -n "$LVM_ORIGIN" ]; then
+    # The provider, as a row in the user's own adapters file. `restores_running_system` is the
+    # one value U27 ruled can never be inferred — LiNix will not run a "restore" for a provider
+    # that did not say it can finish one — so this line is the whole capability.
+    mkdir -p "$LINIX_CONFIG_DIR/adapters"
+    cat > "$LINIX_CONFIG_DIR/adapters/snapshot.toml" <<EOSNAP
+[[snapshot]]
+name = "lvm"
+detect = "lvcreate"
+source = "$STORAGE_LVM/$LVM_ORIGIN"
+id_template = "linix_{label}_{ts}"
+create = ["lvcreate", "-y", "-s", "-n", "{id}", "-L", "64M", "{source}"]
+list = ["lvs", "--noheadings", "-o", "lv_name", "$STORAGE_LVM"]
+list_pattern = "(linix_\\\\S+)"
+delete = ["lvremove", "-y", "$STORAGE_LVM/{id}"]
+restore = ["lvconvert", "--merge", "-y", "$STORAGE_LVM/{id}"]
+restores_running_system = true
+EOSNAP
+    # II.12: a row in a pulled config is argv a shared repo can run, so it passes the hook
+    # ledger. Approving it is part of the path a real user walks, not a step around it.
+    ok "restore: \`lock\` approves the snapshot provider row" lx lock
+
+    _marker_before="$LVM_MNT/before-the-snapshot"
+    _marker_after="$LVM_MNT/after-the-snapshot"
+    mount "/dev/$STORAGE_LVM/$LVM_ORIGIN" "$LVM_MNT" >/dev/null 2>&1
+    echo "this file existed when the snapshot was taken" > "$_marker_before"
+    sync; umount "$LVM_MNT" >/dev/null 2>&1
+
+    # --- (a) a snapshot is taken, for real, by an ordinary mutating sync -------
+    # Not by a test hook: `auto_snapshot` runs before every mutating sync, so this is the same
+    # code path a user's `linix sync` takes. The canaries are declared to give it work — a sync
+    # with nothing to do has nothing to snapshot before.
+    crash_declare
+    lx_slow -y sync >/tmp/restore-sync.out 2>&1
+    _snaps="$(lvs --noheadings -o lv_name "$STORAGE_LVM" 2>/dev/null | tr -d ' ' | grep '^linix_' | head -1)"
+    if [ -n "$_snaps" ]; then
+        PASS=$((PASS + 1)); echo "  PASS  restore: a mutating sync took a real LVM snapshot — $_snaps"
+        grep_ok "restore: snapshot list reports it" "linix_" lx snapshot list
+
+        # --- (b) the control: no terminal, no gallery -------------------------
+        # Choosing from a gallery needs somewhere to choose, and the refusal must say so and
+        # name the commands that do the same job without asking. Exit 3, because LiNix declined
+        # on purpose rather than broke.
+        #
+        # It runs HERE and not before the snapshot exists: with an empty gallery the command
+        # says "No system snapshots found" and exits 0, correctly and long before it looks for a
+        # terminal — so asserting the refusal against an empty gallery asserts nothing.
+        refuses_with_3 "restore: the gallery refuses a shell with no terminal" lx snapshot restore
+        grep_ok "restore: and names what to use instead" \
+            "snapshot list\|rollback" lx snapshot restore
+    elif grep -q "already up to date" /tmp/restore-sync.out; then
+        soft "restore: the sync had nothing to do, so there was no mutation for a pre-sync snapshot to precede — the fixture, not the provider"
+    else
+        hard "restore: a mutating sync took no snapshot, so the provider row was loaded and never used"
+        excerpt /tmp/restore-sync.out 8
+    fi
+
+    if [ -n "$_snaps" ] && [ -n "$SCRIPT_FLAGS" ]; then
+        # --- (c) the regression test for today's fix, driven live -------------
+        # `show_diff_and_confirm` matched the provider BY NAME — `btrfs` or `timeshift`, and
+        # `Unsupported snapshot backend: <anything else>` — so every provider U27 turned into a
+        # row was refused before the confirmation, whatever its row declared. Typing a word that
+        # is not RESTORE is the safe half of the same drive: it must reach the prompt and then
+        # do nothing.
+        cat > /tmp/linix-restore-drive.sh <<EOF
+#!/bin/sh
+export LINIX_CONFIG_DIR="$LINIX_CONFIG_DIR"
+export LINIX_DATA_DIR="$LINIX_DATA_DIR"
+printf '\\nno\\n' | script $SCRIPT_FLAGS "$LINIX snapshot restore" /dev/null
+EOF
+        chmod 0755 /tmp/linix-restore-drive.sh
+        sh /tmp/linix-restore-drive.sh >/tmp/restore-abort.out 2>&1
+        if grep -q "Unsupported snapshot backend" /tmp/restore-abort.out; then
+            hard "restore: the gallery still refuses a provider for its name — the row declares a live restore and the command does not read the row"
+            excerpt /tmp/restore-abort.out 6
+        elif grep -q "Type 'RESTORE'" /tmp/restore-abort.out; then
+            PASS=$((PASS + 1)); echo "  PASS  restore: a provider declared in a user row reaches the confirmation"
+        else
+            hard "restore: the gallery never reached its confirmation prompt"
+            excerpt /tmp/restore-abort.out 8
+        fi
+        # And it did nothing. A confirmation that acts on the wrong answer is worse than one
+        # that never asked, so this is asked of LVM and not of LiNix's output.
+        if lvs --noheadings -o lv_name "$STORAGE_LVM" 2>/dev/null | tr -d ' ' | grep -q '^linix_'; then
+            PASS=$((PASS + 1)); echo "  PASS  restore: answering anything but RESTORE left the snapshot alone"
+        else
+            hard "restore: the snapshot was consumed by a confirmation that was answered 'no'"
+        fi
+
+        # --- (d) the round trip, and the filesystem is the witness -------------
+        # The mutation is made HERE, between the snapshot and the restore, so that "the restore
+        # put it back" is a statement about bytes on a device rather than about a message.
+        mount "/dev/$STORAGE_LVM/$LVM_ORIGIN" "$LVM_MNT" >/dev/null 2>&1
+        rm -f "$_marker_before"
+        echo "this file was written after the snapshot" > "$_marker_after"
+        sync; umount "$LVM_MNT" >/dev/null 2>&1
+
+        cat > /tmp/linix-restore-drive.sh <<EOF
+#!/bin/sh
+export LINIX_CONFIG_DIR="$LINIX_CONFIG_DIR"
+export LINIX_DATA_DIR="$LINIX_DATA_DIR"
+printf '\\nRESTORE\\n' | script $SCRIPT_FLAGS "$LINIX snapshot restore" /dev/null
+EOF
+        chmod 0755 /tmp/linix-restore-drive.sh
+        sh /tmp/linix-restore-drive.sh >/tmp/restore-do.out 2>&1
+
+        # An LVM merge of an unmounted origin happens immediately; a mounted one is deferred to
+        # the next activation, which is why the origin is unmounted above.
+        mount "/dev/$STORAGE_LVM/$LVM_ORIGIN" "$LVM_MNT" >/dev/null 2>&1
+        _back=""; _gone=""
+        [ -f "$_marker_before" ] && _back=1
+        [ -f "$_marker_after" ] || _gone=1
+        umount "$LVM_MNT" >/dev/null 2>&1
+        if [ -n "$_back" ] && [ -n "$_gone" ]; then
+            PASS=$((PASS + 1)); echo "  PASS  restore: the filesystem is back to the snapshot — the pre-snapshot file returned and the post-snapshot file is gone"
+        elif [ -n "$_back" ]; then
+            hard "restore: the pre-snapshot file came back and the post-snapshot file survived — a half-merge"
+            excerpt /tmp/restore-do.out 8
+        else
+            hard "restore: the restore reported and the device did not change — the pre-snapshot file is still missing"
+            excerpt /tmp/restore-do.out 10
+        fi
+    elif [ -z "$SCRIPT_FLAGS" ]; then
+        soft "restore: this image's \`script\` has no -e, so the gallery cannot be driven on a terminal here"
+    fi
+
+    umount "$LVM_MNT" >/dev/null 2>&1
+    lvremove -y "$STORAGE_LVM/$LVM_ORIGIN" >/dev/null 2>&1
+    rm -f "$LINIX_CONFIG_DIR/adapters/snapshot.toml"
+    crash_wipe
+fi
+
+# ==========================================================================
 # 17. COVERAGE AUDIT — what did nothing touch? (IV.1)
 # ==========================================================================
 # The only check here that can notice what is MISSING from the list above it. A

@@ -16,8 +16,11 @@ FROM ubuntu:24.04
 ENV LINIX_IT_IMAGE=storage
 ENV LINIX_IT_STORAGE=1
 ENV DEBIAN_FRONTEND=noninteractive
+# `sudo`/`util-linux`/`passwd`: the fixture 16f needs to drive the privileged path. See the same
+# line in Dockerfile.ubuntu for why it is a fixture and not a convenience.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates build-essential pkg-config libssl-dev perl git \
+    sudo util-linux passwd \
     btrfs-progs lvm2 xfsprogs kmod \
     && rm -rf /var/lib/apt/lists/*
 # zfsutils-linux pulls the userland only; the kernel module belongs to the host and is checked

@@ -1615,3 +1615,55 @@ fix (cache `list_installed` per run) has a real staleness trap after an install 
    gets skipped, and `E3` came back this week for exactly that reason.
 4. **`stack` and `flatpak`** — read their reasons against `Q17` again. They are written as
    prices now; the flatpak one names the experiment that would settle half of it.
+
+---
+
+# Round 11 — the untested half, 2026-08-04 (owner-directed)
+
+**Not a grader's round.** Source: `docs/GRADE-2026-08-04.md` (**B+**), whose §5 is not a list of
+bugs but a list of things **nothing has ever run** — and the owner's instruction on top of it:
+*"it is crucial that we test — real live tests — as much as we can… build the tests that really
+test everything like a human."*
+
+The narrative, including the two instruments that reported defects that were not there, is
+`spec/history.md`, session 2026-08-04.
+
+## What now runs that never ran
+
+Four sections in `docker/integration/run-in-container.sh`, so every container leg in CI gets them
+without a new job:
+
+| | what it drives |
+|---|---|
+| **16d** | `SIGKILL` mid-transaction at three points — log-open, manager-part-way, and a `setsid` **group** kill that takes the package manager down too — then `heal`, convergence, and idempotency |
+| **16e** | two writers against one `DataLock`, and a killed holder whose stamp file outlives it |
+| **16f** | `sudo` with a real password on a real pty: the prompt, the password, a wrong password, an unanswered prompt, the keepalive, and a privileged install **and removal** by a non-root user |
+| **16g** | snapshot → mutate → restore on a real LVM device, through a user-declared provider row (U27's exemplar) |
+
+`sudo`, `util-linux` and `passwd` joined `Dockerfile.ubuntu`, `.storage` and `.tools` — they are
+the **fixture** for 16f, not conveniences. Without them that section reports "not driven here" and
+the escalation path stays unrun on every platform.
+
+## Two defects, both found by trying to drive something
+
+1. **`snapshot restore` was unreachable for every provider but btrfs and timeshift** — a
+   by-name `match` in `show_diff_and_confirm`, three days' work after `U27` ruled providers are
+   rows. Narrower than it first reads: `sync`'s health revert and `bisect` reach
+   `SnapshotProvider::restore` without it, so the automatic rollback was never blocked; what was
+   blocked is the command a person runs to recover by hand.
+   `tests/snapshot_restore_reaches_every_provider_tests.rs`, red before and green after.
+2. **`heal` had two branches that did nothing and said nothing** — `if let Some(cap) =
+   registry.get(..) { if let Some(handler) = ..as_installable() { … } }`, no `else` on either, so
+   an entry naming an absent manager was neither recovered, nor failed, nor mentioned, and `heal`
+   returned `Ok`. W36's finding one branch over.
+
+## What this round did NOT do
+
+- **The Windows harness has none of it.** `scripts/integration-windows.sh` is the twin and the
+  crash and two-writer checks belong there (`sudo` does not — LiNix escalates only off Windows).
+  A check on one harness is a check on one platform, which is round 7's own finding.
+- **The grade's §3 reporting findings are open**: `--dry-run sync` names nothing and skips the
+  guard (3.1), `manual_source` is wrong for 19 backends (3.3), an error names the wrong file
+  (3.5), the remedy block offers a flag that cannot work (3.6). 3.2 became **`Q31`** and is the
+  owner's.
+- **macOS is still only compiled**, and `zfs` still needs a kernel with the module.
