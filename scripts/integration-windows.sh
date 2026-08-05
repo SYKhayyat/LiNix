@@ -1971,7 +1971,10 @@ if [ -s "$STALL_REPORT" ]; then
     echo "        $STALL_REPORT"
     echo "        Read the child list: a tree at cpuMsInWindow=0 with a live child is LiNix"
     echo "        waiting on that child; the child's command line names what was asked."
-    grep -E '^ *pid=.*cpuMsInWindow' "$STALL_REPORT" | head -12 | sed 's/^/        /'
+    # Only the `linix` trees. The report also carries a flat watched-name table whose rows start
+    # at column 0, and matching those printed a dozen of the harness's own `bash` processes
+    # instead of the wedged process — the one thing this excerpt exists to show.
+    grep -E '^(LINIX PID| +pid=.*cpuMsInWindow)' "$STALL_REPORT" | head -12 | sed 's/^/        /'
 fi
 
 # --- Summary ---------------------------------------------------------------
