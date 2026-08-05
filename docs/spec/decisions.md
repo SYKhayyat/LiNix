@@ -1,4 +1,4 @@
-# The decision register — all 150, two of them open
+# The decision register — all 157, nine of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -15,7 +15,7 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **2** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **9** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **1** |
 | **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **143** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
@@ -277,6 +277,13 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q30** | Should the `--` terminator be decided by which `VersionPin` variant a backend picked, and should the terminator table be keyed per verb? — RULED: **read it off the tokens; one key per binary.** Per-verb rejected on measurement. | 2026-08-04 |
 | **Q29** | Is the statement set closed, with all future computation routed through `generate:`? — **HALF RULED.** The *resource-kind* set is ruled **open — more prefixes may be added**; a ratchet holds Part II to `KEYWORDS` instead. The *computation* half is still open. | 2026-08-04 |
 | **Q31** | `unmanaged` names two different numbers on two screens, and a command is named after the meaning the register did *not* choose. Which word goes where? — **OPEN.** | — |
+| **Q32** | Q24's bound watches a child's **exit** and not the read of its output, so a manager that detaches leaves LiNix on a pipe no clock covers — 64s measured against a 20s bound, **reported as SUCCESS**. Does the bound cover the read? — **OPEN.** | — |
+| **Q33** | `heal` acts on `Failed` entries as well as interrupted ones, and every failed attempt writes a *new* operation — 22 for one package in a single sweep, all 22 reinstalled. Is a failed attempt interrupted work? — **OPEN.** | — |
+| **Q34** | `install X` converges the whole manifest, so one unresolvable declaration fails every later install — seven backends were falsely reported as defects in one run. Does `install X` mean X? — **OPEN.** | — |
+| **Q35** | U40 lets a mutation share stdin because `sudo` asks on the terminal; `sudo` is never inserted on Windows, where the sharing costs a 900s silence — 48ms vs 21.9s measured. Does U40's reason reach Windows? — **OPEN.** | — |
+| **Q36** | `adopt` writes 186 winget declarations whose identity embeds a version (`MSIX\Microsoft.Winget.Source_2026.805.1050.50_...`). The package updated the same day; the line can now never converge, and it feeds Q34's cascade on every real machine. — **OPEN.** | — |
+| **Q37** | `github:` downloads the whole release artifact and *then* refuses to deploy because the destination is not LiNix's — a refusal that needs zero downloaded bytes. Measured 61s and 119s, silent, and downloads have no whole-request timeout by design. — **OPEN.** | — |
+| **Q38** | `watch --once` printed `watch: reconcile failed` and **exited 0**. — **OPEN.** | — |
 
 *Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
 this file exists to prevent, found on 2026-07-30 by adding a row to it.*
@@ -5169,3 +5176,204 @@ ruled it means. Two meanings need two words; which two is the owner's call, beca
 routes change what a user reads and one changes what they type.
 
 **Do not answer this in code.** Nothing was changed for it.
+
+## Q32
+
+**Status: OPEN — raised 2026-08-05, from an instrumented Windows sweep.**
+
+**Q24's bound watches the wrong half of the wait.** `RawExecutor::wait_watched` bounds
+`child.wait()` — the child's *exit*. The read of its output is outside that bound:
+
+```rust
+let status = match idle { ... };     // bounded; kills on silence
+...
+stdout: joined(out_task.await)?,     // no clock of any kind
+stderr: joined(err_task.await)?,
+```
+
+`out_task.abort()` exists, but only inside the timeout branch, which is unreachable once
+`child.wait()` has returned. So when a manager hands its stdout to a background process and
+exits, the direct child is gone, a grandchild still holds the write end, and LiNix reads
+toward an EOF that never arrives. Nothing bounds it: not `command_idle_timeout_secs`, not the
+DAG timeout, not `kill_on_drop` — there is no child left to kill.
+
+**Measured, twice.** In a real sweep, `linix -y install nimble:nimjson` sat at **zero CPU with
+no children at all** while three orphaned `nim.exe`/`nimble.exe` ran at `PPID 0`, outside
+LiNix's process tree. Then reproduced deterministically with a fake manager that detaches:
+`command_idle_timeout_secs = 20`, a child holding stdout for 60s, **64s wall** — and
+
+**it exited 0 and reported the install a SUCCESS**, timing the task at 60771ms.
+
+That second half is a separable defect and arguably the worse one: Q28 rules that a command
+reporting success while leaving a false picture is a defect class of its own.
+
+**Recommendation** — keep the same clock running over the readers once the child has exited:
+silence, not duration, the same 900, the same message, the same `Permanent` class, no new dial.
+A pipe that has produced nothing for the bound and still has not closed gets its readers
+aborted and the command fails **by name**. A bound a command can walk around is not a bound.
+
+**Not recommended now, and named so it is not silently skipped:** killing descendants with the
+child (a Windows Job Object, a process group on Unix). It is the deeper fix, it is
+platform-specific, and it changes what "kill" means — a separate decision, not a rider on this
+one.
+
+## Q33
+
+**Status: OPEN — raised 2026-08-05, from the same sweep.**
+
+**`heal` reinstalls things that are not interrupted, once per attempt ever made.**
+`Journal::get_incomplete_actions()` returns `InProgress | Failed | Abandoned`, and every failed
+install writes a **new** operation rather than resolving the old one. Counted in one sweep's
+journal: **22 separate operations for a single `scoop:linix-no-such-pkg-zzz`**, all of which
+`heal` then reinstalls, each a real `scoop install` round trip.
+
+Two things are wrong and they compound. A declaration that fails on every sync grows the
+journal without bound, and `heal`'s cost grows with it — a machine that has failed one install
+a hundred times has a `heal` that makes a hundred doomed calls.
+
+**Recommendation** — `heal` acts on **interrupted** work (`InProgress`, `Abandoned`). A
+`Failed` entry is not interrupted: it is a completed attempt with a known outcome, and its
+recovery is what the failure message already told the user to do. Separately, an attempt at a
+spec that already has an unresolved entry should resolve that entry rather than add a
+twenty-third.
+
+**Not asserted:** that including `Failed` was a mistake. `journal.rs:285` says `InProgress` and
+`Failed` are never purged until resolved, so keeping them is deliberate; whether `heal` should
+*act* on them is the open half.
+
+## Q34
+
+**Status: OPEN — raised 2026-08-05, from the same sweep.**
+
+**One unresolvable declaration fails every later install of anything.** `linix -y install
+bun:sort-package-json` planned this:
+
+```
+Planned changes:
+  install 2   remove 0   (total 2 change(s))
+  backends: bun, scoop        <- scoop = an unrelated leftover from an earlier section
+```
+
+The scoop member cannot resolve, the transaction fails, and the caller is told that
+`bun:sort-package-json` failed. In one sweep this produced **seven** false defect verdicts —
+bun, dotnet, github, nimble, pnpm, pub, winget — none of which had anything wrong with them.
+
+This is not obviously a bug: LiNix is declarative, `install` adds a line and converges, and
+converging everything is the model working as designed. But the consequence is that **a single
+bad line blocks every future install until someone unmanages it by hand**, and the error names
+the innocent package.
+
+**Recommendation** — no change to the model; change what the failure says and what it blocks.
+A member that fails for a reason unrelated to the requested spec should not make the requested
+spec's install report failure, and the message must name the declaration that actually failed.
+The alternative — `install X` converges only X — is a much larger ruling and is not
+recommended.
+
+**Most of this is a symptom of a bug, not of the model.** The leftover is only in the manifest
+because `scoop`'s failure was classified `unknown`, and it was classified `unknown` because
+`register_scoop`, `register_winget` and `register_choco` never call `with_manager_policy` — the
+three main Windows backends run with `ExitPolicy::default()`. Q1 (2026-07-27) already rules that
+a permanent failure withdraws the line, so that half needs no ruling and is a straight fix; see
+`docs/FINDINGS-2026-08-05.md` §1a. What is left for this entry is only the message naming the
+innocent package.
+
+## Q35
+
+**Status: OPEN — raised 2026-08-05. Not the cause of the stall it was found chasing.**
+
+**U40's reason does not reach Windows, but its rule does.** U40 (RULED 2026-07-27) says stdin
+is the one stream a child may share and only a mutation may share it, because *"`sudo` asks for
+a password on the terminal it was started from"*. On Windows `sudo` is never inserted —
+`executor.rs:834` reads `if sudo && !cfg!(windows) && !Self::is_root()` — so no Windows
+mutation has anything to ask, while the sharing stays and costs the full
+`command_idle_timeout_secs` whenever a manager asks something else.
+
+**Measured on this host** with a fake manager that reads stdin, same install both times:
+
+| LiNix's stdin | result |
+|---|---|
+| not a terminal | **48ms** — child gets `Stdio::null`, reads EOF, done |
+| a real console | **21.9s** — the whole bound elapsing, at the shipped 900 a 15-minute silence |
+
+**This was a wrong theory of the observed stall and is recorded anyway.** It was proposed as
+the cause, and the capture refuted it — the wedged process had no child at all (Q32 is the
+cause). It is kept because the hazard is real and measured, and because the next person to see
+an idle `linix` should find both shapes here rather than rediscover this one.
+
+**Recommendation** — on Windows the mutating layer uses `ChildStdin::Closed`. Unix keeps U40
+exactly as ruled. The visible change is that a Windows manager which asks a question fails
+fast with its own prompt captured, instead of going silent for fifteen minutes and failing
+anyway.
+
+## Q36
+
+**Status: OPEN — raised 2026-08-05, measured.**
+
+**`adopt` writes declarations that decay.** On Windows, `winget list` reports Add/Remove-Programs
+and MSIX identities as pseudo-ids, and those ids **contain the version**. `adopt` wrote 186 of
+them. One of them moved while this session was running:
+
+```
+adopted:       MSIX\Microsoft.Winget.Source_2026.805.1050.50_neutral__8wekyb3d8bbwe
+installed now: MSIX\Microsoft.Winget.Source_2026.805.1206.6_neutral__8wekyb3d8bbwe
+```
+
+10:50 to 12:06 on the same day — winget's own source index updates constantly. The declared
+name is now a package that does not exist, so LiNix believes it is missing, tries to install it,
+and cannot. It became two of the seven permanently-open journal operations in the run.
+
+**This is not a harness artifact.** Any machine that runs `adopt` on Windows plants these, and
+each one that updates becomes a line that can never converge — which then feeds Q34: one
+unconvergeable declaration makes every later `install` fail.
+
+The pseudo-ids are deliberately supported as *names* (`adopt.rs`, `guard.rs`,
+`config/grammar/mod.rs` all carry tests). Supporting them as names is not the same as adopting
+them as declarations.
+
+**Recommendation** — `adopt` does not declare a package whose identity carries its own version,
+because such a declaration is false the moment the package updates. The narrow form: skip
+`MSIX\` and `ARP\` pseudo-ids at adoption and say how many were skipped and why.
+
+## Q37
+
+**Status: OPEN — raised 2026-08-05, measured twice.**
+
+**The `github:` backend downloads the artifact, then refuses to deploy it.**
+`deploy_executable` takes an already-downloaded, already-extracted `src`, and its refusal —
+`is_ours(dest, owned_root, recorded)` — reads only the *destination*. It needs zero downloaded
+bytes, and it runs after the download.
+
+Measured inside one `heal`: **60.9s and 119.1s**, back to back, both ending in
+
+```
+could not recover github:sharkdp/fd — refusing to deploy `fd.exe`:
+    C:\Users\Administrator\.local\bin\fd.exe already exists and LiNix did not create it.
+```
+
+**180 of that `heal`'s 201 seconds were spent fetching a file it was always going to reject.**
+It is silent for all of it, at zero CPU with no child process — an in-process `reqwest`
+download, which is why it looks exactly like a wedge and why three earlier stalls were
+misdiagnosed. `core/http.rs` gives downloads no whole-request timeout, correctly: a big download
+must not be capped by wall clock. But that makes an avoidable download unbounded *and* silent.
+
+**Recommendation** — check the destination before spending the network. The ownership test is
+already a pure function of `dest`; hoist it above the fetch. Every download backend that
+deploys onto a shared bin directory has the same ordering.
+
+## Q38
+
+**Status: OPEN — raised 2026-08-05.**
+
+`linix -y watch --once` printed
+
+```
+WARN watch: reconcile failed: `scoop` failed (exit 1): Couldn't find manifest for '...'
+```
+
+and **exited 0**.
+
+A scheduled `watch` is the least-watched surface in the program — that is its purpose — so an
+exit code that says "fine" after a failed reconcile is the Q28 defect class at the one place
+nobody is reading the output.
+
+**Recommendation** — a failed reconcile is a non-zero exit, on `watch` as everywhere else.

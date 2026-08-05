@@ -6193,3 +6193,55 @@ now refused by a number, so the next attempt starts three doors further in:
 run continue. It has never reproduced outside a full sweep. The next move is not another theory
 — it is one full run instrumented to capture the wedged process's CHILD LIST before anything
 kills it, which is the one thing four opportunities all threw away.
+
+### The Windows stall, diagnosed — and the product gap under it (2026-08-05)
+
+**The stall was never one bug.** Three different things produce the same picture — an idle
+`linix`, a log that stopped, a run that resumes the moment it is killed — and all three are now
+named, measured and written up in `docs/FINDINGS-2026-08-05.md`.
+
+**The capture went in before the run, and that is the whole reason any of this is known.** Four
+earlier opportunities were spent killing the process; three explanations were written and later
+refused by measurement. This session proposed a fourth — LiNix hands the terminal to a child that
+then blocks on stdin — and **the capture refuted it within minutes**: the wedged process had no
+child at all. `scripts/stall-snapshot.ps1` photographs and never kills, and its two-sample CPU
+window is what separates a slow command from a stuck one; two of the three captures would have
+been misread without it.
+
+**The sweep then ran to completion unattended for the first time**: `pass=234 fail=13 soft=23`.
+Every previous Windows run ended with a human killing something, which is why its numbers were
+never a measurement of the product.
+
+What the three captures turned out to be:
+
+- `install nimble:nimjson` — LiNix blocked on a pipe an orphaned `nim.exe` still held. The idle
+  bound covers `child.wait()` and **not** the read of the output, and `out_task.abort()` is
+  unreachable once the child has exited. Reproduced at 64s against a 20s bound — **and it exited
+  0 and called the install a success.** `Q32`, and a failing test now pins it.
+- `install pnpm:json` — not a wedge at all: 78ms of CPU in a 4s window with a live child.
+- `heal` — **180 of its 201 seconds spent downloading a GitHub artifact it was always going to
+  refuse.** `deploy_executable` reads only the destination and runs after the fetch. `Q37`.
+
+**The finding that outranks the stall.** `with_manager_policy` is called in exactly one place,
+and `register_scoop`, `register_winget` and `register_choco` are not it — so the three main
+Windows backends run with `ExitPolicy::default()`, no markers of any kind. `scoop install
+<no-such-package>` is therefore classified `unknown`, Q1's withdrawal never fires, and the dead
+line stays in the manifest and fails **every later install** — ten of the run's thirteen
+failures, plus `rollback`, `activate`, and the lifecycle ratchet falling to 1 of 5. Worse and not
+yet exercised: scoop's policy exists because *scoop exits 0 on every outcome*, so without it a
+failed scoop command reads as a successful one.
+
+**The test that guards this has been green the whole time and cannot fail.** It calls
+`with_manager_policy(core)` *inside its own assertion*, so it proves the helper works and never
+asks whether a registrar calls it. Same disease as the sweep: a check that cannot fail, guarding
+the thing that broke.
+
+Also recorded, none of them the stall and all of them real: `heal` retries entries that already
+failed and the journal writes a new operation per attempt (22 for one package, `Q33`); `adopt`
+writes 186 winget declarations whose identity embeds a version, one of which decayed inside 76
+minutes (`Q36`); `watch --once` printed `reconcile failed` and exited 0 (`Q38`); and the terminal
+LiNix hands Windows children for a `sudo` that never runs there (`Q35`).
+
+**Owed.** `Q32`–`Q38` are OPEN in `decisions.md` with measurements and recommendations. The
+`§1a` policy gap needs no ruling — Q1 already ruled it — and should land first, because several
+of the others shrink when it does.

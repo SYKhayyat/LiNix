@@ -1614,6 +1614,80 @@ of `src/`.
 
 ---
 
+# New findings — 2026-08-05 **[MEASURED HERE]**
+
+Found while diagnosing the Windows stall, on the same host, with LiNix's own `--timings`. Both
+are new to this document; neither is in I-18's table of serial loops.
+
+## I-48 · `heal` bypasses the transaction DAG entirely — serial, unbatched, and doomed **[MEASURED HERE]**
+
+`app/sync/mod.rs:718` is a plain `for entry in incomplete_actions` with the install awaited inside
+it, and each call is `handler.install(std::slice::from_ref(spec), sudo)` — **one package per
+command**. So recovery re-implements install dispatch by hand, next to a batched parallel engine,
+and gets none of it:
+
+- **serial** — the I-9 family, one entry at a time;
+- **one node per package** — I-1, which was fixed *in the DAG* and never here;
+- **doomed** — it acts on `Failed` entries as well as interrupted ones, and every failed attempt
+  writes a *new* journal operation, so the work grows without bound (`Q33`).
+
+**Measured on this host, both numbers from LiNix:**
+
+```
+sync --dry-run   2.65s wall ·  21 child command(s) summing to 10.35s · 3.9x overlap ·  2 wave(s)
+heal           205.14s wall ·  27 child command(s) summing to 33.31s · 0.2x overlap · 27 wave(s)
+```
+
+**27 waves for 27 commands is the definition of serial**, and 0.2x overlap against the DAG's 3.9x
+on the same machine in the same minute. 23 of the 30 recovery attempts were the *same* package —
+which a batched engine would have sent as one command, and a correct one would not have sent at
+all.
+
+Note also what the 205s is *not*: only 33s of it is inside child commands. The rest is I-49.
+
+**This is the "two of everything" shape the repo keeps finding**, not merely a missing
+`join_all`: the fix is to route recovery through the transaction engine rather than to
+parallelise a second copy of it. The 2026-08-02 ruling covers this — *restructure if it takes
+that* — but the loop that decides **which** entries to run is `Q33`, which is OPEN, and it is the
+same loop. They should land together.
+
+## I-49 · `github:` downloads the artifact, then checks whether it may deploy it **[MEASURED HERE]**
+
+`utils/file.rs:225` `deploy_executable` takes an already-downloaded, already-extracted `src`, and
+its refusal — `is_ours(dest, owned_root, recorded)` — reads only the **destination**. It needs
+zero downloaded bytes and it runs after the fetch.
+
+Measured inside one `heal`, twice, back to back:
+
+```
+ 60.9s  then  119.1s   -> "refusing to deploy `fd.exe`: ...\.localind.exe already exists
+                           and LiNix did not create it."
+```
+
+**180 of that run's 205 seconds were spent fetching a file it was always going to reject.**
+
+Two things make it invisible rather than merely slow. It is an in-process `reqwest` download, so
+it is **not a child command** and never appears in the `--timings` breakdown — the 205s wall
+against 33s of children is entirely this. And `core/http.rs` gives downloads no whole-request
+timeout, correctly (a large download must not be capped by wall clock), which leaves an
+*avoidable* download both unbounded and silent. Three stalls were misdiagnosed as wedges because
+of it.
+
+**Fix:** hoist the ownership test above the fetch. It is already a pure function of `dest`.
+
+**All three download backends share the ordering — checked, not assumed:**
+
+| site | proof it has already paid before it asks |
+|---|---|
+| `backends/github.rs:887` | deploys from `downloaded[i]` (`:838`) — the artifact is fetched and picked first |
+| `backends/web.rs:289` | `extract_archive(...)` runs at `:236`, before `bin_destination` at `:265` |
+| `backends/appimage.rs:181` | same shape: `bin_destination` at `:180` reads a path that is already on disk |
+
+So the wasted work is a download **and** an extraction, on every one of them, before anything
+asks whether the destination may be written at all.
+
+---
+
 # Suggested order of work
 
 > **Done, 2026-08-02.** Rounds 0–4 below were worked in this order and the disposition of every
