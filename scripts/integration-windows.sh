@@ -76,7 +76,105 @@ elif command -v gtimeout >/dev/null 2>&1; then
 else
     TO=""
 fi
-lx() { record_argv "$@"; $TO "$LINIX" "$@"; }
+# An automated sweep has nobody at the keyboard, so it must not hand anything a keyboard.
+#
+# LiNix gives a mutation's child `Stdio::inherit()` when its own stdin is a terminal
+# (`core/executor.rs`), so a manager that asks a question inherits *this* terminal and waits
+# for an answer that is never coming. Measured on this host: the same install is 48ms with no
+# terminal on stdin and 21.9s with one, where 21.9s is the whole `command_idle_timeout_secs`
+# bound elapsing. At the shipped default of 900 that is a fifteen-minute silence.
+#
+# `exec` rather than a redirect on each call, because the per-call form has to be remembered
+# at ~200 sites and the three background holders are not call sites at all. An explicit pipe
+# still wins over this, so `printf … | lx repl` is unaffected.
+#
+# `LINIX_IT_KEEP_TTY=1` puts the terminal back, and exists so the stall can still be
+# REPRODUCED on demand. A fix that also deletes the only way to observe the bug leaves nobody
+# able to show it ever existed, or to notice it coming back.
+HAD_TTY=no; [ -t 0 ] && HAD_TTY=yes
+if [ "${LINIX_IT_KEEP_TTY:-0}" = "1" ]; then
+    echo "stdin: keeping the terminal (LINIX_IT_KEEP_TTY=1) — this run can stall on purpose"
+else
+    exec < /dev/null
+fi
+
+# --- Stall capture ---------------------------------------------------------
+#
+# Four times a full sweep sat with an idle `linix` and a log that had stopped, and four times
+# the process was killed to get moving again — which is what destroyed the only evidence that
+# could name the cause. The capture has to be armed BEFORE the run, not written afterwards.
+#
+# Non-destructive on purpose: it photographs and never kills. A command that is merely slow
+# and one that is wedged look identical in a single frame, so the snapshot measures CPU over a
+# window and lists the child tree; the report tells them apart, not the threshold.
+STALL_DIR="${TMPDIR:-/tmp}/linix-it-win-stall"
+rm -rf "$STALL_DIR" 2>/dev/null; mkdir -p "$STALL_DIR"
+STALL_REPORT="$STALL_DIR/stalls.txt"
+STALL_CURRENT="$STALL_DIR/current"
+: > "$STALL_CURRENT"
+STALL_AFTER="${LINIX_IT_STALL_AFTER:-150}"   # above the slowest honest call measured here (141s)
+STALL_EVERY="${LINIX_IT_STALL_EVERY:-60}"
+STALL_SNAPSHOT="$(dirname "$0")/stall-snapshot.ps1"
+STALL_PID=""
+
+stall_watch() {
+    _snaps=0
+    while :; do
+        sleep 15
+        [ -s "$STALL_CURRENT" ] || { _snaps=0; continue; }
+        _started=$(awk '{print $1; exit}' "$STALL_CURRENT" 2>/dev/null)
+        case "$_started" in ''|*[!0-9]*) continue ;; esac
+        _age=$(( $(date +%s) - _started ))
+        [ "$_age" -ge "$STALL_AFTER" ] || continue
+        # One at STALL_AFTER, then one every STALL_EVERY, capped: a genuinely long build must
+        # not produce a thousand snapshots, and eight is enough to show a trend.
+        _due=$(( (_age - STALL_AFTER) / STALL_EVERY + 1 ))
+        [ "$_due" -gt "$_snaps" ] || continue
+        [ "$_snaps" -ge 8 ] && continue
+        _snaps=$((_snaps + 1))
+        _what=$(cut -d' ' -f2- < "$STALL_CURRENT")
+        echo "  ....  STALL WATCH: \`linix $_what\` has been running ${_age}s — snapshot $_snaps"
+        "$STALL_PS" -NoProfile -ExecutionPolicy Bypass \
+            -File "$(cygpath -w "$STALL_SNAPSHOT")" \
+            -OutFile "$(cygpath -w "$STALL_REPORT")" \
+            -Note "in flight ${_age}s: linix $_what" >/dev/null 2>&1
+    done
+}
+
+# Armed only where it can work. Named when it cannot, because a capture that silently did not
+# run reads exactly like a run with nothing to capture.
+# `powershell.exe` is not always on PATH under a stripped shell, and the System32 copy is
+# always there when Windows is. Resolved once, by name then by path: an arming check that
+# depends on a PATH entry disarms the whole capture over a shell setting.
+STALL_PS=""
+if command -v powershell.exe >/dev/null 2>&1; then STALL_PS="powershell.exe"
+elif command -v powershell >/dev/null 2>&1; then STALL_PS="powershell"
+elif [ -x "/c/windows/System32/WindowsPowerShell/v1.0/powershell.exe" ]; then
+    STALL_PS="/c/windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+fi
+
+if [ -r "$STALL_SNAPSHOT" ] && [ -n "$STALL_PS" ] \
+   && command -v cygpath >/dev/null 2>&1; then
+    stall_watch & STALL_PID=$!
+    trap 'kill "$STALL_PID" 2>/dev/null' EXIT INT TERM
+    echo "stall capture armed: >${STALL_AFTER}s in one call photographs the process tree into"
+    echo "  $STALL_REPORT"
+    # Which arm this run is. A stall that only happens with a terminal on stdin is a different
+    # finding from one that happens without, and the report must say which run it was.
+    echo "  terminal on stdin at startup: $HAD_TTY; handed to LiNix: ${LINIX_IT_KEEP_TTY:-0}"
+else
+    echo "stall capture NOT armed (needs stall-snapshot.ps1, powershell.exe and cygpath);"
+    echo "  a stall this run will be an observation with no cause, again."
+fi
+
+lx() {
+    record_argv "$@"
+    echo "$(date +%s) $*" > "$STALL_CURRENT"
+    $TO "$LINIX" "$@"
+    _lx_rc=$?
+    : > "$STALL_CURRENT"
+    return $_lx_rc
+}
 
 PASS=0; FAILC=0; SOFTC=0; FAILED_NAMES=""
 
@@ -1858,6 +1956,22 @@ elif [ -n "$UNTOUCHED_CMD" ]; then
     echo "  FAIL  every subcommand is executed — only --help'd:$UNTOUCHED_CMD"
 else
     PASS=$((PASS + 1)); echo "  PASS  every non-exempt subcommand was executed, not just --help'd"
+fi
+
+# --- Stalls -----------------------------------------------------------------
+#
+# Soft, not hard: a slow host is not a defect and this must not turn a red run into a red run
+# for the wrong reason. But it is never silent — the four stalls that started this were
+# invisible in the result line, and a sweep that says `OK` while it sat idle for an hour is
+# reporting on a run that did not happen the way it reads.
+kill "$STALL_PID" 2>/dev/null; trap - EXIT INT TERM
+if [ -s "$STALL_REPORT" ]; then
+    STALL_N=$(grep -c '^STALL SNAPSHOT' "$STALL_REPORT" 2>/dev/null || echo 0)
+    soft "stall capture: $STALL_N snapshot(s) taken — a call ran past ${STALL_AFTER}s"
+    echo "        $STALL_REPORT"
+    echo "        Read the child list: a tree at cpuMsInWindow=0 with a live child is LiNix"
+    echo "        waiting on that child; the child's command line names what was asked."
+    grep -E '^ *pid=.*cpuMsInWindow' "$STALL_REPORT" | head -12 | sed 's/^/        /'
 fi
 
 # --- Summary ---------------------------------------------------------------
