@@ -1,4 +1,4 @@
-use crate::core::{Error, ExitPolicy, Result};
+use crate::core::{Error, ExitPolicy, Result, Retryability};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use fs2::FileExt;
@@ -61,6 +61,27 @@ impl DryRunOutput {
     }
 }
 
+/// A run that exited non-zero and said nothing at all — what a manager that fell over before it
+/// could speak leaves behind. `winget` under concurrent cold start is the measured case.
+#[cfg(test)]
+pub(crate) fn silent_failure(code: i32) -> StdOutput {
+    StdOutput {
+        status: fabricate_status(code),
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+    }
+}
+
+/// A run that exited non-zero and still produced its answer.
+#[cfg(test)]
+fn spoken_failure(code: i32, stdout: &str, stderr: &str) -> StdOutput {
+    StdOutput {
+        status: fabricate_status(code),
+        stdout: stdout.as_bytes().to_vec(),
+        stderr: stderr.as_bytes().to_vec(),
+    }
+}
+
 impl From<DryRunOutput> for StdOutput {
     fn from(dry: DryRunOutput) -> Self {
         StdOutput {
@@ -115,6 +136,27 @@ pub enum ChildStdin {
 /// Seeded from `Config::command_idle_timeout_secs` at startup, where `0` means no bound.
 static COMMAND_IDLE_TIMEOUT_SECS: once_cell::sync::OnceCell<u64> = once_cell::sync::OnceCell::new();
 
+/// How long a **read** may produce nothing before LiNix stops waiting for it.
+///
+/// The bound above was chosen for `Checkpoint-Computer`, a mutation that legitimately runs
+/// silent for minutes, and reads inherited it because there was only one number. They are not
+/// the same job: `winget list` takes 1.5s, `apt list --installed` under a second, and a
+/// question that has gone quiet for a quarter of an hour is not about to answer. Fifteen
+/// minutes of rope for a one-second question means a stuck read costs fifteen minutes to
+/// learn what twenty seconds could have told you.
+///
+/// Seeded from `Config::query_idle_timeout_secs`, where `0` means no bound — and a bound
+/// above `command_idle_timeout_secs` is pointless rather than wrong, since the outer one
+/// fires first.
+static QUERY_IDLE_TIMEOUT_SECS: once_cell::sync::OnceCell<u64> = once_cell::sync::OnceCell::new();
+
+/// How many times a read that failed *transiently* is asked again before LiNix gives up.
+///
+/// Reads are idempotent — that is the whole justification. A mutation retried on a guess can
+/// install something twice; asking a manager what it has, twice, costs a second. Seeded from
+/// `Config::read_retry_attempts`; `1` means ask once and do not retry.
+static READ_RETRY_ATTEMPTS: once_cell::sync::OnceCell<u32> = once_cell::sync::OnceCell::new();
+
 /// Above the longest legitimate silence anyone has measured, and far below the hang.
 /// `Checkpoint-Computer` is the adversarial case: a real one is silent for its whole run.
 pub const DEFAULT_COMMAND_IDLE_TIMEOUT_SECS: u64 = 900;
@@ -132,6 +174,46 @@ fn command_idle_timeout() -> Option<std::time::Duration> {
         0 => None,
         secs => Some(std::time::Duration::from_secs(secs)),
     }
+}
+
+/// Two minutes. The slowest read measured on any host here is a cold `winget list` at 2.6s
+/// under sixteen-way contention, so this is ~46x the worst observed — wide enough that a fat
+/// machine on a slow disk is never cut off, and narrow enough that a wedged question is a
+/// two-minute wait instead of a fifteen-minute one.
+pub const DEFAULT_QUERY_IDLE_TIMEOUT_SECS: u64 = 120;
+
+/// Three: the measured failure is a cold-start collision that a warm winget does not
+/// reproduce, so one more attempt is usually the whole fix and two more is the margin.
+pub const DEFAULT_READ_RETRY_ATTEMPTS: u32 = 3;
+
+/// Set the process-wide read bounds (called once during startup). Later calls no-op.
+pub fn set_query_bounds(idle_secs: u64, retry_attempts: u32) {
+    let _ = QUERY_IDLE_TIMEOUT_SECS.set(idle_secs);
+    let _ = READ_RETRY_ATTEMPTS.set(retry_attempts);
+}
+
+/// The bound a read waits under: its own, but never longer than the outer one, which fires
+/// first anyway. A `0` on either means that one imposes nothing.
+fn query_idle_timeout() -> Option<std::time::Duration> {
+    let own = match *QUERY_IDLE_TIMEOUT_SECS
+        .get()
+        .unwrap_or(&DEFAULT_QUERY_IDLE_TIMEOUT_SECS)
+    {
+        0 => None,
+        secs => Some(std::time::Duration::from_secs(secs)),
+    };
+    match (own, command_idle_timeout()) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (Some(a), None) => Some(a),
+        (None, outer) => outer,
+    }
+}
+
+fn read_retry_attempts() -> u32 {
+    (*READ_RETRY_ATTEMPTS
+        .get()
+        .unwrap_or(&DEFAULT_READ_RETRY_ATTEMPTS))
+    .max(1)
 }
 
 /// Where a program lives, answered once per name per process.
@@ -208,10 +290,14 @@ pub struct RawExecutor {
 
 impl RawExecutor {
     /// The layer behind `run_output`/`search_output`/`command_exists`.
+    ///
+    /// Bounded by `query_idle_timeout`, not the mutation bound. A question that has said
+    /// nothing for two minutes is not about to answer, and making it wait out a bound sized
+    /// for `Checkpoint-Computer` buys nothing but the wait.
     pub fn reader() -> Self {
         Self {
             stdin: ChildStdin::Closed,
-            idle: command_idle_timeout(),
+            idle: query_idle_timeout(),
         }
     }
 
@@ -967,13 +1053,93 @@ impl CommandExecutor {
         &self.installed
     }
 
+    /// A read whose answer is its stdout.
+    ///
+    /// **A non-zero exit is tolerated; a non-zero exit that said nothing at all is not.** The
+    /// distinction is the whole of it. "No such package" and "no results" are legitimate
+    /// non-zero replies and they arrive with their reason on the page, so the exit code alone
+    /// must never be the verdict — that is why this goes through the unchecked primitive rather
+    /// than `run`. But a failure with nothing on *either* stream is not a reply at all, and
+    /// returning `Ok("")` for it hands every caller an answer the manager never gave.
+    ///
+    /// Measured: 3 of 16 concurrent cold-start `winget list` exit `0x8A150001` having written
+    /// zero bytes anywhere. Read as an empty listing, that made `linix list --backend winget`
+    /// print nothing and exit 0 on a machine with 280 packages on it — and `info` report an
+    /// installed package as absent, which is the shape it was first noticed in.
+    ///
+    /// **Retried when — and only when — the failure is classified transient.** Reads are
+    /// idempotent, which is the whole justification: asking a manager what it has, twice,
+    /// costs a second, where a mutation retried on a guess installs something twice. The
+    /// measured case is a cold-start collision that a warm winget does not reproduce, so the
+    /// second attempt is usually the entire fix.
     pub async fn run_output(&self, cmd: &str, args: &[&str], sudo: bool) -> Result<String> {
-        // Reads tolerate a non-zero exit on purpose (empty results, missing packages),
-        // so this goes through the unchecked primitive, never `run`.
-        let output = self.read_raw(cmd, args, sudo).await?;
-        Ok(crate::utils::text::sanitize(&String::from_utf8_lossy(
-            &output.stdout,
-        )))
+        let attempts = read_retry_attempts();
+        let mut backoff = std::time::Duration::from_millis(200);
+        for attempt in 1..=attempts {
+            let output = self.read_raw(cmd, args, sudo).await?;
+            let stdout = crate::utils::text::sanitize(&String::from_utf8_lossy(&output.stdout));
+            let benign = output.status.success() || self.exit_policy.is_benign(output.status.code());
+            // **Both streams, not just stdout.** A read that failed and *said* something has
+            // described its own situation, and the caller may legitimately read that as an
+            // empty result: `Get-ComputerRestorePoint` on an unelevated shell exits 1 with
+            // `Access denied` on stderr and nothing on stdout, and treating that as fatal
+            // failed a whole `sync` that had no business caring. Whether *that* is the right
+            // answer is a separate question about snapshots, not about this primitive.
+            //
+            // Silence on both is the case with no second reading. Nothing expresses "you have
+            // none of these" by saying nothing at all and failing.
+            let said_nothing =
+                stdout.trim().is_empty() && String::from_utf8_lossy(&output.stderr).trim().is_empty();
+            if benign || !said_nothing {
+                return Ok(stdout);
+            }
+            let err = self.answerless_read(cmd, args, &output);
+            if attempt == attempts || err.retryability() != Retryability::Transient {
+                return Err(err);
+            }
+            debug!(
+                "`{cmd}` produced no answer and the failure is transient; \
+                 asking again ({attempt}/{attempts})"
+            );
+            tokio::time::sleep(backoff).await;
+            backoff *= 3;
+        }
+        unreachable!("the loop returns on its last attempt")
+    }
+
+    /// The failure for a read that exited non-zero without producing an answer.
+    ///
+    /// Carries the manager's own words when it left any, and its retryability, so the retry
+    /// loop does not have to read the sentence back to decide what to do.
+    fn answerless_read(&self, cmd: &str, args: &[&str], output: &StdOutput) -> Error {
+        let code = output
+            .status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "terminated by signal".to_string());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let said = stderr.trim().lines().next().unwrap_or("").trim().to_string();
+        let detail = if said.is_empty() {
+            String::new()
+        } else {
+            format!(" It said: {said}")
+        };
+        let hay = ExitPolicy::haystack(&output.stdout, &output.stderr);
+        Error::CommandFailed {
+            message: format!(
+                "`{} {}` exited {code} with no output, so LiNix has no answer from it — not an \
+                 empty one.{detail}",
+                cmd,
+                args.join(" ")
+            ),
+            // By code as well as by text. This is the one failure whose haystack is reliably
+            // empty, so the text lists cannot classify it and the code is the only signal
+            // there is.
+            retry: self
+                .exit_policy
+                .retryability_of(output.status.code(), &hay),
+            absent_name: false,
+        }
     }
 
     /// A read whose emptiness is an *answer*, so a command that could not produce one must
@@ -1462,6 +1628,173 @@ mod child_process_tests {
         assert_eq!(env.get("SYSTEMD_PAGER").map(String::as_str), Some(""));
         assert_eq!(env.get("PAGER").map(String::as_str), Some("cat"));
         assert_eq!(env.get("GIT_PAGER").map(String::as_str), Some("cat"));
+    }
+
+    /// A read that failed **without a word** is not a machine with nothing on it.
+    ///
+    /// Measured, on a real host: 3 of 16 cold-start concurrent `winget list` exit `0x8A150001`
+    /// having written zero bytes to either stream. `run_output` did not look at the status, so
+    /// the caller got `Ok("")`, the parser found no packages in it, and `list_installed`
+    /// answered `Ok(vec![])`. Nothing anywhere thought winget had failed — LiNix believed the
+    /// machine was empty and said so at exit 0:
+    ///
+    /// ```text
+    /// round 1 : rows min=0 max=280   EMPTY_LISTINGS=1/16
+    ///         rc=0  ms=2285  rows=0   <-- `linix list --backend winget` reported no packages
+    /// ```
+    ///
+    /// A silent non-zero exit is the one case that cannot be an answer: every manager with
+    /// nothing to report says so by exiting 0, or by printing a header. Saying nothing *and*
+    /// failing is the absence of an answer, and the caller has to be told which it got.
+    #[tokio::test]
+    async fn a_read_that_failed_without_a_word_is_not_an_empty_machine() {
+        let (e, mock) = wired();
+        mock.set_response("winget list", Ok(super::silent_failure(1)));
+        let err = e
+            .run_output("winget", &["list"], false)
+            .await
+            .expect_err("a silent non-zero read must not read as an empty listing");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("winget"),
+            "the failure must name the command that produced nothing: {msg}"
+        );
+        assert!(
+            msg.contains("no output"),
+            "the failure must say the command produced nothing, so it cannot be              mistaken for an empty result: {msg}"
+        );
+    }
+
+    /// The other half, and the reason this is not simply "non-zero reads are errors". A read
+    /// that exited non-zero and *printed a listing* has answered; the exit code is the manager
+    /// grumbling about something else. `apt list --installed` warning about an unstable CLI is
+    /// the shape.
+    #[tokio::test]
+    async fn a_read_that_failed_but_still_answered_keeps_its_answer() {
+        let (e, mock) = wired();
+        mock.set_response(
+            "winget list",
+            Ok(super::spoken_failure(1, "7zip.7zip  25.01
+", "a warning")),
+        );
+        let out = e
+            .run_output("winget", &["list"], false)
+            .await
+            .expect("a read with a listing in it is an answer, whatever the exit code");
+        assert!(out.contains("7zip.7zip"), "{out}");
+    }
+
+    /// The code is the only signal this failure leaves, so the classifier has to read it —
+    /// and having classified it transient, a read must actually ask again.
+    ///
+    /// Measured: winget loses ~3 of a cold burst of 16 concurrent listings and none of the
+    /// next 32. The second attempt is usually the whole fix, which is why this is worth a
+    /// retry at all — and why it is worth it only for reads, which are idempotent.
+    #[tokio::test]
+    async fn a_read_whose_only_signal_is_its_exit_code_is_still_classified_and_retried() {
+        let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let e = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(DashMap::new()),
+        )
+        .with_exit_policy(crate::core::exit_policy::winget());
+        // 0x8A150001, silent — the exact shape measured on the host.
+        mock.set_response("winget list", Ok(super::silent_failure(0x8A15_0001_u32 as i32)));
+
+        let err = e
+            .run_output("winget", &["list"], false)
+            .await
+            .expect_err("a silent failure is still a failure once the retries are spent");
+        assert_eq!(
+            err.retryability(),
+            Retryability::Transient,
+            "the exit code is the only thing that can classify this, and it must: {err}"
+        );
+        let tries = mock
+            .get_calls()
+            .await
+            .iter()
+            .filter(|c| c.as_str() == "winget list")
+            .count();
+        assert!(
+            tries > 1,
+            "a transient read was asked exactly once — the classification bought nothing              (tried {tries}x)"
+        );
+    }
+
+    /// The other side: a failure the policy does **not** classify is asked once and reported.
+    /// Retrying everything would turn a manager that is simply broken into a slow one.
+    #[tokio::test]
+    async fn an_unclassified_silent_failure_is_not_retried() {
+        let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let e = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(DashMap::new()),
+        )
+        .with_exit_policy(crate::core::exit_policy::winget());
+        mock.set_response("winget list", Ok(super::silent_failure(1)));
+
+        let _ = e.run_output("winget", &["list"], false).await.unwrap_err();
+        let tries = mock
+            .get_calls()
+            .await
+            .iter()
+            .filter(|c| c.as_str() == "winget list")
+            .count();
+        assert_eq!(tries, 1, "an unclassified failure must be asked once, not {tries} times");
+    }
+
+    /// A read and a mutation are bounded differently, and the reason is in the numbers: the
+    /// mutation bound exists for `Checkpoint-Computer`, silent for its whole run, and a read
+    /// takes seconds. Collapsing them back to one number is the change this pins against —
+    /// it reads as a simplification and costs fifteen minutes per wedged listing.
+    #[test]
+    fn a_read_is_bounded_tighter_than_a_mutation() {
+        let read = super::RawExecutor::reader().idle;
+        let write = super::RawExecutor::mutator().idle;
+        let (Some(read), Some(write)) = (read, write) else {
+            panic!("both layers must carry a bound by default: {read:?} / {write:?}");
+        };
+        assert!(
+            read < write,
+            "a read waits as long as a mutation ({read:?} vs {write:?})"
+        );
+        assert_eq!(read.as_secs(), super::DEFAULT_QUERY_IDLE_TIMEOUT_SECS);
+        assert_eq!(write.as_secs(), super::DEFAULT_COMMAND_IDLE_TIMEOUT_SECS);
+    }
+
+    /// The boundary, and it was drawn in the wrong place first.
+    ///
+    /// A read that failed and *complained* is left alone here. It looks like it ought to be a
+    /// failure — `search_output` treats exactly that shape as one — but a listing is not a
+    /// search, and the caller may have a reading for it that this primitive cannot know.
+    /// Making it fatal failed a whole `sync`: `Get-ComputerRestorePoint` on an unelevated
+    /// shell exits 1 with `Access denied` on stderr and nothing on stdout, and the snapshot
+    /// check that asked has every right to carry on without a restore-point list.
+    ///
+    /// Whether *that* caller should care is a real question and a separate one. The rule
+    /// here is only about what a command said: silence on both streams has one reading,
+    /// and a complaint has two.
+    #[tokio::test]
+    async fn a_read_that_failed_but_explained_itself_is_left_to_its_caller() {
+        let (e, mock) = wired();
+        mock.set_response(
+            "winget list",
+            Ok(super::spoken_failure(1, "", "Failed when opening source")),
+        );
+        let out = e
+            .run_output("winget", &["list"], false)
+            .await
+            .expect("a read that complained has said something; this primitive does not judge it");
+        assert!(out.is_empty(), "the answer is still the empty stdout: {out:?}");
     }
 
     /// The suppression must not be a property of the mutating path only — a read is exactly

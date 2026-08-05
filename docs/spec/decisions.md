@@ -286,6 +286,12 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q38** | `watch --once` printed `watch: reconcile failed` and **exited 0**. — RULED: **a failed reconcile is a non-zero exit**, on `watch --once` as everywhere. The looping form still warns and carries on. | 2026-08-05 |
 | **Q39** | `adopt` wrote 150 `service:X@status=running` lines and converging one ran `sc start` on an already-running service. — RULED, both halves: already being in the declared state is success (150 placements to 2), **and** a bare `adopt` does not take a backend where being on the machine is not evidence of a choice. `linix adopt service` takes them; `--enabled-only` narrows to what starts at boot. | 2026-08-05 |
 
+| **Q40** | A read that failed **silently** became an empty answer: `run_output` ignored exit status, so `winget list` exiting `0x8A150001` with zero bytes returned `Ok("")` and `list_installed` reported `Ok(vec![])`. Measured — `linix list --backend winget` printed nothing and **exited 0** on a machine with 280 packages. — RULED: **a non-zero read that said nothing on either stream is a failure, not an empty result.** | 2026-08-05 |
+| **Q41** | Retryability was classified only from output *text*, and the one failure that matters here has no text at all — so an empty haystack fell to `Unknown` while the exit code, the only signal present, was read by nothing but `is_benign`. — RULED: **classify by exit code too**, and retry a transient *read* (idempotent; a mutation is not). | 2026-08-05 |
+| **Q42** | `command_idle_timeout_secs` (900) was chosen for `Checkpoint-Computer`, a mutation that legitimately runs silent for minutes, and every **read** inherited it — so a wedged 1.5s listing cost fifteen minutes. — RULED: **reads get their own bound**, `query_idle_timeout_secs`, default 120, `0` disables. | 2026-08-05 |
+
+| **Q43** | Three backends parse a human table where the tool offers a machine format — pixi (`--json`), dotnet (`--format json`), scoop (`export`). All three are **version-dependent flags** and LiNix has no capability probe, so shipping them blind reproduces `Q40` (a silently empty listing) on older tooling. — **OPEN.** Recommendation: negotiate once per backend per run, falling back to the text form. | — |
+
 *Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
 this file exists to prevent, found on 2026-07-30 by adding a row to it.*
 
@@ -5426,6 +5432,153 @@ them as declarations.
 **Recommendation** — `adopt` does not declare a package whose identity carries its own version,
 because such a declaration is false the moment the package updates. The narrow form: skip
 `MSIX\` and `ARP\` pseudo-ids at adoption and say how many were skipped and why.
+
+## Q40
+
+**Status: ANSWERED — ruled 2026-08-05, and built the same day.**
+
+**Ruled: a read that exits non-zero having said nothing on either stream is a failure, not an
+empty result.**
+`run_output` deliberately ignored exit status — reads tolerate a non-zero exit because "no such
+package" and "no results" are legitimate non-zero replies. But it tolerated the *silent* ones
+too, and those are not replies at all.
+
+Measured, without LiNix in the picture: 16 concurrent `winget list` from a cold start, 3 of them
+exit `0x8A150001` in ~310ms having written **zero bytes to either stream**. Through LiNix that
+became `Ok("")` → a parser finding no packages → `list_installed` answering `Ok(vec![])`. Nothing
+in the chain believed anything had failed:
+
+```
+round 1 : rows min=0 max=280   EMPTY_LISTINGS=1/16
+        rc=0  ms=2285  rows=0   <-- `linix list --backend winget`, on a machine with 280
+```
+
+So a transient winget hiccup did not make LiNix report an error — it made LiNix believe the
+machine was empty, at exit 0. The flaky `info` test that started this (`info winget:7zip.7zip`
+denying a row `list` had just printed) is the mildest symptom of it; `check drift` seeing nothing
+installed is not.
+
+The rule is narrow on purpose, and the first attempt was one notch too wide. Keying on an empty
+*stdout* alone made `Get-ComputerRestorePoint` fatal — unelevated it exits 1 with `Access
+denied` on stderr and nothing on stdout — and that failed a whole `sync` which had no business
+caring. The suite caught it within the hour. A command that **said** something has described
+its own situation and its caller may have a reading for it; silence on *both* streams is the
+one case with no second reading, because nothing expresses "you have none of these" by saying
+nothing at all and failing.
+
+**The two readers deliberately differ, and that is worth stating because this repo treats two of
+everything as a defect.** `search_output` already refused a non-zero exit that complained on
+stderr, and `run_output` does not. A search that complains has failed to consult its index, and
+an empty result read as "this manager does not have it" hands a bare name to a lower-priority
+manager (V.7c) — the emptiness *is* the answer there, so it has to be trustworthy. A listing's
+caller may have somewhere else to go: the snapshot check that asked for restore points and was
+denied does not need them. If those two ever want the same rule, it should be `search_output`'s,
+reached by fixing the callers that currently rely on tolerance — not by loosening the search. Fixed in `run_output` for every read, and in
+the three callers that were separately turning an error into a negative: `info` (which printed
+"is not installed on this machine"), `list` (which dropped the manager's rows), and
+`hook-reconcile` (which recorded nothing). `planner::installed_sets` was checked and is
+**correct as it stands** — it treats an unqueryable backend as "assume installed" so removals are
+still scheduled, which is the documented safe direction.
+
+## Q41
+
+**Status: ANSWERED — ruled 2026-08-05, and built the same day.**
+
+**Ruled: classify retryability by exit code as well as by output text, and retry a read that is
+classified transient.**
+
+`ExitPolicy` matched *text* — transient markers, permanent markers, absent markers — against a
+haystack built from both streams. The failure above writes nothing to either, so the haystack is
+empty, every list misses, and `retryability` returns `Unknown`. The one signal that existed, the
+exit code, was read by nothing but `is_benign`. **The classifier was looking at the wrong axis
+for the only failure that has no words.**
+
+What a manager *says* still outranks what it returns: `retryability_of` consults the code only
+when the text classified nothing, because a command that named its problem has described it
+better than a number can.
+
+**Retry is for reads only, and that is not a convenience.** A read is idempotent — asking a
+manager what it has, twice, costs a second. A mutation retried on a guess installs something
+twice. The measured failure is a cold-start collision that a warm winget does not reproduce (3 of
+16 on the first burst, 0 of 32 on the next two), so the second attempt is usually the entire fix.
+`read_retry_attempts` defaults to 3; `1` disables it.
+
+Only `0x8A150001` is listed as transient, because it is the only one measured. Winget documents
+many more codes and guessing which of them a retry could help would be inventing policy from a
+header file — an over-eager entry costs real seconds on every failure that will never pass.
+
+## Q42
+
+**Status: ANSWERED — ruled 2026-08-05, and built the same day.**
+
+**Ruled: reads get their own bound on silence.** `query_idle_timeout_secs`, default **120**, `0`
+disables, and it is capped by `command_idle_timeout_secs` because the outer bound fires first
+anyway.
+
+One number was doing two jobs. `command_idle_timeout_secs` is 900 and the comment beside it names
+why: `Checkpoint-Computer` is silent for its entire run, so a mutation needs that much rope. A
+read does not — `winget list` takes 1.5s here, 2.6s under sixteen-way contention, and `apt list
+--installed` under a second. Fifteen minutes of rope for a one-second question means a wedged
+listing costs fifteen minutes to learn what two could have told you. The 25-minute `winget list`
+recorded under `cargo test` on 2026-07-31 is the case: it *did* eventually return, and waiting
+was still the wrong trade.
+
+120 is ~46x the slowest read measured on this host — wide enough that a fat machine on a slow
+disk is never cut off, narrow enough that a hang is a two-minute wait. It is a key rather than a
+constant because a CI runner and a laptop have different answers, exactly as the bound above it
+does.
+
+## Q43
+
+**Status: OPEN — raised 2026-08-05, swept and measured.**
+
+**Three backends parse a human table where the tool offers a machine format, and LiNix cannot
+safely ask for it.** The sweep of all 40 registered backends found exactly three gaps, all
+verified on this host:
+
+| backend | LiNix parses today | available instead | shape |
+|---|---|---|---|
+| **pixi** | `global list` | `global list --json` | box-drawing tree (`└── ripgrep: 15.2.0`) to JSON |
+| **dotnet** | `tool list --global` | `tool list --format json` | fixed-width columns to JSON |
+| **scoop** | `list` | `scoop export` | fixed-width columns to JSON |
+
+Everything else is already machine-readable or has nothing to offer. **Already fine:** npm, pnpm,
+pip, pipx, composer (JSON); choco (`list -r`, `name|version`), apt (`dpkg-query -f=`), luarocks
+(`--porcelain`), opam (`--short`), cabal (`--simple-output`), spack (`--format`). **Checked and
+there is no machine format:** gem, cargo (`install --list`; its `--message-format json` is for
+diagnostics, not for the listing), uv, yarn, mas, and `winget list` itself.
+
+**Why this is not simply a config edit.** Every one of the three is a *version-dependent flag* —
+`--format json` needs dotnet SDK 10, `--json` a recent pixi, and scoop's export only emits JSON in
+current builds — and **LiNix has no capability probe.** There is no version gate, no
+`supports_flag`, nothing. Passing an unsupported flag to an older tool makes the command fail with
+a usage message on stderr and nothing on stdout, and `Q40` deliberately leaves *that* shape alone:
+a read that complained is handed to its caller as an empty result. So shipping any of these three
+blind would reproduce the exact defect `Q40` was raised to fix — a manager silently reporting an
+empty machine — on a different axis, and only for users on older tooling, who are the least likely
+to be reading release notes.
+
+**Recommendation — negotiate once, per backend, per run.** Ask for the machine format; if the
+command *fails* (a status-aware read, not `run_output`), fall back to the text form and remember
+that answer for the rest of the run. It costs one extra failed invocation on old tooling and
+nothing at all on current, needs no version table to go stale, and is testable from both sides. It
+is a second code path per backend, which this repo is right to be suspicious of — but the
+alternatives are a version table nobody will maintain, pinning minimum versions of tools LiNix
+does not control, or never improving a parser again.
+
+**The measured argument for bothering at all:** the scoop parser already carries a scar from this
+exact class. `scoop list` leaves Version and Source empty for a failed install and keeps the row
+forever; read by whitespace-splitting it became a package named `jq` at version `2026-07-21`, and
+`adopt` wrote it into a manifest for software that was never on PATH. The fix was to slice by
+header offsets — correct, and still parsing a table drawn for a human when the same tool will hand
+over JSON on request.
+
+**Not found: a second member of the `Q36` family.** winget is the only backend that merges a
+*foreign inventory* into its listing — the ARP and MSIX rows it synthesises from the registry.
+Every other manager lists what it installed and can reinstall it. `choco export` exists and adds
+nothing over `choco list -r`. The `ManualListing::ExportFile` seam stays because `brew bundle
+dump` is the likely second member and there is no macOS host here to check it on.
+
 
 ## Q37
 

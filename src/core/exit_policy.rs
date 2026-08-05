@@ -47,6 +47,15 @@ pub struct ExitPolicy {
     /// with no entry is ratcheted by `absent_marker_coverage_tests.rs` rather than left to
     /// be discovered one backend at a time.
     pub absent_markers: Vec<&'static str>,
+    /// Exit codes that mean the failure came from outside the request, for a manager that
+    /// does not say so in words.
+    ///
+    /// **Every other list here is text, and text is the wrong axis for a manager that fails
+    /// silently.** Measured: 3 of 16 concurrent cold-start `winget list` exit `0x8A150001`
+    /// having written zero bytes to either stream, so the haystack every marker is matched
+    /// against is empty and `retryability` returns `Unknown` — while the one signal that does
+    /// exist, the code, was read by nothing but `is_benign`.
+    pub transient_exits: Vec<i32>,
 }
 
 impl ExitPolicy {
@@ -148,6 +157,22 @@ impl ExitPolicy {
             return false;
         }
         self.absent_markers.iter().any(|m| hay.contains(m))
+    }
+
+    /// Whether the same command could succeed on another attempt, given both signals it left.
+    ///
+    /// **What a manager says outranks what it returns.** A command that named its problem has
+    /// described it better than its exit code can, and the codes here are a fallback for the
+    /// case that has no words at all — which is exactly the case [`retryability`] cannot see,
+    /// because its haystack is empty and every marker list misses.
+    pub fn retryability_of(&self, code: Option<i32>, hay: &str) -> Retryability {
+        match self.retryability(hay) {
+            Retryability::Unknown => match code {
+                Some(c) if self.transient_exits.contains(&c) => Retryability::Transient,
+                _ => Retryability::Unknown,
+            },
+            classified => classified,
+        }
     }
 
     /// Whether the same command could succeed on another attempt.
@@ -308,11 +333,23 @@ pub fn choco() -> ExitPolicy {
 /// winget's wording separates them — `No installed package found` for the first, `No package
 /// found` for the second — so the marker is the second phrasing, which the first does not
 /// contain.
+/// winget's internal error, `0x8A150001`, written as the `i32` a process exit status carries.
+///
+/// Measured on a real host: 16 concurrent `winget list` from a cold start, and 3 of them exit
+/// this having printed nothing at all, in ~310ms — while a single `winget list` takes 1.5s and
+/// a second burst against a warm winget loses none. It is contention on winget's own source
+/// index, not a fact about the request, and the identical command succeeds moments later.
+const WINGET_INTERNAL_ERROR: i32 = 0x8A15_0001_u32 as i32;
+
 pub fn winget() -> ExitPolicy {
     ExitPolicy {
         benign_exits: vec![-1978335189, -1978335212, -1978335215],
         failure_markers: vec!["no package found matching input criteria"],
         absent_markers: vec!["no package found matching input criteria"],
+        // The only code here is the one that was measured. Winget documents many more, and
+        // guessing which of them a retry could help would be inventing policy from a header
+        // file — an over-eager entry costs real seconds on every failure that will never pass.
+        transient_exits: vec![WINGET_INTERNAL_ERROR],
         ..ExitPolicy::default()
     }
 }

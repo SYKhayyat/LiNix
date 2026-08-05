@@ -3339,3 +3339,64 @@ winget branch. What the version-bearing names did was make the failure visible t
 rather than on rebuild day; the other 120 were equally unenforceable and perfectly quiet.
 
 ---
+
+## `Q40`–`Q42` — a read that failed, and the three ways nobody noticed
+
+**The bug, as it presented.** One integration test went red now and then under full-suite load:
+`info winget:7zip.7zip` denied a row that `list` had printed a moment earlier. It passed in
+isolation every time. That is a flake in the way a smoke alarm is a noise.
+
+**What it actually was.** Sixteen concurrent `winget list`, with LiNix nowhere near them:
+
+```
+N= 1   min 1165ms   median 1165ms   max 1165ms    0/1 failed
+N= 8   min 2306ms   median 2503ms   max 2522ms    0/8
+N=16   min  304ms   median 2313ms   max 2612ms    3/16   <-- rc=0x8A150001, 0 bytes out
+```
+
+Winget loses ~3 of a cold burst of 16 and none of the next 32; it is contention on its own
+source index. Not our defect — but what LiNix did with it was.
+
+`run_output` ignored exit status by design, and the design is right: "no such package" and "no
+results" are ordinary non-zero replies. It ignored the *silent* ones too. So `Ok("")` → a parser
+finding nothing → `list_installed` answering `Ok(vec![])`. **Nothing in the chain believed
+anything had failed.** LiNix did not think winget was unwell; it thought the machine was empty:
+
+```
+round 1 : rows min=0 max=280   EMPTY_LISTINGS=1/16
+        rc=0  ms=2285  rows=0   <-- `linix list --backend winget`, 280 packages installed
+```
+
+**Three layers, three chances to notice, three misses.** The executor turned a failure into an
+empty string. The backend turned an empty string into an empty machine. And three callers turned
+an empty machine into a claim: `info` printed *"is not installed on this machine"*, `list`
+dropped the manager's rows without a word, and `hook-reconcile` recorded nothing as though there
+had been nothing. Each layer was individually defensible and the composition was a lie.
+
+**Why the retry classifier could not save it.** `ExitPolicy` classifies from *text* — transient
+markers, permanent markers, absent markers, all matched against a haystack of both streams. This
+failure writes zero bytes. The haystack is empty, every list misses, and the verdict is
+`Unknown`. The one signal that existed — the exit code — was read by nothing but `is_benign`.
+**A classifier looking at the only axis the failure does not use.**
+
+**Why the bound could not save it either, and was wrong anyway.** The first theory was that the
+900s idle bound was killing a wedged `winget list`. The measurement refuted it: these fail in
+~310ms. But it exposed a real fault beside the imagined one — 900 was chosen for
+`Checkpoint-Computer`, a mutation silent for its whole run, and every read inherited it. A
+question that takes 1.5s had fifteen minutes of rope.
+
+**The shape of the fix.** Narrow where it must be, general where it can be. A non-zero read with
+output keeps its output — breaking that would break every manager that reports "not found" by
+exiting 1. A non-zero read with *nothing* is a failure, because no manager expresses "you have
+none of these" by saying nothing and failing. Classification gained the code as a fallback under
+the text, never over it: a manager that named its problem has described it better than a number
+can. Retry is for reads alone — idempotence is the entire justification, and a mutation retried
+on a guess installs twice.
+
+**And one sibling that was already right.** `planner::installed_sets` drops a backend it could
+not query from its map, and `is_installed` reads a missing entry as *assume it is there* — so a
+removal is still scheduled and reports its own failure. Its comment says why: *"Not knowing must
+never turn into 'so skip it'."* The same question, asked and answered correctly, two files from
+where it was being answered wrongly.
+
+---

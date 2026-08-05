@@ -1656,6 +1656,54 @@ mod tests {
         }
     }
 
+    /// The link that turned an executor detail into a wrong answer about the machine.
+    ///
+    /// `run_output` handed back `Ok("")` for a lister that died without a word, the parser
+    /// found no packages in the empty string, and `list_installed` reported `Ok(vec![])` — a
+    /// manager with nothing installed. Nothing in the chain thought anything had failed.
+    /// Measured on winget: 1 run in 16 under concurrent cold start, and `linix list --backend
+    /// winget` printed nothing and exited 0 with 280 packages on the machine.
+    #[tokio::test]
+    async fn a_lister_that_died_silently_is_a_failure_not_an_empty_machine() {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        mock.set_response(
+            "dpkg-query -W -f=${Package} ${Version}\\n",
+            Ok(crate::core::executor::silent_failure(1)),
+        );
+        let q = queryable_with(ManualListing::AllInstalled, mock.clone(), vfs);
+
+        let err = q.list_installed().await.expect_err(
+            "a lister that exited non-zero without a word must not report an empty machine",
+        );
+        assert!(
+            err.to_string().contains("no output"),
+            "the failure must say the lister produced nothing: {err}"
+        );
+    }
+
+    /// The boundary the fix must not cross. A manager with genuinely nothing installed exits
+    /// 0 and says nothing, and that empty listing is a real answer — turning *it* into an
+    /// error would break every clean machine.
+    #[tokio::test]
+    async fn a_lister_that_succeeded_with_nothing_to_say_still_reports_an_empty_machine() {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        mock.set_response(
+            "dpkg-query -W -f=${Package} ${Version}\\n",
+            Ok(DryRunOutput {
+                stdout: vec![],
+                stderr: vec![],
+            }
+            .into()),
+        );
+        let q = queryable_with(ManualListing::AllInstalled, mock.clone(), vfs);
+        assert!(
+            q.list_installed().await.expect("exit 0 is an answer").is_empty(),
+            "an empty listing at exit 0 is a machine with nothing installed, not a failure"
+        );
+    }
+
     #[tokio::test]
     async fn apt_manual_list_asks_apt_mark_not_dpkg_query() {
         // The bug: apt had no manual command, so `list_manual` fell back to `dpkg-query

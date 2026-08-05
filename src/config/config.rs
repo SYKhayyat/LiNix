@@ -328,6 +328,28 @@ pub struct Config {
     #[serde(default = "default_command_idle_timeout_secs")]
     pub command_idle_timeout_secs: u64,
 
+    /// The same cap on silence, for a **read** — `winget list`, `apt list --installed`, a
+    /// search. `0` removes it, and anything above `command_idle_timeout_secs` is moot because
+    /// the outer bound fires first.
+    ///
+    /// Separate because the two jobs are not alike. The bound above is sized for
+    /// `Checkpoint-Computer`, a mutation that legitimately runs silent for minutes; a read
+    /// takes seconds, and a question that has said nothing for two minutes is not about to
+    /// answer. One number for both meant a stuck listing cost fifteen minutes to learn what
+    /// two could have told you.
+    #[serde(default = "default_query_idle_timeout_secs")]
+    pub query_idle_timeout_secs: u64,
+
+    /// How many times a read whose failure is classified **transient** is asked again. `1`
+    /// asks once and does not retry.
+    ///
+    /// Only reads, and only transient ones. A read is idempotent, so a second attempt costs a
+    /// second; a mutation retried on a guess installs something twice. The measured case is
+    /// winget losing 3 of 16 concurrent cold-start listings and none of the next 32 — a
+    /// collision, not an answer, and asking again is the whole fix.
+    #[serde(default = "default_read_retry_attempts")]
+    pub read_retry_attempts: u32,
+
     /// How long to wait out a remote rate limit before giving up and naming it (S26). A CI
     /// job and a laptop want different answers, which is why it is a key; the default is
     /// short because the wait happens while the data lock is held, and a command that looks
@@ -520,6 +542,12 @@ fn default_network_timeout_secs() -> u64 {
 fn default_command_idle_timeout_secs() -> u64 {
     crate::core::executor::DEFAULT_COMMAND_IDLE_TIMEOUT_SECS
 }
+fn default_query_idle_timeout_secs() -> u64 {
+    crate::core::executor::DEFAULT_QUERY_IDLE_TIMEOUT_SECS
+}
+fn default_read_retry_attempts() -> u32 {
+    crate::core::executor::DEFAULT_READ_RETRY_ATTEMPTS
+}
 fn default_nix_gc_age() -> String {
     "30d".to_string()
 }
@@ -629,6 +657,8 @@ impl Default for Config {
             installed_cache_secs: default_installed_cache_secs(),
             network_timeout_secs: default_network_timeout_secs(),
             command_idle_timeout_secs: default_command_idle_timeout_secs(),
+            query_idle_timeout_secs: default_query_idle_timeout_secs(),
+            read_retry_attempts: default_read_retry_attempts(),
             rate_limit_max_wait_secs: default_rate_limit_max_wait_secs(),
             nix_gc_age: default_nix_gc_age(),
             clean_cache_on_remove: false,

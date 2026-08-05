@@ -491,7 +491,20 @@ pub(crate) async fn handle_hook_reconcile(app: &App, manager: &str) -> Result<()
     let Some(queryable) = backend.as_queryable() else {
         return Ok(());
     };
-    let installed = queryable.list_installed().await.unwrap_or_default();
+    // Adopting nothing is the safe direction when a listing fails — this records what a
+    // manager installed behind LiNix's back, and inventing entries would be worse. But a hook
+    // that silently records nothing looks exactly like a hook with nothing to record, and this
+    // one runs unattended, where nobody is watching for the difference.
+    let installed = match queryable.list_installed().await {
+        Ok(pkgs) => pkgs,
+        Err(e) => {
+            warn!(
+                "hook-reconcile: `{manager}` could not be listed, so nothing it installed was \
+                 recorded as managed. It is not that there was nothing: {e}"
+            );
+            return Ok(());
+        }
+    };
     let mut newly = 0usize;
     {
         let mut state = app.state.lock().await;

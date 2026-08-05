@@ -41,6 +41,19 @@ network_timeout_secs = 15
 # restore point that had already been written.
 command_idle_timeout_secs = 900
 
+# The same cap on silence, for a READ — a listing, a search, an existence probe. Separate
+# because the number above is sized for a mutation that legitimately runs silent for minutes
+# (a Windows restore point), while a read takes seconds: `winget list` is 1.5s here, 2.6s
+# under heavy contention. One number for both meant a wedged listing cost fifteen minutes to
+# learn what two could have told you. 0 removes it; anything above the bound above is moot.
+query_idle_timeout_secs = 120
+
+# How many times a read whose failure is classified TRANSIENT is asked again. 1 disables it.
+# Reads only, and that is the justification: asking a manager what it has, twice, costs a
+# second, while a mutation retried on a guess installs something twice. Measured: winget
+# loses ~3 of a cold burst of 16 concurrent listings and none of the next 32.
+read_retry_attempts = 3
+
 # How long to wait out a remote rate limit (GitHub) before giving up and naming the host
 # and its reset time. The wait is taken while the data directory is locked, so a long one
 # is indistinguishable from a hang; raise it for an unattended job that would rather wait.

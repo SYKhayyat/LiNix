@@ -826,6 +826,10 @@ pub(crate) fn plan_user_verb(
 fn apply_process_wide_config(config: &linix::config::Config) {
     linix::backends::node_registry::set_http_timeout(config.network_timeout_secs);
     linix::core::executor::set_command_idle_timeout(config.command_idle_timeout_secs);
+    linix::core::executor::set_query_bounds(
+        config.query_idle_timeout_secs,
+        config.read_retry_attempts,
+    );
 }
 
 /// safe default for a sequence that may install or remove.

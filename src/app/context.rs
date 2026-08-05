@@ -620,15 +620,54 @@ impl App {
             .into_iter()
             .filter(|b| backend_filter.is_none_or(|f| b.name() == f))
             .collect();
+        // The fan-out drops backends that cannot be queried at all, so the names have to be
+        // taken through the same filter to stay aligned with the answers.
+        let names: Vec<String> = backends
+            .iter()
+            .filter(|b| b.as_queryable().is_some())
+            .map(|b| b.name().to_string())
+            .collect();
         // Every backend's lister is a separate process (`apt list`, `cargo install --list`,
         // …) with nothing to share, so querying them one after another is latency the machine
         // is not spending — it is waiting. Fan out, bounded by `max_parallel`.
         let results = self
-            .query_backends_concurrently(backends, |q| async move {
-                q.list_installed().await.unwrap_or_default()
-            })
+            .query_backends_concurrently(backends, |q| async move { q.list_installed().await })
             .await;
-        Ok(results.into_iter().flatten().collect())
+
+        // `unwrap_or_default()` stood here, and it is how `linix list --backend winget` printed
+        // nothing and exited 0 on a machine with 280 winget packages on it: the manager fell
+        // over, its rows became an empty vector, and the empty vector became the answer.
+        // Measured 1 run in 16 under concurrent cold start. A listing missing a manager is a
+        // different thing from a machine missing its packages, and the user has to be able to
+        // tell which one they are holding.
+        let mut rows = Vec::new();
+        let mut unlisted = Vec::new();
+        for (name, result) in names.into_iter().zip(results) {
+            match result {
+                Ok(pkgs) => rows.extend(pkgs),
+                Err(e) => unlisted.push((name, e)),
+            }
+        }
+        if !unlisted.is_empty() {
+            // One manager was asked about, so its failure *is* the answer — there is no
+            // partial listing to hand back, only an empty one that would read as "you have
+            // none of these".
+            if backend_filter.is_some() {
+                let (name, e) = unlisted.remove(0);
+                return Err(Error::command_failed(format!(
+                    "`{name}` could not be listed, so LiNix cannot tell you what it has: {e}"
+                )));
+            }
+            // Listing everything: one unwell manager must not take the other twenty-three
+            // with it, but it must not pass quietly either.
+            for (name, e) in &unlisted {
+                warn!(
+                    "`{name}` could not be listed — anything it has is missing from this \
+                     listing: {e}"
+                );
+            }
+        }
+        Ok(rows)
     }
 
     pub async fn get_info(&self, package_name: &str) -> Result<Option<Package>> {
@@ -684,8 +723,15 @@ impl App {
             let Some(q) = backend.as_queryable() else {
                 continue;
             };
-            if let Ok(Some(found)) = q.info(&spec.name).await {
-                return Ok(Some(found));
+            // A manager that could not be asked has not said no. Dropping the error here made
+            // `info` print "is not installed on this machine" — a claim about the user's
+            // machine — whenever a manager fell over, and a `winget list` that fails under
+            // concurrent load does exactly that, silently (Q36's sibling). Absence and
+            // unavailability are different answers and only one of them is knowable.
+            match q.info(&spec.name).await {
+                Ok(Some(found)) => return Ok(Some(found)),
+                Ok(None) => {}
+                Err(e) => return Err(e),
             }
         }
 
@@ -710,13 +756,38 @@ impl App {
             .map(|s| s.name.clone())
             .unwrap_or_else(|| package_name.to_string());
         let backends = self.registry.available();
-        let found = self
+        let answers = self
             .query_backends_concurrently(backends, move |q| {
                 let name = name.clone();
-                async move { q.info(&name).await.ok().flatten() }
+                async move { q.info(&name).await }
             })
             .await;
-        Ok(found.into_iter().flatten().next())
+        // In registry order, so the first manager that *has* it still wins and the fan-out
+        // stays the only thing deciding that.
+        let mut unanswered = Vec::new();
+        for answer in answers {
+            match answer {
+                Ok(Some(found)) => return Ok(Some(found)),
+                Ok(None) => {}
+                Err(e) => unanswered.push(e.to_string()),
+            }
+        }
+        // Nobody has it — but "nobody has it" is only true if everybody was asked. A manager
+        // that fell over contributes silence, and silence read as a "no" is how `info` reports
+        // an installed package as absent. `.ok().flatten()` here did precisely that.
+        if !unanswered.is_empty() {
+            return Err(Error::command_failed(format!(
+                "no manager reported `{package_name}`, but {} could not be asked, so LiNix \
+                 cannot tell you it is absent:\n  {}",
+                if unanswered.len() == 1 {
+                    "one of them".to_string()
+                } else {
+                    format!("{} of them", unanswered.len())
+                },
+                unanswered.join("\n  ")
+            )));
+        }
+        Ok(None)
     }
 
     /// Everything installed that LiNix does not manage — the dependency closure included.
@@ -750,11 +821,28 @@ impl App {
 
     pub async fn installed_but_unmanaged(&self) -> Result<Vec<Package>> {
         let backends = self.registry.available();
-        let listed = self
-            .query_backends_concurrently(backends, |q| async move {
-                q.list_installed().await.unwrap_or_default()
-            })
+        let names: Vec<String> = backends
+            .iter()
+            .filter(|b| b.as_queryable().is_some())
+            .map(|b| b.name().to_string())
+            .collect();
+        let answers = self
+            .query_backends_concurrently(backends, |q| async move { q.list_installed().await })
             .await;
+        // A manager that could not be listed contributes nothing, which is the safe direction
+        // for the caller that deletes — `purge-unmanaged` removes less, never more. It is not
+        // a safe direction for the *sentence*: "nothing here is unmanaged" and "one manager
+        // never answered" both come out as an empty list, and only one of them is a clean bill.
+        let mut listed = Vec::new();
+        for (name, answer) in names.into_iter().zip(answers) {
+            match answer {
+                Ok(pkgs) => listed.push(pkgs),
+                Err(e) => warn!(
+                    "`{name}` could not be listed, so nothing it has counts as unmanaged here \
+                     — this is not a clean bill for `{name}`: {e}"
+                ),
+            }
+        }
         // D5: a `.deb`/`.rpm` a download backend handed to a system manager is listed by that
         // manager as installed, but a download declaration owns it — so it is not unmanaged, and
         // `purge-unmanaged` must defer to the recorded installer rather than delete it. Match by

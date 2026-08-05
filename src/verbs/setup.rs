@@ -279,6 +279,14 @@ network_timeout_secs = 15
 # Raise it if you drive something legitimately silent for longer; 0 removes the bound.
 command_idle_timeout_secs = 900
 
+# The same cap, for a READ — a listing or a search. Its own key because the number above is
+# sized for a mutation that is legitimately silent for minutes, and a read takes seconds.
+query_idle_timeout_secs = 120
+
+# How many times a read that failed TRANSIENTLY is asked again. 1 disables it. Reads only:
+# asking twice costs a second, where a mutation retried on a guess installs twice.
+read_retry_attempts = 3
+
 # How long to wait out a remote rate limit (GitHub) before giving up and naming it.
 # The wait happens while the data directory is locked, so a long one looks like a hang.
 # Raise it for an unattended CI job that would rather wait than fail.

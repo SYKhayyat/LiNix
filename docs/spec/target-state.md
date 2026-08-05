@@ -1725,6 +1725,32 @@ nothing for `command_idle_timeout_secs` are abandoned and the command **fails by
 that ends before the read ends is a bound a command can walk around, and the walk-around was
 silent *and* returned the child's exit code — so the command reported **success** (V.131).
 
+**A read has its own bound** (2026-08-05, `Q42`). `query_idle_timeout_secs`, default 120, `0`
+disables, never longer than the bound above. The number above is sized for `Checkpoint-Computer`,
+a mutation legitimately silent for its whole run; a read takes seconds — `winget list` 1.5s here,
+2.6s under sixteen-way contention — and a question that has said nothing for two minutes is not
+about to answer. One number for both jobs meant a wedged listing cost fifteen minutes to learn
+what two could have told you.
+
+**A read that exits non-zero having said nothing at all has failed; it has not answered "nothing"**
+(2026-08-05, `Q40`). A non-zero exit alone is not the verdict — "no such package" and "no
+results" are ordinary non-zero replies that arrive with their reason on the page, so a read that
+*printed* keeps what it printed — on either stream, since a complaint is something said, and
+`Get-ComputerRestorePoint` exiting 1 with `Access denied` is for its caller to weigh. But silence
+on both streams beside a failure is the one case that cannot be an
+answer: a manager with nothing to report says so by exiting 0, or by printing a header. Returning
+an empty listing there made `linix list --backend winget` print nothing and exit 0 on a machine
+with 280 packages, and made `info` report an installed package as absent. **Absence and
+unavailability are different answers, and no caller may collapse them** — not `list`, which names
+the manager it could not reach and marks the listing partial; not `info`, which fails rather than
+claim a package is not installed; not a hook, which says it recorded nothing and why.
+
+**Retryability is classified from the exit code as well as from the output** (2026-08-05, `Q41`),
+and **a read classified transient is retried** — `read_retry_attempts`, default 3. What a manager
+says outranks what it returns, so the code is consulted only where the text classified nothing;
+that is precisely the silent failure, whose haystack is empty by definition. Retry is for reads
+and only reads: a read is idempotent, and a mutation retried on a guess installs twice.
+
 ## II.13 History
 
 **Git is your intent. Snapshots are your machine.** Two jobs, two mechanisms, neither
