@@ -60,8 +60,10 @@ enable  = [["launchctl", "load", "-w", "{name}"]]
 disable = [["launchctl", "unload", "-w", "{name}"]]
 start   = [["launchctl", "start", "{name}"]]
 stop    = [["launchctl", "stop", "{name}"]]
-# No native restart verb — stop then start, in order.
-restart = [["launchctl", "stop", "{name}"], ["launchctl", "start", "{name}"]]
+# No native restart verb. Spelled out here as stop-then-start it was indistinguishable from a
+# native one, so both halves were labelled `restart` and neither could be told which codes mean
+# "already in that state". Left absent, the derivation produces the same two commands and labels
+# each with its own verb.
 list = ["launchctl", "list"]
 list_pattern = '^\S+\s+\S+\s+(\S+)'
 list_skip_lines = 1
@@ -74,7 +76,13 @@ enable  = [["sc", "config", "{name}", "start=", "auto"]]
 disable = [["sc", "config", "{name}", "start=", "disabled"]]
 start   = [["sc", "start", "{name}"]]
 stop    = [["sc", "stop", "{name}"]]
-restart = [["sc", "stop", "{name}"], ["sc", "start", "{name}"]]
+# `sc` has no restart verb either — see launchd above for why it is not written out here.
+# 1056 = ERROR_SERVICE_ALREADY_RUNNING, 1062 = ERROR_SERVICE_NOT_ACTIVE. `sc` returns them for
+# a start of a running service and a stop of a stopped one — the state the declaration asked
+# for. Without these, adopting a machine's running services makes every later sync fail on the
+# first one.
+start_benign_exits = [1056]
+stop_benign_exits  = [1062]
 # `state= active` is what sc's own documentation says and what this box rejects:
 #   sc query type= service state= active   ->  ERROR: Invalid state= field   (exit 0)
 #   sc query type= service                 ->  156 services

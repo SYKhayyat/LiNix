@@ -87,15 +87,19 @@ impl Extras<'_> {
             .filter_map(|(s, _)| crate::core::extras_lock::extra_key(s).map(|k| (k, s)))
             .collect();
         for (key, stmt) in by_key {
-            if !ledger.applied().contains(&key) {
-                // Never applied. `sync` will place it, whatever the machine looks like — so
-                // this needs no probe and is the same answer for all six kinds.
-                changes.place.push(key);
-                continue;
-            }
-            match in_effect(self.config, stmt, &key).await {
+            // The probe first and the ledger only after it. `Dependents::apply` has never
+            // consulted the ledger — it skips whatever the probe reports in effect — so a
+            // short-circuit on "never applied" made `plan` promise work `sync` would not do.
+            // Invisible until `adopt` wrote 150 running services LiNix had never placed:
+            // `plan` said 150 resources to place and `sync` correctly placed none.
+            //
+            // The record still answers the case nothing can be asked about: a resource this
+            // machine cannot be queried for has been applied, or it has not, and only one of
+            // those is work.
+            match in_effect(self.config, self.registry, stmt, &key).await {
                 Some(true) => {}
                 Some(false) => changes.place.push(key),
+                None if !ledger.applied().contains(&key) => changes.place.push(key),
                 None => changes.unverifiable.push(key),
             }
         }
@@ -261,6 +265,7 @@ impl Extras<'_> {
 /// the whole question either.
 pub(crate) async fn in_effect(
     config: &std::sync::Arc<crate::config::Config>,
+    registry: &crate::backends::BackendRegistry,
     stmt: &crate::config::grammar::Statement,
     key: &str,
 ) -> Option<bool> {
@@ -269,6 +274,34 @@ pub(crate) async fn in_effect(
 
     let (kind, id) = split_key(key)?;
     match kind {
+        // A running service is a state the init can be asked about, and asking costs one
+        // cached listing for the whole run. Left unasked, every `service:` line was
+        // `unverifiable` — which places — so adopting a machine's 150 running services made
+        // every later sync run 150 `sc start` calls on services that were already running.
+        "service" => {
+            let Statement::Service(_, opts) = stmt else {
+                return None;
+            };
+            // Enablement is a second axis and no init here reports it in the listing. A line
+            // that declares it is answered by the machine, not by this shortcut.
+            if opts.one("enabled").is_some() {
+                return None;
+            }
+            let running = registry
+                .get("service")?
+                .as_queryable()?
+                .list_installed()
+                .await
+                .ok()?
+                .iter()
+                .any(|p| p.name == id);
+            match opts.one("status")? {
+                "running" | "started" | "start" => Some(running),
+                "stopped" | "stop" => Some(!running),
+                // A restart is a transition, not a state: no listing can say it happened.
+                _ => None,
+            }
+        }
         // The ledger keys a link by its resolved destination — exactly so the teardown can
         // find what was written — so the destination is the key and the source is the
         // declaration's own name.
@@ -316,4 +349,116 @@ fn declared_extras(state: &crate::model::DesiredState) -> std::collections::BTre
         .iter()
         .filter_map(|(s, _)| crate::core::extras_lock::extra_key(s))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::in_effect;
+    use crate::backends::service::{InitProviderFile, ServiceBackendCore, ServiceQueryable};
+    use crate::backends::BackendRegistry;
+    use crate::config::grammar::{Options, Statement};
+    use crate::core::{BackendCapabilities, CommandExecutor};
+    use std::sync::Arc;
+
+    /// A registry whose `service` backend reports exactly one running service, from a real
+    /// child process — so the listing is parsed rather than handed over.
+    fn registry_listing_nginx() -> BackendRegistry {
+        #[cfg(windows)]
+        let toml = r#"
+[[init]]
+name = "probe"
+detect = "cmd"
+start = [["cmd", "/C", "exit 0"]]
+stop  = [["cmd", "/C", "exit 0"]]
+list  = ["cmd", "/C", "echo SERVICE_NAME: nginx"]
+list_pattern = 'SERVICE_NAME:\s+(\S+)'
+"#;
+        #[cfg(not(windows))]
+        let toml = r#"
+[[init]]
+name = "probe"
+detect = "sh"
+start = [["sh", "-c", "exit 0"]]
+stop  = [["sh", "-c", "exit 0"]]
+list  = ["sh", "-c", "echo 'SERVICE_NAME: nginx'"]
+list_pattern = 'SERVICE_NAME:\s+(\S+)'
+"#;
+        let file: InitProviderFile = toml::from_str(toml).expect("the probe row parses");
+        let core = Arc::new(ServiceBackendCore::with_providers(
+            CommandExecutor::new(false, false),
+            file.init,
+        ));
+        let mut reg = BackendRegistry::new();
+        reg.register(Arc::new(
+            BackendCapabilities::builder(core.clone())
+                .with_queryable(Arc::new(ServiceQueryable { core }))
+                .build(),
+        ));
+        reg
+    }
+
+    fn service(name: &str, key: &str, value: &str) -> (Statement, String) {
+        let mut opts = Options::default();
+        opts.insert(key, value);
+        (
+            Statement::Service(name.to_string(), opts),
+            format!("service:{}", name),
+        )
+    }
+
+    /// The reason `adopt` made every later sync fail: a `service:` line was `unverifiable`, and
+    /// unverifiable places — so 150 adopted running services meant 150 `sc start` calls per
+    /// sync, each on a service that was already running.
+    #[tokio::test]
+    async fn a_service_already_in_its_declared_state_is_not_placed_again() {
+        let config = Arc::new(crate::config::Config::default());
+        let reg = registry_listing_nginx();
+
+        let (running, key) = service("nginx", "status", "running");
+        assert_eq!(
+            in_effect(&config, &reg, &running, &key).await,
+            Some(true),
+            "nginx is in the listing and the line asks for running"
+        );
+
+        let (stopped, key) = service("nginx", "status", "stopped");
+        assert_eq!(
+            in_effect(&config, &reg, &stopped, &key).await,
+            Some(false),
+            "a running service declared stopped is drift, and drift places"
+        );
+
+        // The same two questions about a service the init does not report.
+        let (running, key) = service("absent-svc", "status", "running");
+        assert_eq!(in_effect(&config, &reg, &running, &key).await, Some(false));
+        let (stopped, key) = service("absent-svc", "status", "stopped");
+        assert_eq!(in_effect(&config, &reg, &stopped, &key).await, Some(true));
+    }
+
+    /// What the listing cannot answer stays unanswered. A restart is a transition no listing
+    /// records; enablement is a second axis none of the shipped inits report. Answering either
+    /// from "is it running" would report converged on a machine that is not.
+    #[tokio::test]
+    async fn what_the_listing_cannot_answer_is_left_unverifiable() {
+        let config = Arc::new(crate::config::Config::default());
+        let reg = registry_listing_nginx();
+
+        let (restarted, key) = service("nginx", "status", "restarted");
+        assert_eq!(in_effect(&config, &reg, &restarted, &key).await, None);
+
+        let (enabled, key) = service("nginx", "enabled", "true");
+        assert_eq!(in_effect(&config, &reg, &enabled, &key).await, None);
+
+        // Enablement declared *alongside* a status is still unanswered: the status half being
+        // satisfied says nothing about the half that is not.
+        let mut opts = Options::default();
+        opts.insert("status", "running");
+        opts.insert("enabled", "true");
+        let both = Statement::Service("nginx".to_string(), opts);
+        assert_eq!(
+            in_effect(&config, &reg, &both, "service:nginx").await,
+            None,
+            "running is satisfied and enabled is unknown — the line as a whole is unknown"
+        );
+    }
 }

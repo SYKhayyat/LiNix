@@ -13,6 +13,7 @@ use crate::core::{
 };
 use async_trait::async_trait;
 use serde::Deserialize;
+use std::borrow::Cow;
 use std::sync::Arc;
 use tracing::{info, warn};
 
@@ -66,6 +67,18 @@ pub struct InitProvider {
     /// How to read one service's status, for `info`. Optional.
     #[serde(default)]
     pub status: Vec<String>,
+    /// Exit codes `start` returns when the service is *already running*.
+    ///
+    /// Being in the state the declaration asks for is what convergence means, so it is a
+    /// success and not a failure. Per action rather than per provider: `sc` answers 1056
+    /// (`ERROR_SERVICE_ALREADY_RUNNING`) to a start and 1062 (`ERROR_SERVICE_NOT_ACTIVE`) to a
+    /// stop, and each of those is a genuine failure on the other verb.
+    #[serde(default)]
+    pub start_benign_exits: Vec<i32>,
+    /// Exit codes `stop` returns when the service is *already stopped*. See
+    /// [`start_benign_exits`](Self::start_benign_exits).
+    #[serde(default)]
+    pub stop_benign_exits: Vec<i32>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -81,9 +94,13 @@ impl InitProvider {
         cmd.iter().map(|a| a.replace("{name}", name)).collect()
     }
 
-    /// The ordered list of concrete commands that realize `action` for `name`. Empty when this
-    /// init cannot express the action, so the caller reports "cannot" rather than reporting done.
-    pub fn plan(&self, action: ServiceAction, name: &str) -> Vec<Vec<String>> {
+    /// The ordered list of concrete commands that realize `action` for `name`, each paired with
+    /// the action it carries out. Empty when this init cannot express the action, so the caller
+    /// reports "cannot" rather than reporting done.
+    ///
+    /// A derived restart is a `Stop` followed by a `Start`, and each half must be labelled as
+    /// itself: the two halves have opposite ideas of which exit code means "already there".
+    pub fn plan(&self, action: ServiceAction, name: &str) -> Vec<(ServiceAction, Vec<String>)> {
         let seq = match action {
             ServiceAction::Enable => &self.enable,
             ServiceAction::Disable => &self.disable,
@@ -92,15 +109,34 @@ impl InitProvider {
             ServiceAction::Restart => {
                 if self.restart.is_empty() {
                     // Derived stop-then-start for an init with no native restart verb.
-                    let mut out: Vec<Vec<String>> = Vec::new();
-                    out.extend(self.stop.iter().map(|c| Self::fill(c, name)));
-                    out.extend(self.start.iter().map(|c| Self::fill(c, name)));
+                    let mut out: Vec<(ServiceAction, Vec<String>)> = Vec::new();
+                    out.extend(
+                        self.stop
+                            .iter()
+                            .map(|c| (ServiceAction::Stop, Self::fill(c, name))),
+                    );
+                    out.extend(
+                        self.start
+                            .iter()
+                            .map(|c| (ServiceAction::Start, Self::fill(c, name))),
+                    );
                     return out;
                 }
                 &self.restart
             }
         };
-        seq.iter().map(|c| Self::fill(c, name)).collect()
+        seq.iter().map(|c| (action, Self::fill(c, name))).collect()
+    }
+
+    /// The exit codes that mean "already in the state `action` asks for" — success for a
+    /// converger. Empty for every action whose init reports that case as exit 0.
+    fn benign_exits(&self, action: ServiceAction) -> &[i32] {
+        match action {
+            ServiceAction::Start => &self.start_benign_exits,
+            ServiceAction::Stop => &self.stop_benign_exits,
+            // A native restart is not "already there" under any code: it asks for a transition.
+            ServiceAction::Restart | ServiceAction::Enable | ServiceAction::Disable => &[],
+        }
     }
 
     fn applies_to_this_os(&self) -> bool {
@@ -225,15 +261,33 @@ impl ServiceBackendCore {
             .find(|p| p.applies_to_this_os() && self.executor.command_exists_sync(&p.detect))
     }
 
+    /// The executor to run one action's command on: this backend's, unless the action has exit
+    /// codes that mean "already in that state", which the executor is the only place that can
+    /// forgive.
+    fn executor_for(&self, init: &InitProvider, action: ServiceAction) -> Cow<'_, CommandExecutor> {
+        let benign = init.benign_exits(action);
+        if benign.is_empty() {
+            return Cow::Borrowed(&self.executor);
+        }
+        Cow::Owned(
+            self.executor
+                .duplicate()
+                .with_exit_policy(crate::core::ExitPolicy {
+                    benign_exits: benign.to_vec(),
+                    ..Default::default()
+                }),
+        )
+    }
+
     /// Run the concrete commands for one action, propagating the first failure.
     async fn apply(&self, action: ServiceAction, name: &str, sudo: bool) -> Result<()> {
         let Some(init) = self.detect_init() else {
             return Ok(());
         };
-        for cmd in init.plan(action, name) {
+        for (step, cmd) in init.plan(action, name) {
             let (prog, args) = cmd.split_first().expect("an init command is never empty");
             let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-            self.executor.run(prog, &arg_refs, sudo).await?;
+            self.executor_for(init, step).run(prog, &arg_refs, sudo).await?;
         }
         Ok(())
     }
@@ -244,12 +298,15 @@ impl ServiceBackendCore {
         let Some(init) = self.detect_init() else {
             return;
         };
-        for cmd in init.plan(action, name) {
+        for (step, cmd) in init.plan(action, name) {
             let Some((prog, args)) = cmd.split_first() else {
                 continue;
             };
             let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-            let _ = self.executor.run(prog, &arg_refs, sudo).await;
+            let _ = self
+                .executor_for(init, step)
+                .run(prog, &arg_refs, sudo)
+                .await;
         }
     }
 }
@@ -469,13 +526,16 @@ mod tests {
         ] {
             assert_eq!(
                 sd.plan(action, "nginx"),
-                vec![vec![
-                    "systemctl".to_string(),
-                    "--no-pager".into(),
-                    verb.into(),
-                    "--".into(),
-                    "nginx".into()
-                ]]
+                vec![(
+                    action,
+                    vec![
+                        "systemctl".to_string(),
+                        "--no-pager".into(),
+                        verb.into(),
+                        "--".into(),
+                        "nginx".into()
+                    ]
+                )]
             );
         }
     }
@@ -493,7 +553,7 @@ mod tests {
             ServiceAction::Stop,
             ServiceAction::Restart,
         ] {
-            for cmd in sd.plan(action, "nginx") {
+            for (_, cmd) in sd.plan(action, "nginx") {
                 assert!(cmd.iter().any(|a| a == "--no-pager"), "{:?} can page", cmd);
             }
         }
@@ -518,7 +578,7 @@ mod tests {
                 ServiceAction::Stop,
                 ServiceAction::Restart,
             ] {
-                for cmd in p.plan(action, "nginx") {
+                for (_, cmd) in p.plan(action, "nginx") {
                     assert!(
                         !cmd.iter().any(|a| a == "--"),
                         "{}/{:?} emitted a terminator",
@@ -535,20 +595,22 @@ mod tests {
         let p = shipped("openrc");
         assert_eq!(
             p.plan(ServiceAction::Enable, "sshd"),
-            vec![vec![
-                "rc-update".to_string(),
-                "add".into(),
-                "sshd".into(),
-                "default".into()
-            ]]
+            vec![(
+                ServiceAction::Enable,
+                vec![
+                    "rc-update".to_string(),
+                    "add".into(),
+                    "sshd".into(),
+                    "default".into()
+                ]
+            )]
         );
         assert_eq!(
             p.plan(ServiceAction::Start, "sshd"),
-            vec![vec![
-                "rc-service".to_string(),
-                "sshd".into(),
-                "start".into()
-            ]]
+            vec![(
+                ServiceAction::Start,
+                vec!["rc-service".to_string(), "sshd".into(), "start".into()]
+            )]
         );
     }
 
@@ -556,8 +618,8 @@ mod tests {
     fn windows_restart_is_stop_then_start() {
         let cmds = shipped("windows-sc").plan(ServiceAction::Restart, "W32Time");
         assert_eq!(cmds.len(), 2);
-        assert_eq!(cmds[0][1], "stop");
-        assert_eq!(cmds[1][1], "start");
+        assert_eq!(cmds[0].1[1], "stop");
+        assert_eq!(cmds[1].1[1], "start");
     }
 
     #[test]
@@ -586,10 +648,118 @@ stop = [["dinitctl", "stop", "{name}"]]
         assert_eq!(
             cmds,
             vec![
-                vec!["dinitctl".to_string(), "stop".into(), "web".into()],
-                vec!["dinitctl".to_string(), "start".into(), "web".into()],
+                (
+                    ServiceAction::Stop,
+                    vec!["dinitctl".to_string(), "stop".into(), "web".into()]
+                ),
+                (
+                    ServiceAction::Start,
+                    vec!["dinitctl".to_string(), "start".into(), "web".into()]
+                ),
             ]
         );
+    }
+
+    /// Already being in the state the line asks for is what convergence *means*, and `sc` says
+    /// so with an exit code: 1056 to a start of a running service, 1062 to a stop of a stopped
+    /// one. Per verb, because each is an ordinary failure on the other — a stop that came back
+    /// "already running" did not stop anything.
+    #[test]
+    fn windows_forgives_already_in_that_state_once_per_verb() {
+        let sc = shipped("windows-sc");
+        assert_eq!(sc.benign_exits(ServiceAction::Start), [1056]);
+        assert_eq!(sc.benign_exits(ServiceAction::Stop), [1062]);
+        for action in [
+            ServiceAction::Enable,
+            ServiceAction::Disable,
+            ServiceAction::Restart,
+        ] {
+            assert!(
+                sc.benign_exits(action).is_empty(),
+                "{:?} asks for a transition, so no code means it already happened",
+                action
+            );
+        }
+    }
+
+    /// The other four shipped inits report "already in that state" as exit 0, so they declare
+    /// nothing here. Pinned rather than left blank: a row that grows a code silently, or loses
+    /// one, is the same invisible change either way.
+    #[test]
+    fn the_inits_that_answer_zero_declare_no_benign_codes() {
+        for name in ["systemd", "openrc", "sysvinit", "launchd"] {
+            let p = shipped(name);
+            assert!(
+                p.start_benign_exits.is_empty() && p.stop_benign_exits.is_empty(),
+                "{} declares benign exits — if that is real it needs a measurement beside it",
+                name
+            );
+        }
+    }
+
+    /// A derived restart's two halves carry their own verbs, so each forgives its own code. A
+    /// single per-provider list could not tell them apart, and would let a failed stop through.
+    #[test]
+    fn a_derived_restart_labels_each_half_with_its_own_verb() {
+        let sc = shipped("windows-sc");
+        let cmds = sc.plan(ServiceAction::Restart, "W32Time");
+        assert_eq!(cmds[0].0, ServiceAction::Stop);
+        assert_eq!(cmds[1].0, ServiceAction::Start);
+        assert_eq!(sc.benign_exits(cmds[0].0), [1062]);
+        assert_eq!(sc.benign_exits(cmds[1].0), [1056]);
+    }
+
+    /// A code in the table that never reaches the executor running the command is the gap that
+    /// left sixteen registrars with no policy at all — so this drives a real command through
+    /// `install` and reads the outcome, rather than asserting on the table it just read.
+    ///
+    /// One row, one exit code, two verbs: `start` declares it benign and `stop` does not, so a
+    /// pass here cannot come from the command, the code, or the platform.
+    #[tokio::test]
+    async fn the_benign_code_reaches_the_verb_that_declared_it_and_no_other() {
+        #[cfg(windows)]
+        let toml = r#"
+[[init]]
+name = "probe"
+detect = "cmd"
+start = [["cmd", "/C", "exit 7"]]
+stop  = [["cmd", "/C", "exit 7"]]
+start_benign_exits = [7]
+"#;
+        #[cfg(not(windows))]
+        let toml = r#"
+[[init]]
+name = "probe"
+detect = "sh"
+start = [["sh", "-c", "exit 7"]]
+stop  = [["sh", "-c", "exit 7"]]
+start_benign_exits = [7]
+"#;
+        let file: InitProviderFile = toml::from_str(toml).unwrap();
+        let core = Arc::new(ServiceBackendCore::with_providers(
+            CommandExecutor::new(false, false),
+            file.init,
+        ));
+        let inst = ServiceInstallable { core };
+        let spec = |status: &str| PackageSpec {
+            name: "irrelevant".to_string(),
+            backend: "service".to_string(),
+            options: std::collections::HashMap::from([(
+                "status".to_string(),
+                status.to_string(),
+            )]),
+            requires: Vec::new(),
+            present: true,
+        };
+
+        inst.install(&[spec("running")], false)
+            .await
+            .expect("7 is declared benign for start: already running is the declared state");
+        let err = inst
+            .install(&[spec("stopped")], false)
+            .await
+            .expect_err("stop never declared 7 benign, so it is an ordinary failure");
+        assert!(err.to_string().contains('7'), "{}", err);
     }
 
     /// A row that cannot both start and stop is refused rather than half-loaded (U36).

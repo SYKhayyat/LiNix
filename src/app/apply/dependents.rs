@@ -41,7 +41,9 @@ impl Dependents<'_> {
 
         for (stmt, origin) in state.dependents() {
             if let Some(key) = crate::core::extras_lock::extra_key(stmt) {
-                if crate::app::apply::extras::in_effect(self.config, stmt, &key).await == Some(true)
+                if crate::app::apply::extras::in_effect(self.config, self.registry, stmt, &key)
+                    .await
+                    == Some(true)
                 {
                     tracing::debug!("`{}` is already in effect — nothing to do", key);
                     continue;

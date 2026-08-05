@@ -126,14 +126,59 @@ fn an_adopted_service_is_a_live_line_carrying_the_state_it_was_found_in() {
 
     // And nothing it took is scheduled for removal. An adopted service recorded as a *package*
     // is managed with nothing declaring it, which reads as a removal of every service on the box.
+    //
+    // Either summary satisfies this: an empty plan does not print a count, and it is the
+    // stronger outcome — the whole point of adopting is that the machine already matches. It
+    // did not print that until `in_effect` learned to ask the init whether a declared service
+    // is running, because before it every adopted service was `unverifiable`, and unverifiable
+    // places.
     let (plan, code) = run(&root, &["plan"]);
     assert_eq!(code, 0, "{plan}");
     assert!(
-        plan.contains("0 removal(s)"),
+        plan.contains("0 removal(s)") || plan.contains("already matches desired state"),
         "adopting a machine must never plan a removal on it:\n{plan}"
     );
     assert!(
         !plan.contains("would be removed"),
         "adopting a machine must never plan a removal on it:\n{plan}"
+    );
+}
+
+/// The half of `Y7a` that made every later `install` fail, and the reason it took a real
+/// machine to see: `adopt` writes `service:X@status=running` for every running service, and
+/// until `in_effect` could answer for a `service:` those lines were placed on the *first* sync
+/// whatever the machine looked like — 150 `sc start` calls on 150 already-running services,
+/// each returning 1056, the first one failing the transaction.
+///
+/// Asserted on a plan rather than a sync so it costs no mutation: a machine that already matches
+/// its adopted manifest has nothing to place.
+#[test]
+fn adopting_a_running_service_leaves_nothing_to_place() {
+    let root = fixture("grade5-adopt-nothing-to-place");
+    let (out, code) = run(&root, &["adopt", "-y"]);
+    assert_eq!(code, 0, "{out}");
+
+    let lines = declared_in(&root.join("config").join("modules").join("adopted.txt"));
+    let services = lines.iter().filter(|l| l.starts_with("service:")).count();
+    if services == 0 {
+        eprintln!("skipped: this host reported no running services");
+        return;
+    }
+
+    let (plan, code) = run(&root, &["plan"]);
+    assert_eq!(code, 0, "{plan}");
+    // A service that stopped between the two commands is real drift and is allowed to place —
+    // trigger-start services do exactly that. What must not happen is the whole adopted set
+    // queueing up, which is what "150 resource(s) to place" out of 150 adopted lines was.
+    let placing = plan
+        .split("resource(s) to place")
+        .next()
+        .and_then(|s| s.rsplit(' ').next())
+        .and_then(|n| n.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    assert!(
+        placing * 2 < services,
+        "{placing} of {services} adopted services are queued to be applied — a machine that was \
+         just adopted from is by definition already in the state it was adopted in:\n{plan}"
     );
 }
