@@ -1,4 +1,4 @@
-# The decision register — all 157, nine of them open
+# The decision register — all 158, ten of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -15,7 +15,7 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **9** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **10** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **1** |
 | **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **143** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
@@ -284,6 +284,7 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q36** | `adopt` writes 186 winget declarations whose identity embeds a version (`MSIX\Microsoft.Winget.Source_2026.805.1050.50_...`). The package updated the same day; the line can now never converge, and it feeds Q34's cascade on every real machine. — **OPEN.** | — |
 | **Q37** | `github:` downloads the whole release artifact and *then* refuses to deploy because the destination is not LiNix's — a refusal that needs zero downloaded bytes. Measured 61s and 119s, silent, and downloads have no whole-request timeout by design. — **OPEN.** | — |
 | **Q38** | `watch --once` printed `watch: reconcile failed` and **exited 0**. — **OPEN.** | — |
+| **Q39** | `adopt` writes 150 `service:X@status=running` lines; converging one runs `sc start` on an already-running service, which returns **1056** — the desired state — and nothing calls it benign, so the whole transaction fails. After `adopt`, every `install` fails. — **OPEN.** | — |
 
 *Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
 this file exists to prevent, found on 2026-07-30 by adding a row to it.*
@@ -5377,3 +5378,59 @@ exit code that says "fine" after a failed reconcile is the Q28 defect class at t
 nobody is reading the output.
 
 **Recommendation** — a failed reconcile is a non-zero exit, on `watch` as everywhere else.
+
+
+## Q39
+
+**Status: OPEN — raised 2026-08-05, measured. Probably the most user-visible defect on Windows.**
+
+**After `linix adopt`, every `linix install` fails.**
+
+`adopt` on this host wrote 517 lines, of which:
+
+```
+150  service:<name>@status=running      every running Windows service
+180  winget:MSIX\... / winget:ARP\...   version-bearing pseudo-ids (Q36)
+```
+
+Converging a `service:X@status=running` line runs the `windows-sc` provider's
+`start = [["sc", "start", "{name}"]]`. On a service that is **already running** — which all 150
+are, because that is why `adopt` adopted them — `sc` returns **1056**:
+
+```
+Error: `sc` failed (exit 1056): [SC] StartService FAILED 1056:
+An instance of the service is already running.
+```
+
+`1056` is `ERROR_SERVICE_ALREADY_RUNNING`. **It is the desired state.** For a declarative
+converger it is the definition of success, and it appears nowhere in the codebase. There is a
+`benign_exits` mechanism — `msiexec` uses `1605/1614/1618/1641/3010`, `winget` its negative codes
+— and `for_manager` has no `"service"` arm at all, so the service backend runs on
+`ExitPolicy::default()` with `benign_exits` empty.
+
+Then Q34 does the rest: `install X` converges the whole manifest, one member fails, the
+transaction fails, and the user is told that **X** failed. Observed on `bun`, `dotnet`, `pnpm`,
+`winget` and `yarn` in one run — none of which had anything wrong with them.
+
+**This is what remained after the exit-policy gap was fixed**, and it is the larger of the two
+cascade sources. The first run's failures were attributed to the scoop leftover; the confirmation
+run shows that was only part of it.
+
+**The family, and it is not only `1056`:**
+
+- `sc start` on a running service → `1056`, desired state.
+- `sc stop` on a stopped service → `1062` (`ERROR_SERVICE_NOT_ACTIVE`), also the desired state, and
+  `stop = [["sc", "stop", "{name}"]]` has the same shape.
+- Unelevated, the same convergence returns `5` (access denied) instead — measured here on
+  `Spooler`. That one is a real failure and should stay one, but it means an unelevated `adopt`
+  produces a manifest that cannot converge either.
+
+**Recommendation** — two parts, and the first needs no ruling in spirit because it is what
+convergence *means*:
+
+1. Give the service backend an exit policy whose `benign_exits` carry `1056` for start and `1062`
+   for stop. Already being in the declared state is success.
+2. **`adopt` should not adopt every running service.** 150 of them, none chosen by the user, is
+   not a manifest anyone wrote — and combined with Q36's 180 decaying pseudo-ids it means 64% of
+   what `adopt` produced on this machine cannot converge. This half is a real ruling: it changes
+   what `adopt` means on Windows.
