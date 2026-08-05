@@ -215,8 +215,25 @@ pub(crate) async fn handle_run(app: &App, packages: &[String], command: &str) ->
         .map_err(|e| e.into())
 }
 
-pub(crate) async fn handle_adopt(app: &App) -> Result<()> {
-    app.adopter().adopt().await.map_err(|e| e.into())
+pub(crate) async fn handle_adopt(
+    app: &App,
+    backends: Vec<String>,
+    enabled_only: bool,
+) -> Result<()> {
+    // A name that reaches no backend is refused rather than silently adopting nothing: `linix
+    // adopt srvice` answering "Adopted 0 declaration(s)" is byte-identical to a correct name
+    // with nothing to take, so a typo cannot be told from a no-op (Q9).
+    //
+    // Through `require_known_backend` and not a message of its own: `install`'s wording is the
+    // one refusal, and a second spelling of it is how E18's family started.
+    for name in &backends {
+        app.require_known_backend(Some(name))?;
+    }
+    let scope = linix::app::adopt::AdoptScope {
+        backends,
+        enabled_only,
+    };
+    app.adopter().adopt_scoped(&scope).await.map_err(|e| e.into())
 }
 
 pub(crate) async fn handle_snapshot_restore(app: &App) -> Result<()> {

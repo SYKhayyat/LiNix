@@ -67,6 +67,17 @@ pub struct InitProvider {
     /// How to read one service's status, for `info`. Optional.
     #[serde(default)]
     pub status: Vec<String>,
+    /// How to list the services this machine starts on its own — `adopt --enabled-only`.
+    ///
+    /// One command, not one per service: reading a start type per name is 150 process spawns
+    /// on the host this was measured on. A provider that cannot answer in one command leaves
+    /// this empty, and `--enabled-only` says so by name rather than falling back to everything.
+    #[serde(default)]
+    pub list_enabled: Vec<String>,
+    /// A regex whose first capture group is the service name on each `list_enabled` line.
+    /// Falls back to [`list_pattern`](Self::list_pattern) when absent.
+    #[serde(default)]
+    pub list_enabled_pattern: Option<String>,
     /// Exit codes `start` returns when the service is *already running*.
     ///
     /// Being in the state the declaration asks for is what convergence means, so it is a
@@ -164,7 +175,22 @@ impl InitProvider {
     /// The running services this init reports, for drift. A line that does not match the pattern
     /// is skipped rather than guessed at — a header or a chain must not become a phantom service.
     fn parse_list(&self, output: &str) -> Vec<Package> {
-        let Some(pattern) = &self.list_pattern else {
+        self.parse_with(output, self.list_pattern.as_deref())
+    }
+
+    /// The same reader over `list_enabled`, which usually differs from `list` only in the
+    /// shape of one column.
+    fn parse_enabled(&self, output: &str) -> Vec<Package> {
+        self.parse_with(
+            output,
+            self.list_enabled_pattern
+                .as_deref()
+                .or(self.list_pattern.as_deref()),
+        )
+    }
+
+    fn parse_with(&self, output: &str, pattern: Option<&str>) -> Vec<Package> {
+        let Some(pattern) = pattern else {
             return Vec::new();
         };
         let Ok(re) = crate::utils::regex_cache::compiled(pattern) else {
@@ -418,6 +444,35 @@ impl Queryable for ServiceQueryable {
     /// what `adopt` offers. `adoption_options` is what keeps the offer to that claim.
     async fn list_manual(&self) -> Result<Vec<Package>> {
         self.list_installed().await
+    }
+
+    /// **A bare `adopt` does not take services** (owner ruling, 2026-08-05 — `Q39`).
+    ///
+    /// `manual_source` below has always said why, in its own words: *"no init records which you
+    /// chose."* Running is a fact about the machine, not evidence of intent — on the host this
+    /// was measured on, `adopt` wrote 150 service lines out of 161 declarations, and two of
+    /// them were trigger-start services Windows had already stopped again twenty minutes later.
+    /// `linix adopt service` still takes them.
+    fn adopted_unasked(&self) -> bool {
+        false
+    }
+
+    /// The services this machine starts on its own — the closest thing an init keeps to a
+    /// record of a decision, as opposed to a record of right now.
+    async fn list_manual_enabled(&self) -> Result<Option<Vec<Package>>> {
+        let Some(init) = self.core.detect_init() else {
+            return Ok(None);
+        };
+        if init.list_enabled.is_empty() {
+            return Ok(None);
+        }
+        let (prog, args) = init
+            .list_enabled
+            .split_first()
+            .expect("list_enabled is non-empty here");
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let out = self.core.executor.run_output(prog, &arg_refs, false).await?;
+        Ok(Some(init.parse_enabled(&out)))
     }
 
     fn manual_source(&self) -> String {

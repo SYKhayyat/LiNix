@@ -514,7 +514,19 @@ pub enum Commands {
     Repo(RepoArgs),
 
     /// Take over the machine: write the packages you installed by hand into a module
-    Adopt,
+    Adopt {
+        /// Only these backends — and these are taken even when a bare `adopt` leaves them
+        /// alone. `linix adopt service` writes the machine's services; a bare `linix adopt`
+        /// does not, because an init records what is running and never who chose it.
+        #[arg(value_name = "BACKEND")]
+        backends: Vec<String>,
+
+        /// Only what this machine starts on its own, rather than what happens to be running
+        /// right now. A backend that cannot answer that question is skipped and named, never
+        /// quietly widened back to everything.
+        #[arg(long)]
+        enabled_only: bool,
+    },
 
     /// Vendor someone else's modules into your repo (XIII.14).
     ///

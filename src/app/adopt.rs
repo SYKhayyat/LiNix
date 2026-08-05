@@ -57,6 +57,16 @@ fn by_reason(skipped: &[Skipped]) -> Vec<(String, usize)> {
 }
 
 /// The skip lines a user sees, printed under a total that agrees with them.
+fn print_skipped_backends(skipped: &[(String, String)]) {
+    if skipped.is_empty() {
+        return;
+    }
+    println!("Not asked: {}", skipped.len());
+    for (backend, reason) in skipped {
+        println!("  {}: {}", backend, reason);
+    }
+}
+
 fn print_left_alone(skipped: &[Skipped]) {
     if skipped.is_empty() {
         return;
@@ -78,6 +88,29 @@ pub struct Discovery {
     pub skipped: Vec<Skipped>,
     /// Backend name -> how its manual set was determined, for the manifest header.
     pub sources: BTreeMap<String, String>,
+    /// Whole backends this run did not ask, and why — one line each rather than one per
+    /// package, because the answer is about the backend and not about any of its names.
+    pub skipped_backends: Vec<(String, String)>,
+}
+
+/// What this `adopt` was asked for.
+///
+/// A bare `linix adopt` takes the backends that answer [`Queryable::adopted_unasked`], which is
+/// all of them except the ones where being on the machine is not evidence anybody chose it.
+/// Naming a backend takes that one and only that one, opt-out included.
+#[derive(Debug, Clone, Default)]
+pub struct AdoptScope {
+    /// Backends named on the command line. Empty means "whatever adopt takes unasked".
+    pub backends: Vec<String>,
+    /// Take only what this machine starts on its own — services set to run at boot rather
+    /// than services that happen to be running this minute.
+    pub enabled_only: bool,
+}
+
+impl AdoptScope {
+    fn asked_for(&self, backend: &str) -> bool {
+        self.backends.iter().any(|b| b == backend)
+    }
 }
 
 impl Adopter {
@@ -116,11 +149,51 @@ impl Adopter {
     async fn manual_listings(
         &self,
         backends: &[Arc<crate::core::BackendCapabilities>],
+        scope: &AdoptScope,
     ) -> Vec<(String, String, Vec<Package>)> {
         use futures::stream::StreamExt;
         futures::stream::iter(backends.iter().cloned())
             .map(|backend| async move {
                 let queryable = backend.as_queryable()?;
+                // Named on the command line beats the default, in both directions: `linix adopt
+                // service` takes a backend a bare run leaves alone, and naming any backend at
+                // all means the others are not this run's business.
+                if !scope.backends.is_empty() {
+                    if !scope.asked_for(backend.name()) {
+                        return None;
+                    }
+                } else if !queryable.adopted_unasked() {
+                    info!(
+                        "not adopting `{}` unless asked: {} — run `linix adopt {}` to take them.",
+                        backend.name(),
+                        queryable.manual_source(),
+                        backend.name(),
+                    );
+                    return None;
+                }
+                if scope.enabled_only {
+                    return match queryable.list_manual_enabled().await {
+                        Ok(Some(pkgs)) => Some((
+                            backend.name().to_string(),
+                            format!("{} (--enabled-only)", queryable.manual_source()),
+                            pkgs,
+                        )),
+                        // Refused by name rather than quietly widened back to everything: a
+                        // filter that silently does nothing is how you adopt 150 services while
+                        // believing you asked for the 40 that start at boot.
+                        Ok(None) => {
+                            warn!(
+                                "`{}` cannot say which of its entries this machine starts on                                  its own, so `--enabled-only` has nothing to filter on here —                                  skipping it rather than taking all of them.",
+                                backend.name()
+                            );
+                            None
+                        }
+                        Err(e) => {
+                            warn!("`{}` could not be asked what starts at boot: {e}", backend.name());
+                            None
+                        }
+                    };
+                }
                 // Adoption is only safe for backends that can name the packages a person
                 // actually chose. Where a manager installs dependencies but exposes no way to
                 // tell them apart, the honest answer is to adopt nothing. Adopting nothing
@@ -162,6 +235,10 @@ impl Adopter {
     /// backend error while the other swallowed it, so the preview could hide a failure the
     /// real run reported. A preview that does not run the same code is not a preview.
     pub async fn discover(&self) -> Result<Discovery> {
+        self.discover_scoped(&AdoptScope::default()).await
+    }
+
+    pub async fn discover_scoped(&self, scope: &AdoptScope) -> Result<Discovery> {
         let mut found = Discovery::default();
         let mut seen_keys = HashSet::new();
         let mut candidates: Vec<Package> = Vec::new();
@@ -176,8 +253,23 @@ impl Adopter {
         let backends = self.registry.available();
         let (owned_system, manual) = tokio::join!(
             self.owned_system_names(&backends),
-            self.manual_listings(&backends)
+            self.manual_listings(&backends, scope)
         );
+        for backend in &backends {
+            let Some(q) = backend.as_queryable() else {
+                continue;
+            };
+            if scope.backends.is_empty() && !q.adopted_unasked() {
+                found.skipped_backends.push((
+                    backend.name().to_string(),
+                    format!(
+                        "{} — `linix adopt {}` takes them",
+                        q.manual_source(),
+                        backend.name()
+                    ),
+                ));
+            }
+        }
 
         for (name, source, pkgs) in manual {
             found.sources.insert(name, source);
@@ -293,8 +385,12 @@ impl Adopter {
     /// Discovery -> manifest -> acquisition.
     #[instrument(skip(self))]
     pub async fn adopt(&self) -> Result<()> {
+        self.adopt_scoped(&AdoptScope::default()).await
+    }
+
+    pub async fn adopt_scoped(&self, scope: &AdoptScope) -> Result<()> {
         debug!("scanning for packages to adopt");
-        let mut found = self.discover().await?;
+        let mut found = self.discover_scoped(scope).await?;
 
         // Before the count is reported, or "3 candidates" is followed by a manifest holding
         // one. II.9: one `modules/adopted.txt`, overwritten. Adopting twice must answer "the
@@ -320,6 +416,7 @@ impl Adopter {
             if !found.skipped.is_empty() {
                 println!();
                 print_left_alone(&found.skipped);
+        print_skipped_backends(&found.skipped_backends);
             }
             return Ok(());
         }
@@ -404,6 +501,7 @@ impl Adopter {
         println!("{:-<64}", "");
         println!("Manifest:  {}", manifest_path.display());
         print_left_alone(&found.skipped);
+        print_skipped_backends(&found.skipped_backends);
         println!("{:-<64}", "");
         println!("This list is an ESTIMATE of what you chose to install — read it.");
         println!("Deleting a line UNDOES it on the next sync: a package is uninstalled,");

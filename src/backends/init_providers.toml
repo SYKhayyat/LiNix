@@ -27,6 +27,12 @@ list = ["systemctl", "--no-pager", "list-units", "--type=service", "--state=runn
 list_pattern = '^(\S+)'
 list_strip_suffix = ".service"
 status = ["systemctl", "--no-pager", "status", "--", "{name}"]
+# `adopt --enabled-only`: the units this machine brings up itself, in one command rather than
+# one `is-enabled` per unit. `--state=enabled` covers `enabled` and not `enabled-runtime`,
+# which is a unit enabled until the next boot and so is not a decision about this machine.
+list_enabled = ["systemctl", "--no-pager", "list-unit-files", "--type=service", "--state=enabled", "--no-legend"]
+list_enabled_pattern = '^(\S+)\.service'
+
 
 [[init]]
 name = "openrc"
@@ -40,6 +46,10 @@ restart = [["rc-service", "{name}", "restart"]]
 list = ["rc-status", "--servicelist"]
 list_pattern = '^\s*(\S+)'
 status = ["rc-service", "{name}", "status"]
+# OpenRC's boot decision is the runlevel a service is added to.
+list_enabled = ["rc-update", "show", "default"]
+list_enabled_pattern = '^\s*(\S+)'
+
 
 [[init]]
 name = "sysvinit"
@@ -92,4 +102,11 @@ stop_benign_exits  = [1062]
 # a failure, on every Windows machine, since this row was written.
 list = ["sc", "query", "type=", "service"]
 list_pattern = 'SERVICE_NAME:\s+(\S+)'
+# `adopt --enabled-only`. `sc` has no verb that lists start types, and asking per service is a
+# process spawn each -- 150 of them on the host this was measured on. PowerShell answers the
+# whole question once. `Automatic` covers `Automatic (Delayed Start)`, which is the same
+# decision made about the same service; a trigger-start service is deliberately excluded,
+# because Windows stopping it again when it idles is exactly what made adopting them wrong.
+list_enabled = ["powershell", "-NoProfile", "-Command", "Get-Service | Where-Object { $_.StartType -eq 'Automatic' } | ForEach-Object { 'SERVICE_NAME: ' + $_.Name }"]
+
 status = ["sc", "qc", "{name}"]

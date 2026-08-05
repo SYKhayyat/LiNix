@@ -170,6 +170,34 @@ pub trait Queryable: Send + Sync {
         true
     }
 
+    /// Whether a bare `linix adopt` takes this backend, or waits to be asked for it by name.
+    ///
+    /// The neighbour of [`tracks_manual`](Self::tracks_manual), one step further along the same
+    /// question. That one refuses a backend that cannot tell a user's choices from
+    /// dependencies. This one is for a backend that can list what is on the machine perfectly
+    /// well, where *being on the machine is not evidence anybody chose it*.
+    ///
+    /// Measured on a Windows host: `adopt` wrote 161 declarations, **150 of them every running
+    /// Windows service**. Nobody chose those; Windows did — and two, `gpsvc` and `smphost`, had
+    /// stopped on their own twenty minutes later, because Windows starts them on a trigger and
+    /// stops them when idle. A manifest is a list of what you want, and deleting a line from it
+    /// undoes the thing, so 93% of that file was a loaded list nobody wrote.
+    ///
+    /// `false` does not mean unadoptable: `linix adopt <backend>` takes it, and says so when it
+    /// skips (owner ruling, 2026-08-05 — `Q39`).
+    fn adopted_unasked(&self) -> bool {
+        true
+    }
+
+    /// The subset of [`list_manual`](Self::list_manual) this machine brings up on its own.
+    ///
+    /// `None` from a backend with no such notion — a package is not "enabled" — and from one
+    /// whose adapter on this host cannot report it, which `adopt --enabled-only` refuses by
+    /// name rather than quietly falling back to everything.
+    async fn list_manual_enabled(&self) -> Result<Option<Vec<Package>>> {
+        Ok(None)
+    }
+
     /// How `list_manual` decided what the user chose, phrased so a person can judge it.
     ///
     /// Adoption writes an estimate into a file the user is then asked to trust. An

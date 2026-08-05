@@ -377,7 +377,10 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
         Commands::RemoveOrphans => handle_remove_orphans(app).await,
         Commands::CleanCache { all } => handle_clean_cache(app, *all).await,
         Commands::Heal => handle_heal(app).await,
-        Commands::Adopt => handle_adopt(app).await,
+        Commands::Adopt {
+            backends,
+            enabled_only,
+        } => handle_adopt(app, backends.clone(), *enabled_only).await,
         Commands::History => handle_history(app).await,
         Commands::Activate { profiles, add } => handle_activate(app, profiles, *add).await,
         Commands::Deactivate { profiles } => handle_deactivate(app, profiles).await,
