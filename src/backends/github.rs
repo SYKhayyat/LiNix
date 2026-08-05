@@ -579,6 +579,41 @@ impl Installable for GithubInstallable {
                 }
             }
 
+            // Q37: a release that resolves to one deployable artifact takes the repo's own name
+            // on PATH, and that is known *here* — before the transfer. `deploy_executable`'s
+            // refusal reads only the destination, so asking it after the download bought
+            // nothing and cost one `heal` 180 of its 201 seconds fetching two artifacts it was
+            // always going to reject: silent, zero CPU, no child process, indistinguishable
+            // from a hang. Several artifacts each take the name of the program *inside* them,
+            // which no metadata can answer, so that case still pays for the download.
+            if selection
+                .picks
+                .iter()
+                .filter(|p| !system_pkg::is_handoff_format(p.format))
+                .count()
+                == 1
+            {
+                let repo_name = spec.name.split('/').next_back().unwrap_or(&spec.name);
+                let bin_dest = crate::utils::bin_destination(
+                    &self.core.bin_dir,
+                    repo_name,
+                    self.core.confine_bin,
+                )?;
+                let previous: Vec<String> = state
+                    .get(&spec.name)
+                    .map(|s| s.artifacts.iter().filter_map(|a| a.bin_path.clone()).collect())
+                    .unwrap_or_default();
+                crate::utils::ensure_deployable(
+                    &bin_dest,
+                    &self.core.install_dir,
+                    previous
+                        .iter()
+                        .find(|p| *p == &bin_dest.to_string_lossy())
+                        .map(|s| s.as_str()),
+                )
+                .await?;
+            }
+
             // Everything is downloaded and hashed before anything is unpacked or put on PATH:
             // with several artifacts under one declaration, a supply-chain objection to the
             // third must not arrive with the first two already deployed.

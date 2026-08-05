@@ -149,6 +149,27 @@ impl Installable for WebInstallable {
                 }
             }
 
+            // Q37: the PATH name is derived from the URL and from nothing inside the file, so
+            // the deploy refusal is answerable before the transfer rather than after it. The
+            // `web:` twin of the `github:` ordering that spent 180s on a rejected artifact.
+            let url_name = spec.name.split('/').next_back().unwrap_or("resource");
+            let deploys = !crate::backends::artifact::ArtifactOptions::read(&spec.options)
+                .map(|o| o.download_only)
+                .unwrap_or(false);
+            if deploys {
+                let bin_dest = crate::utils::bin_destination(
+                    &self.core.bin_dir,
+                    crate::utils::strip_archive_suffixes(url_name),
+                    self.core.confine_bin,
+                )?;
+                crate::utils::ensure_deployable(
+                    &bin_dest,
+                    &self.core.install_dir,
+                    state.get(&spec.name).and_then(|s| s.bin_link.as_deref()),
+                )
+                .await?;
+            }
+
             info!("Web: Downloading resource: {}", spec.name);
             let response = client.get(&spec.name).send().await.map_err(Error::from)?;
             let bytes = response.bytes().await.map_err(Error::from)?;

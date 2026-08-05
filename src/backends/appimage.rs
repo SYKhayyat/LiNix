@@ -131,6 +131,30 @@ impl Installable for AppImageInstallable {
             let filename = url.split('/').next_back().unwrap_or("app.AppImage");
             let dest_path = self.core.install_dir.join(filename);
 
+            // Q37: the PATH name comes from the URL, so the refusal below can be asked now —
+            // before the network — instead of after a download that was always going to be
+            // thrown away. Same question, same message, no bytes.
+            let link_name = filename
+                .strip_suffix(".AppImage")
+                .or_else(|| filename.strip_suffix(".appimage"))
+                .unwrap_or(filename);
+            let download_only = crate::backends::artifact::ArtifactOptions::read(&spec.options)
+                .map(|o| o.download_only)
+                .unwrap_or(false);
+            let link_path = if download_only {
+                None
+            } else {
+                let link_path =
+                    crate::utils::bin_destination(&bin_dir, link_name, self.core.confine_bin)?;
+                crate::utils::ensure_deployable(
+                    &link_path,
+                    &self.core.install_dir,
+                    state.get(&spec.name).map(|s| s.symlink_path.as_str()),
+                )
+                .await?;
+                Some(link_path)
+            };
+
             info!("AppImage: Downloading {}...", url);
             let response = client.get(url).send().await?;
             if !response.status().is_success() {
@@ -162,35 +186,25 @@ impl Installable for AppImageInstallable {
                 tokio::fs::set_permissions(&dest_path, perms).await?;
             }
 
-            let link_name = filename
-                .strip_suffix(".AppImage")
-                .or_else(|| filename.strip_suffix(".appimage"))
-                .unwrap_or(filename);
-
             // D3b: `@download_only` keeps the fetched AppImage on disk but never links it onto
             // PATH. It is still declared, so a later removal still deletes the file.
-            let download_only = crate::backends::artifact::ArtifactOptions::read(&spec.options)
-                .map(|o| o.download_only)
-                .unwrap_or(false);
-
-            let symlink_path = if download_only {
-                String::new()
-            } else {
-                let link_path =
-                    crate::utils::bin_destination(&bin_dir, link_name, self.core.confine_bin)?;
-                crate::utils::deploy_executable(
-                    &dest_path,
-                    &link_path,
-                    &self.core.install_dir,
-                    state.get(&spec.name).map(|s| s.symlink_path.as_str()),
-                )
-                .await?;
-                info!(
-                    "AppImage: Successfully installed {} to {}",
-                    link_name,
-                    link_path.display()
-                );
-                link_path.to_string_lossy().to_string()
+            let symlink_path = match &link_path {
+                None => String::new(),
+                Some(link_path) => {
+                    crate::utils::deploy_executable(
+                        &dest_path,
+                        link_path,
+                        &self.core.install_dir,
+                        state.get(&spec.name).map(|s| s.symlink_path.as_str()),
+                    )
+                    .await?;
+                    info!(
+                        "AppImage: Successfully installed {} to {}",
+                        link_name,
+                        link_path.display()
+                    );
+                    link_path.to_string_lossy().to_string()
+                }
             };
             if download_only {
                 info!(

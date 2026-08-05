@@ -228,14 +228,7 @@ pub async fn deploy_executable(
     owned_root: &Path,
     recorded: Option<&str>,
 ) -> Result<()> {
-    if !is_ours(dest, owned_root, recorded).await {
-        return Err(Error::Refused(format!(
-            "refusing to deploy `{}`: {} already exists and LiNix did not create it. Move or \
-             rename that file yourself if you want it managed here.",
-            dest.file_name().unwrap_or_default().to_string_lossy(),
-            dest.display()
-        )));
-    }
+    ensure_deployable(dest, owned_root, recorded).await?;
 
     if let Some(parent) = dest.parent() {
         tokio::fs::create_dir_all(parent)
@@ -268,6 +261,28 @@ pub async fn deploy_executable(
     }
 
     Ok(())
+}
+
+/// The whole of [`deploy_executable`]'s refusal, asked without any bytes.
+///
+/// The test is a pure function of the *destination*, so a backend can ask it before it spends
+/// the network — and must. Asking only at deploy time cost one `heal` 180 of its 201 seconds
+/// fetching two GitHub artifacts it was always going to reject, silently, with no child process
+/// to show for it: from outside, indistinguishable from a hang.
+pub async fn ensure_deployable(
+    dest: &Path,
+    owned_root: &Path,
+    recorded: Option<&str>,
+) -> Result<()> {
+    if is_ours(dest, owned_root, recorded).await {
+        return Ok(());
+    }
+    Err(Error::Refused(format!(
+        "refusing to deploy `{}`: {} already exists and LiNix did not create it. Move or \
+         rename that file yourself if you want it managed here.",
+        dest.file_name().unwrap_or_default().to_string_lossy(),
+        dest.display()
+    )))
 }
 
 async fn is_ours(dest: &Path, owned_root: &Path, recorded: Option<&str>) -> bool {
