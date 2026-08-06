@@ -3,6 +3,15 @@
 **2026-08-05 · branch `grade/2026-07-29` @ `3d321bf` · 390 tracked files, 93,909 lines of Rust in
 `src/`, 17,667 in `tests/`, 36,043 in docs.**
 
+> **Provenance, 2026-08-05 (later).** `grade/2026-07-29` was fast-forwarded into `main` and
+> deleted, along with `grade/2026-07-28`; `main` is now the only ref. The branch name above is
+> kept because it is where this review was run — `3d321bf` still resolves, on `main`. Every line
+> count and citation below describes the tree at `3d321bf` and has not been restated against
+> anything later. The one change since that touches the files reviewed here is a whole-tree
+> `cargo fmt`, which moved line breaks in 26 source files and no line numbers cited below are
+> guaranteed to survive it. **Findings are as-of `3d321bf`; none have been re-checked against
+> `main`, and none are marked resolved by this note.**
+
 This is not a bug review. It argues about whether the code should exist and whether this is the
 way to build it. Correctness findings appear only where a design choice is the reason the bug is
 possible.

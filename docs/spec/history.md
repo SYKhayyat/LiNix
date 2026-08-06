@@ -6559,3 +6559,47 @@ line, its status table, and `SPEC.md`. Now green: **166 entries, 160 ANSWERED, 2
 NEVER RULED, 1 OPEN.**
 
 That one remaining OPEN is `Z1`, the licence, which is not a builder's decision at any point.
+
+## 2026-08-05 (last) — the formatting debt paid, and the branches collapse into `main`
+
+`cargo fmt --check` was reporting **60 diffs across 27 files** — call chains rustfmt wanted broken
+differently, struct literals past the width, argument lists it would rather stack. Applied across
+26 source files. The change is line breaks and indentation: `cargo build --all-targets` clean,
+`cargo clippy --all-targets` clean, and the suite **82 binaries, 1,875 pass, 0 fail, 0 ignored**.
+
+### The instrument lied again, and again it was mine
+
+The first suite run was filtered through `grep -E "^(test result|error|failures:)" | sort |
+uniq -c | tail -30`. `error` and `failures:` sort **before** `test result` — so `tail -30` cut off
+precisely the lines the filter existed to catch. A red run and a green run would have printed the
+same thirty lines. It reported exit 0, which was `uniq`'s exit code and not cargo's.
+
+Caught before it was acted on, and the suite re-run keeping the whole log. This is the session
+doc's own rules 3 and 4 — *self-test the instrument against a known case*, *treat green as a
+claim* — failing one day after they were written, in the tooling of the person who wrote them
+down. A filter that can only print good news is not a check; it is a decoration on one.
+
+### The branches are gone; `main` is the whole repository
+
+`main` had been left **174 commits behind** the working branch while six months of work landed on
+`grade/*`. It was a strict ancestor, so the merge was a fast-forward and no conflict was
+possible.
+
+Before deleting anything, the test that actually matters: **`git log --all --not origin/main` was
+empty** — across every ref, local and remote, not one commit was unreachable from the pushed
+`main`. Deletion after that discards nothing, by construction rather than by assertion.
+
+`grade/2026-07-28` (`962bd32`, already contained in `07-29`) and `grade/2026-07-29` (`8f0d840`)
+deleted on both sides, both with `git branch -d` — the form that refuses an unmerged branch —
+so git re-checked the claim independently at the moment of deletion. **`main` is now the only
+ref, local and remote, at 596 commits.**
+
+One commit is deliberately unreachable: `33f4066`, the pre-amend spelling of the head commit,
+whose message was the single word `Commit`. Trees and parents verified identical to `8f0d840`
+before the rewrite — message-only, no content difference.
+
+Historical documents keep the branch names they cite. `GRADE-2026-07-2x` through
+`GRADE-2026-08-04` and `lamdan/whole-repo-2026-08-05.md` were graded *on* those branches, and
+that stays true after the ref is gone; the commit SHAs they quote survive the deletion and still
+resolve on `main`. Rewriting them to say `main` would falsify a record to tidy a name — the same
+reason `Q31` left the old spellings in place.
