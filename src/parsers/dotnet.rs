@@ -114,8 +114,7 @@ mod json_tests {
     use super::*;
 
     /// Verbatim from `dotnet tool list --global --format json` on SDK 10.0.301.
-    const REAL: &str =
-        r#"{"version":1,"data":[{"packageId":"dotnetsay","version":"3.0.3","commands":["dotnetsay"]}]}"#;
+    const REAL: &str = r#"{"version":1,"data":[{"packageId":"dotnetsay","version":"3.0.3","commands":["dotnetsay"]}]}"#;
 
     #[test]
     fn a_tool_is_its_package_id_and_version() {

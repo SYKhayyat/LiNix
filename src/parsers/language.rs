@@ -157,10 +157,13 @@ fn parse_yarn_list(output: &str) -> Vec<Package> {
         .filter_map(|l| {
             // `info "<name>@<version>" has binaries:` / `... has no binaries`. The quotes are
             // what separate a package line from yarn's other `info` chatter, which carries none.
-            let (spec, _) = l.trim().strip_prefix("info ")?.strip_prefix('"')?.split_once('"')?;
+            let (spec, _) = l
+                .trim()
+                .strip_prefix("info ")?
+                .strip_prefix('"')?
+                .split_once('"')?;
             let (name, ver) = spec.rsplit_once('@')?;
-            (!name.is_empty() && !ver.is_empty())
-                .then(|| Package::with_version(name, ver, "yarn"))
+            (!name.is_empty() && !ver.is_empty()).then(|| Package::with_version(name, ver, "yarn"))
         })
         .collect()
 }
@@ -498,8 +501,7 @@ mod outdated_tests {
     use super::*;
 
     /// Verbatim from `pip list --outdated --format=json` on this host.
-    const PIP: &str =
-        r#"[{"name": "pip", "version": "26.1.2", "latest_version": "26.2.1", "latest_filetype": "wheel"}]"#;
+    const PIP: &str = r#"[{"name": "pip", "version": "26.1.2", "latest_version": "26.2.1", "latest_filetype": "wheel"}]"#;
 
     #[test]
     fn pip_reports_the_latest_version_not_the_installed_one() {

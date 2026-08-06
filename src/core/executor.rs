@@ -1078,7 +1078,8 @@ impl CommandExecutor {
         for attempt in 1..=attempts {
             let output = self.read_raw(cmd, args, sudo).await?;
             let stdout = crate::utils::text::sanitize(&String::from_utf8_lossy(&output.stdout));
-            let benign = output.status.success() || self.exit_policy.is_benign(output.status.code());
+            let benign =
+                output.status.success() || self.exit_policy.is_benign(output.status.code());
             // **Both streams, not just stdout.** A read that failed and *said* something has
             // described its own situation, and the caller may legitimately read that as an
             // empty result: `Get-ComputerRestorePoint` on an unelevated shell exits 1 with
@@ -1088,8 +1089,8 @@ impl CommandExecutor {
             //
             // Silence on both is the case with no second reading. Nothing expresses "you have
             // none of these" by saying nothing at all and failing.
-            let said_nothing =
-                stdout.trim().is_empty() && String::from_utf8_lossy(&output.stderr).trim().is_empty();
+            let said_nothing = stdout.trim().is_empty()
+                && String::from_utf8_lossy(&output.stderr).trim().is_empty();
             if benign || !said_nothing {
                 return Ok(stdout);
             }
@@ -1138,7 +1139,13 @@ impl CommandExecutor {
             .map(|c| c.to_string())
             .unwrap_or_else(|| "terminated by signal".to_string());
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let said = stderr.trim().lines().next().unwrap_or("").trim().to_string();
+        let said = stderr
+            .trim()
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
         let detail = if said.is_empty() {
             String::new()
         } else {
@@ -1155,9 +1162,7 @@ impl CommandExecutor {
             // By code as well as by text. This is the one failure whose haystack is reliably
             // empty, so the text lists cannot classify it and the code is the only signal
             // there is.
-            retry: self
-                .exit_policy
-                .retryability_of(output.status.code(), &hay),
+            retry: self.exit_policy.retryability_of(output.status.code(), &hay),
             absent_name: false,
         }
     }
@@ -1694,8 +1699,12 @@ mod child_process_tests {
         let (e, mock) = wired();
         mock.set_response(
             "winget list",
-            Ok(super::spoken_failure(1, "7zip.7zip  25.01
-", "a warning")),
+            Ok(super::spoken_failure(
+                1,
+                "7zip.7zip  25.01
+",
+                "a warning",
+            )),
         );
         let out = e
             .run_output("winget", &["list"], false)
@@ -1714,16 +1723,14 @@ mod child_process_tests {
     async fn a_read_whose_only_signal_is_its_exit_code_is_still_classified_and_retried() {
         let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
         let mock = Arc::new(MockExecutor::new(vfs.clone()));
-        let e = CommandExecutor::with_layer(
-            false,
-            false,
-            mock.clone(),
-            vfs,
-            Arc::new(DashMap::new()),
-        )
-        .with_exit_policy(crate::core::exit_policy::winget());
+        let e =
+            CommandExecutor::with_layer(false, false, mock.clone(), vfs, Arc::new(DashMap::new()))
+                .with_exit_policy(crate::core::exit_policy::winget());
         // 0x8A150001, silent — the exact shape measured on the host.
-        mock.set_response("winget list", Ok(super::silent_failure(0x8A15_0001_u32 as i32)));
+        mock.set_response(
+            "winget list",
+            Ok(super::silent_failure(0x8A15_0001_u32 as i32)),
+        );
 
         let err = e
             .run_output("winget", &["list"], false)
@@ -1752,14 +1759,9 @@ mod child_process_tests {
     async fn an_unclassified_silent_failure_is_not_retried() {
         let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
         let mock = Arc::new(MockExecutor::new(vfs.clone()));
-        let e = CommandExecutor::with_layer(
-            false,
-            false,
-            mock.clone(),
-            vfs,
-            Arc::new(DashMap::new()),
-        )
-        .with_exit_policy(crate::core::exit_policy::winget());
+        let e =
+            CommandExecutor::with_layer(false, false, mock.clone(), vfs, Arc::new(DashMap::new()))
+                .with_exit_policy(crate::core::exit_policy::winget());
         mock.set_response("winget list", Ok(super::silent_failure(1)));
 
         let _ = e.run_output("winget", &["list"], false).await.unwrap_err();
@@ -1769,7 +1771,10 @@ mod child_process_tests {
             .iter()
             .filter(|c| c.as_str() == "winget list")
             .count();
-        assert_eq!(tries, 1, "an unclassified failure must be asked once, not {tries} times");
+        assert_eq!(
+            tries, 1,
+            "an unclassified failure must be asked once, not {tries} times"
+        );
     }
 
     /// A read and a mutation are bounded differently, and the reason is in the numbers: the
@@ -1814,7 +1819,10 @@ mod child_process_tests {
             .run_output("winget", &["list"], false)
             .await
             .expect("a read that complained has said something; this primitive does not judge it");
-        assert!(out.is_empty(), "the answer is still the empty stdout: {out:?}");
+        assert!(
+            out.is_empty(),
+            "the answer is still the empty stdout: {out:?}"
+        );
     }
 
     /// The suppression must not be a property of the mutating path only — a read is exactly

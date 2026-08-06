@@ -986,9 +986,14 @@ mod tests {
             "the count is not the question here"
         );
         assert!(
-            enforce_deliberate(&cfg, &reg, &pairs(&["python3"]), GuardScope::PurgeUndeclared)
-                .await
-                .is_err(),
+            enforce_deliberate(
+                &cfg,
+                &reg,
+                &pairs(&["python3"]),
+                GuardScope::PurgeUndeclared
+            )
+            .await
+            .is_err(),
             "protection still applies to a deliberate purge"
         );
     }

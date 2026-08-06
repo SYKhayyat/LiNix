@@ -679,7 +679,10 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
     // No `or(parser)` fallback here, deliberately. The point of a machine format is that it is
     // a *different* shape, so silently reading JSON with the column parser configured for the
     // text listing would report nothing and look like an empty machine (Q40's class).
-    let machine_list = match (def.machine_list_args.clone(), def.machine_list_parser.clone()) {
+    let machine_list = match (
+        def.machine_list_args.clone(),
+        def.machine_list_parser.clone(),
+    ) {
         (Some(args), Some(spec)) => {
             let name = backend_name.clone();
             Some(crate::backends::generic::MachineListing {
@@ -1384,7 +1387,8 @@ version_col = 1
             Ok(crate::core::executor::DryRunOutput {
                 stdout: b"widget 2.0
 gadget 3.1
-".to_vec(),
+"
+                .to_vec(),
                 stderr: vec![],
             }
             .into()),

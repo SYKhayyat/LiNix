@@ -601,7 +601,12 @@ impl Installable for GithubInstallable {
                 )?;
                 let previous: Vec<String> = state
                     .get(&spec.name)
-                    .map(|s| s.artifacts.iter().filter_map(|a| a.bin_path.clone()).collect())
+                    .map(|s| {
+                        s.artifacts
+                            .iter()
+                            .filter_map(|a| a.bin_path.clone())
+                            .collect()
+                    })
                     .unwrap_or_default();
                 crate::utils::ensure_deployable(
                     &bin_dest,

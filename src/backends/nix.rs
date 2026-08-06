@@ -502,8 +502,16 @@ mod tests {
         );
         let core = Arc::new(NixBackendCore::new(exec, "30d".to_string()));
         let specs = vec![
-            crate::core::PackageSpec { name: "hello".into(), backend: "nix".into(), ..Default::default() },
-            crate::core::PackageSpec { name: "ripgrep".into(), backend: "nix".into(), ..Default::default() },
+            crate::core::PackageSpec {
+                name: "hello".into(),
+                backend: "nix".into(),
+                ..Default::default()
+            },
+            crate::core::PackageSpec {
+                name: "ripgrep".into(),
+                backend: "nix".into(),
+                ..Default::default()
+            },
         ];
         NixInstallable { core: core.clone() }
             .install(&specs, false)

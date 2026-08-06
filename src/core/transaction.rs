@@ -359,10 +359,11 @@ impl Transaction {
                             GraphAction::Install(s) => s.options.get("__source").cloned(),
                             GraphAction::Remove { .. } => None,
                         };
-                        first_failure = Some(task_data.result.clone().err().unwrap().about_declaration(
-                            &format!("{}:{}", task_data.backend_name, task_data.package_name),
-                            origin.as_deref(),
-                        ));
+                        first_failure =
+                            Some(task_data.result.clone().err().unwrap().about_declaration(
+                                &format!("{}:{}", task_data.backend_name, task_data.package_name),
+                                origin.as_deref(),
+                            ));
                     }
                     failed_now.push((
                         task_data.node_index,

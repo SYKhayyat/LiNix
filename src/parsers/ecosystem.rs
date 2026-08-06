@@ -788,8 +788,14 @@ mod pixi_json_tests {
         let from_tree = pixi_list(tree, "pixi");
         let from_json = pixi_list_json(REAL, "pixi");
         assert_eq!(
-            from_tree.iter().map(|p| (&p.name, &p.version)).collect::<Vec<_>>(),
-            from_json.iter().map(|p| (&p.name, &p.version)).collect::<Vec<_>>(),
+            from_tree
+                .iter()
+                .map(|p| (&p.name, &p.version))
+                .collect::<Vec<_>>(),
+            from_json
+                .iter()
+                .map(|p| (&p.name, &p.version))
+                .collect::<Vec<_>>(),
         );
     }
 

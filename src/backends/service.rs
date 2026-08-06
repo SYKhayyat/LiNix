@@ -313,7 +313,9 @@ impl ServiceBackendCore {
         for (step, cmd) in init.plan(action, name) {
             let (prog, args) = cmd.split_first().expect("an init command is never empty");
             let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-            self.executor_for(init, step).run(prog, &arg_refs, sudo).await?;
+            self.executor_for(init, step)
+                .run(prog, &arg_refs, sudo)
+                .await?;
         }
         Ok(())
     }
@@ -471,7 +473,11 @@ impl Queryable for ServiceQueryable {
             .split_first()
             .expect("list_enabled is non-empty here");
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let out = self.core.executor.run_output(prog, &arg_refs, false).await?;
+        let out = self
+            .core
+            .executor
+            .run_output(prog, &arg_refs, false)
+            .await?;
         Ok(Some(init.parse_enabled(&out)))
     }
 
@@ -799,10 +805,7 @@ start_benign_exits = [7]
         let spec = |status: &str| PackageSpec {
             name: "irrelevant".to_string(),
             backend: "service".to_string(),
-            options: std::collections::HashMap::from([(
-                "status".to_string(),
-                status.to_string(),
-            )]),
+            options: std::collections::HashMap::from([("status".to_string(), status.to_string())]),
             requires: Vec::new(),
             present: true,
         };

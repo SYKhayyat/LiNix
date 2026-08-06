@@ -293,7 +293,9 @@ v  | repo-oss                   | glibc              | 2.42-1.1        | 2.43-1.
 
     #[test]
     fn a_zypper_header_row_is_not_a_package() {
-        assert!(!parse_zypper_outdated(ZYPPER).iter().any(|p| p.name == "Name"));
+        assert!(!parse_zypper_outdated(ZYPPER)
+            .iter()
+            .any(|p| p.name == "Name"));
     }
 
     #[test]

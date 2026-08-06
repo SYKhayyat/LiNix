@@ -377,7 +377,10 @@ mod tests {
             .unwrap();
         VscodeInstallable { core: core.clone() }
             .remove(
-                &["rust-lang.rust-analyzer".to_string(), "tamasfe.even-better-toml".to_string()],
+                &[
+                    "rust-lang.rust-analyzer".to_string(),
+                    "tamasfe.even-better-toml".to_string(),
+                ],
                 false,
             )
             .await
@@ -393,6 +396,11 @@ mod tests {
         );
         assert!(calls[0].contains("rust-lang.rust-analyzer"), "{:?}", calls);
         assert!(calls[0].contains("tamasfe.even-better-toml"), "{:?}", calls);
-        assert_eq!(calls[1].matches("--uninstall-extension").count(), 2, "{:?}", calls);
+        assert_eq!(
+            calls[1].matches("--uninstall-extension").count(),
+            2,
+            "{:?}",
+            calls
+        );
     }
 }

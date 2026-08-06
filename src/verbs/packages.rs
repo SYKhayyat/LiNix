@@ -821,14 +821,13 @@ pub(crate) async fn compute_outdated(app: &App, list: &[linix::core::Package]) -
                         let cur = p.version.as_deref()?;
                         let remote = s.lookup(&p.name).await.ok()??;
                         let newest = remote.version.as_deref()?;
-                        (version_compare::compare(newest, cur)
-                            == Ok(version_compare::Cmp::Gt))
-                        .then(|| Outdated {
-                            backend: p.backend.clone(),
-                            name: p.name.clone(),
-                            installed: cur.to_string(),
-                            latest: newest.to_string(),
-                        })
+                        (version_compare::compare(newest, cur) == Ok(version_compare::Cmp::Gt))
+                            .then(|| Outdated {
+                                backend: p.backend.clone(),
+                                name: p.name.clone(),
+                                installed: cur.to_string(),
+                                latest: newest.to_string(),
+                            })
                     }
                 })
                 .buffer_unordered(cap)

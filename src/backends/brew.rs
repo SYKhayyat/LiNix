@@ -370,10 +370,21 @@ mod tests {
         );
         let core = Arc::new(BrewBackendCore::new(exec));
         let specs = vec![
-            crate::core::PackageSpec { name: "jq".into(), backend: "brew".into(), ..Default::default() },
-            crate::core::PackageSpec { name: "ripgrep".into(), backend: "brew".into(), ..Default::default() },
+            crate::core::PackageSpec {
+                name: "jq".into(),
+                backend: "brew".into(),
+                ..Default::default()
+            },
+            crate::core::PackageSpec {
+                name: "ripgrep".into(),
+                backend: "brew".into(),
+                ..Default::default()
+            },
         ];
-        BrewInstallable { core: core.clone() }.install(&specs, false).await.unwrap();
+        BrewInstallable { core: core.clone() }
+            .install(&specs, false)
+            .await
+            .unwrap();
         BrewInstallable { core: core.clone() }
             .remove(&["jq".to_string(), "ripgrep".to_string()], false)
             .await
@@ -387,7 +398,15 @@ mod tests {
             calls.len(),
             calls
         );
-        assert!(calls[0].contains("jq") && calls[0].contains("ripgrep"), "{:?}", calls);
-        assert!(calls[1].contains("jq") && calls[1].contains("ripgrep"), "{:?}", calls);
+        assert!(
+            calls[0].contains("jq") && calls[0].contains("ripgrep"),
+            "{:?}",
+            calls
+        );
+        assert!(
+            calls[1].contains("jq") && calls[1].contains("ripgrep"),
+            "{:?}",
+            calls
+        );
     }
 }

@@ -984,7 +984,11 @@ impl GenericQueryable {
         let dir = tempfile::Builder::new()
             .prefix("linix-export-")
             .tempdir()
-            .map_err(|e| Error::Io(format!("could not make a directory for `{bin}`'s export: {e}")))?;
+            .map_err(|e| {
+                Error::Io(format!(
+                    "could not make a directory for `{bin}`'s export: {e}"
+                ))
+            })?;
         let path = dir.path().join("export.json");
         let path_arg = path.to_string_lossy().to_string();
         let rendered: Vec<String> = args
@@ -1684,7 +1688,7 @@ mod tests {
                 upgrade_reinstall_args: None,
                 property_probes: Vec::new(),
                 machine_list: None,
-            outdated: None,
+                outdated: None,
                 search_source: SearchSource::Command,
                 flag_map: HashMap::new(),
             },
@@ -1828,7 +1832,8 @@ mod tests {
             Ok(DryRunOutput {
                 stdout: b"jq 1.7.1
 ripgrep 15.2.0
-".to_vec(),
+"
+                .to_vec(),
                 stderr: vec![],
             }
             .into()),
@@ -1947,7 +1952,10 @@ ripgrep 15.2.0
         );
         let q = queryable_with(ManualListing::AllInstalled, mock.clone(), vfs);
         assert!(
-            q.list_installed().await.expect("exit 0 is an answer").is_empty(),
+            q.list_installed()
+                .await
+                .expect("exit 0 is an answer")
+                .is_empty(),
             "an empty listing at exit 0 is a machine with nothing installed, not a failure"
         );
     }

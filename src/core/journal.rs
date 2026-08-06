@@ -281,10 +281,7 @@ impl Journal {
     }
 
     fn is_interrupted(e: &JournalEntry) -> bool {
-        matches!(
-            e.status,
-            ActionStatus::InProgress | ActionStatus::Abandoned
-        )
+        matches!(e.status, ActionStatus::InProgress | ActionStatus::Abandoned)
     }
 
     /// True makes `sync` run `heal` on its own, without asking.
@@ -381,7 +378,6 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-
     /// A failed attempt is not interrupted work (owner ruling, 2026-08-05 — `Q33`).
     ///
     /// It reached an outcome and said so; the package is not installed and its line is still in
@@ -394,14 +390,12 @@ mod tests {
         let tmp = tempdir().unwrap();
         let mut journal = Journal::at(tmp.path().join("journal.json")).unwrap();
 
-        let spec = |name: &str| {
-            crate::core::PackageSpec {
-                name: name.to_string(),
-                backend: "apt".to_string(),
-                options: Default::default(),
-                requires: Vec::new(),
-                present: true,
-            }
+        let spec = |name: &str| crate::core::PackageSpec {
+            name: name.to_string(),
+            backend: "apt".to_string(),
+            options: Default::default(),
+            requires: Vec::new(),
+            present: true,
         };
         let interrupted = journal
             .record_start(JournalAction::Install(spec("half-done")))

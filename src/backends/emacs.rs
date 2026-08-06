@@ -300,10 +300,21 @@ mod batch_tests {
     async fn a_batch_of_packages_is_one_emacs_and_one_archive_refresh() {
         let (core, mock) = wired();
         let specs = vec![
-            crate::core::PackageSpec { name: "csv-mode".into(), backend: "emacs".into(), ..Default::default() },
-            crate::core::PackageSpec { name: "rainbow-mode".into(), backend: "emacs".into(), ..Default::default() },
+            crate::core::PackageSpec {
+                name: "csv-mode".into(),
+                backend: "emacs".into(),
+                ..Default::default()
+            },
+            crate::core::PackageSpec {
+                name: "rainbow-mode".into(),
+                backend: "emacs".into(),
+                ..Default::default()
+            },
         ];
-        EmacsInstallable { core: core.clone() }.install(&specs, false).await.unwrap();
+        EmacsInstallable { core: core.clone() }
+            .install(&specs, false)
+            .await
+            .unwrap();
 
         let calls = mock.get_calls().await;
         assert_eq!(calls.len(), 1, "one Emacs for the batch, got {:?}", calls);
@@ -313,7 +324,11 @@ mod batch_tests {
             "the archive is fetched once, not once per package: {:?}",
             calls
         );
-        assert!(calls[0].contains("csv-mode") && calls[0].contains("rainbow-mode"), "{:?}", calls);
+        assert!(
+            calls[0].contains("csv-mode") && calls[0].contains("rainbow-mode"),
+            "{:?}",
+            calls
+        );
     }
 
     /// Removal batches the same way.
@@ -336,8 +351,16 @@ mod batch_tests {
     async fn one_illegal_name_refuses_the_whole_batch_before_anything_runs() {
         let (core, mock) = wired();
         let specs = vec![
-            crate::core::PackageSpec { name: "csv-mode".into(), backend: "emacs".into(), ..Default::default() },
-            crate::core::PackageSpec { name: "evil (shell-command \"rm -rf /\")".into(), backend: "emacs".into(), ..Default::default() },
+            crate::core::PackageSpec {
+                name: "csv-mode".into(),
+                backend: "emacs".into(),
+                ..Default::default()
+            },
+            crate::core::PackageSpec {
+                name: "evil (shell-command \"rm -rf /\")".into(),
+                backend: "emacs".into(),
+                ..Default::default()
+            },
         ];
         let err = EmacsInstallable { core }.install(&specs, false).await;
         assert!(err.is_err(), "an illegal symbol must refuse the batch");

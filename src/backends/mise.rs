@@ -473,10 +473,21 @@ mod tests {
         );
         let core = Arc::new(MiseBackendCore::new(exec));
         let specs = vec![
-            crate::core::PackageSpec { name: "node".into(), backend: "mise".into(), ..Default::default() },
-            crate::core::PackageSpec { name: "go".into(), backend: "mise".into(), ..Default::default() },
+            crate::core::PackageSpec {
+                name: "node".into(),
+                backend: "mise".into(),
+                ..Default::default()
+            },
+            crate::core::PackageSpec {
+                name: "go".into(),
+                backend: "mise".into(),
+                ..Default::default()
+            },
         ];
-        MiseInstallable { core: core.clone() }.install(&specs, false).await.unwrap();
+        MiseInstallable { core: core.clone() }
+            .install(&specs, false)
+            .await
+            .unwrap();
         MiseInstallable { core: core.clone() }
             .remove(&["node".to_string(), "go".to_string()], false)
             .await
@@ -490,7 +501,15 @@ mod tests {
             calls.len(),
             calls
         );
-        assert!(calls[0].contains("node@latest") && calls[0].contains("go@latest"), "{:?}", calls);
-        assert!(calls[1].contains("node") && calls[1].contains("go"), "{:?}", calls);
+        assert!(
+            calls[0].contains("node@latest") && calls[0].contains("go@latest"),
+            "{:?}",
+            calls
+        );
+        assert!(
+            calls[1].contains("node") && calls[1].contains("go"),
+            "{:?}",
+            calls
+        );
     }
 }

@@ -258,8 +258,8 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             upgrade_reinstall_args: None,
             property_probes: Vec::new(),
             machine_list: None,
-                        // `apt list --upgradable` also warns about an unstable CLI on stderr; the parser drops it.
-outdated: Some(OutdatedProbe {
+            // `apt list --upgradable` also warns about an unstable CLI on stderr; the parser drops it.
+            outdated: Some(OutdatedProbe {
                 binary: None,
                 args: vec!["list".into(), "--upgradable".into()],
                 parse: std::sync::Arc::new(crate::parsers::apt::parse_apt_outdated),
@@ -452,7 +452,9 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             outdated: Some(OutdatedProbe {
                 binary: None,
                 args: vec!["version".into(), "-l".into(), "<".into()],
-                parse: std::sync::Arc::new(|o: &str| crate::parsers::common::parse_apk_outdated(o, "apk")),
+                parse: std::sync::Arc::new(|o: &str| {
+                    crate::parsers::common::parse_apk_outdated(o, "apk")
+                }),
             }),
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
@@ -630,7 +632,11 @@ fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             machine_list: None,
             outdated: Some(OutdatedProbe {
                 binary: None,
-                args: vec!["upgrade".into(), "--disable-interactivity".into(), "--accept-source-agreements".into()],
+                args: vec![
+                    "upgrade".into(),
+                    "--disable-interactivity".into(),
+                    "--accept-source-agreements".into(),
+                ],
                 parse: std::sync::Arc::new(windows::parse_winget_outdated),
             }),
             search_source: SearchSource::Command,

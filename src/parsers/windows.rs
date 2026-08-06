@@ -704,7 +704,11 @@ pub fn parse_scoop_export(json: &str) -> Vec<Package> {
             if info.contains("failed") {
                 return None;
             }
-            let version = a.get("Version").and_then(|v| v.as_str()).unwrap_or("").trim();
+            let version = a
+                .get("Version")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
             // No version means scoop has a directory and no installed manifest — the same
             // half-state by a different route.
             if version.is_empty() {
@@ -749,7 +753,9 @@ mod scoop_export_tests {
     /// The same half-state by the other route — a directory with no installed manifest.
     #[test]
     fn an_app_with_no_version_is_not_an_installed_package() {
-        assert!(!parse_scoop_export(EXPORT).iter().any(|p| p.name == "halfway"));
+        assert!(!parse_scoop_export(EXPORT)
+            .iter()
+            .any(|p| p.name == "halfway"));
     }
 
     /// Both readers answer for the same machine, so they must answer alike — including about
@@ -840,7 +846,11 @@ pub fn parse_choco_outdated(output: &str) -> Vec<Package> {
             let name = f.next()?.trim();
             let _current = f.next()?;
             let available = f.next()?.trim();
-            let pinned = f.next().unwrap_or("false").trim().eq_ignore_ascii_case("true");
+            let pinned = f
+                .next()
+                .unwrap_or("false")
+                .trim()
+                .eq_ignore_ascii_case("true");
             if name.is_empty() || available.is_empty() || pinned {
                 return None;
             }

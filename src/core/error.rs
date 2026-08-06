@@ -183,8 +183,11 @@ impl Error {
             Some(o) => format!(" ({})", o),
             None => String::new(),
         };
-        let note = format!("
-    while applying `{}`{}.", key, where_from);
+        let note = format!(
+            "
+    while applying `{}`{}.",
+            key, where_from
+        );
         match self {
             Error::CommandFailed {
                 message,

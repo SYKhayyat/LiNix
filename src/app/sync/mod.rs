@@ -995,10 +995,9 @@ impl<'a> SyncEngine<'a> {
                             "could not recover {} — {}. {} The entry stays recorded as \
                              interrupted, so nothing claims this package is installed.",
                             key,
-                            e.as_ref().map_or(
-                                "the recovery did not reach it".to_string(),
-                                |e| e.to_string()
-                            ),
+                            e.as_ref()
+                                .map_or("the recovery did not reach it".to_string(), |e| e
+                                    .to_string()),
                             what_to_do_about(e.as_ref(), &key),
                         );
                         failed.push(key);

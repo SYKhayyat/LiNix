@@ -203,7 +203,12 @@ impl Searchable for PacmanSearchable {
     ///
     /// A pacman that genuinely failed says so on stderr, and that path still raises.
     async fn outdated_all(&self) -> Result<Option<Vec<Package>>> {
-        match self.core.executor.run_output("pacman", &["-Qu"], false).await {
+        match self
+            .core
+            .executor
+            .run_output("pacman", &["-Qu"], false)
+            .await
+        {
             Ok(output) => Ok(Some(pacman::parse_pacman_outdated(&output))),
             Err(e) if e.to_string().contains("no output") => Ok(Some(Vec::new())),
             Err(e) => Err(e),
@@ -372,7 +377,8 @@ mod outdated_semantics_tests {
     fn wired() -> (Arc<PacmanBackendCore>, Arc<MockExecutor>) {
         let vfs = Arc::new(DashMap::new());
         let mock = Arc::new(MockExecutor::new(vfs.clone()));
-        let exec = CommandExecutor::with_layer(false, false, mock.clone(), vfs, Arc::new(DashMap::new()));
+        let exec =
+            CommandExecutor::with_layer(false, false, mock.clone(), vfs, Arc::new(DashMap::new()));
         (Arc::new(PacmanBackendCore::new(exec)), mock)
     }
 
@@ -406,7 +412,11 @@ mod outdated_semantics_tests {
         let (core, mock) = wired();
         mock.set_response(
             "pacman -Qu",
-            Ok(crate::core::executor::spoken_failure(1, "", "error: failed to init transaction")),
+            Ok(crate::core::executor::spoken_failure(
+                1,
+                "",
+                "error: failed to init transaction",
+            )),
         );
         // A complaint is handed to the caller as an empty read (Q40's boundary), so the probe
         // reports nothing stale rather than inventing rows — but it never claims more.
@@ -426,10 +436,18 @@ mod outdated_semantics_tests {
             }
             .into()),
         );
-        let got = PacmanSearchable { core }.outdated_all().await.unwrap().unwrap();
+        let got = PacmanSearchable { core }
+            .outdated_all()
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].name, "audit");
         assert_eq!(got[0].version.as_deref(), Some("4.2.1-1"));
-        assert_eq!(mock.get_calls().await.len(), 1, "one call for the whole machine");
+        assert_eq!(
+            mock.get_calls().await.len(),
+            1,
+            "one call for the whole machine"
+        );
     }
 }

@@ -233,7 +233,10 @@ pub(crate) async fn handle_adopt(
         backends,
         enabled_only,
     };
-    app.adopter().adopt_scoped(&scope).await.map_err(|e| e.into())
+    app.adopter()
+        .adopt_scoped(&scope)
+        .await
+        .map_err(|e| e.into())
 }
 
 pub(crate) async fn handle_snapshot_restore(app: &App) -> Result<()> {
