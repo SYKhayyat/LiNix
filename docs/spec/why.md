@@ -3871,3 +3871,112 @@ under a summary reading `already up to date`. That made the bug wasteful instead
 bought the time to have it ruled rather than guessed.
 
 ---
+
+**V.142 — Why the second path is always where the safety falls off, and what makes it stop.**
+
+`lamdan/whole-repo-2026-08-05.md` filed F-5 as *"two paths for everything, and the second path
+is where the safety falls off."* The finding was accurate and it was incomplete in a way that
+matters: it named the direction it had happened to look in.
+
+The mechanism first, because it is not the thing the finding names. `registry.rs` carries an
+**argv table** — every backend driven against a mock, the argv it would really have run
+recorded, checked on every platform's CI so a typo in `mas`'s verbs is visible on a machine
+with no Mac. It is one of the better instruments in this tree. And it recorded
+
+```
+Runs("apt install -y -- jq"),
+…
+Runs("dnf install -y jq"),
+Runs("pacman -S --noconfirm --needed jq"),
+```
+
+in the same list, in a passing test, for as long as all three existed. **Nothing ever asked
+`core::argv` whether the recorded argv was right.** That file is the one place that knows
+whether a binary ends its options at `--`; it says `dnf` and `pacman` both do, on the strength
+of the parser they link against. The gate recorded the defect *as the expectation*, which is
+this repo's signature failure — a check drawn around the artifact under review rather than
+around the property — one level below where II.21 had just fixed it.
+
+**Why those two and no others.** Every backend on the data path gets the terminator from
+`argv::push_names`, which `generic.rs` calls on the one line every install goes through. Every
+hand-written backend called `push_names` too — `brew`, `conda`, `flatpak`, `go`, `link`, `mise`,
+`nix`, `snap`, `vscode`, `xbps` all do — except `dnf.rs` and `pacman.rs`, which built a
+`Vec<&str>` and pushed names onto it. Twelve of fourteen remembered. The two that forgot are the
+two that run as root, which is not a coincidence so much as the point: a rule that has to be
+remembered is a rule that will be forgotten somewhere, and where it gets forgotten is not
+correlated with where it matters least.
+
+**The finding's frame was one-directional, and the traffic runs both ways.** F-5 read the split
+as *data path good, hand-written path lossy*. Scoping the conversions turned up two defects of
+the same class running the other way, both live:
+
+- **`clean_cache` existed only on the hand-written path.** `ManagerConfig` had no field for it
+  and `GenericUpgradable` did not implement the method, so all forty data backends answered
+  `Unsupported`; `handle_clean_cache` filters that out silently and prints *"No backend on this
+  machine has a cache to clear."* That sentence was false on every Debian, Alpine, SUSE and
+  Node machine LiNix has ever run on. Six hand-written modules had the verb. The shared
+  machinery — the good path — could not express it at all.
+- **The exclusive lock keyed on the program, not the manager.** `run_exclusive(binary(), …)` in
+  `generic.rs` against `run_exclusive("xbps", …)` in every hand-written module. OpenBSD installs
+  with `pkg_add` and removes with `pkg_delete`, so its install and its removal took two
+  different flocks over one package database. `xbps.rs` had this right and would have lost it in
+  conversion — which is the honest reason to scope a deletion before doing it.
+
+So the rule is not "prefer the data path". It is **one path, and a capability the machinery
+lacks becomes a field rather than a reason to keep a second implementation**. That is what the
+ratchet's header already said about the eight conversions of 2026-08-04, and it held for these
+three: `CacheClean`, `DependsProbe`, `OutdatedProbe::silence_is_none` and `{name_component}` are
+now available to all sixty-two backends, including a user's own row in `adapters/backends.toml`.
+
+**Why the exemptions survived.** `tests/backend_is_data_not_code_tests.rs` is the ratchet, and
+it is well built — a list that may only shrink, no stale entries, no "not converted yet". Its
+one assertion about the *reasons* was `why.len() > 60`. So:
+
+- `pacman.rs` claimed *"the removal guard needs pacman's own essential/required-by data"*. There
+  is no `essential()` impl in the file. `grep -n essential src/backends/pacman.rs` returns
+  nothing, and the row for `yay` two hundred lines away carries `essential_args: None` with the
+  correct reason written out: pacman has no per-package essential flag, `base` is a convention
+  and `HoldPkg` is user config.
+- `dnf.rs` claimed *"a second command whose output changes what the first one means"*. It runs
+  `rpm -qa` and `dnf repoquery --userinstalled` and reads both with **the same function**. That
+  is `ManualListing::Command { format: SameAsInstalled }`, described in prose.
+- `xbps.rs` claimed three binaries. Those are `binary`, `remove_binary` and `list_binary`, and
+  `generic.rs`'s own doc comment names OpenBSD's `pkg_add`/`pkg_delete` as exactly this case.
+
+Every one of the three was 100–160 characters of accurate-sounding English about a manager, and
+all three passed. **Sixty characters of fluent prose is what a check that cannot fail looks
+like when the subject is English.** Each entry now carries a `proof`: text that must appear in
+the module the reason excuses. pacman's would have been `fn essential`, and it would have failed
+on the day it was written. The instrument is self-tested against a planted falsehood first
+(IV.1) — the check is run against a module that does *not* contain `fn essential`, so a grep
+matching nothing cannot pass for a grep that found something.
+
+**A fourth false reason, found by the gate that was just installed, and what it taught about
+the gate.** `brew.rs` claimed *"`brew list --versions` and the search headers need parsing the
+generic parsers do not have"* — `LambdaParser` has carried exactly that for every apk and AUR
+row since they were written. The first `proof` written for the entry was brew's own install
+argv, which is present in the module and establishes nothing; catching that took reading the
+file. **A grep cannot decide whether a reason is sound, only whether it is about code that
+exists** — what it buys is that writing the entry now requires naming a line, and naming a line
+is where the three false claims came apart.
+
+brew's real exemption turned out to be one line further down: `info` reads `brew info --json=v1`
+for the keg prefix and whether the formula arrived as a dependency. `PropertyProbe` substitutes
+a command's whole stdout into a `{base}` template and cannot reach `installed[0].prefix`, and a
+listing cannot answer about a formula that is not installed. The entry says that now, and points
+at `installed_as_dependency`. **brew is not converted in this change** — one more field to reach
+into a JSON document is a fourth conversion's worth of design, and a sweep that keeps widening
+is how a repo ends up with two of everything by a different route.
+
+What did come out of brew and flatpak is the pair F-5 named directly: both had a
+whitespace-columns loop inlined in `fetch_installed` that is `parsers::common::parse_simple_list`
+verbatim. flatpak's was character-identical; brew's differed in one case — it dropped a line with
+a single token, where the shared parser keeps it as a versionless package. The shared behaviour
+is the safer of the two in the direction that matters (`Q40`: a listing that silently drops rows
+reports a machine as emptier than it is), so the shared one wins and the local copy is gone.
+
+**What was deliberately not changed.** `dnf`, `pacman` and `xbps` still report a package's
+dependencies; they are the only three system managers that do, and the test asserting the other
+fifteen ask nothing stays as it is. Under `Y9` a dependency is *reported, never planned from*,
+so asking costs one subprocess on `linix info` and buys the `Dependencies:` line. Removing it
+would be a feature a user would notice, which is not a detail to settle inside a refactor.

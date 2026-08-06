@@ -278,6 +278,14 @@ async fn every_subcommand_linix_invokes_still_exists_upstream() {
         if let Some(u) = backend.as_upgradable() {
             let _ = u.upgrade(false).await;
             let _ = u.update(false).await;
+            // The two verbs this gate could not see. `clean_cache` and `list_orphans` build
+            // argv from the same rows `install` does — `dnf clean all`, `pacman -Qdtq`,
+            // `xbps-remove -Oy`, `apt-get autoremove --dry-run` — and until 2026-08-06 none of
+            // them was ever walked against a `--help`. A subcommand that only `linix
+            // clean-cache` reaches is a subcommand upstream can delete unnoticed, which is
+            // what happened to `pixi global upgrade-all` and is the reason this file exists.
+            let _ = u.clean_cache(false).await;
+            let _ = u.list_orphans().await;
         }
         if let Some(s) = backend.as_searchable() {
             let _ = s.search("jq").await;

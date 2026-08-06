@@ -58,6 +58,15 @@ manager that lists updates but has no catalogue to search is an ordinary shape, 
 capability on search alone made its updates silently unreportable. `search` itself still refuses
 by name when it was never configured.
 
+**Extended again 2026-08-06 by `Y11`:** `clean_cache_args` is the manager's own way of emptying
+its download cache, with `clean_cache_binary` for a manager that empties it with a different
+program; `repo_remove_binary` for one that adds a source with one program and drops it with
+another. Absent means *this manager has no such verb*, which `linix clean-cache` reports as
+nothing to clear for that backend rather than as a success. Every field a built-in row gained
+in that change is here too — that is what "a first-class peer of a built-in" has to mean, and
+the reason `clean_cache` was worth a field at all is that when it existed only as Rust in six
+modules, no definition and no row could say it.
+
 **Every file above may begin with a byte-order mark, and it is read anyway** (Q22). Notepad
 writes one by default and no editor shows it, so before this the three bytes became part of the
 first name on the first line and the refusal named two strings that render identically. The mark
@@ -1734,6 +1743,15 @@ asking a backend author to declare the second is asking for the two to disagree.
 path it names, or it is deleted. Two of everything is bad; one of everything, unwired, is worse
 — it reads as a defence in the source and is absent at runtime.
 
+**A backend that builds argv by hand is a backend that has to remember, and the record of what
+it runs is checked against the table, not merely printed beside it** (2026-08-06, `Y11`,
+V.142). The argv every backend produces is driven and recorded on every platform's CI; each
+recorded invocation is now cross-checked against the terminator table, so an operand handed to
+a program that ends its options at `--` without one fails the build. Recording an argv is not
+checking it: `dnf install -y jq` sat in a green test directly beside `apt install -y -- jq` for
+as long as both existed, and the two managers missing the hardening were the two that run as
+root.
+
 ## II.12c What comes back from a command line (V.84, U40)
 
 **LiNix reads the output of every command it runs.** stdout and stderr are captured on every
@@ -2313,3 +2331,46 @@ reads as instructions.
 **The rule this generalises: a gate is drawn around the property, not around the artifact that
 was under review.** See `why.md` for the six live defects that were sitting outside three
 working gates when this was written.
+
+## II.22 One path per backend, and a capability the machinery lacks is a field (`Y11`, V.142)
+
+**A backend is a `ManagerConfig` row, or it is a module named in
+`tests/backend_is_data_not_code_tests.rs` with what the generic machinery cannot express — and
+with the line in that module which makes the claim true.** A reason is a claim (E29), and a
+claim is checked against the code it describes. Length is not evidence: three exemptions
+described code that was not in the module they excused, and the only assertion on them was that
+they ran past sixty characters.
+
+**Where a conversion is blocked, the machinery gains a field. It never gains a compromise.**
+Eleven backends have come off the hand-written path this way, and every one of them cost a
+field that is now available to all sixty-two: `extra_probes`, `upgrade_reinstall_args`,
+`property_probes`, `SearchSource`, `VersionPin`, `CacheClean`, `DependsProbe`,
+`OutdatedProbe::silence_is_none`, and the `{name_component}` placeholder. That is the
+difference between converting a backend and deleting one.
+
+**Two paths for one job is one path where a property is enforced and one where it is
+remembered, and the second one loses.** It lost in both directions before this rule existed:
+
+- the hand-written path lost the `--` terminator, on `dnf` and `pacman` — the two managers that
+  run as root, and the only two backends in the tree that built install and remove argv without
+  `core::argv::push_names`;
+- the data path lost `clean_cache` entirely, because `ManagerConfig` had no field for it. All
+  forty rows answered `Unsupported`, and `linix clean-cache` on a Debian machine printed *"No
+  backend on this machine has a cache to clear"* over a full `/var/cache/apt/archives`;
+- the data path also lost the exclusive lock, keying it on the *program* rather than the
+  manager — so OpenBSD's `pkg_add` and `pkg_delete` took two different locks over one package
+  database. Every hand-written module had keyed on the manager all along.
+
+**A manager's exclusive lock names the manager, never the program.** A manager with two
+binaries has one database and two names for it.
+
+**A repository name that becomes a path segment is validated as one.** `{name}` is an argument
+the manager parses; `{name_component}` is a segment LiNix builds a path out of, and the
+difference is that `../../etc/cron.d/x` is an ordinary argument and a directory escape. Both
+managers that put a name in a path validated it by hand; the shared path did not, because until
+they became rows no row did.
+
+**Every verb that builds argv is driven by the drift gate, not only the ones it was written
+for.** `clean_cache` and `list_orphans` produce argv from the same rows `install` does, and
+neither was walked against a manager's own `--help` until 2026-08-06 — a subcommand only one
+verb reaches is a subcommand upstream can delete unnoticed.

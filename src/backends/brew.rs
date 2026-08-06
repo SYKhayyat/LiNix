@@ -121,14 +121,7 @@ impl Queryable for BrewQueryable {
             .executor
             .run_output("brew", &["list", "--versions"], false)
             .await?;
-        let mut packages = Vec::new();
-        for line in output.lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
-                packages.push(Package::with_version(parts[0], parts[1], "brew"));
-            }
-        }
-        Ok(packages)
+        Ok(crate::parsers::common::parse_simple_list(&output, "brew"))
     }
 
     async fn list_manual(&self) -> Result<Vec<Package>> {

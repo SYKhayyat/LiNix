@@ -858,8 +858,11 @@ depends_args     = ["deps"]              # a package's dependencies, for `packag
 repo_add_args    = ["repo", "add"]       # `repo:` lines
 repo_remove_args = ["repo", "rm"]
 repo_list_args   = ["repo", "list"]
-repo_binary      = "mymgr-sources"       # when sources are edited by another program
-repo_list_binary = "cat"                 # …and read by another one again
+repo_binary        = "mymgr-sources"     # when sources are edited by another program
+repo_list_binary   = "cat"               # …and read by another one again
+repo_remove_binary = "rm"                # …and dropped by a third
+clean_cache_args   = ["cache", "clean"]  # `linix clean-cache`; absent = it has no cache
+clean_cache_binary = "mymgr-gc"          # when a different program empties it
 purge_args       = ["rm", "--purge"]     # config-destroying removal
 manual = "all_installed"                 # so `adopt` takes what you chose, not deps
 [backend.orphan_dry_run]                 # what its autoremove WOULD remove

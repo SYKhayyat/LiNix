@@ -9,7 +9,6 @@ pub mod registry;
 pub mod appimage;
 pub mod btrfs;
 pub mod conda;
-pub mod dnf;
 pub mod emacs;
 pub mod firewall;
 pub mod flatpak;
@@ -20,14 +19,12 @@ pub mod link;
 mod link_teardown_test;
 pub mod mise;
 pub mod nix;
-pub mod pacman;
 pub mod service;
 pub mod setting;
 pub mod snap;
 pub mod storage;
 pub mod vscode;
 pub mod web;
-pub mod xbps;
 
 pub mod psresource;
 

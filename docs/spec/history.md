@@ -6883,3 +6883,49 @@ the container as the fixture, and the neighbouring rows (`Optional Deps`, `Confl
 the test because they are the same shape and a prefix match would take them too. It matters now
 in a way it did not before: `linix info` *shows* that answer to a person, so an empty one is a
 lie rather than a lucky escape.
+
+## 2026-08-06 — `Y11`: one path per backend, and the gate that recorded the defect
+
+`lamdan/whole-repo-2026-08-05.md`'s F-5 said "two paths for everything, and the second path is
+where the safety falls off". It named three exemptions it had checked. All three were false, and
+the sweep that confirmed them found the finding's frame was one-directional.
+
+**What was actually wrong, and how it survived.**
+
+| | claim | what the code said |
+|---|---|---|
+| `pacman.rs` | "the removal guard needs pacman's own essential/required-by data" | no `essential()` impl in the file; `yay`'s row carries the correct reason for `essential_args: None` |
+| `dnf.rs` | "a second command whose output changes what the first one means" | two independent commands read by the same function — `ManualListing::Command { format: SameAsInstalled }` in prose |
+| `xbps.rs` | "two binaries — and a third for the listing" | `binary`, `remove_binary`, `list_binary` |
+
+The ratchet that guards those reasons asserted `why.len() > 60`. Each claim ran to 100–160
+characters of accurate-sounding English about a manager, and all three passed.
+
+**The terminator.** `dnf.rs` and `pacman.rs` were the only two backends in the tree that built
+install and remove argv without `core::argv::push_names` — twelve of fourteen hand-written
+modules called it. So `dnf install -y jq` and `pacman -S --noconfirm --needed jq` went out with
+no `--`, on the two managers that run as root, while every user-scope backend got the hardening
+free. `registry.rs`'s argv table recorded all three lines side by side in a passing test and
+never asked `core::argv` — the file that says both binaries terminate — whether what it recorded
+was right. **A gate that records an argv is not a gate that checks it.**
+
+**And two the finding did not look for, running the other way.** `clean_cache` existed on six
+hand-written modules and on no row at all, because `ManagerConfig` had no field: `linix
+clean-cache` told every Debian, Alpine, SUSE and Node user that no backend on the machine had a
+cache to clear. And `generic.rs` keyed its exclusive lock on the *program*, so OpenBSD's
+`pkg_add` and `pkg_delete` took two flocks over one package database — a bug every hand-written
+module had avoided, and one `xbps` would have acquired in conversion.
+
+**What shipped, measured rather than flattered.** Three modules totalling 1,223 lines became
+three rows totalling 272 — but `src/` came out about level (+41), because what left as bespoke
+Rust went back as shared machinery every backend can reach, as parsers moved next to their
+siblings with their fixtures, and as three new gates. **A conversion that shrinks the tree is a
+nice side effect; the one that matters removed a second way of doing the job.** Four fields
+added to the shared machinery — `CacheClean`, `DependsProbe`, `OutdatedProbe::silence_is_none`, `{name_component}` —
+all available to every backend including a user's own. Three gates: the argv table now
+cross-checks every recorded invocation against the terminator table; install and remove must
+contend for the same lock; and each exemption carries a `proof` that must appear in the module
+it excuses, self-tested against a planted falsehood first. `clean_cache` and `list_orphans` are
+now driven by `argv_drift_tests`, which had never seen either.
+
+Ruled as `Y11`. Rules in II.22 and II.12b; reasons in V.142.

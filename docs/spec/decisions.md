@@ -1,4 +1,4 @@
-# The decision register — all 169, two of them open
+# The decision register — all 170, one of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -15,9 +15,9 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **2** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **1** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **162** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **164** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -73,9 +73,8 @@ status loses that, so it is kept here:
 
 ## Index
 
-**Two are open — `Z1`, raised 2026-08-03, a licence choice; and `Q48`, raised 2026-08-06, what
-`link:` should do on Windows.** All 169 are accounted
-for: **162 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 2 OPEN** — and this line
+**One is open — `Z1`, raised 2026-08-03, a licence choice.** All 170 are accounted
+for: **164 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 1 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -333,6 +332,7 @@ II.19 and the reasons in V.115–V.118.*
 | **Y9** | The planner asked seven backends what each declared package depends on and installed the answers — which took ownership of packages nobody declared, and split the one command line it had a reason to keep. RULED: **no.** LiNix installs what you declared, and `@requires` keeps splitting the wave. | 2026-08-06 |
 | **Y10** | The write-ahead log had two variants and all nine `apply/` modules referenced it zero times, while a `dotfiles:` tree destroyed the user's file with no backup, no ledger row and therefore no teardown — four documents said otherwise. RULED: **the log covers what cannot be recomputed**, and **a tree is the `link:` lines it stands for.** | 2026-08-06 |
 | **Q48** | Every `link:` on Windows took the cross-drive COPY fallback, same drive or not: `is_same_drive` compared a verbatim prefix against a plain one — and the limitation it guarded does not exist, since a Windows symlink spans volumes. RULED: **a `link:` links; only a missing privilege gets a copy, and it says so.** | 2026-08-06 |
+| **Y11** | Two backends built install and remove argv by hand and lost the `--` terminator; forty backends could not clear a cache because no row could say how; one manager took two locks over one database. The argv table recorded all of it and checked none of it. RULED: **one path per backend, and a capability the machinery lacks is a field.** | 2026-08-06 |
 
 ---
 
@@ -4984,7 +4984,7 @@ repaired: see `Q48`.
 
 ## Q48
 
-**Status: RULED 2026-08-06.** Raised the same day while building `Y10`.
+**Status: ANSWERED — ruled 2026-08-06.** Raised the same day while building `Y10`.
 
 **Q48 — Should `link:` symlink on Windows, or is the copy fallback now the behaviour?**
 `is_same_drive` (`backends/link.rs`) compared the `Component::Prefix` of `source.canonicalize()`
@@ -6307,3 +6307,92 @@ It now prints the same per-reason breakdown `adopt` does.
 
 Rule in II.9; why in V.137. Related: `Q31`, which this shrinks and does not close.
 
+
+---
+
+## Y11
+
+**Status: ANSWERED — built and ruled 2026-08-06.** Raised by
+`lamdan/whole-repo-2026-08-05.md` as F-5, ranked second on the quality axis. Accurate on the
+mechanism; one-directional about which path loses, and the review's proposed remedy is
+explicitly not what shipped.
+
+**Y11 — When one job has two implementations, which one is right?** Neither, reliably. The
+question is what makes the second one stop existing.
+
+A backend here is a `ManagerConfig` row — about 56 lines of table over shared machinery — or a
+hand-written module averaging 403. F-5's claim was that nine of the twenty-two exemptions are
+refuted by the code beside them, and it checked three: `dnf`, `pacman` and `xbps`. All three
+check out, and the three modules are gone: 1,223 lines of Rust for 272 of table.
+
+**`src/` came out about level on the change (+41 lines), and that is the honest number.** What
+left as bespoke Rust went back as machinery every backend can reach, as parsers moved next to
+their siblings with their fixtures, and as three new gates. A conversion that shrinks the tree
+is a pleasant side effect; the one that counts removed a second way of doing the job.
+
+**RULED, part one: one path per backend. A capability the machinery lacks is a field, never a
+reason to keep a second implementation.**
+
+That is the rule the ratchet's header already stated for the eight conversions of 2026-08-04,
+now binding. These three cost four fields, and all four are available to every backend
+including a user's own row in `adapters/backends.toml`:
+
+- **`CacheClean`** — how a manager empties its download cache, with its own binary, because
+  Void empties its cache with `xbps-remove` and apt with `apt-get`.
+- **`DependsProbe`** — the argv *and* the reader, because dnf prints one bare name per line,
+  pacman prints several on one labelled row, and apt prints one per labelled line. One parser
+  lenient enough for all three is one parser that reads a malformed answer in one shape as a
+  valid answer in another.
+- **`OutdatedProbe::silence_is_none`** — `pacman -Qu` exits non-zero with nothing on either
+  stream to mean *nothing is out of date*, which is exactly the shape `Q40` calls a failed read.
+  Translated back for the manager whose meaning is known, rather than by loosening the rule for
+  every read in the program.
+- **`{name_component}`** — a repository name that becomes a path segment. Both hand-written
+  modules validated it; the shared repo path did not, because until now no row put a name in a
+  path. `../../etc/cron.d/x` is an ordinary argument and a directory escape.
+
+**RULED, part two: the record of what a backend runs is checked against the table that knows
+the answer.**
+
+This is the finding under the finding, and F-5 did not name it. `registry.rs`'s argv table
+drives every backend against a mock and records the argv it would have run — good instrument,
+one of the better ones here. It recorded `Runs("dnf install -y jq")` in the same list as
+`Runs("apt install -y -- jq")` and never asked `core::argv`, which is the one file that knows
+`dnf` ends its options at `--`. The gate held the defect as its own expectation. Every recorded
+invocation is now cross-checked, with a written exemption for `emacs`, whose operand is the
+value of `--eval` and not an operand at all.
+
+**The review's frame was one-directional, and that is the correction.** F-5 read the split as
+*data path good, hand-written path lossy*. Scoping the conversion found two live defects of the
+same class running the other way:
+
+- **`clean_cache` existed only on the hand-written path.** Six modules had the verb;
+  `ManagerConfig` had no field, so all forty rows answered `Unsupported` and `linix clean-cache`
+  told every Debian, Alpine, SUSE and Node user that no backend on the machine had a cache.
+  Eighteen backends can clear one now.
+- **The exclusive lock keyed on the program, not the manager.** OpenBSD's `pkg_add` and
+  `pkg_delete` took two different flocks over one package database. Every hand-written module
+  had keyed on the manager; only the shared machinery had not. `xbps.rs` had it right and would
+  have lost it in conversion.
+
+**RULED, part three: an exemption's reason is checked against the module it excuses.**
+
+The ratchet's only assertion about a reason was `why.len() > 60`. `pacman.rs` claimed the
+removal guard needed its essential data and had no `essential()` impl; `dnf.rs` described
+`ManualListing::Command { format: SameAsInstalled }` in prose; `xbps.rs` named three fields that
+exist. Each entry now carries a `proof` — text that must appear in the module — and the check is
+self-tested against a planted falsehood before it is trusted (IV.1).
+
+**Deliberately not done.** F-5's proposed change was *"move the 40 rows into `onboarder.rs`'s
+TOML format"*. Refused for now, and not as a matter of taste: the rows carry parser closures
+(`PackageReader`, `NameReader`) that a TOML file cannot hold, and moving compile-checked data
+into a runtime-parsed file trades a build failure for a startup failure. The rows are already
+data; where they live is a separate question and it does not have a bug attached.
+
+**Also not done:** `dnf`, `pacman` and `xbps` still report dependencies, and the test asserting
+the other fifteen system managers ask nothing is unchanged. Under `Y9` a dependency is reported
+and never planned from, so the asymmetry costs one subprocess on `linix info` and buys the
+`Dependencies:` line. Removing it is a feature a user would notice, which is not something to
+settle inside a refactor.
+
+Rule in II.22 and II.12b; reason in V.142.

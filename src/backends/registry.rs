@@ -1,13 +1,15 @@
 // src/backends/registry.rs
 
 use crate::app::LuaHooks;
+use crate::backends::generic::{
+    CacheClean, DependsProbe, GenericEnumerable, OrphanDryRun, RepoListing,
+};
 use crate::backends::generic::{ExportFormat, MachineListing, ManualFormat, OutdatedProbe};
 use crate::backends::generic::{
     GenericBackendCore, GenericInstallable, GenericQueryable, GenericRepoManager,
     GenericSearchable, GenericUpgradable, ManagerConfig, ManualListing, PropertyProbe,
     SearchSource, VersionPin,
 };
-use crate::backends::generic::{GenericEnumerable, OrphanDryRun};
 use crate::backends::pip_search::PipSearchable;
 use crate::config::Config;
 use crate::core::{BackendCapabilities, CommandExecutor};
@@ -93,9 +95,9 @@ pub async fn create_default_registry(
         register_apt(&mut reg, &executor);
         register_apk(&mut reg, &executor);
         register_zypper(&mut reg, &executor);
-        crate::backends::pacman::register(&mut reg, &executor, config);
-        crate::backends::dnf::register(&mut reg, &executor, config);
-        crate::backends::xbps::register(&mut reg, &executor, config);
+        register_pacman(&mut reg, &executor);
+        register_dnf(&mut reg, &executor);
+        register_xbps(&mut reg, &executor);
         // AUR helpers: pacman-syntax drop-ins for Arch's user repository. Registered as
         // distinct backends (not a pacman flag) so `yay:pkg` / `paru:pkg` are explicit and
         // tracked separately. Runtime-gated by the helper binary being present.
@@ -242,6 +244,8 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             // could never have worked on apt at all.
             repo_binary: Some("add-apt-repository".into()),
             repo_list_binary: None,
+            repo_remove_binary: None,
+            repo_list_shape: RepoListing::Columns,
             // No transitive dependency expansion for apt. apt resolves and installs a
             // package's full dependency closure itself at `apt-get install` time, so LiNix
             // re-deriving it is redundant. Worse, the planner's expansion is a recursive
@@ -250,7 +254,13 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             // subprocess calls and effectively hangs `status`/`sync`. It also wrongly tags
             // every transitive dependency as a LiNix-managed install. Leave dependency
             // resolution to apt. See the sync harness.
-            depends_args: None,
+            depends: None,
+            // `apt clean` exists on modern apt; `apt-get clean` exists on every apt there has ever
+            // been, and it is already this row's binary for `autoremove --dry-run`.
+            clean_cache: Some(CacheClean {
+                binary: Some("apt-get".into()),
+                args: vec!["clean".into()],
+            }),
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
@@ -263,6 +273,7 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
                 binary: None,
                 args: vec!["list".into(), "--upgradable".into()],
                 parse: std::sync::Arc::new(crate::parsers::apt::parse_apt_outdated),
+                silence_is_none: false,
             }),
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
@@ -278,6 +289,303 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             .with_enumerable(Arc::new(GenericEnumerable { core: core.clone() }))
             .with_upgradable(Arc::new(GenericUpgradable { core: core.clone() }))
             .with_repo_manager(Arc::new(GenericRepoManager { core: core.clone() }))
+            .with_metadata_provider(core.clone())
+            .build(),
+    ));
+}
+
+/// Arch. **The row `register_aur_helper` had already been proving for a year.**
+///
+/// `yay` and `paru` speak pacman's flags and have been data since they were written —
+/// `["-S", "--noconfirm", "--needed"]` at their row, character-identical to what `pacman.rs`
+/// built by hand two hundred lines away. The module's exemption said the removal guard needed
+/// pacman's own essential data; `grep -n essential src/backends/pacman.rs` returned nothing and
+/// there was no `essential()` impl to need it. What the hand-written path did have was argv
+/// built by hand, and so no `--` before the package name on either verb — the one thing every
+/// backend on this path gets without remembering.
+fn register_pacman(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("pacman");
+    cfg.install_args = vec!["-S".into(), "--noconfirm".into(), "--needed".into()];
+    cfg.remove_args = vec!["-Rs".into(), "--noconfirm".into()];
+    // Arch is rolling: an exact-version pin is not part of its model, which is why the AUR
+    // helpers that share this syntax carry no `version_pin` either.
+    cfg.list_args = vec!["-Q".into()];
+    // `-Qe` = explicitly installed only.
+    cfg.manual = ManualListing::Command {
+        binary: None,
+        args: vec!["-Qe".into()],
+        format: ManualFormat::SameAsInstalled,
+    };
+    // pacman has no per-package essential flag: `base` is a convention and `HoldPkg` is user
+    // config, so there is nothing authoritative to query. The same `None` the AUR rows carry.
+    cfg.essential_args = None;
+    cfg.search_args = vec!["-Ss".into()];
+    // `-Ssq` is the search form that prints bare names from the sync databases with no query —
+    // the catalogue, which is what II.15's `re:` expands against. `-Ss` matches descriptions
+    // too and cannot answer a name pattern.
+    cfg.enumerate_args = Some(vec!["-Ssq".into()]);
+    cfg.upgrade_args = vec!["-Syu".into(), "--noconfirm".into()];
+    cfg.update_args = Some(vec!["-Sy".into()]);
+    // `-Qdtq` prints the orphans themselves, one bare name per line, so there is no prefix to
+    // strip. It is a listing rather than a dry run, and `list_orphans` only ever wanted names.
+    cfg.orphan_dry_run = Some(OrphanDryRun {
+        binary: None,
+        args: vec!["-Qdtq".into()],
+        removes_line_prefix: String::new(),
+    });
+    cfg.clean_cache = Some(CacheClean {
+        binary: None,
+        args: vec!["-Sc".into(), "--noconfirm".into()],
+    });
+    // Drop-in policy: write `/etc/pacman.d/linix-<name>.conf` and add one `Include =` line to
+    // `/etc/pacman.conf`, never rewriting its body. The name lands in a path, so the row asks
+    // for `{name_component}` and the generic path refuses anything that could leave the
+    // directory.
+    cfg.repo_binary = Some("sh".into());
+    cfg.repo_add_args = Some(vec![
+        "-c".into(),
+        "set -e; printf '[%s]\\nServer = %s\\n' '{name_component}' '{url}' \
+         > '/etc/pacman.d/linix-{name_component}.conf'; \
+         grep -qxF 'Include = /etc/pacman.d/linix-{name_component}.conf' /etc/pacman.conf || \
+         printf '\\n%s\\n' 'Include = /etc/pacman.d/linix-{name_component}.conf' \
+         >> /etc/pacman.conf"
+            .into(),
+    ]);
+    cfg.repo_remove_args = Some(vec![
+        "-c".into(),
+        // A `#` delimiter for sed avoids escaping the slashes in the path.
+        "rm -f '/etc/pacman.d/linix-{name_component}.conf'; \
+         sed -i '\\#Include = /etc/pacman.d/linix-{name_component}.conf#d' /etc/pacman.conf"
+            .into(),
+    ]);
+    // `pacman-conf --repo-list` prints names and nothing else; the mirror for one repository
+    // is a second question about that name.
+    cfg.repo_list_binary = Some("pacman-conf".into());
+    cfg.repo_list_args = Some(vec!["--repo-list".into()]);
+    cfg.repo_list_shape =
+        RepoListing::NamesThenDetail(vec!["-r".into(), "{name}".into(), "Server".into()]);
+    // Reported, never planned from (`Y9`). `-Si`'s `Depends On` row carries SEVERAL names on
+    // one line, which the labelled parser — written for apt's one-per-line shape — would read
+    // as one.
+    cfg.depends = Some(DependsProbe {
+        binary: None,
+        args: vec!["-Si".into(), "{name}".into()],
+        parse: Arc::new(crate::parsers::pacman::parse_depends_on),
+    });
+    cfg.outdated = Some(OutdatedProbe {
+        binary: None,
+        args: vec!["-Qu".into()],
+        parse: Arc::new(crate::parsers::pacman::parse_pacman_outdated),
+        silence_is_none: true,
+    });
+    cfg.needs_root = true;
+    cfg.is_exclusive = true;
+
+    let core = Arc::new(GenericBackendCore {
+        name: "pacman".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: crate::parsers::pacman::parse_list,
+            search_fn: crate::parsers::pacman::parse_search,
+        }),
+    });
+    let core = with_manager_policy(core);
+    reg.register(Arc::new(
+        BackendCapabilities::builder(core.clone())
+            .with_installable(Arc::new(GenericInstallable { core: core.clone() }))
+            .with_queryable(Arc::new(GenericQueryable { core: core.clone() }))
+            .with_searchable(Arc::new(GenericSearchable { core: core.clone() }))
+            .with_enumerable(Arc::new(GenericEnumerable { core: core.clone() }))
+            .with_upgradable(Arc::new(GenericUpgradable { core: core.clone() }))
+            .with_repo_manager(Arc::new(GenericRepoManager { core: core.clone() }))
+            .with_metadata_provider(core.clone())
+            .build(),
+    ));
+}
+
+/// Fedora / RHEL.
+///
+/// The module's exemption said dnf *"reads its own history to distinguish user-installed from
+/// dependency, which is a second command whose output changes what the first one means."* It
+/// does not: `rpm -qa` and `dnf repoquery --userinstalled` are two independent commands read by
+/// **the same function**, which is `ManualListing::Command { format: SameAsInstalled }` spelled
+/// out in Rust. apt's row does the strictly harder version — a third binary printing a
+/// different shape — as data.
+fn register_dnf(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("dnf");
+    // Reproducible installs: dnf pins with `name-version`.
+    cfg.version_pin = Some(VersionPin::Inline("{name}-{version}".into()));
+    cfg.install_args = vec!["install".into(), "-y".into()];
+    cfg.remove_args = vec!["remove".into(), "-y".into()];
+    // The installed set comes from rpm, which is the database dnf writes into and the one
+    // command that answers without touching the network.
+    cfg.list_binary = Some("rpm".into());
+    cfg.list_args = vec![
+        "-qa".into(),
+        "--queryformat".into(),
+        "%{NAME}|%{VERSION}\n".into(),
+    ];
+    // The user's own set is dnf's to answer, not rpm's — so the row names the binary rather
+    // than falling through to `list_binary`.
+    cfg.manual = ManualListing::Command {
+        binary: Some("dnf".into()),
+        args: vec![
+            "repoquery".into(),
+            "--userinstalled".into(),
+            "--qf".into(),
+            "%{name}|%{version}".into(),
+        ],
+        format: ManualFormat::SameAsInstalled,
+    };
+    cfg.search_args = vec!["search".into()];
+    cfg.upgrade_args = vec!["upgrade".into(), "-y".into()];
+    cfg.update_args = Some(vec!["makecache".into()]);
+    cfg.orphan_dry_run = Some(OrphanDryRun {
+        binary: None,
+        args: vec![
+            "repoquery".into(),
+            "--unneeded".into(),
+            "--queryformat".into(),
+            "%{name}".into(),
+        ],
+        removes_line_prefix: String::new(),
+    });
+    cfg.clean_cache = Some(CacheClean {
+        binary: None,
+        args: vec!["clean".into(), "all".into()],
+    });
+    // `config-manager` is a dnf plugin (dnf-plugins-core); removal is deleting the drop-in
+    // file, which is `rm`'s job and not dnf's — the same shape apk's row uses for a manager
+    // whose sources are a file.
+    cfg.repo_add_args = Some(vec![
+        "config-manager".into(),
+        "--add-repo".into(),
+        "{url}".into(),
+    ]);
+    cfg.repo_remove_args = Some(vec![
+        "-f".into(),
+        "/etc/yum.repos.d/{name_component}.repo".into(),
+    ]);
+    // dnf has no verb that removes a repository — `config-manager` only adds and toggles — so
+    // the drop-in file is deleted. Adding and removing are two programs, which is why the
+    // remove binary is its own field.
+    cfg.repo_remove_binary = Some("rm".into());
+    cfg.repo_list_args = Some(vec!["repolist".into(), "--all".into()]);
+    cfg.depends = Some(DependsProbe {
+        binary: None,
+        args: vec![
+            "repoquery".into(),
+            "--requires".into(),
+            "--resolve".into(),
+            "--queryformat".into(),
+            // rpm's own format language. `{name}` here is six characters of `%{name}`, which
+            // is why the operand is the argument that IS `{name}` and never one containing it.
+            "%{name}".into(),
+            "{name}".into(),
+        ],
+        parse: Arc::new(crate::parsers::dnf::parse_bare_dependency_names),
+    });
+    // `dnf check-update -q` exits **100** when it finds something. That is dnf saying "there
+    // are updates", not a failure, so it goes through the read that judges by whether an
+    // answer arrived rather than by the exit code.
+    cfg.outdated = Some(OutdatedProbe {
+        binary: None,
+        args: vec!["check-update".into(), "-q".into()],
+        parse: Arc::new(crate::parsers::dnf::parse_dnf_outdated),
+        silence_is_none: false,
+    });
+    cfg.needs_root = true;
+    cfg.is_exclusive = true;
+
+    let core = Arc::new(GenericBackendCore {
+        name: "dnf".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::dnf::parse_rpm_qa(o, "dnf"),
+            search_fn: crate::parsers::dnf::parse_dnf_search,
+        }),
+    });
+    let core = with_manager_policy(core);
+    reg.register(Arc::new(
+        BackendCapabilities::builder(core.clone())
+            .with_installable(Arc::new(GenericInstallable { core: core.clone() }))
+            .with_queryable(Arc::new(GenericQueryable { core: core.clone() }))
+            .with_searchable(Arc::new(GenericSearchable { core: core.clone() }))
+            .with_upgradable(Arc::new(GenericUpgradable { core: core.clone() }))
+            .with_repo_manager(Arc::new(GenericRepoManager { core: core.clone() }))
+            .with_metadata_provider(core.clone())
+            .build(),
+    ));
+}
+
+/// Void Linux. **Three binaries, which is three fields.**
+///
+/// The module's exemption named the three — install with `xbps-install`, remove with
+/// `xbps-remove`, list with `xbps-query` — as though they were the obstacle. They are
+/// `binary`, `remove_binary` and `list_binary`, and `generic.rs`'s own doc comment names
+/// OpenBSD's `pkg_add`/`pkg_delete` as exactly this case, two hundred lines above the row that
+/// ships it.
+///
+/// What the module had that the machinery did not was the lock: it made both binaries
+/// exclusive over `"xbps"` while the shared path keyed on the program, so converting it before
+/// `lock_key` existed would have given install and remove two locks over one package database.
+fn register_xbps(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("xbps");
+    cfg.binary = Some("xbps-install".into());
+    cfg.remove_binary = Some("xbps-remove".into());
+    cfg.list_binary = Some("xbps-query".into());
+    cfg.search_binary = Some("xbps-query".into());
+    // Void is rolling, like Arch: no exact-version pin.
+    cfg.install_args = vec!["-Sy".into()];
+    cfg.remove_args = vec!["-y".into()];
+    cfg.list_args = vec!["-l".into()];
+    // `-m` lists only what was registered as manually installed.
+    cfg.manual = ManualListing::Command {
+        binary: None,
+        args: vec!["-m".into()],
+        format: ManualFormat::SameAsInstalled,
+    };
+    cfg.search_args = vec!["-Rs".into()];
+    cfg.upgrade_args = vec!["-Suy".into()];
+    cfg.update_args = Some(vec!["-S".into()]);
+    // `xbps-query -O` prints the orphans, one per line.
+    cfg.orphan_dry_run = Some(OrphanDryRun {
+        binary: Some("xbps-query".into()),
+        args: vec!["-O".into()],
+        removes_line_prefix: String::new(),
+    });
+    // Void empties its cache with the REMOVER, not the installer — which is the whole reason
+    // `CacheClean` carries a binary of its own.
+    cfg.clean_cache = Some(CacheClean {
+        binary: Some("xbps-remove".into()),
+        args: vec!["-Oy".into()],
+    });
+    cfg.depends = Some(DependsProbe {
+        binary: Some("xbps-query".into()),
+        args: vec!["-x".into(), "{name}".into()],
+        parse: Arc::new(crate::parsers::bsd::parse_xbps_dependencies),
+    });
+    cfg.needs_root = true;
+    cfg.is_exclusive = true;
+
+    let core = Arc::new(GenericBackendCore {
+        name: "xbps".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: crate::parsers::bsd::parse_xbps_list,
+            search_fn: crate::parsers::bsd::parse_xbps_search,
+        }),
+    });
+    let core = with_manager_policy(core);
+    reg.register(Arc::new(
+        BackendCapabilities::builder(core.clone())
+            .with_installable(Arc::new(GenericInstallable { core: core.clone() }))
+            .with_queryable(Arc::new(GenericQueryable { core: core.clone() }))
+            .with_searchable(Arc::new(GenericSearchable { core: core.clone() }))
+            .with_upgradable(Arc::new(GenericUpgradable { core: core.clone() }))
             .with_metadata_provider(core.clone())
             .build(),
     ));
@@ -359,7 +667,10 @@ fn register_aur_helper(
             repo_list_args: None,
             repo_binary: None,
             repo_list_binary: None,
-            depends_args: None,
+            repo_remove_binary: None,
+            repo_list_shape: RepoListing::Columns,
+            depends: None,
+            clean_cache: None,
             needs_root: false,
             is_exclusive: true,
             install_source_option: None,
@@ -434,6 +745,8 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             // …`, which apk refuses.
             repo_binary: Some("sh".into()),
             repo_list_binary: Some("cat".into()),
+            repo_remove_binary: None,
+            repo_list_shape: RepoListing::Columns,
             // No transitive dependency expansion for apk. `apk info -R <pkg>` emits a
             // header line ("<pkg>-<ver>-<rev> depends on:") plus virtual provider tokens
             // (`so:libc.musl…`, `pc:…`, `cmd:…`) — none of which are installable package
@@ -441,7 +754,13 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             // (`jq-1.8.1-r0`) and the `so:` provides into non-existent packages, so `apk add`
             // would fail with "no such package". apk resolves its own dependency closure at
             // install time, so LiNix does not need to expand it. See the sync harness.
-            depends_args: None,
+            depends: None,
+            // apk-cache(8). A host with no cache directory configured has nothing to delete and
+            // says so; it is not an error.
+            clean_cache: Some(CacheClean {
+                binary: None,
+                args: vec!["cache".into(), "clean".into()],
+            }),
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
@@ -455,6 +774,7 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
                 parse: std::sync::Arc::new(|o: &str| {
                     crate::parsers::common::parse_apk_outdated(o, "apk")
                 }),
+                silence_is_none: false,
             }),
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
@@ -517,13 +837,20 @@ fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_list_args: Some(vec!["repos".into()]),
             repo_binary: None,
             repo_list_binary: None,
+            repo_remove_binary: None,
+            repo_list_shape: RepoListing::Columns,
             // None, like apt, dnf and pacman: zypper resolves its own dependency closure at
             // install time, so LiNix re-deriving one adds nodes the planner then tries to
             // install by name. What `info --requires` reports are RPM capabilities
             // (`libjq.so.1()(64bit)`), not packages anyone declares — and until 2026-07-30 this
             // was the only system manager that set it, which is why it was the only one whose
             // first real run could not install anything.
-            depends_args: None,
+            depends: None,
+            // `--all` is both the metadata and the package caches. zypper(8).
+            clean_cache: Some(CacheClean {
+                binary: None,
+                args: vec!["clean".into(), "--all".into()],
+            }),
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
@@ -535,6 +862,7 @@ fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecutor) {
                 binary: None,
                 args: vec!["--non-interactive".into(), "list-updates".into()],
                 parse: std::sync::Arc::new(crate::parsers::dnf::parse_zypper_outdated),
+                silence_is_none: false,
             }),
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
@@ -622,7 +950,10 @@ fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_list_args: Some(vec!["source".into(), "list".into()]),
             repo_binary: None,
             repo_list_binary: None,
-            depends_args: None,
+            repo_remove_binary: None,
+            repo_list_shape: RepoListing::Columns,
+            depends: None,
+            clean_cache: None,
             needs_root: false,
             is_exclusive: false,
             install_source_option: None,
@@ -638,6 +969,7 @@ fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
                     "--accept-source-agreements".into(),
                 ],
                 parse: std::sync::Arc::new(windows::parse_winget_outdated),
+                silence_is_none: false,
             }),
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
@@ -697,7 +1029,10 @@ fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_list_args: Some(vec!["bucket".into(), "list".into()]),
             repo_binary: None,
             repo_list_binary: None,
-            depends_args: None,
+            repo_remove_binary: None,
+            repo_list_shape: RepoListing::Columns,
+            depends: None,
+            clean_cache: None,
             needs_root: false,
             is_exclusive: false,
             install_source_option: None,
@@ -715,6 +1050,7 @@ fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
                 binary: None,
                 args: vec!["status".into()],
                 parse: std::sync::Arc::new(windows::parse_scoop_outdated),
+                silence_is_none: false,
             }),
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
@@ -790,7 +1126,10 @@ fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_list_args: Some(vec!["source".into(), "list".into()]),
             repo_binary: None,
             repo_list_binary: None,
-            depends_args: None,
+            repo_remove_binary: None,
+            repo_list_shape: RepoListing::Columns,
+            depends: None,
+            clean_cache: None,
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
@@ -802,6 +1141,7 @@ fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
                 binary: None,
                 args: vec!["outdated".into(), "-r".into()],
                 parse: std::sync::Arc::new(windows::parse_choco_outdated),
+                silence_is_none: false,
             }),
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
@@ -857,7 +1197,10 @@ fn register_mas(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_list_args: None,
             repo_binary: None,
             repo_list_binary: None,
-            depends_args: None,
+            repo_remove_binary: None,
+            repo_list_shape: RepoListing::Columns,
+            depends: None,
+            clean_cache: None,
             needs_root: false,
             is_exclusive: false,
             install_source_option: None,
@@ -919,7 +1262,14 @@ fn register_pip(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_list_args: None,
             repo_binary: None,
             repo_list_binary: None,
-            depends_args: None,
+            repo_remove_binary: None,
+            repo_list_shape: RepoListing::Columns,
+            depends: None,
+            // `pip cache purge` — the wheel cache under `~/.cache/pip`. pip 20.1 and later.
+            clean_cache: Some(CacheClean {
+                binary: None,
+                args: vec!["cache".into(), "purge".into()],
+            }),
             needs_root: false,
             is_exclusive: false,
             install_source_option: None,
@@ -931,6 +1281,7 @@ fn register_pip(reg: &mut BackendRegistry, executor: &CommandExecutor) {
                 binary: None,
                 args: vec!["list".into(), "--outdated".into(), "--format=json".into()],
                 parse: std::sync::Arc::new(crate::parsers::language::parse_pip_outdated),
+                silence_is_none: false,
             }),
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
@@ -981,7 +1332,10 @@ fn register_gem(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_list_args: Some(vec!["sources".into()]),
             repo_binary: None,
             repo_list_binary: None,
-            depends_args: None,
+            repo_remove_binary: None,
+            repo_list_shape: RepoListing::Columns,
+            depends: None,
+            clean_cache: None,
             needs_root: false,
             is_exclusive: false,
             install_source_option: None,
@@ -993,6 +1347,7 @@ fn register_gem(reg: &mut BackendRegistry, executor: &CommandExecutor) {
                 binary: None,
                 args: vec!["outdated".into()],
                 parse: std::sync::Arc::new(crate::parsers::language::parse_gem_outdated),
+                silence_is_none: false,
             }),
             search_source: SearchSource::Command,
             flag_map: HashMap::new(),
@@ -1044,7 +1399,14 @@ fn register_bun(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_list_args: None,
             repo_binary: None,
             repo_list_binary: None,
-            depends_args: None,
+            repo_remove_binary: None,
+            repo_list_shape: RepoListing::Columns,
+            depends: None,
+            // bun keeps its global module cache under `~/.bun/install/cache`.
+            clean_cache: Some(CacheClean {
+                binary: None,
+                args: vec!["pm".into(), "cache".into(), "rm".into()],
+            }),
             needs_root: false,
             is_exclusive: false,
             install_source_option: None,
@@ -1109,7 +1471,10 @@ fn register_macports(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_list_args: None,
             repo_binary: None,
             repo_list_binary: None,
-            depends_args: None,
+            repo_remove_binary: None,
+            repo_list_shape: RepoListing::Columns,
+            depends: None,
+            clean_cache: None,
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
@@ -1170,7 +1535,14 @@ fn register_pkgin(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_list_args: None,
             repo_binary: None,
             repo_list_binary: None,
-            depends_args: None,
+            repo_remove_binary: None,
+            repo_list_shape: RepoListing::Columns,
+            depends: None,
+            // pkgin(1) — the downloaded binary packages under `/var/db/pkgin/cache`.
+            clean_cache: Some(CacheClean {
+                binary: None,
+                args: vec!["clean".into()],
+            }),
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
@@ -1238,7 +1610,15 @@ fn register_pkg_freebsd(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_list_args: None,
             repo_binary: None,
             repo_list_binary: None,
-            depends_args: None,
+            repo_remove_binary: None,
+            repo_list_shape: RepoListing::Columns,
+            depends: None,
+            // FreeBSD keeps fetched packages in `/var/cache/pkg`. `-y` because a converger has
+            // nobody at the terminal.
+            clean_cache: Some(CacheClean {
+                binary: None,
+                args: vec!["clean".into(), "-y".into()],
+            }),
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
@@ -1307,7 +1687,10 @@ fn register_pkg_add_openbsd(reg: &mut BackendRegistry, executor: &CommandExecuto
             repo_list_args: None,
             repo_binary: None,
             repo_list_binary: None,
-            depends_args: None,
+            repo_remove_binary: None,
+            repo_list_shape: RepoListing::Columns,
+            depends: None,
+            clean_cache: None,
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
@@ -1376,7 +1759,20 @@ fn register_dotnet(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_list_args: None,
             repo_binary: None,
             repo_list_binary: None,
-            depends_args: None,
+            repo_remove_binary: None,
+            repo_list_shape: RepoListing::Columns,
+            depends: None,
+            // The NuGet http-cache, global-packages and temp folders. `all` is every local
+            // that `dotnet nuget locals --list` reports.
+            clean_cache: Some(CacheClean {
+                binary: None,
+                args: vec![
+                    "nuget".into(),
+                    "locals".into(),
+                    "all".into(),
+                    "--clear".into(),
+                ],
+            }),
             needs_root: false,
             is_exclusive: false,
             install_source_option: None,
@@ -1454,7 +1850,10 @@ fn base_config(name: &str) -> ManagerConfig {
         repo_list_args: None,
         repo_binary: None,
         repo_list_binary: None,
-        depends_args: None,
+        repo_remove_binary: None,
+        repo_list_shape: RepoListing::Columns,
+        depends: None,
+        clean_cache: None,
         version_pin: None,
         needs_root: false,
         is_exclusive: false,
@@ -1538,8 +1937,14 @@ fn register_composer(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         binary: None,
         args: vec!["global".into(), "outdated".into(), "--format=json".into()],
         parse: std::sync::Arc::new(crate::parsers::language::parse_composer_outdated),
+        silence_is_none: false,
     });
     cfg.upgrade_args = vec!["global".into(), "update".into()];
+    // composer keeps every downloaded package archive under `~/.composer/cache`.
+    cfg.clean_cache = Some(CacheClean {
+        binary: None,
+        args: vec!["clear-cache".into()],
+    });
     let core = Arc::new(GenericBackendCore {
         name: "composer".into(),
         executor: executor.duplicate(),
@@ -1565,6 +1970,12 @@ fn register_opam(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     cfg.list_args = vec!["list".into(), "--installed".into(), "--short".into()];
     cfg.search_args = vec!["search".into(), "--short".into()];
     cfg.upgrade_args = vec!["upgrade".into(), "-y".into()];
+    // `opam clean` removes downloaded archives and build logs, never a switch's
+    // installed packages — which is the line X.3 draws between a cache and a removal.
+    cfg.clean_cache = Some(CacheClean {
+        binary: None,
+        args: vec!["clean".into()],
+    });
     let core = Arc::new(GenericBackendCore {
         name: "opam".into(),
         executor: executor.duplicate(),
@@ -1831,6 +2242,7 @@ fn register_npm(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         parse: std::sync::Arc::new(|o: &str| {
             crate::parsers::language::parse_npm_outdated(o, "npm")
         }),
+        silence_is_none: false,
     });
     // `npm prefix -g` reports the PREFIX, not the module directory, and the layout below it
     // differs by OS: POSIX puts modules under `lib/node_modules`, Windows directly under
@@ -1844,6 +2256,12 @@ fn register_npm(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             "{base}/lib/node_modules/{name}".into()
         },
     }];
+    // `npm cache clean` refuses without `--force`; the flag is npm asking whether you
+    // meant it, not a way to make it try harder.
+    cfg.clean_cache = Some(CacheClean {
+        binary: None,
+        args: vec!["cache".into(), "clean".into(), "--force".into()],
+    });
     let core = Arc::new(GenericBackendCore {
         name: "npm".into(),
         executor: executor.duplicate(),
@@ -1878,6 +2296,7 @@ fn register_pnpm(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         parse: std::sync::Arc::new(|o: &str| {
             crate::parsers::language::parse_npm_outdated(o, "pnpm")
         }),
+        silence_is_none: false,
     });
     // `pnpm root -g` already IS the global node_modules directory, so the package folder is
     // `<root>/<name>`; appending another `node_modules` yields a path that does not exist.
@@ -1893,6 +2312,11 @@ fn register_pnpm(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             template: "{base}".into(),
         },
     ];
+    // pnpm's content-addressable store, minus what is still referenced.
+    cfg.clean_cache = Some(CacheClean {
+        binary: None,
+        args: vec!["store".into(), "prune".into()],
+    });
     let core = Arc::new(GenericBackendCore {
         name: "pnpm".into(),
         executor: executor.duplicate(),
@@ -1933,6 +2357,12 @@ fn register_yarn(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             template: "{base}".into(),
         },
     ];
+    // `yarn cache clean` with no package name empties the whole cache, in Classic and
+    // in Berry.
+    cfg.clean_cache = Some(CacheClean {
+        binary: None,
+        args: vec!["cache".into(), "clean".into()],
+    });
     let core = Arc::new(GenericBackendCore {
         name: "yarn".into(),
         executor: executor.duplicate(),
@@ -2027,6 +2457,11 @@ fn register_uv(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         args: vec!["tool".into(), "dir".into()],
         template: "{base}/{name}".into(),
     }];
+    // uv keeps wheels and source distributions under its own cache directory.
+    cfg.clean_cache = Some(CacheClean {
+        binary: None,
+        args: vec!["cache".into(), "clean".into()],
+    });
     let core = Arc::new(GenericBackendCore {
         name: "uv".into(),
         executor: executor.duplicate(),
@@ -2200,6 +2635,11 @@ fn register_eopkg(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     cfg.upgrade_args = vec!["upgrade".into(), "-y".into()];
     cfg.needs_root = true;
     cfg.is_exclusive = true;
+    // Solus keeps fetched `.eopkg` archives in `/var/cache/eopkg/packages`.
+    cfg.clean_cache = Some(CacheClean {
+        binary: None,
+        args: vec!["delete-cache".into()],
+    });
     let core = Arc::new(GenericBackendCore {
         name: "eopkg".into(),
         executor: executor.duplicate(),
@@ -2796,23 +3236,25 @@ mod tests {
                 Runs("Install-PSResource"),
                 Runs("Uninstall-PSResource"),
             ),
+            // The two rows that carried the defect as their expectation. `--` is not decoration
+            // here: these are the two managers that run as root.
             ArgvCase::pkg(
                 "pacman",
-                &|r, e| crate::backends::pacman::register(r, e, &Config::default()),
-                Runs("pacman -S --noconfirm --needed jq"),
-                Runs("pacman -Rs --noconfirm jq"),
+                &register_pacman,
+                Runs("pacman -S --noconfirm --needed -- jq"),
+                Runs("pacman -Rs --noconfirm -- jq"),
             ),
             ArgvCase::pkg(
                 "dnf",
-                &|r, e| crate::backends::dnf::register(r, e, &Config::default()),
-                Runs("dnf install -y jq"),
-                Runs("dnf remove -y jq"),
+                &register_dnf,
+                Runs("dnf install -y -- jq"),
+                Runs("dnf remove -y -- jq"),
             ),
             // Void's manager installs and removes with two different programs, which is the
             // `remove_binary` case a single-binary assumption gets wrong.
             ArgvCase::pkg(
                 "xbps",
-                &|r, e| crate::backends::xbps::register(r, e, &Config::default()),
+                &register_xbps,
                 Runs("xbps-install -Sy -- jq"),
                 Runs("xbps-remove -y -- jq"),
             ),
@@ -3197,16 +3639,13 @@ mod tests {
         use crate::core::executor::MockExecutor;
         use dashmap::DashMap;
 
+        let mut unterminated: Vec<String> = Vec::new();
+        let mut split_locks: Vec<String> = Vec::new();
         for case in argv_cases() {
             let vfs = Arc::new(DashMap::new());
             let mock = Arc::new(MockExecutor::new(vfs.clone()));
-            let exec = CommandExecutor::with_layer(
-                true,
-                false,
-                mock.clone(),
-                vfs,
-                Arc::new(DashMap::new()),
-            );
+            let locks = Arc::new(DashMap::new());
+            let exec = CommandExecutor::with_layer(true, false, mock.clone(), vfs, locks.clone());
             let mut reg = BackendRegistry::new();
             (case.register)(&mut reg, &exec);
 
@@ -3247,7 +3686,147 @@ mod tests {
                 removed,
                 &calls[after_install..],
             );
+            unterminated.extend(operands_outside_the_terminator(&case, &calls));
+
+            // One manager, one lock. The map is keyed by whatever each call asked to be
+            // exclusive over, so more than one key here is a backend whose install and whose
+            // removal do not wait for each other.
+            let mut keys: Vec<String> = locks.iter().map(|e| e.key().clone()).collect();
+            keys.sort();
+            if keys.len() > 1 {
+                split_locks.push(format!("{}: {:?}", case.backend, keys));
+            }
         }
+
+        assert!(
+            split_locks.is_empty(),
+            "these backends take a DIFFERENT exclusive lock to install than to remove, so two \
+             LiNix processes can write one package database at the same time:\n    {}\n\n\
+             The lock names the manager, not the program: a manager that installs with one \
+             binary and removes with another has one database and two names for it.",
+            split_locks.join("\n    ")
+        );
+
+        assert!(
+            unterminated.is_empty(),
+            "these invocations hand a declaration's own text to a program that ends its options \
+             at `--`, without sending one:\n    {}\n\n\
+             `core::argv::push_names` is what puts the terminator in, and it is where the \
+             answer for each program lives. A backend that builds argv by hand is a backend \
+             that has to remember, and the two that did are the two root-privileged system \
+             managers.",
+            unterminated.join("\n    ")
+        );
+    }
+
+    /// A backend whose operands cannot sit behind a terminator, and why.
+    ///
+    /// The reason is the exemption (E29). Both entries below are about the *shape* of the
+    /// argument — a value belonging to a preceding flag is not an operand, and no `--` can
+    /// precede it without becoming that flag's value instead.
+    const NO_TERMINATOR: &[(&str, &str)] = &[(
+        "emacs",
+        "is handed one Emacs Lisp form as the value of `--eval`. A `--` in front of it would \
+         become the form, and the package name is inside the form rather than beside it — \
+         which is the same reason `argv_drift_tests` excuses emacs from the `--help` walk.",
+    )];
+
+    /// Operands this run sent to a terminating program with no terminator in front of them.
+    ///
+    /// **The argv table records what each backend runs; until now nothing asked `core::argv`
+    /// whether it was right.** So `Runs("dnf install -y jq")` sat in a green test directly
+    /// beside `Runs("apt install -y -- jq")`, and the two system managers that build argv by
+    /// hand were the two that lost the hardening every backend on the data path gets for free.
+    /// Checked against the calls, not against the expectation string, because the expectation
+    /// is the thing that was wrong.
+    fn operands_outside_the_terminator(case: &ArgvCase, calls: &[String]) -> Vec<String> {
+        let mut out = Vec::new();
+        for call in calls {
+            let tokens: Vec<&str> = call.split_whitespace().collect();
+            let Some((program, args)) = tokens.split_first() else {
+                continue;
+            };
+            if !crate::core::argv::terminates_options(program) {
+                continue;
+            }
+            // A terminator anywhere means the options ended; everything after it is an operand
+            // by definition and needs nothing more.
+            if args.contains(&"--") {
+                continue;
+            }
+            // An operand is a token that is not itself an option and that carries the subject
+            // the declaration named — `nixpkgs#jq` is the operand for a `jq` declaration.
+            let carries_subject = args
+                .iter()
+                .any(|a| !a.starts_with('-') && a.contains(case.subject));
+            if !carries_subject {
+                continue;
+            }
+            if NO_TERMINATOR.iter().any(|(b, _)| *b == case.backend) {
+                continue;
+            }
+            out.push(format!(
+                "{}: `{}` — `{}` ends its options at `--`",
+                case.backend, call, program
+            ));
+        }
+        out
+    }
+
+    /// The terminator check, run against argv this test writes rather than argv the tree
+    /// produces.
+    ///
+    /// **The gate above passes today, and that is exactly when an instrument stops being
+    /// evidence.** It fired on `dnf install -y jq` and `pacman -S --noconfirm --needed jq` on
+    /// the day it was written; nothing since then would notice if it quietly stopped seeing
+    /// anything, because a scan that matches nothing and a tree with nothing to match look the
+    /// same from the outside. So the shapes are asserted here — the two it must catch, and the
+    /// four it must not — before it is trusted with the real table.
+    #[test]
+    fn the_terminator_check_can_actually_fail() {
+        fn probe(backend: &'static str, subject: &'static str, call: &str) -> usize {
+            let case = ArgvCase::shaped(
+                backend,
+                &|_, _| {},
+                subject,
+                &[],
+                Expect::NoCommand("unused — this drives the scan, not a backend"),
+                Expect::NoCommand("unused — this drives the scan, not a backend"),
+            );
+            operands_outside_the_terminator(&case, &[call.to_string()]).len()
+        }
+
+        // Caught: a terminating program handed the declaration's own text bare. These are the
+        // two real invocations that were live when this was written.
+        assert_eq!(probe("dnf", "jq", "dnf install -y jq"), 1);
+        assert_eq!(
+            probe("pacman", "jq", "pacman -S --noconfirm --needed jq"),
+            1
+        );
+
+        // Not caught, and each for its own reason — a scan that flagged these would be turned
+        // off within a week.
+        assert_eq!(probe("apt", "jq", "apt install -y -- jq"), 0, "terminated");
+        assert_eq!(
+            probe("nix", "jq", "nix profile install -- nixpkgs#jq"),
+            0,
+            "terminated, and the operand only contains the subject"
+        );
+        assert_eq!(
+            probe("winget", "jq", "winget install jq"),
+            0,
+            "winget reads a bare `--` as the package id"
+        );
+        assert_eq!(
+            probe("apt", "jq", "apt-get autoremove --dry-run"),
+            0,
+            "no operand carries the subject"
+        );
+        assert_eq!(
+            probe("emacs", "jq", "emacs --batch --eval (package-install 'jq)"),
+            0,
+            "written exemption: the form is the value of `--eval`, not an operand"
+        );
     }
 
     /// One verb's outcome against one expectation.
@@ -3294,6 +3873,248 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `linix clean-cache` reaches the managers that have one, and says nothing about the rest.
+    ///
+    /// **Three outcomes and no fourth**, the same discipline the argv table applies to install
+    /// and remove — because the fourth, *"it reported success having run nothing"*, is exactly
+    /// what forty backends did. `GenericUpgradable` had no `clean_cache` at all: every manager
+    /// on the data path answered `Unsupported`, `handle_clean_cache` filtered that out
+    /// silently, and a Debian machine with a full `/var/cache/apt/archives` was told **"No
+    /// backend on this machine has a cache to clear."**
+    ///
+    /// The argv is pinned for the four system managers because a typo in a verb only
+    /// `clean-cache` reaches is invisible on every platform that cannot run the manager — the
+    /// whole reason the argv table exists.
+    #[tokio::test]
+    async fn cache_cleaning_runs_a_command_or_refuses_by_name() {
+        use crate::core::executor::MockExecutor;
+        use dashmap::DashMap;
+
+        type Registrar = fn(&mut BackendRegistry, &CommandExecutor);
+        // The rows whose argv is worth pinning by name: the system managers, whose cache is the
+        // one that fills a disk, and the one that empties it with a different binary.
+        let pinned: &[(&str, Registrar, &str)] = &[
+            ("apt", register_apt, "apt-get clean"),
+            ("dnf", register_dnf, "dnf clean all"),
+            ("pacman", register_pacman, "pacman -Sc --noconfirm"),
+            ("xbps", register_xbps, "xbps-remove -Oy"),
+            ("zypper", register_zypper, "zypper clean --all"),
+        ];
+        for (name, register, want) in pinned {
+            let vfs = Arc::new(DashMap::new());
+            let mock = Arc::new(MockExecutor::new(vfs.clone()));
+            let exec = CommandExecutor::with_layer(
+                true,
+                false,
+                mock.clone(),
+                vfs,
+                Arc::new(DashMap::new()),
+            );
+            let mut reg = BackendRegistry::new();
+            register(&mut reg, &exec);
+            let up = reg
+                .get(name)
+                .and_then(|b| b.as_upgradable().cloned())
+                .unwrap_or_else(|| panic!("{name} cannot upgrade"));
+            up.clean_cache(false)
+                .await
+                .unwrap_or_else(|e| panic!("{name} has a cache verb and refused it: {e}"));
+            let calls = mock.get_calls().await;
+            assert!(
+                calls.iter().any(|c| c.contains(want)),
+                "{name}: cache cleaning ran no call containing `{want}` — it ran {calls:?}"
+            );
+        }
+
+        // And the whole family: no backend may report success without running anything, and
+        // none may run something and then report it has no cache.
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let exec =
+            CommandExecutor::with_layer(true, false, mock.clone(), vfs, Arc::new(DashMap::new()));
+        let mut reg = BackendRegistry::new();
+        for case in argv_cases() {
+            (case.register)(&mut reg, &exec);
+        }
+        let mut silent_success: Vec<String> = Vec::new();
+        let mut ran_then_refused: Vec<String> = Vec::new();
+        let mut cleaners: Vec<String> = Vec::new();
+        for b in reg.all() {
+            let Some(up) = b.as_upgradable() else {
+                continue;
+            };
+            let before = mock.get_calls().await.len();
+            let outcome = up.clean_cache(false).await;
+            let after = mock.get_calls().await.len();
+            let name = b.name().to_string();
+            match (outcome, after > before) {
+                (Ok(()), true) => cleaners.push(name),
+                (Ok(()), false) => silent_success.push(name),
+                (Err(crate::core::Error::Unsupported(_)), false) => {}
+                (Err(_), true) => ran_then_refused.push(name),
+                // A manager that ran its verb and the mock failed it, or refused for a reason
+                // other than "no such verb" — both are the caller's to report, not this gate's.
+                (Err(_), false) => {}
+            }
+        }
+        assert!(
+            silent_success.is_empty(),
+            "these backends reported a cleared cache without running anything: {silent_success:?}"
+        );
+        assert!(
+            ran_then_refused.is_empty(),
+            "these backends ran a cache command and then reported failure: {ran_then_refused:?}"
+        );
+        assert!(
+            cleaners.len() >= 15,
+            "only {} backend(s) can clear a cache — the data path had none of them until \
+             `clean_cache` became a row, and a low number here is that returning: {cleaners:?}",
+            cleaners.len()
+        );
+    }
+
+    /// A dependency probe sends its operand and keeps the manager's own format language.
+    ///
+    /// **`{name}` means two things and only one of them is a package.** dnf asks with
+    /// `--queryformat %{name}`, which is rpm's format language — six characters that a
+    /// substitute-everywhere fill would have turned into `%jq`, producing a listing of nothing
+    /// under a command that exits 0. So the operand is the argument that *is* `{name}`, never
+    /// one that contains it, and that is also what lets it go behind the terminator.
+    ///
+    /// Pinned for all three because they are the only rows in the tree that ask, and because
+    /// `argv_drift_tests` does not drive `get_dependencies` — an argv only `linix info` reaches.
+    #[tokio::test]
+    async fn a_dependency_probe_sends_the_operand_and_keeps_the_format_string() {
+        use crate::core::executor::MockExecutor;
+        use dashmap::DashMap;
+
+        // A backend, the function that builds it, and the argv it must send. Named because
+        // spelling a function type inline three deep is what clippy calls complex and a reader
+        // calls unreadable.
+        type Registrar = fn(&mut BackendRegistry, &CommandExecutor);
+        let want: &[(&str, Registrar, &str)] = &[
+            (
+                "dnf",
+                register_dnf as Registrar,
+                "dnf repoquery --requires --resolve --queryformat %{name} -- jq",
+            ),
+            ("pacman", register_pacman, "pacman -Si -- jq"),
+            ("xbps", register_xbps, "xbps-query -x -- jq"),
+        ];
+        for (name, register, argv) in want {
+            let vfs = Arc::new(DashMap::new());
+            let mock = Arc::new(MockExecutor::new(vfs.clone()));
+            let exec = CommandExecutor::with_layer(
+                true,
+                false,
+                mock.clone(),
+                vfs,
+                Arc::new(DashMap::new()),
+            );
+            let mut reg = BackendRegistry::new();
+            register(&mut reg, &exec);
+            let mp = reg
+                .get(name)
+                .and_then(|b| b.as_metadata_provider().cloned())
+                .unwrap_or_else(|| panic!("{name} reports no dependencies"));
+            let _ = mp.get_dependencies("jq").await;
+            assert_eq!(
+                mock.get_calls().await,
+                vec![argv.to_string()],
+                "{name}'s dependency probe"
+            );
+        }
+    }
+
+    /// Adding a repository, removing one and listing them are three commands, and a row may
+    /// name a different program for each.
+    ///
+    /// **The argv table drives `install` and `remove` and nothing else**, so a repository verb
+    /// has never been in it — which is how apt spent months running `apt add-apt-repository`,
+    /// a command apt refuses (`S44`). Converting `dnf` and `pacman` to rows put two more
+    /// three-program managers on that path: dnf adds with its own plugin and removes a file
+    /// with `rm`, and pacman writes both through `sh` and reads through `pacman-conf`. Each
+    /// combination is asserted here, because "it compiled" says nothing about which program ran.
+    #[tokio::test]
+    async fn a_repository_verb_runs_the_program_that_verb_needs() {
+        use crate::core::executor::MockExecutor;
+        use dashmap::DashMap;
+
+        type Registrar = fn(&mut BackendRegistry, &CommandExecutor);
+        for (name, register) in [
+            ("dnf", register_dnf as Registrar),
+            ("pacman", register_pacman),
+        ] {
+            let vfs = Arc::new(DashMap::new());
+            let mock = Arc::new(MockExecutor::new(vfs.clone()));
+            let exec = CommandExecutor::with_layer(
+                true,
+                false,
+                mock.clone(),
+                vfs,
+                Arc::new(DashMap::new()),
+            );
+            let mut reg = BackendRegistry::new();
+            register(&mut reg, &exec);
+            let rm = reg
+                .get(name)
+                .and_then(|b| b.as_repo_manager().cloned())
+                .unwrap_or_else(|| panic!("{name} manages no repositories"));
+
+            rm.add_repo("linixprobe", "https://example.invalid/r", false)
+                .await
+                .unwrap_or_else(|e| panic!("{name} add_repo: {e}"));
+            rm.remove_repo("linixprobe", false)
+                .await
+                .unwrap_or_else(|e| panic!("{name} remove_repo: {e}"));
+            let _ = rm.list_repos().await;
+
+            let calls = mock.get_calls().await;
+            let want: &[&str] = match name {
+                "dnf" => &[
+                    "dnf config-manager --add-repo https://example.invalid/r",
+                    "rm -f /etc/yum.repos.d/linixprobe.repo",
+                    "dnf repolist --all",
+                ],
+                _ => &[
+                    "sh -c set -e; printf",
+                    "sh -c rm -f '/etc/pacman.d/linix-linixprobe.conf'",
+                    "pacman-conf --repo-list",
+                ],
+            };
+            for w in want {
+                assert!(
+                    calls.iter().any(|c| c.contains(w)),
+                    "{name}: no call contained `{w}` — it ran {calls:?}"
+                );
+            }
+        }
+
+        // The name lands in a path, so it is validated as a path segment — which is what both
+        // hand-written modules did and the shared repo path did not, because until these two
+        // became rows no row put a name in a path.
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let exec =
+            CommandExecutor::with_layer(true, false, mock.clone(), vfs, Arc::new(DashMap::new()));
+        let mut reg = BackendRegistry::new();
+        register_dnf(&mut reg, &exec);
+        let rm = reg.get("dnf").unwrap().as_repo_manager().unwrap().clone();
+        for escape in ["../../etc/cron.d/x", "..", "", "a/b"] {
+            assert!(
+                rm.remove_repo(escape, false).await.is_err(),
+                "`{escape}` became part of `/etc/yum.repos.d/<name>.repo` unchallenged"
+            );
+        }
+        assert!(
+            mock.get_calls().await.is_empty(),
+            "a refused repository name still ran something: {:?}",
+            mock.get_calls().await
+        );
+        // The control: a real name still works, so this is not a check that refuses everything.
+        rm.remove_repo("epel", false).await.expect("a plain name");
     }
 
     /// A pinned version rides where that manager puts it, and still behind the terminator.

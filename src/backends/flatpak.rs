@@ -183,17 +183,7 @@ impl Queryable for FlatpakQueryable {
                 false,
             )
             .await?;
-        let mut packages = Vec::new();
-
-        for line in sanitize(&out).lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
-                packages.push(Package::with_version(parts[0], parts[1], "flatpak"));
-            } else if !line.is_empty() {
-                packages.push(Package::new(line.trim(), "flatpak"));
-            }
-        }
-        Ok(packages)
+        Ok(crate::parsers::common::parse_simple_list(&out, "flatpak"))
     }
 
     async fn list_manual(&self) -> Result<Vec<Package>> {

@@ -341,7 +341,6 @@ impl LinkBackendCore {
         );
         Ok(())
     }
-
 }
 
 /// Whether Windows refused a symlink because the process may not create one.

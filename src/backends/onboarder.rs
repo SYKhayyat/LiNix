@@ -20,6 +20,9 @@
 //     needs_root   = false
 //     outdated_args = ["list", "--upgradable"]   # what has an update, in ONE call (Q44)
 //     machine_list_args = ["list", "--json"]     # preferred over list_args if accepted (Q43)
+//     clean_cache_args = ["cache", "clean"]      # `linix clean-cache`; absent = it has none
+//     clean_cache_binary = "xbps-remove"         # when a different program empties the cache
+//     repo_remove_binary = "rm"                  # when adding and dropping a source differ
 //     [backend.parser]
 //     format = "columns"                  # "name version" per line
 //     name_col = 0
@@ -40,9 +43,9 @@
 // An unapproved or changed file registers nothing and says so; `linix lock` approves it.
 
 use crate::backends::generic::{
-    GenericBackendCore, GenericEnumerable, GenericInstallable, GenericQueryable,
-    GenericRepoManager, GenericSearchable, GenericUpgradable, ManagerConfig, ManualListing,
-    SearchSource, VersionPin,
+    CacheClean, DependsProbe, GenericBackendCore, GenericEnumerable, GenericInstallable,
+    GenericQueryable, GenericRepoManager, GenericSearchable, GenericUpgradable, ManagerConfig,
+    ManualListing, RepoListing, SearchSource, VersionPin,
 };
 use crate::backends::BackendRegistry;
 use crate::core::{BackendCapabilities, CommandExecutor, Package};
@@ -371,8 +374,18 @@ pub struct CustomBackendDef {
     pub repo_binary: Option<String>,
     /// Binary for `repo_list_args`, when sources are read by a different program again.
     pub repo_list_binary: Option<String>,
-    /// Querying a package's dependencies (reverse-dependency reports, `why`).
+    /// Binary for `repo_remove_args`, when a manager adds a source with one program and drops
+    /// it with another (dnf adds with `config-manager` and removes the drop-in with `rm`).
+    pub repo_remove_binary: Option<String>,
+    /// Querying a package's dependencies (reverse-dependency reports, `why`). `{name}` is the
+    /// package, and it must be an argument of its own so the terminator can precede it.
     pub depends_args: Option<Vec<String>>,
+    /// Emptying this manager's download cache, for `linix clean-cache`. Absent ⇒ it has none,
+    /// which is what the verb reports rather than pretending it cleaned something.
+    pub clean_cache_args: Option<Vec<String>>,
+    /// Binary for `clean_cache_args`, when the cache is emptied by a different program than
+    /// the one that installs (Void's is `xbps-remove`).
+    pub clean_cache_binary: Option<String>,
     /// A dry run of the manager's own orphan verb, so `sync` can remove what it *would*
     /// remove. Absent ⇒ this backend cannot say, and a removal it cannot enumerate it does
     /// not make.
@@ -674,6 +687,7 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
             binary: def.outdated_binary.as_deref().map(expand_binary),
             args,
             parse: Arc::new(move |o: &str| spec.parse(o, &name)),
+            silence_is_none: false,
         }
     });
     // No `or(parser)` fallback here, deliberately. The point of a machine format is that it is
@@ -736,7 +750,22 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
         repo_list_args: def.repo_list_args,
         repo_binary: def.repo_binary,
         repo_list_binary: def.repo_list_binary,
-        depends_args: def.depends_args,
+        repo_remove_binary: def.repo_remove_binary,
+        // A custom row states its listing as columns; a per-name detail query is a second
+        // command, and no `adapters/backends.toml` has asked for one.
+        repo_list_shape: RepoListing::Columns,
+        depends: def.depends_args.map(|args| DependsProbe {
+            binary: None,
+            args,
+            // The shape every `Key: value` report shares. A custom row's manager is unknown
+            // here, and this is the parser that reads the two labelled layouts apt and zypper
+            // print without reading a description's prose as a package.
+            parse: Arc::new(crate::backends::generic::parse_dependency_output),
+        }),
+        clean_cache: def.clean_cache_args.map(|args| CacheClean {
+            binary: def.clean_cache_binary,
+            args,
+        }),
         version_pin: def.version_pin.map(Into::into),
         needs_root: def.needs_root,
         is_exclusive: def.is_exclusive,

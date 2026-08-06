@@ -309,3 +309,38 @@ v  | repo-oss                   | glibc              | 2.42-1.1        | 2.43-1.
         .is_empty());
     }
 }
+
+/// `dnf repoquery --requires --resolve --queryformat %{name} <pkg>` — one bare package name per
+/// line, and nothing else.
+///
+/// **A different shape from a labelled report, and so a different function.** `generic.rs`'s
+/// labelled parser reads `Depends:`/`Requires:` rows and would answer this output with an empty
+/// list, because there is no label on any line. One parser made lenient enough for both is one
+/// parser that reads a malformed answer in either shape as a valid answer in the other — the
+/// same rule `MachineListing` states for its own reader.
+pub fn parse_bare_dependency_names(output: &str) -> Vec<String> {
+    crate::utils::text::sanitize(output)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+#[cfg(test)]
+mod bare_dependency_tests {
+    use super::parse_bare_dependency_names;
+
+    #[test]
+    fn one_name_per_line_and_blank_lines_are_not_packages() {
+        assert_eq!(
+            parse_bare_dependency_names("glibc\n\noniguruma\n  \n"),
+            vec!["glibc", "oniguruma"]
+        );
+    }
+
+    #[test]
+    fn a_package_with_nothing_to_report_reports_nothing() {
+        assert!(parse_bare_dependency_names("").is_empty());
+    }
+}

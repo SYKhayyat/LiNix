@@ -216,6 +216,14 @@ pub struct OutdatedProbe {
     /// version is not taken from here — the caller already has it, and a manager that reports
     /// its own idea of "current" has been wrong about it before.
     pub parse: PackageReader,
+    /// This manager says *"nothing is out of date"* by exiting non-zero with nothing on either
+    /// stream, and documents that exit as the answer.
+    ///
+    /// `pacman -Qu` is the one. That shape is exactly what `Q40` calls a failed read —
+    /// correctly in general, and wrongly here — so it is translated back for the manager whose
+    /// meaning is known, rather than by loosening the rule for every read in the program. A
+    /// pacman that genuinely failed says so on stderr and still raises.
+    pub silence_is_none: bool,
 }
 
 /// A machine-readable listing this manager *may* support, and how to read it (`Q43`).
@@ -248,6 +256,72 @@ pub struct MachineListing {
     /// same one made lenient: one parser that accepts two shapes is how a malformed answer in
     /// one of them gets silently read as the other.
     pub parse: PackageReader,
+}
+
+/// Reads a manager's output into bare names — dependencies, and anything else that is a list
+/// of names rather than of packages.
+pub type NameReader = std::sync::Arc<dyn Fn(&str) -> Vec<String> + Send + Sync>;
+
+/// How this manager empties its download cache (`X.3` levels 1–2).
+///
+/// **`None` is a claim that the manager has no cache verb, not that nobody wrote one.** Until
+/// 2026-08-06 it was neither: `ManagerConfig` had no field at all and `GenericUpgradable` did
+/// not implement `clean_cache`, so every one of the forty data-path backends answered
+/// `Unsupported`. `handle_clean_cache` filters that out silently, so `linix clean-cache` on a
+/// Debian machine printed *"No backend on this machine has a cache to clear"* while
+/// `/var/cache/apt/archives` sat there. Six hand-written modules had the verb; the shared
+/// machinery could not express it, which is the terminator split running the other way.
+#[derive(Debug, Clone)]
+pub struct CacheClean {
+    /// `None` falls back to the backend's own binary. Void empties its cache with
+    /// `xbps-remove`, which is its *remover*, not its installer.
+    pub binary: Option<String>,
+    pub args: Vec<String>,
+}
+
+/// How this manager answers "what does this package need?" — **reported, never planned from**.
+///
+/// A probe rather than a bare argv list because the answer's shape is the manager's: dnf prints
+/// one bare name per line, pacman prints several on one labelled row, apt prints one per
+/// labelled line. One parser made lenient enough for all three is one parser that reads a
+/// malformed answer in one shape as a valid answer in another.
+#[derive(Clone)]
+pub struct DependsProbe {
+    /// `None` falls back to the backend's own binary. Void asks `xbps-query`, which is neither
+    /// the installer it is named for nor its remover.
+    pub binary: Option<String>,
+    /// `{name}` is the package asked about.
+    pub args: Vec<String>,
+    pub parse: NameReader,
+}
+
+impl std::fmt::Debug for DependsProbe {
+    /// The reader is a closure and has no useful rendering; the argv is what identifies this.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DependsProbe")
+            .field("binary", &self.binary)
+            .field("args", &self.args)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What a manager's repository listing prints.
+///
+/// Stated per backend rather than guessed from the output, because the two shapes are not
+/// distinguishable from one line: a bare name and a `name url` row whose url happens to be
+/// missing look identical, and reading the first as the second silently reports every
+/// repository as having no source.
+#[derive(Debug, Clone)]
+pub enum RepoListing {
+    /// One row per repository, whose first two whitespace columns are the name and the source.
+    /// Every manager with a `repo list` verb of its own.
+    Columns,
+    /// Bare names, one per line, and the source is a second question about one of them.
+    /// `{name}` is the repository.
+    ///
+    /// pacman is the one: `pacman-conf --repo-list` prints names and nothing else, and
+    /// `pacman-conf -r <name> Server` prints that one repository's mirror.
+    NamesThenDetail(Vec<String>),
 }
 
 /// A dry run of the manager's own orphan verb, and how to read the names back out of it.
@@ -316,7 +390,20 @@ pub struct ManagerConfig {
     /// manager can write its sources one way and read them another (apk writes with `sh` and
     /// reads with `cat`). Falls back to `binary`, not to `repo_binary`.
     pub repo_list_binary: Option<String>,
-    pub depends_args: Option<Vec<String>>,
+    /// Optional: the program that runs `repo_remove_args`, when a manager adds a source one way
+    /// and drops it another. Falls back to [`repo_binary`](Self::repo_binary).
+    ///
+    /// dnf adds with its own `config-manager` plugin and has no verb that removes: the drop-in
+    /// file is deleted with `rm`. Two directions of the same operation, two programs — which is
+    /// the argument `repo_list_binary` already carries for reading.
+    pub repo_remove_binary: Option<String>,
+    /// The shape of what `repo_list_args` prints.
+    pub repo_list_shape: RepoListing,
+    /// How to ask this manager what one package needs. `None` means it is not asked, which is
+    /// the right answer for every manager whose own installer resolves its closure.
+    pub depends: Option<DependsProbe>,
+    /// How to empty this manager's download cache. `None` means it has no such verb.
+    pub clean_cache: Option<CacheClean>,
     /// Native syntax for pinning an exact version at install (None = no version pinning).
     pub version_pin: Option<VersionPin>,
     /// Optional: the option key holding what `install_args` takes, when that is not the
@@ -370,6 +457,17 @@ impl GenericBackendCore {
         self.config.binary.as_deref().unwrap_or(&self.name)
     }
 
+    /// What this backend's mutations are exclusive over.
+    ///
+    /// **The manager, never the program.** OpenBSD installs with `pkg_add` and removes with
+    /// `pkg_delete`, and keying on the program gave those two verbs two different locks over one
+    /// package database — so a `linix` installing and a `linix` removing could hold both at
+    /// once. Every hand-written backend already named its manager here; the shared machinery was
+    /// the one place that named the binary.
+    pub fn lock_key(&self) -> &str {
+        &self.name
+    }
+
     /// The program that removes. Falls back to [`binary`](Self::binary), not to the name, so a
     /// user-defined noun with a separate remover still removes with the right tool.
     pub fn remove_binary(&self) -> &str {
@@ -385,6 +483,14 @@ impl GenericBackendCore {
             .repo_binary
             .as_deref()
             .unwrap_or_else(|| self.binary())
+    }
+
+    /// The program that removes a repository. Falls back to the one that adds it.
+    pub fn repo_remove_binary(&self) -> &str {
+        self.config
+            .repo_remove_binary
+            .as_deref()
+            .unwrap_or_else(|| self.repo_binary())
     }
 
     /// The program that lists repositories.
@@ -438,24 +544,31 @@ impl BackendCore for GenericBackendCore {
 #[async_trait]
 impl MetadataProvider for GenericBackendCore {
     async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
-        let base_args = match &self.config.depends_args {
-            Some(args) => args,
-            None => return Ok(vec![]),
+        let Some(probe) = &self.config.depends else {
+            return Ok(vec![]);
         };
 
-        let mut final_args = Vec::new();
-        for arg in base_args {
-            final_args.push(arg.replace("{name}", name));
+        // The operand is the argument that IS `{name}`, never one that merely contains it:
+        // dnf asks with `--queryformat %{name}`, where those six characters are rpm's own
+        // format language and substituting the package into them produces `%jq`.
+        let mut final_args: Vec<String> = probe
+            .args
+            .iter()
+            .filter(|a| a.as_str() != "{name}")
+            .cloned()
+            .collect();
+        let bin = probe.binary.as_deref().unwrap_or(self.binary());
+        if probe.args.iter().any(|a| a.as_str() == "{name}") {
+            // A read's operand is where a leading dash is least expected and most reachable,
+            // so it goes behind the terminator by the same rule the install path uses.
+            crate::core::argv::push_names(&mut final_args, bin, [name]);
         }
 
         let arg_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
         // Dependency resolution is a read-only query — never escalate with sudo.
-        let output = self
-            .executor
-            .run_output(self.binary(), &arg_refs, false)
-            .await?;
+        let output = self.executor.run_output(bin, &arg_refs, false).await?;
 
-        Ok(parse_dependency_output(&output))
+        Ok((probe.parse)(&output))
     }
 }
 
@@ -477,7 +590,7 @@ impl MetadataProvider for GenericBackendCore {
 ///
 /// A `Key : Value` row that is not a dependency label closes the block, which is what keeps
 /// `Description`'s indented prose out.
-fn parse_dependency_output(output: &str) -> Vec<String> {
+pub(crate) fn parse_dependency_output(output: &str) -> Vec<String> {
     fn is_dependency_label(key: &str) -> bool {
         let k = key.trim().to_ascii_lowercase();
         k.starts_with("depends") || k.starts_with("requires") || k.starts_with("pre-depends")
@@ -709,7 +822,7 @@ impl GenericInstallable {
         let outcome = if self.core.config.is_exclusive {
             self.core
                 .executor
-                .run_exclusive(self.core.binary(), self.core.binary(), &arg_refs, sudo)
+                .run_exclusive(self.core.lock_key(), self.core.binary(), &arg_refs, sudo)
                 .await
         } else {
             self.core
@@ -779,7 +892,7 @@ impl GenericInstallable {
         if self.core.config.is_exclusive {
             self.core
                 .executor
-                .run_exclusive(bin, bin, &arg_refs, sudo)
+                .run_exclusive(self.core.lock_key(), bin, &arg_refs, sudo)
                 .await?;
         } else {
             self.core.executor.run(bin, &arg_refs, sudo).await?;
@@ -1169,7 +1282,16 @@ impl Searchable for GenericSearchable {
         // `run_output`, not `probe_output`: several managers report "there are updates" with a
         // non-zero exit — `dnf check-update` returns 100 — and that is an answer, not a fault.
         // A genuine failure still arrives as an error, because Q40 made silence one.
-        let output = self.core.executor.run_output(bin, &args, false).await?;
+        let output = match self.core.executor.run_output(bin, &args, false).await {
+            Ok(o) => o,
+            // Asked, and the manager's documented way of saying "none". `Some(vec![])` and not
+            // `None`: `None` would send the caller round the per-package path for an answer it
+            // already has, which is the 771s `Q44` measured.
+            Err(e) if probe.silence_is_none && e.to_string().contains("no output") => {
+                return Ok(Some(Vec::new()))
+            }
+            Err(e) => return Err(e),
+        };
         Ok(Some((probe.parse)(&output)))
     }
 }
@@ -1291,7 +1413,7 @@ impl Upgradable for GenericUpgradable {
         if self.core.config.is_exclusive {
             self.core
                 .executor
-                .run_exclusive(self.core.binary(), self.core.binary(), &args, sudo)
+                .run_exclusive(self.core.lock_key(), self.core.binary(), &args, sudo)
                 .await?;
         } else {
             self.core
@@ -1315,6 +1437,26 @@ impl Upgradable for GenericUpgradable {
             .filter_map(|rest| rest.split_whitespace().next())
             .map(|n| n.to_string())
             .collect())
+    }
+
+    async fn clean_cache(&self, sudo: bool) -> Result<()> {
+        let Some(clean) = &self.core.config.clean_cache else {
+            return Err(crate::core::Error::Unsupported("cache cleaning".into()));
+        };
+        let bin = clean.binary.as_deref().unwrap_or(self.core.binary());
+        let args: Vec<&str> = clean.args.iter().map(String::as_str).collect();
+        info!("{}: clearing the package cache...", self.core.name);
+        // Exclusive on the manager for the same reason an install is: emptying the cache and
+        // filling it are the same directory, and `is_exclusive` is the row that says so.
+        if self.core.config.is_exclusive {
+            self.core
+                .executor
+                .run_exclusive(self.core.lock_key(), bin, &args, sudo)
+                .await?;
+        } else {
+            self.core.executor.run(bin, &args, sudo).await?;
+        }
+        Ok(())
     }
 }
 
@@ -1460,6 +1602,33 @@ fn reject_shell_meta(field: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+/// A repository name that is about to become part of a FILE PATH.
+///
+/// `{name}` is an argument a manager parses; `{name_component}` is a path segment LiNix builds —
+/// `/etc/yum.repos.d/<name>.repo`, `/etc/pacman.d/linix-<name>.conf` — and the difference is
+/// that `../../../etc/cron.d/x` is a perfectly ordinary argument and a directory escape. Both
+/// hand-written modules validated it and the shared repo path did not, because until dnf and
+/// pacman became rows no row put a name in a path.
+///
+/// Deliberately narrower than [`reject_shell_meta`], which passes `/` and `..`: this is the set
+/// a repository is actually named from. apt's PPA identifiers (`ppa:git-core/ppa`) carry a
+/// colon and a slash and are *arguments*, not paths — they use `{name}` and are unaffected.
+fn validate_path_component(backend: &str, name: &str) -> Result<()> {
+    let ok = !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if ok {
+        return Ok(());
+    }
+    Err(crate::core::Error::Validation(format!(
+        "`{backend}` writes a repository into a file named after it, so `{name}` has to be a \
+         single path segment: letters, digits, `-`, `_` and `.` only. Refusing."
+    )))
+}
+
 /// The first `{placeholder}` still standing in a template argument, if any.
 fn find_placeholder(s: &str) -> Option<String> {
     let mut rest = s;
@@ -1538,8 +1707,18 @@ impl RepoManager for GenericRepoManager {
         })?;
 
         let mut final_args = Vec::new();
+        let component = if base_args.iter().any(|a| a.contains("{name_component}")) {
+            validate_path_component(&self.core.name, name)?;
+            Some(name)
+        } else {
+            None
+        };
         for arg in base_args {
-            final_args.push(arg.replace("{name}", name).replace("{url}", url));
+            let filled = arg
+                .replace("{name_component}", component.unwrap_or_default())
+                .replace("{name}", name)
+                .replace("{url}", url);
+            final_args.push(filled);
         }
         reject_unsubstituted(&self.core.name, &final_args)?;
 
@@ -1568,10 +1747,18 @@ impl RepoManager for GenericRepoManager {
             None
         };
 
+        let component = if base_args.iter().any(|a| a.contains("{name_component}")) {
+            validate_path_component(&self.core.name, name)?;
+            Some(name)
+        } else {
+            None
+        };
         let final_args: Vec<String> = base_args
             .iter()
             .map(|a| {
-                let filled = a.replace("{name}", name);
+                let filled = a
+                    .replace("{name_component}", component.unwrap_or_default())
+                    .replace("{name}", name);
                 match &url {
                     Some(u) => filled.replace("{url}", u),
                     None => filled,
@@ -1583,7 +1770,7 @@ impl RepoManager for GenericRepoManager {
 
         self.core
             .executor
-            .run(self.core.repo_binary(), &arg_refs, sudo)
+            .run(self.core.repo_remove_binary(), &arg_refs, sudo)
             .await?;
         Ok(())
     }
@@ -1598,6 +1785,29 @@ impl RepoManager for GenericRepoManager {
             .executor
             .run_output(self.core.repo_list_binary(), &arg_refs, false)
             .await?;
+
+        // Bare names, and the source is a separate question per name. Asked once each, and a
+        // name whose detail cannot be read keeps its row with an empty source: a repository
+        // LiNix cannot describe is still a repository the user has, and dropping it here would
+        // make `repo remove` unable to find something `repo list` was hiding.
+        if let RepoListing::NamesThenDetail(detail) = &self.core.config.repo_list_shape {
+            let mut repos = Vec::new();
+            for name in output.lines().map(str::trim).filter(|l| !l.is_empty()) {
+                let filled: Vec<String> =
+                    detail.iter().map(|a| a.replace("{name}", name)).collect();
+                let refs: Vec<&str> = filled.iter().map(String::as_str).collect();
+                let source = self
+                    .core
+                    .executor
+                    .run_output(self.core.repo_list_binary(), &refs, false)
+                    .await
+                    .ok()
+                    .and_then(|s| s.lines().next().map(|l| l.trim().to_string()))
+                    .unwrap_or_default();
+                repos.push((name.to_string(), source));
+            }
+            return Ok(repos);
+        }
 
         let mut repos = Vec::new();
         for line in output.lines() {
@@ -1614,13 +1824,14 @@ impl RepoManager for GenericRepoManager {
                 continue;
             }
             // Skip obvious table headers (e.g. winget "Name Argument Explicit",
-            // scoop "Name Source Updated") so they don't show up as repositories.
+            // scoop "Name Source Updated", dnf "repo id  repo name  status") so they don't show
+            // up as repositories.
             let is_header = matches!(
                 parts[0],
-                "Name" | "NAME" | "Repository" | "Repo" | "Bucket" | "Source"
+                "Name" | "NAME" | "Repository" | "Repo" | "Bucket" | "Source" | "repo"
             ) && matches!(
                 parts[1],
-                "Argument" | "URL" | "Url" | "Source" | "Updated" | "Explicit" | "Enabled"
+                "Argument" | "URL" | "Url" | "Source" | "Updated" | "Explicit" | "Enabled" | "id"
             );
             if is_header {
                 continue;
@@ -1674,12 +1885,19 @@ mod tests {
                 repo_list_args: None,
                 repo_binary: None,
                 repo_list_binary: None,
-                depends_args: Some(vec![
-                    "depends".into(),
-                    "--no-recommends".into(),
-                    "--no-suggests".into(),
-                    "{name}".into(),
-                ]),
+                repo_remove_binary: None,
+                repo_list_shape: RepoListing::Columns,
+                depends: Some(DependsProbe {
+                    binary: None,
+                    args: vec![
+                        "depends".into(),
+                        "--no-recommends".into(),
+                        "--no-suggests".into(),
+                        "{name}".into(),
+                    ],
+                    parse: Arc::new(parse_dependency_output),
+                }),
+                clean_cache: None,
                 version_pin: None,
                 needs_root: true, // apt needs root for writes — but reads must NOT escalate
                 is_exclusive: true,
@@ -1706,17 +1924,24 @@ mod tests {
         // Respond to the NON-sudo command; if get_dependencies escalated, this wouldn't
         // match and the result would be empty.
         mock.set_response(
-            "apt depends --no-recommends --no-suggests curl",
+            "apt depends --no-recommends --no-suggests -- curl",
             Ok(DryRunOutput {
                 stdout: b"Depends: libc6\nDepends: bash\n".to_vec(),
                 stderr: vec![],
             }
             .into()),
         );
-        let core = apt_like_core(mock, vfs);
+        let core = apt_like_core(mock.clone(), vfs);
         let deps = core.get_dependencies("curl").await.unwrap();
         // "Depends: libc6" -> "libc6" (label + constraints stripped)
         assert_eq!(deps, vec!["libc6".to_string(), "bash".to_string()]);
+        // And the name went behind the terminator, like every other operand this program
+        // sends. A read is where a leading dash is least expected and most reachable — the
+        // package asked about comes from a declaration, the same place an install's does.
+        assert_eq!(
+            mock.get_calls().await,
+            vec!["apt depends --no-recommends --no-suggests -- curl"]
+        );
     }
 
     /// Everything a manager prints that is *not* a dependency has to be thrown away, and until
@@ -1748,7 +1973,7 @@ mod tests {
         let vfs = Arc::new(DashMap::new());
         let mock = Arc::new(MockExecutor::new(vfs.clone()));
         mock.set_response(
-            "zypper info --requires jq",
+            "zypper info --requires -- jq",
             Ok(DryRunOutput {
                 stdout: fixture.into_bytes(),
                 stderr: vec![],
@@ -1757,7 +1982,11 @@ mod tests {
         );
         let exec = CommandExecutor::with_layer(true, false, mock, vfs, Arc::new(DashMap::new()));
         let mut core = apt_like_core_named("zypper", exec);
-        core.config.depends_args = Some(vec!["info".into(), "--requires".into(), "{name}".into()]);
+        core.config.depends = Some(DependsProbe {
+            binary: None,
+            args: vec!["info".into(), "--requires".into(), "{name}".into()],
+            parse: Arc::new(parse_dependency_output),
+        });
 
         let deps = core.get_dependencies("jq").await.unwrap();
 

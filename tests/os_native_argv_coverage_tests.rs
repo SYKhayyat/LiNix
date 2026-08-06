@@ -156,12 +156,18 @@ fn every_registrar_has_an_argv_row_or_a_written_reason() {
     let src = read("src/backends/registry.rs");
     let defined = registrars(&src);
 
+    // Floors on the SCAN, not counts of the backends. A parse that finds nothing passes every
+    // assertion below it, and that is what these guard. They sit far under the real numbers on
+    // purpose: a conversion moves registrars from the second list to the first, and a floor
+    // that has to be edited each time is one more thing the sweep has to remember. It was
+    // `> 20` on both, and converting `dnf`, `pacman` and `xbps` on 2026-08-06 took the module
+    // half to exactly 20 — a green gate failing on a change that made the code better.
     assert!(
         defined
             .iter()
             .filter(|r| r.starts_with("register_"))
             .count()
-            > 20,
+            > 10,
         "found too few generic registrars — the scan is broken, not the code"
     );
     assert!(
@@ -169,7 +175,7 @@ fn every_registrar_has_an_argv_row_or_a_written_reason() {
             .iter()
             .filter(|r| r.starts_with("backends::"))
             .count()
-            > 20,
+            > 10,
         "found too few module registrars — the scan is broken, not the code. This half was \
          missing entirely until 2026-08-04 and a zero here reads exactly like the bug."
     );
