@@ -57,7 +57,7 @@ impl Sandbox {
                     "installed_at": 0,
                     "expires_at": null,
                     "options": {},
-                    "source": null,
+                    "source": "adopt",
                     "is_transient": false,
                     "session_id": null
                 }],

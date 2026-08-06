@@ -632,7 +632,7 @@ impl<'a> SyncEngine<'a> {
         for idx in changes.graph.node_indices() {
             match &changes.graph[idx] {
                 GraphAction::Install(spec) => {
-                    let source = spec.options.get("__source").cloned();
+                    let source = spec.options.get("__source").map_or("sync", String::as_str);
                     state.add(
                         &spec.backend,
                         &spec.name,
@@ -955,7 +955,8 @@ impl<'a> SyncEngine<'a> {
                         // when nobody is watching.
                         match &entry.action {
                             crate::core::journal::JournalAction::Install(spec) => {
-                                let source = spec.options.get("__source").cloned();
+                                let source =
+                                    spec.options.get("__source").map_or("sync", String::as_str);
                                 let mut state = self.state.lock().await;
                                 state.add(
                                     &spec.backend,

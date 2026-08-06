@@ -164,7 +164,7 @@ impl Leases<'_> {
                         &s.name,
                         s.version.clone(),
                         std::collections::HashMap::new(),
-                        Some("imperative".into()),
+                        "imperative",
                         false,
                     );
                     state.clear_suspension(&s.backend, &s.name);

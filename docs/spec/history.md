@@ -6668,16 +6668,77 @@ allowlisted files really do still ask, so a stale entry fails loudly instead of 
 apt's per-backend test was deleted in the same change: two gates for one rule is how the weaker
 one keeps passing.
 
-### What was deliberately not done
+### What was deliberately not done, and then ruled
 
 A `@requires` edge between two packages of the **same** manager still splits that manager's
 command line, though `apt install a b` orders the two correctly on its own. `Y1` binds that clause
-in as many words, so reversing it is the owner's call and not the builder's — and unlike the
-native edges, it only fires where somebody wrote `@requires`.
+in as many words, so it went to the owner rather than the builder. **Ruled the same day: it
+stands.** `@requires` is not LiNix inferring a package relation, it is an ordering the user
+asserted, and it can mean what no manager knows — a daemon up before the next postinstall, a
+binary the other one shells out to. Merging would discard the language's only explicit ordering
+guarantee to save one subprocess, in the one case where somebody typed the edge on purpose.
 
-Ruled into `decisions.md` as **`Y9`, BUILT NEVER RULED**, rule in II.7 and II.19, reason in
-**V.115a**. Register now **167 entries, 160 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 2 BUILT
+The stale-data question was ruled with it. A machine carrying dependency rows from an earlier
+build reads them as drift and plans them for removal; under `max_removals` (20) it acts, which
+on Debian means `apt remove libssl3`. Real in shape, empty in fact — LiNix has no users, and the
+one machine that could hold such rows does not: 323 rows, 4 without a `source`, all of them
+`cowsay` on pnpm/yarn/pipx/bun at a single timestamp, a hand-test of one name across four
+managers. A load-time drop of origin-less rows was designed and **rejected as code guarding a
+machine that does not exist.**
+
+Ruled into `decisions.md` as **`Y9`, ANSWERED**, rule in II.7 and II.19, reason in
+**V.115a**. Register now **167 entries, 161 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT
 NEVER RULED, 1 OPEN**, counted by `scripts/decision-count.sh --check`.
+
+### Confirming the ruling found its own argument unenforced
+
+Y9's safety case is *"a managed row always says who put it there"* — that is what makes a
+dependency row identifiable and an expander-written one impossible. The write-up called
+`source: None` "a value no other writer in the tree produces". It was not enforced anywhere.
+`app/sync/mod.rs` had **two** sites — the install loop and the journal-heal path — storing
+whatever `__source` held, `None` included, where `verbs/plan.rs` on the same read supplied a
+fallback. Nothing reaches them today: `model/resolve.rs:1113` stamps `__source` on every
+resolved line unconditionally. A true invariant with no rule behind it is the state the tree was
+in before the expander was written, and the next hand-built `PackageSpec` walks straight through
+it.
+
+`ManagedPackage::source` is a `String`, not an `Option<String>`, and `StateRegistry::add` takes
+`source: &str`. Ten call sites in `src/` across eight files and ten more in `tests/`; every
+production one already passed a real origin except sync's two, which now name the verb
+(`"sync"`, as `plan` already did). An unattributable row does not compile. One already on disk is **refused** by `load_from`, with the existing
+*"move it aside and run `linix adopt`"* message — not dropped, because dropping it unmanages a
+package that is still installed, which is II.7's blind spot arriving from the other direction.
+
+**Two siblings, found by looking for the family rather than the instance:**
+
+- `linix why` matched a bare `"hook"` in its provenance arm, but `verbs/declare.rs` writes
+  `hook:{manager}`. The branch had never been reachable, so every package a package-manager
+  hook caught answered *"recorded by hook:choco"* instead of saying it was installed behind
+  LiNix's back. Fixed by prefix, and the match is lifted out to `insight::provenance` so the
+  writers and the reader can be tested against each other at all — `why_names_each_writer_by_the_
+  string_that_writer_stores` covers every literal any writer in the tree stores.
+- `verbs/plan.rs` was the one site with a fallback and it built it with `.cloned().or_else(||
+  Some(...))` — a heap allocation to reach a `&'static str`. Now `map_or`, like the other two.
+
+**The type found nineteen of the twenty sites. The twentieth was JSON.**
+`grade7_protected_skip_is_reported_tests` writes its registry fixture as raw
+`serde_json::json!` text rather than through `add`, with `"source": null` in it, so the compiler
+had nothing to say and six tests failed at run time with the loader's refusal — which is the
+refusal working, arriving in the one place that had hand-written the bad shape. A type closes
+every door the type can see; a fixture that bypasses the constructor is not one of them, and only
+the full suite says so. The fixture is `"adopt"` now, which is what a managed package that no
+module declares actually is.
+
+The builder's own `registry.json` was the only file on any machine that could carry the old
+rows, and it carried four: `cowsay` on pnpm, yarn, pipx and bun at one timestamp — a hand-test
+of one name across four managers, not a dependency closure. Backed up and dropped by hand.
+**That is the whole migration, and it is why no migration code was written** (`Y9`): 4 rows on
+1 machine, done once, versus a load-time filter living in the tree for ever.
+
+Verified: `cargo build --all-targets` clean, `cargo clippy --all-targets` clean, `cargo fmt
+--check` clean, lib 1512 pass, `cargo test --no-fail-fast` across 82 binaries with the one
+fixture failure above fixed and that target re-run green, and `linix why cargo:ripgrep` answers
+*"adopted from this machine"* against the repaired registry.
 
 ### Measured, both sides, in a container
 

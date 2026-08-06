@@ -89,13 +89,13 @@ async fn test_planner_protects_mission_critical_closure() {
 
     {
         let mut state = kernel.state.lock().await;
-        state.add("apt", "sudo", None, HashMap::new(), None, false);
+        state.add("apt", "sudo", None, HashMap::new(), "test", false);
         state.add(
             "apt",
             "linux-image-generic",
             None,
             HashMap::new(),
-            None,
+            "test",
             false,
         );
     }

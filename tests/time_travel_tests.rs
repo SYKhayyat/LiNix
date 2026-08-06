@@ -33,7 +33,7 @@ async fn test_lease_expiration_pruning_logic() {
         "expired-binary",
         Some("1.0.0".into()),
         HashMap::from([("lease".into(), "1h".into())]),
-        None,
+        "test",
         false,
     );
     if let Some(pkg) = state
@@ -50,7 +50,7 @@ async fn test_lease_expiration_pruning_logic() {
         "active-binary",
         Some("2.0.0".into()),
         HashMap::new(),
-        None,
+        "test",
         false,
     );
     if let Some(pkg) = state
@@ -113,7 +113,7 @@ async fn test_lease_manifest_override_logic() {
         "manifest-protected",
         None,
         HashMap::new(),
-        None,
+        "test",
         false,
     );
     if let Some(pkg) = state

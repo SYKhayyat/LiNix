@@ -16,8 +16,8 @@ not in this paragraph.
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
-| **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **2** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **160** |
+| **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **1** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **161** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -74,7 +74,7 @@ status loses that, so it is kept here:
 ## Index
 
 **One is open — `Z1`, raised 2026-08-03, a licence choice.** All 167 are accounted
-for: **160 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 2 BUILT NEVER RULED, 1 OPEN** — and this line
+for: **161 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 1 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -329,7 +329,7 @@ II.19 and the reasons in V.115–V.118.*
 | **Y6** | Every run re-asked every manager the same question about a machine nothing had touched — may an answer outlive its run? — RULED: **yes, opt-in.** `installed_cache_secs`, 0 by default, dropped on every mutation and by `clean-cache`, bypassed by `--no-cache`. | 2026-08-03 |
 | **Y7** | `winget list` reports names with spaces in them and "a package name is one word" refused them, so a name LiNix printed was a name LiNix could not be given — RULED: **quote it.** `winget:"ARP\Machine\X64\Mozilla Firefox"`. | 2026-08-03 |
 | **Y8** | Nine managers started 5.4 s into a 9.1 s `check drift` and the run was idle before they did — why did it not overlap? — RULED: **ask every manager the run will ask, at once.** Not slower children: unasked ones. 9.1 s → 3.9 s, 2.7× → 5.4×, same report. | 2026-08-03 |
-| **Y9** | The planner asked seven backends what each declared package depends on and installed the answers — which took ownership of packages nobody declared, and split the one command line it had a reason to keep. BUILT: **no.** LiNix installs what you declared. **Awaiting the owner.** | — |
+| **Y9** | The planner asked seven backends what each declared package depends on and installed the answers — which took ownership of packages nobody declared, and split the one command line it had a reason to keep. RULED: **no.** LiNix installs what you declared, and `@requires` keeps splitting the wave. | 2026-08-06 |
 
 ---
 
@@ -4805,7 +4805,7 @@ both end in a crawl of every manager.
 
 ## Y9
 
-**Status: BUILT, NEVER RULED — built 2026-08-06, awaiting the owner.** Raised by
+**Status: ANSWERED — built and ruled 2026-08-06.** Raised by
 `lamdan/whole-repo-2026-08-05.md` as F-1, a speed finding. It is also an accuracy one, and that
 half is new.
 
@@ -4815,7 +4815,7 @@ set as an install node of its own, and asked *those* nodes the same question. Se
 answered for real: `apt-cache depends`-shaped queries from brew, dnf, flatpak, pacman, snap,
 vscode and xbps.
 
-**BUILT: no.** LiNix installs what you declared. Rule in **II.7** and **II.19**, reason in
+**RULED: no.** LiNix installs what you declared. Rule in **II.7** and **II.19**, reason in
 **V.115a**, gated by `tests/a_plan_installs_only_declarations_tests.rs`.
 
 **Measured, both sides, in the Arch integration image with `pacman` behind a counting shim**
@@ -4829,7 +4829,7 @@ the manager what it has, install the difference in one line.
 
 - **An install node is a declaration or it does not exist.** `sync/mod.rs` writes one
   `state.add` per install node, so a discovered dependency became a package LiNix *manages* —
-  with `source: None`, a value no other writer in the tree produces. II.7 says LiNix removes
+  with `source: None`, an origin no user could be shown. II.7 says LiNix removes
   what it manages and you stopped declaring, and nobody ever declared libfoo. They were shielded
   only by being re-derived identically each run, and `direct_dependencies` dropped a spec's
   entry on any error: **one failed `apt-cache depends` took the whole set out of the desired
@@ -4840,6 +4840,15 @@ the manager what it has, install the difference in one line.
   maximises.
 - **`MetadataProvider` stays, and reporting is the feature.** `linix info <name>` prints
   dependencies; `linix why` searches them for reverse dependencies. Neither plans from them.
+- **The ledger row now has to say where it came from.** Confirming the ruling exposed that its
+  own safety argument was unenforced: `sync/mod.rs` had two sites that stored whatever
+  `__source` held, `None` included, where `verbs/plan.rs` supplied a fallback. Nothing reached
+  them — `model/resolve.rs` stamps `__source` on every resolved line — so the invariant was true
+  and unpinned, which is the shape the next hand-built spec walks through. `ManagedPackage::source`
+  is a `String` and `StateRegistry::add` takes a `&str`; an unattributable row does not compile,
+  and one already on disk is refused with the `adopt` instruction rather than dropped. Found with
+  it, in the same family: `linix why`'s `hook` arm matched a bare `"hook"` where `declare.rs`
+  writes `hook:<manager>`, so every hooked package got the fallback sentence.
 - **One gate, not one per backend.** Every `ManagerConfig` in `registry.rs` had already
   reached this answer separately (`depends_args: None`, zypper's row carrying the finding as a
   comment, apt's
@@ -4848,20 +4857,30 @@ the manager what it has, install the difference in one line.
   around the property — nothing that plans reads a `MetadataProvider` — so it holds for the
   backend nobody has written yet. apt's per-backend test was deleted in the same commit.
 
-**What the owner is being asked.** Two things, and the first is the ruling:
+**What the owner ruled, 2026-08-06.** Two things:
 
-1. **Confirm that a dependency is never an install.** The behaviour a user sees change: a plan
-   lists only what they declared, and a machine that had dependency rows in `registry.json`
-   from an earlier build will see those rows as drift on the next sync. They are removal
-   candidates, so a large enough set is refused by the guard rather than acted on — which is the
-   guard doing its job, but it is a refusal that arrives without the user having changed
-   anything. **No migration was written for it: this is a rewrite, and the rows are wrong data,
-   not an old format.**
-2. **Deliberately not done:** a `@requires` edge between two packages of the *same* manager
-   still splits that manager's command line, though `apt install a b` orders the two correctly
-   on its own. `Y1` binds that clause explicitly, so reversing it is the owner's and not the
-   builder's. It costs a second invocation only where somebody wrote `@requires`, which is rare
-   and explicit — unlike the native edges above, which appeared on their own.
+1. **A dependency is never an install. Confirmed.** A plan lists what you declared and nothing
+   else.
+2. **`@requires` keeps splitting the command line, and `Y1`'s clause stands unreversed.** The
+   case for merging was that `apt install a b` orders a package dependency correctly by itself,
+   so the split buys nothing. It buys the thing the user asked for. `@requires` is not LiNix
+   inferring a package relation — it is an ordering the user asserted, and it can mean what no
+   manager knows: a daemon that must be up before the next package's postinstall runs, a binary
+   the other one shells out to at configure time. A manager orders its own dependencies; it does
+   not order somebody else's reasons. Merging the two would discard the only explicit ordering
+   guarantee in the language to save one subprocess, in the one case where the user typed the
+   edge on purpose. It fires nowhere else — unlike the native edges above, which appeared on
+   their own.
+
+**No migration, and none needed.** A machine carrying dependency rows from an earlier build
+would read them as drift and plan them for removal — under `max_removals` (20) it would act,
+which on a Debian box means `apt remove libssl3`. That hazard is real in shape and empty in
+fact: LiNix has no users, so the only machine that could hold such rows is the builder's, and
+it does not. Its `registry.json` has 323 rows, 4 without a `source` — `cowsay` on pnpm, yarn,
+pipx and bun at one timestamp, a hand-test of one name across four managers, not a dependency
+closure. A load-time drop of origin-less rows was designed and **rejected as code guarding a
+machine that does not exist**; the rows are wrong data, not an old format, and this is a
+rewrite.
 
 **What could reverse it:** a manager that installs a declared package and *not* its
 dependencies. None of the 23 that answer a dependency query does; one that did would need its

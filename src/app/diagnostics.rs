@@ -226,7 +226,7 @@ impl FailureDiagnosticEngine {
                                     &spec.name,
                                     None,
                                     HashMap::new(),
-                                    Some("diagnostics".into()),
+                                    "diagnostics",
                                     false,
                                 );
                                 state_guard.clone()

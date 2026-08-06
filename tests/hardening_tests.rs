@@ -106,7 +106,7 @@ async fn scoped_upgrade_is_non_destructive_end_to_end() {
             "out-of-scope-pkg",
             None,
             HashMap::new(),
-            Some("manifest:other".into()),
+            "manifest:other",
             false,
         );
     }
@@ -234,7 +234,7 @@ async fn installed_but_undeclared_lists_the_dependency_closure_too() {
             "ripgrep",
             None,
             HashMap::new(),
-            Some("manifest:base".into()),
+            "manifest:base",
             false,
         );
     }

@@ -24,7 +24,11 @@ pub struct ManagedPackage {
     pub installed_at: u64,
     pub expires_at: Option<u64>,
     pub options: HashMap<String, String>,
-    pub source: Option<String>,
+    /// Why this row exists — a `file:line` a user wrote, or the verb that took ownership
+    /// (`adopt`, `imperative`, `plan`, `sync`). Not optional: a managed row LiNix cannot
+    /// attribute is one II.7 will remove with no answer to `why`, and that is exactly the
+    /// shape the dependency expander wrote before Y9 (V.115a).
+    pub source: String,
     pub is_transient: bool,
     pub session_id: Option<String>,
 }
@@ -236,7 +240,7 @@ impl StateRegistry {
         name: &str,
         version: Option<String>,
         options: HashMap<String, String>,
-        source: Option<String>,
+        source: &str,
         is_transient: bool,
     ) {
         // Deliberately does NOT read `@lease` / `@duration`. II.16 retired them: a lease is
@@ -263,13 +267,13 @@ impl StateRegistry {
             installed_at: Self::now(),
             expires_at,
             options,
-            source,
+            source: source.to_string(),
             is_transient,
             session_id,
         };
 
         trace!(
-            "Finalizing addition of {}:{} (Source: {:?}, Transient: {})",
+            "Finalizing addition of {}:{} (Source: {}, Transient: {})",
             backend,
             name,
             new_pkg.source,
@@ -492,6 +496,63 @@ mod tests {
 
     fn reg() -> StateRegistry {
         StateRegistry::new(PathBuf::from("/tmp/linix-test-registry.json"))
+    }
+
+    /// A managed row with no origin is the shape the dependency expander wrote (`Y9`,
+    /// V.115a): II.7 removes what LiNix manages and nobody declared, so an unattributable
+    /// row is a package scheduled for deletion with no answer to `why`. The type stops one
+    /// being *written*; this stops one being *read back in* — quietly dropping it would
+    /// unmanage a package that is still installed, and quietly keeping it is the original bug.
+    #[test]
+    fn a_row_with_no_origin_is_refused_rather_than_read() {
+        let dir = std::env::temp_dir().join("linix-sourceless-row-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("registry.json");
+
+        // Serialized from a real registry, so the fixture cannot fail to load for some
+        // unrelated missing field and be mistaken for the refusal under test.
+        let mut r = reg();
+        r.add(
+            "apt",
+            "libssl3",
+            None,
+            HashMap::new(),
+            "modules/dev.txt:2",
+            false,
+        );
+        let good = serde_json::to_string(&r).unwrap();
+        let bad = good.replace("\"modules/dev.txt:2\"", "null");
+        assert_ne!(good, bad, "the fixture must actually lose its origin");
+
+        std::fs::write(&path, &bad).unwrap();
+        let err = StateRegistry::load_from(&path)
+            .expect_err("a row with no origin must not load")
+            .to_string();
+        // The message has to be actionable, not just a serde dump: the fix is to rebuild the
+        // ledger from the machine, and nothing else in the tree will say so.
+        assert!(err.contains("adopt"), "{err}");
+
+        // The same file with its origin loads, so the refusal is about the missing field and
+        // not about the shape of the row.
+        std::fs::write(&path, &good).unwrap();
+        let loaded = StateRegistry::load_from(&path).unwrap();
+        assert_eq!(loaded.packages[0].source, "modules/dev.txt:2");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Every writer supplies an origin, and it survives the round trip. The `add` signature
+    /// makes an absent one impossible; this pins that an *empty* one cannot sneak through the
+    /// same door, since `""` is a `&str` and the type cannot tell the difference.
+    #[test]
+    fn every_managed_row_carries_the_origin_it_was_given() {
+        let mut r = reg();
+        for source in ["modules/dev.txt:14", "adopt", "imperative", "hook:choco"] {
+            r.add("apt", "jq", None, HashMap::new(), source, false);
+            let row = r.packages.iter().find(|p| p.name == "jq").unwrap();
+            assert_eq!(row.source, source);
+            assert!(!row.source.is_empty());
+        }
     }
 
     #[test]

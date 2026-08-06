@@ -429,7 +429,7 @@ pub(crate) async fn record_hooked_target(
                 &name,
                 None,
                 std::collections::HashMap::new(),
-                Some(source),
+                &source,
                 false,
             );
             if declarative {
@@ -515,7 +515,7 @@ pub(crate) async fn handle_hook_reconcile(app: &App, manager: &str) -> Result<()
                     &pkg.name,
                     pkg.version.clone(),
                     std::collections::HashMap::new(),
-                    Some(format!("hook:{manager}")),
+                    &format!("hook:{manager}"),
                     false,
                 );
                 newly += 1;

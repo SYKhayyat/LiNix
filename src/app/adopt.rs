@@ -438,7 +438,7 @@ impl Adopter {
         let recorded;
         {
             let mut state_mut = self.state.lock().await;
-            let source_meta = Some("adopt".to_string());
+            let source_meta = "adopt";
 
             for pkg in &found.adopt {
                 // Packages only. A `service:` line resolves to a resource statement, so it is
@@ -456,7 +456,7 @@ impl Adopter {
                     &pkg.name,
                     pkg.version.clone(),
                     HashMap::new(),
-                    source_meta.clone(),
+                    source_meta,
                     false, // Adopted packages are permanent, not transient.
                 );
             }

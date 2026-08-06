@@ -60,13 +60,13 @@ async fn test_ephemeral_shell_atomic_purge_isolation_logic() {
     {
         let mut state = kernel.state.lock().await;
 
-        state.add("brew", "git", None, HashMap::new(), None, false);
+        state.add("brew", "git", None, HashMap::new(), "test", false);
 
         state.active_session_id = Some(target_session_id.to_string());
-        state.add("brew", "temp-tool-1", None, HashMap::new(), None, true);
+        state.add("brew", "temp-tool-1", None, HashMap::new(), "test", true);
 
         state.active_session_id = Some(other_session_id.to_string());
-        state.add("brew", "temp-tool-2", None, HashMap::new(), None, true);
+        state.add("brew", "temp-tool-2", None, HashMap::new(), "test", true);
     }
 
     kernel.mock_executor.set_response(

@@ -347,7 +347,7 @@ impl EphemeralShell {
                         &s.name,
                         s.version.clone(),
                         HashMap::new(),
-                        Some("imperative".into()),
+                        "imperative",
                         false,
                     );
                 }

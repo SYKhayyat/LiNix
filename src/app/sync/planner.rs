@@ -942,7 +942,7 @@ mod tests {
             installed_at: 0,
             expires_at: None,
             options: HashMap::new(),
-            source: None,
+            source: "test".into(),
             is_transient: false,
             session_id: None,
         }
@@ -1287,7 +1287,7 @@ mod tests {
         let config = Config::default();
         let mut state = StateRegistry::new(PathBuf::from("test-state.json"));
         let mut imp = managed("my-imperative-tool", "generic-test");
-        imp.source = Some("imperative".into());
+        imp.source = "imperative".into();
         state.packages.push(imp);
         let desired: HashMap<String, Vec<PackageSpec>> = HashMap::new();
 

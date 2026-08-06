@@ -633,11 +633,30 @@ async fn introduced_in_git(app: &App, name: &str) -> Option<crate::model::introd
     introduced::introduced_in(&out)
 }
 
+/// How a package got into the registry — a different question from where it is declared.
+///
+/// The arms must match what the writers actually store: `declare.rs` writes `hook:<manager>`
+/// and never a bare `hook`, so a reader matching the bare word answers every hooked package
+/// with the fallback and nothing says so.
+fn provenance(source: &str) -> String {
+    match source {
+        "imperative" => "installed by `linix install`".to_string(),
+        "adopt" => "adopted from this machine".to_string(),
+        s => match s.strip_prefix("hook:") {
+            Some(manager) => format!(
+                "installed behind LiNix's back with {}, and caught by the hook",
+                manager
+            ),
+            None => format!("recorded by {}", s),
+        },
+    }
+}
+
 pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
     // Snapshot the state we need, then release the lock before doing async backend queries.
     #[allow(clippy::type_complexity)]
     let (matches, all_managed): (
-        Vec<(String, String, Option<String>, Option<String>, Option<u64>)>,
+        Vec<(String, String, Option<String>, String, Option<u64>)>,
         Vec<(String, String)>,
     ) = {
         let state = app.state.lock().await;
@@ -681,15 +700,7 @@ pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
         let declarations: Vec<String> = found.declarations.iter().map(|d| d.describe()).collect();
         let gating: Vec<String> = found.gating.iter().map(|g| g.describe()).collect();
 
-        // How it got into the registry, which is a different question: `adopt` took it, a
-        // hook caught it, `linix install` put it there.
-        let prov = match source.as_deref() {
-            Some("imperative") => "installed by `linix install`".to_string(),
-            Some("hook") => "installed behind LiNix's back, and caught by the hook".to_string(),
-            Some("adopt") => "adopted from this machine".to_string(),
-            Some(other) if !other.is_empty() => format!("recorded by {}", other),
-            _ => "origin unknown (recorded before LiNix tracked it)".to_string(),
-        };
+        let prov = provenance(&source);
 
         // Declared nowhere and still managed IS the answer, not a gap: it is drift, and the
         // next sync removes it. Saying "declared nowhere" without saying what that means is
@@ -817,6 +828,37 @@ pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every string a writer in the tree stores in `ManagedPackage::source`, against the
+    /// sentence `why` gives back. One entry per writer, so a new writer with no arm here is
+    /// visible as a bare "recorded by" rather than as nothing at all.
+    #[test]
+    fn why_names_each_writer_by_the_string_that_writer_stores() {
+        // `app/shell/mod.rs`, `app/leases.rs`, `app/snapshot_restore.rs`.
+        assert_eq!(provenance("imperative"), "installed by `linix install`");
+        // `app/adopt.rs`.
+        assert_eq!(provenance("adopt"), "adopted from this machine");
+        // `verbs/declare.rs` — `hook:<manager>`, one arm per manager it can be. Matching a
+        // bare `hook` made this unreachable for every one of them.
+        for manager in ["choco", "scoop", "apt", "brew"] {
+            let said = provenance(&format!("hook:{manager}"));
+            assert!(
+                said.contains("caught by the hook") && said.contains(manager),
+                "hook:{manager} answered {said:?}"
+            );
+        }
+        // `verbs/declare.rs` local-file arm, `app/diagnostics.rs`, `verbs/plan.rs`,
+        // `app/sync/mod.rs` — no dedicated sentence, and the fallback names them.
+        for other in ["local-file", "diagnostics", "plan", "sync"] {
+            assert_eq!(provenance(other), format!("recorded by {other}"));
+        }
+        // A declared package: `model/resolve.rs` stamps `file:line`, which is the answer
+        // `why` exists to give.
+        assert_eq!(
+            provenance("modules/dev.txt:14"),
+            "recorded by modules/dev.txt:14"
+        );
+    }
 
     fn p(backend: &str, name: &str, version: Option<&str>) -> ResolvedPkg {
         ResolvedPkg {

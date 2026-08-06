@@ -377,7 +377,7 @@ mod tests {
                 name,
                 Some(version.to_string()),
                 HashMap::new(),
-                Some("imperative".into()),
+                "imperative",
                 false,
             );
         }

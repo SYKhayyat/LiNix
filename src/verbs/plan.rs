@@ -532,11 +532,7 @@ pub(crate) async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Resul
                 );
                 continue;
             }
-            let source = spec
-                .options
-                .get("__source")
-                .cloned()
-                .or_else(|| Some("plan".into()));
+            let source = spec.options.get("__source").map_or("plan", String::as_str);
             app.state.lock().await.add(
                 &spec.backend,
                 &spec.name,
@@ -1568,7 +1564,7 @@ mod unverified_tests {
             } else {
                 Default::default()
             },
-            source: None,
+            source: "test".into(),
             is_transient: false,
             session_id: None,
         }

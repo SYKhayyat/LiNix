@@ -2515,7 +2515,7 @@ desired set as an install node of its own, then asked *those* nodes the same que
 
 **It manufactured managed packages.** `sync/mod.rs` writes one `state.add` per install node, so
 `apt:nginx` on one line took ownership of nginx's direct dependencies in `registry.json` — with
-`source: None`, the one value no other writer in the tree produces. And *"what LiNix may remove:
+`source: None`, an origin no user could be shown. And *"what LiNix may remove:
 what it manages and you stopped declaring"* (II.7) then points straight at them. They survived
 only by being re-derived identically on the next run: `direct_dependencies` drops a spec's
 entry on any error, so **one failed `apt-cache depends` takes every one of those packages out of
@@ -2587,6 +2587,18 @@ implementations and the next one:
 `tests/a_plan_installs_only_declarations_tests.rs`. Reporting one is untouched and is the
 feature: `linix info <name>` prints dependencies and `linix why` searches them for reverse
 dependencies.
+
+**And the row itself now has to say where it came from** *(2026-08-06, with the ruling)*.
+Banning the caller stops the expander; it does not stop the *next* thing that builds a spec by
+hand from writing an unattributable row, and `sync/mod.rs` had two sites that would have — they
+stored whatever `__source` held, `None` included, where `verbs/plan.rs` supplied a fallback.
+Nothing reached them, because `model/resolve.rs` stamps `__source` on every resolved line; the
+invariant was true and unenforced, which is a sentence in a document rather than a rule.
+`ManagedPackage::source` is a `String` and `StateRegistry::add` takes a `&str`, so a row LiNix
+cannot attribute no longer compiles, and one already on disk is refused by `load_from` with the
+`adopt` instruction rather than dropped — dropping it would unmanage a package that is still
+installed, which is II.7's blind spot arriving from the other side. **A ledger of what LiNix
+will delete is a ledger that owes an answer to `why` for every line in it.**
 
 **What could reverse it:** a manager that installs a declared package and *not* its
 dependencies, leaving the closure to the caller. None of the 23 that answer does; a backend
