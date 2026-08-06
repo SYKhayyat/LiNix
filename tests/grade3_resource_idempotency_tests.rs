@@ -19,6 +19,10 @@
 //! by a run that reported `already up to date`. A user's genuine pre-existing file is backed up
 //! once and then never overwritten, which is the one thing that goes right here.
 //!
+//! The `Cross-drive fallback to COPY` line above is a quotation from 2026-07-30 and no longer
+//! exists: `Q48` deleted the drive check, so a `link:` on Windows links, and only a missing
+//! symlink privilege gets a copy. Nothing below matches on it.
+//!
 //! Two properties are asserted below, and the second is the one with teeth: the *work* is
 //! unconditional. `ExtrasManager::in_effect` already answers "is this resource in place?" — the
 //! probe `check` and `plan` were given in round 3 — and the loop that places them never asks.

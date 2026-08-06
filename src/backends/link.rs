@@ -342,13 +342,32 @@ impl LinkBackendCore {
         Ok(())
     }
 
-    #[cfg(target_os = "windows")]
-    fn is_same_drive(a: &Path, b: &Path) -> bool {
-        use std::path::Component;
-        let drive_a = a.components().find(|c| matches!(c, Component::Prefix(_)));
-        let drive_b = b.components().find(|c| matches!(c, Component::Prefix(_)));
-        drive_a == drive_b
-    }
+}
+
+/// Whether Windows refused a symlink because the process may not create one.
+///
+/// `CreateSymbolicLinkW` fails with `ERROR_PRIVILEGE_NOT_HELD` (1314) unless the process is
+/// elevated or Developer Mode is on. The executor renders io errors to strings before this
+/// layer sees them, so the code is matched in the one rendering Rust guarantees for an OS
+/// error: a trailing `(os error N)`.
+#[cfg(target_os = "windows")]
+fn is_missing_symlink_privilege(e: &Error) -> bool {
+    matches!(e, Error::Io(msg) if msg.contains("os error 1314"))
+}
+
+/// Said when a `link:` becomes a copy, because the two differ in a way the user will meet
+/// later: edits to the source stop appearing at the destination until the next sync. Names
+/// the privilege and how to get it, since "fell back to a copy" is not something a reader
+/// can act on.
+#[cfg(target_os = "windows")]
+fn copy_fallback_message(source: &Path, target: &Path) -> String {
+    format!(
+        "Link: placed {:?} as a COPY of {:?}, not a link — creating symlinks needs Developer \
+         Mode or an elevated shell. Edits to the source will not appear at the destination \
+         until the next sync. Settings > For developers > Developer Mode turns this into a \
+         real link.",
+        target, source
+    )
 }
 
 #[async_trait]
@@ -463,10 +482,10 @@ impl Installable for LinkInstallable {
                 }
 
                 // A copy LiNix made is as much "already in effect" as a symlink it made.
-                // Windows cannot symlink across drives, so the deploy below falls back to
-                // copying — and asking only `read_link` meant every later sync backed up its
-                // own copy as `<target>.linix-backup` and wrote the file again, under a
-                // summary reading `already up to date`.
+                // Windows without the symlink privilege gets a copy, and asking only
+                // `read_link` meant every later sync backed up its own copy as
+                // `<target>.linix-backup` and wrote the file again, under a summary
+                // reading `already up to date`.
                 if exists && !is_symlink {
                     if let (Ok(from), Ok(to)) = (
                         tokio::fs::read(&source).await,
@@ -509,18 +528,19 @@ impl Installable for LinkInstallable {
 
             // Delegate to the executor so the dry-run VFS records this instead of the
             // real filesystem being touched.
+            // A symlink is attempted for every target, including one on another drive: a
+            // Windows symlink stores the destination as a string and resolves it on open, so
+            // it spans volumes. Only the privilege varies, so only the privilege is handled.
             #[cfg(target_os = "windows")]
             {
-                let source_abs = source.canonicalize().unwrap_or_else(|_| source.clone());
-                if !self.core.executor.dry_run
-                    && !LinkBackendCore::is_same_drive(&source_abs, &target_path)
-                {
-                    warn!("Link: Cross-drive fallback to COPY for {:?}", source);
-                    tokio::fs::copy(&source, &target_path)
-                        .await
-                        .map_err(Error::from)?;
-                } else {
-                    self.core.executor.symlink(&source, &target_path).await?;
+                match self.core.executor.symlink(&source, &target_path).await {
+                    Err(e) if is_missing_symlink_privilege(&e) => {
+                        warn!("{}", copy_fallback_message(&source, &target_path));
+                        tokio::fs::copy(&source, &target_path)
+                            .await
+                            .map_err(Error::from)?;
+                    }
+                    other => other?,
                 }
             }
 

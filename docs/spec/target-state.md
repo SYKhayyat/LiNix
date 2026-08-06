@@ -415,6 +415,16 @@ the row existed. Asked as `is_symlink` alone it is wrong wherever the deploy fal
 copy: LiNix called its own file a destination it did not create, and refused to touch the tree
 containing it.
 
+**A `link:` links, on every platform and every drive; a copy is what a missing privilege gets,
+and it says so** (2026-08-06, `Q48`). Windows is not asked whether the source and destination
+share a drive — a Windows symlink stores its destination as a string and resolves it on open, so
+it spans volumes, and the check that claimed otherwise compared a verbatim `\\?\C:` prefix
+against a plain `C:` and answered *different drive* for every path on every machine. The only
+thing that genuinely varies is `SeCreateSymbolicLinkPrivilege`, so it is the only thing handled:
+the symlink is attempted, and `ERROR_PRIVILEGE_NOT_HELD` — and no other error — falls back to a
+copy under a warning that names Developer Mode and says edits will not propagate until the next
+sync. **V.141.**
+
 ### Health checks (XIII.5, U7)
 
 **Two scopes, one revert path.** `@health=` on a line answers *did this upgrade break this*.

@@ -3832,3 +3832,42 @@ the interpreter returns leaves it nothing to find, which is precisely the differ
 write-ahead log and a write-behind one, and the only witness that can tell them apart.
 
 ---
+
+## `Q48` — the drive check that answered "different drive" for every path on earth
+
+**V.141.** `link:` on Windows deployed a copy, never a link — on a machine with one drive, under
+a warning reading *"Cross-drive fallback to COPY"*.
+
+`is_same_drive` compared `source.canonicalize()` against the raw target. `canonicalize` returns a
+verbatim path, whose prefix Rust models as `VerbatimDisk('C')`; the target's is `Disk('C')`. Same
+drive, two spellings, and the comparison was of the spelling. Measured rather than reasoned:
+
+    verbatim: VerbatimDisk(67)
+    plain:    Disk(67)
+    same_drive = false
+
+67 is `C` in both. So the guard was not merely wrong at the margin — it was wrong for every path
+on every machine, and `link:`, the feature whose entire purpose is *one file with two names*,
+quietly produced two files that drift apart the moment either is edited.
+
+**The check should not have been repaired, because the thing it checked does not exist.** A
+Windows symlink is a reparse point holding the destination as a *string*, resolved when the link
+is opened; it crosses volumes fine. It is the *hard* link that cannot. Verified before deleting:
+a second drive letter via `subst`, then `symlink_file` from `C:` to `X:`, unelevated — created,
+resolved, and read through. So repairing the prefix comparison would have preserved a fallback
+guarding against nothing, and still copied for the cross-drive case symlinks handle.
+
+**What does vary is the privilege**, and it is now the only thing branched on.
+`ERROR_PRIVILEGE_NOT_HELD` (1314) — and no other error — falls back to a copy; everything else
+propagates, so a genuine failure is no longer laundered into a silent copy. The warning names the
+privilege, the remedy, and the consequence, because *"fell back to a copy"* is not something a
+reader can act on, and the consequence is the one the user meets later: edits stop propagating.
+
+**Why this was not shipped when it was found.** It reached `decisions.md` as `Q48` and sat there,
+correctly: turning copies into symlinks can fail a sync that works today, which is behaviour a
+user would notice. What was fixed at the time was the ownership predicate — a copy LiNix made is
+now recognised as LiNix's — which is what kept a run from backing up its own copy on every sync
+under a summary reading `already up to date`. That made the bug wasteful instead of latent, and
+bought the time to have it ruled rather than guessed.
+
+---

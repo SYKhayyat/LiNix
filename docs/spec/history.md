@@ -105,14 +105,17 @@ Two siblings found while building:
   turns it red with that message. The third test reads `JournalAction`'s own source and fails on
   an unrecognised variant, so adding a converge to the log has to change the reasoning first.
 
-### Left for the owner
+### Raised, then ruled the same day (`Q48`)
 
-`Q48` — `LinkBackendCore::is_same_drive` compares `Component::Prefix`, and `canonicalize`
-returns a `\\?\C:` verbatim prefix where the target carries a plain `C:`. They never match, so
-**every** `link:` on Windows logs *"Cross-drive fallback to COPY"* and copies, same drive or not.
-The three-line fix turns those copies into symlinks, which need a privilege a copy does not, so
-it is a behaviour change a user would notice. Not touched. The ownership predicate above is what
-makes it harmless rather than latent.
+`LinkBackendCore::is_same_drive` compared `Component::Prefix`, and `canonicalize` returns a
+`\\?\C:` verbatim prefix where the target carries a plain `C:`. They never matched, so **every**
+`link:` on Windows logged *"Cross-drive fallback to COPY"* and copied, same drive or not. Left
+untouched at the time, because turning copies into symlinks needs a privilege a copy does not —
+behaviour a user would notice. **Ruled 2026-08-06: the check is deleted, not repaired.** A
+Windows symlink spans volumes — that is the hard link's limitation, not the symlink's — verified
+with a `subst` drive letter and an unelevated `symlink_file` across it, so the guard was
+protecting against nothing. Only `ERROR_PRIVILEGE_NOT_HELD` now falls back to a copy, under a
+warning naming Developer Mode and the consequence. `V.141`.
 
 ## Session 2026-08-05 — the gate moved to the property (`F-2`)
 

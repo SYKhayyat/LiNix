@@ -332,7 +332,7 @@ II.19 and the reasons in V.115–V.118.*
 | **Y8** | Nine managers started 5.4 s into a 9.1 s `check drift` and the run was idle before they did — why did it not overlap? — RULED: **ask every manager the run will ask, at once.** Not slower children: unasked ones. 9.1 s → 3.9 s, 2.7× → 5.4×, same report. | 2026-08-03 |
 | **Y9** | The planner asked seven backends what each declared package depends on and installed the answers — which took ownership of packages nobody declared, and split the one command line it had a reason to keep. RULED: **no.** LiNix installs what you declared, and `@requires` keeps splitting the wave. | 2026-08-06 |
 | **Y10** | The write-ahead log had two variants and all nine `apply/` modules referenced it zero times, while a `dotfiles:` tree destroyed the user's file with no backup, no ledger row and therefore no teardown — four documents said otherwise. RULED: **the log covers what cannot be recomputed**, and **a tree is the `link:` lines it stands for.** | 2026-08-06 |
-| **Q48** | Every `link:` on Windows takes the cross-drive COPY fallback, same drive or not: `is_same_drive` compares a verbatim prefix against a plain one. **OPEN** — fixing it needs the symlink privilege a copy does not. | — |
+| **Q48** | Every `link:` on Windows took the cross-drive COPY fallback, same drive or not: `is_same_drive` compared a verbatim prefix against a plain one — and the limitation it guarded does not exist, since a Windows symlink spans volumes. RULED: **a `link:` links; only a missing privilege gets a copy, and it says so.** | 2026-08-06 |
 
 ---
 
@@ -4974,37 +4974,43 @@ the same bytes and asserts they answer the same, and by
 test **read the journal while it is running** — the only witness that can tell a write-ahead
 record from a write-behind one.
 
-**Still the owner's, found under this and not ruled:** `LinkBackendCore::is_same_drive`
-compares `Component::Prefix`, and `canonicalize` returns a `\\?\C:` verbatim prefix where the
-target carries a plain `C:` — so **every `link:` on Windows takes the cross-drive COPY fallback,
-including same-drive ones.** Fixing it turns those copies back into symlinks, which needs the
-symlink privilege a copy does not, so it is a behaviour change on a path that currently works.
-Not touched. See `Q48`.
+**Found under this, raised as `Q48`, and ruled the same day it was explained.**
+`LinkBackendCore::is_same_drive` compared `Component::Prefix`, and `canonicalize` returns a
+`\\?\C:` verbatim prefix where the target carries a plain `C:` — so **every `link:` on Windows
+took the cross-drive COPY fallback, including same-drive ones.** The check is gone rather than
+repaired: see `Q48`.
 
 ---
 
 ## Q48
 
-**Status: OPEN.** Raised 2026-08-06 while building `Y10`. Not blocking: the current behaviour
-is correct, only slower and not what the line says it is.
+**Status: RULED 2026-08-06.** Raised the same day while building `Y10`.
 
 **Q48 — Should `link:` symlink on Windows, or is the copy fallback now the behaviour?**
-`is_same_drive` (`backends/link.rs`) compares the `Component::Prefix` of `source.canonicalize()`
+`is_same_drive` (`backends/link.rs`) compared the `Component::Prefix` of `source.canonicalize()`
 against the raw target. `canonicalize` returns `\\?\C:\...`, whose prefix is `VerbatimDisk('C')`;
-the target's is `Disk('C')`. They never match, so **every** `link:` on Windows logs
-*"Cross-drive fallback to COPY"* and copies — same drive or not. The dotfiles tree inherits it.
+the target's is `Disk('C')`. They never matched, so **every** `link:` on Windows logged
+*"Cross-drive fallback to COPY"* and copied — same drive or not. The dotfiles tree inherited it.
 
-**Why it was not fixed under `Y10`.** Comparing the drive letters instead of the prefixes is a
-three-line fix, and it changes what Windows users get: a copy needs no privilege, a symlink
-needs Developer Mode or an elevated shell. Turning copies into symlinks could start failing
-syncs that work today, which is a behaviour change a user would notice — rule 2 of *asking while
-building*. The ownership predicate was fixed instead, so a copy LiNix made is correctly
-recognised as LiNix's on the next run, which is what made the bug harmless rather than latent.
+**RULED: a `link:` links.** The drive check is deleted, not repaired, because the limitation it
+guarded does not exist: a Windows symlink stores its destination as a string and resolves it on
+open, so it spans volumes — that is the *hard* link's restriction, not the symlink's. Verified
+before deleting, with a second drive letter from `subst` and an unelevated `symlink_file` from
+`C:` to `X:`: created, resolved, read through. Repairing the comparison would have kept a
+fallback guarding nothing and still copied for the case symlinks handle.
 
-**What an answer has to say:** whether a same-drive `link:` on Windows should symlink, and if so
-what happens on a machine without the privilege — refuse by name, or fall back to a copy *and
-say which one it did*. The third option is to rule that the copy is the behaviour and delete the
-symlink attempt on Windows, which would make the warning a fact rather than a fallback.
+**The privilege is the only thing that varies, so it is the only thing branched on.**
+`ERROR_PRIVILEGE_NOT_HELD` (1314) falls back to a copy; every other error propagates, so a real
+failure is no longer laundered into a silent copy. The fallback warns by name — the privilege,
+the remedy (Developer Mode or an elevated shell), and the consequence the user will actually
+meet, that edits stop propagating until the next sync. The third option, ruling the copy *is*
+the behaviour, was rejected: it would retire the one thing `link:` exists for on the one platform
+where the cure is a checkbox.
+
+**Why it was not shipped when found.** Turning copies into symlinks can fail a sync that works
+today — behaviour a user would notice, rule 2 of *asking while building*. The ownership predicate
+was fixed instead, which stopped a run backing up its own copy every sync under a summary reading
+`already up to date`, and made the bug wasteful rather than latent. `V.141`, `why.md`.
 
 ---
 
