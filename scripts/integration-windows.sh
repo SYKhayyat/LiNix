@@ -554,7 +554,7 @@ echo "=============================================================="
 if ! $TO "$LINIX" --version >/dev/null 2>&1; then
     echo "FATAL: '${TO:+$TO }$LINIX --version' did not run — nothing below would be tested."
     command -v "$LINIX" >/dev/null 2>&1 \
-        || echo "       '$LINIX' is not on PATH: set LINIX to the built binary, or build it."
+        || echo "       not on PATH: set LINIX to the built binary, or build it. Looked for '$LINIX'"
     [ -n "$TO" ] || echo "       (no timeout wrapper in use, so the binary itself is the fault)"
     exit 2
 fi
@@ -701,7 +701,7 @@ echo "[8] The guard"
 # `lx` is a shell function, so `sh -c "lx …"` ran nothing at all and this asserted
 # only that the binary still exists — which it would whatever LiNix did.
 $TO "$LINIX" -y uninstall linix >/dev/null 2>&1 || true
-ok "linix survives an uninstall attempt" on_path "$LINIX"
+ok "LiNix survives an uninstall attempt" on_path "$LINIX"
 refuses_with_3 "purge-undeclared is still not a silent mass-delete after adopt" lx -y purge-undeclared
 # WHICH rule refuses is still asserted, but the answer depends on how much `adopt`
 # could take on this host: where it adopted well the protected set decides, where it

@@ -351,7 +351,7 @@ max_removals = 20
 # Refuse to change anything unless a snapshot can be taken first.
 # require_snapshot = false
 
-# Refuse to apply when `linix audit` reports a managed package as vulnerable.
+# Refuse to apply when `linix check security` reports a managed package as vulnerable.
 # deny_vulnerable = false
 
 # Refuse to put a downloaded file anywhere but the backend's own bin directory,
@@ -637,7 +637,7 @@ pub(crate) async fn handle_policy(app: &App) -> Result<()> {
     if violations.is_empty() {
         println!("[guard] check passed — the desired state is compliant.");
         if guard.deny_vulnerable {
-            println!("(deny_vulnerable is also enforced at sync time via `linix audit`.)");
+            println!("(deny_vulnerable is also enforced at sync time via `linix check security`.)");
         }
     } else {
         println!("[guard] violations ({}):", violations.len());

@@ -39,9 +39,9 @@ fn hermetic_git_env() {
     static HERMETIC: std::sync::Once = std::sync::Once::new();
     HERMETIC.call_once(|| {
         for (k, v) in [
-            ("GIT_AUTHOR_NAME", "linix test"),
+            ("GIT_AUTHOR_NAME", "linix-tests"),
             ("GIT_AUTHOR_EMAIL", "test@example.invalid"),
-            ("GIT_COMMITTER_NAME", "linix test"),
+            ("GIT_COMMITTER_NAME", "linix-tests"),
             ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
             ("GIT_CONFIG_GLOBAL", "linix-tests-absent-gitconfig"),
             ("GIT_CONFIG_SYSTEM", "linix-tests-absent-gitconfig"),

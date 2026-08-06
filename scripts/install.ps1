@@ -51,11 +51,11 @@ if (-not (Get-Command linix -ErrorAction SilentlyContinue)) {
 }
 
 Say "running health check..."
-& $linix doctor
+& $linix check health
 
 if (-not $env:LINIX_NO_ADOPT) {
     $ans = Read-Host "linix  adopt the packages already installed on this machine into a manifest now? [y/N]"
     if ($ans -match '^(y|yes)$') { & $linix adopt } else { Say "skipped - run 'linix adopt' whenever you're ready." }
 }
 
-Say "done. Try 'linix status' or 'linix doctor'."
+Say "done. Try 'linix check' or 'linix sync'."

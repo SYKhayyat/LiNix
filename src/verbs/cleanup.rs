@@ -345,7 +345,11 @@ pub(crate) async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -
 
     println!("\nRemoved {} package(s); {} failed.", gone, failed);
     if let Some(id) = &snapshot {
-        println!("Undo with `linix undo {}`.", id);
+        println!(
+            "Snapshot {} was taken before this ran; `linix snapshot restore` opens the gallery \
+             to put the filesystem back.",
+            id
+        );
     }
     Ok(())
 }

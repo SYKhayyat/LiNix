@@ -470,7 +470,7 @@ echo "=============================================================="
 # for, and `grep_ok` for /linix/ matches the words "failed to run command
 # 'linix'", so an image with no binary reported nine passes. Stop here instead.
 if ! $LINIX --version >/dev/null 2>&1; then
-    echo "FATAL: '$LINIX' is not runnable in this image — nothing below was tested."
+    echo "FATAL: not runnable in this image — nothing below was tested. Looked for '$LINIX'"
     echo "       The image must put the built binary on PATH (see the Dockerfiles)."
     exit 1
 fi

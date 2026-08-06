@@ -2021,7 +2021,9 @@ real work and must stay.
 ## II.17 Deleted
 
 **Commands:** `prune` · `orphans` · `clone` · `migrate` (→ `adopt`) · `remove` (→
-`uninstall`)
+`uninstall`) · `status` · `doctor` · `unmanaged` · `absent` · `conflicts` · `audit` (all six →
+`check <section>`, ruled 2026-07-24) · `undo` (→ `snapshot restore` for the filesystem,
+`rollback` for the manifests)
 
 **Flags:** `-g` / `--groups-dir` · `--no-global` · `--allow-regex-expansion` ·
 `--backend` on removing commands
@@ -2237,3 +2239,29 @@ The error messages already meet this standard — file, line, what is wrong, wha
 the concept means. **This rule is that standard applied to success, to absence, and to history.**
 
 ---
+
+## II.21 A command LiNix names is a command LiNix has (`F-2`, built 2026-08-05, never ruled)
+
+**Every `linix <verb>` written anywhere a person reads or a machine runs names a live path
+through the CLI.** Source strings, doc comments, backend data tables, the install scripts, the
+container harnesses, the examples, and `readme.md`. Checked on every run against clap's own
+command tree — names, aliases and nested subcommands — by
+`tests/named_commands_exist_tests.rs`.
+
+**The convention that makes it checkable: prose calls the product `LiNix`.** A lowercase `linix`
+that opens a line or follows a quote, a backtick or a shell operator is an invocation and is
+checked; `the LiNix binary` is a sentence and is not. Without that distinction the gate needs a
+list of English words to ignore, and a list of words to ignore is one more thing that rots.
+
+**`readme.md`'s verb tables are checked too**, by the same tree — a table whose first column is
+backticked command paths is found by *what it contains*, not by where it sits, and the number of
+such tables is pinned so one cannot rot past recognition and leave the gate in silence.
+
+**`docs/` is out of scope, deliberately.** It is a record — a changelog, a bug tracker and a
+decision register — and a record has to be free to write `linix doctor` when it is describing the
+day `linix doctor` was deleted. `readme.md` is in scope because it is the one document a user
+reads as instructions.
+
+**The rule this generalises: a gate is drawn around the property, not around the artifact that
+was under review.** See `why.md` for the six live defects that were sitting outside three
+working gates when this was written.

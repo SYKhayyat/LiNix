@@ -3517,3 +3517,97 @@ a choice from a dependency still produces two different numbers, and the rename 
 that a definition rather than a surprise.
 
 ---
+
+## `F-2` — the gate is drawn around the artifact, and the property escapes through the next copy
+
+**Eight grade rounds named "a check that cannot fail" as this repository's signature defect.
+Rounds 2, 7 and 8 name it in nearly identical words. None of them says *why it keeps coming
+back*, and a ninth sighting would have been worth nothing.** This is the mechanism.
+
+The gates here are good. `removal_guard_enumeration_tests.rs` scans all of `src/` and fails the
+build when a removal appears without a named guard, then self-tests the instrument before
+trusting it. `argv_drift_tests.rs` walks every subcommand LiNix invokes against the real
+manager's `--help`. `help_map_tests.rs` compares the map in `args.rs` to `--help` in both
+directions, and its own header cites `undo` — a command that sat in two exemption lists for
+months after it was renamed — as the reason it exists.
+
+Each one is scoped to the file that was open when it was written. So on 2026-08-05, with no
+top-level `status`, `doctor`, `undo` or `audit` verb anywhere in the program:
+
+- **`app/fleet.rs` asked every host for `linix status --json`.** `linix fleet` could not return
+  "in sync" for a correctly installed machine — every host answered "unrecognized subcommand"
+  with exit 2 and every row read ERROR. 265 lines of a command that had never once worked.
+- **`scripts/install.sh` and `install.ps1` ran `doctor`** to vouch for the binary they had just
+  built, and signed off with *"Try `linix status` or `linix doctor`"*. The first thing a new user
+  runs, and the health check that certifies the install.
+- **`verbs/cleanup.rs` printed `Undo with 'linix undo <id>'`** after `purge-undeclared`, the most
+  destructive command in the program.
+- **`cli/args.rs` documented `upgrade --security` as upgrading what `linix audit` reports** —
+  inside the very file `help_map_tests.rs` gates. The gate compares the *map* to `--help`; a
+  dead command in a flag's help text is a different copy of the fact, sitting four hundred lines
+  away in the same file.
+- **`app/apply/dotfiles.rs`** told a non-interactive caller to run `linix status`, and
+  **`backends/init_providers.toml`** explained a `--no-pager` flag by a hang in `linix status`.
+- **`readme.md`'s verb tables listed `status`, `unmanaged`, `absent`, `conflicts`, `doctor` and
+  `audit`** — six rows across two tables — thirty lines after the file correctly explains that
+  `--help` cannot go stale the way a README can.
+
+One fact. Six copies. One gate, around one copy.
+
+**So the gate moved to the property.** `tests/named_commands_exist_tests.rs` reads clap's command
+tree — names, aliases, nesting — and asserts that every `linix <verb>` in any file a user reads
+or a machine runs walks that tree. It found all six of the above, plus two nobody had named.
+
+**The convention it rests on, and the reason it is exact.** The false-positive problem is prose:
+*the linix binary*, *this linix speaks schema 2*. The obvious fix is a list of English words to
+ignore — which is one more hand-maintained list beside the program, rotting on the same schedule
+as the ones that caused this. Instead: **prose calls the product `LiNix`.** A lowercase `linix`
+at command position — opening a line, or after a quote, a backtick or a shell operator — is an
+invocation. Nine prose strings were respelled to obey it, and the tree now has no exemption list
+at all. The scanner skips exactly one file, `tests/named_commands_exist_tests.rs` itself, because
+a gate that asserts a string is absent must spell the string out; it is skipped by `file!()`
+rather than by a path literal, and a test asserts the file would otherwise have been read.
+
+**Two findings in the same report were checked and one of them was wrong.** `F-2` reads
+`harness-logic-test.sh:553`'s `install.*` exemption as excusing the install scripts from
+subcommand validation, and calls it *"the argument for including it, written down as the reason
+for excluding it"*. It is not: that exemption belongs to a different check — "every script in
+`scripts/` is run by something" — and `install.*` genuinely is not a gate. The real gap is that
+the harness's subcommand check only ever looked at the two container scripts named in `SOURCES`,
+so `install.sh` was never in its scope to be exempted from. The Rust gate covers it regardless,
+which is the point of scoping to the property: it does not have to be told which files matter.
+
+**And what it cost to fix `fleet` properly.** Renaming the string was not enough. `linix check
+--json` emitted `{section, ok, summary, next}`, and every number it reported — how many to
+install, how many to remove, how many unmanaged — existed only inside the English of `summary`.
+A consumer wanting a count had to regex `"3 to install, 1 to remove"`, which makes the wording of
+a sentence an API. Every section now carries a `counts` object beside its sentence, always
+present and always including its zeroes, so that "the key is missing" and "the count is nought"
+cannot be confused; `fleet` reads those, and reads the drift section's own `ok` for the verdict —
+which is wider than the two package counts, because a machine whose packages match and whose
+`link:` tree does not has drifted.
+
+**And under that, a family worth naming.** `fleet` reads that output over SSH, so it has to *be*
+a document, and two verbs broke that promise on the branch a **healthy** machine takes. `sync
+--dry-run --json` emitted its report inside the dry-run block, below the "nothing to do" exit, so
+a converged machine answered "is this in sync?" with the words `already up to date`. And
+`Adopter::discover` — which the `unmanaged` section calls — printed `Note: your modules did not
+resolve …` to stdout, so a machine with a broken config returned something unparseable. **A
+`--json` flag gets exercised on the busy path where there is obviously something to print; the
+empty case is the one nobody looks at, and it is the one a converged fleet is made of.** Both are
+fixed and pinned by `tests/json_output_is_a_document_tests.rs`, which drives the real binary and
+carries a busy-path control so the empty-case tests are known to be about the empty case. There
+is still no general gate that every `--json` verb emits only a document — four cases are pinned,
+the property is not.
+
+**The sibling in the same family.** `scripts/decision-count.sh` gates the register's own counts
+and printed `unrecognised 2` before exiting 0, because the unreadable bucket was never added to
+the failure count. Two entries carried statuses the counter had never learned — `DEFERRED` and
+`HALF RULED` — so every total it verified was computed over 164 of 166 entries. Three of its six
+buckets were cross-checked against the docs and three were not, and the two files each broke the
+register down as `160 ANSWERED, 2 PARKED, 1 BUILT NEVER RULED, 1 OPEN`: four correct figures
+summing to 164 beside a total of 166 that this same script had verified. **An omitted bucket
+states no wrong number anywhere**, so every per-figure check passed it. A breakdown is a claim
+about the whole register, and it is now checked as one.
+
+---

@@ -74,7 +74,7 @@ status loses that, so it is kept here:
 ## Index
 
 **One is open — `Z1`, raised 2026-08-03, a licence choice.** All 166 are accounted
-for: **160 ANSWERED, 2 PARKED, 1 BUILT NEVER RULED, 1 OPEN** — and this line
+for: **160 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 1 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`

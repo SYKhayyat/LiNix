@@ -130,6 +130,18 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> 
         }
     }
 
+    // The machine-readable plan is emitted here, above the "nothing to do" exit and not below
+    // it. It used to sit inside the dry-run block further down, which a converged machine never
+    // reached — so `sync --dry-run --json` answered every question except the one asked of it
+    // most, "is this machine already in sync?", and answered that one with the words
+    // `already up to date` where a document was expected.
+    if app.config.dry_run && opts.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&changes.generate_report())?
+        );
+    }
+
     // A config can be all dependents/schedules and no package changes (just a `service:` or a
     // `schedule:` line). That is still work, so the "nothing to do" exit has to account for
     // the dependent phase and the schedule phase too.
@@ -163,14 +175,9 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> 
         app.execs().print_plan(&state);
     }
 
-    // Dry-run is preview-only: never prompt, never mutate. (JSON dry-run emits the report.)
+    // Dry-run is preview-only: never prompt, never mutate. (The report went out above, on the
+    // path a converged machine also takes.)
     if app.config.dry_run {
-        if opts.json {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&changes.generate_report())?
-            );
-        }
         // The same phases a real run would perform, in the same order, from the same list —
         // each honours `dry_run` itself and previews instead of acting.
         let extras_undone =
@@ -562,7 +569,9 @@ pub(crate) async fn handle_sync(app: &App, locked: bool, upgrade: bool, json: bo
     // holds a package this run decided not to remove — which the lines above have just named
     // (AU1). The claim was made, in that exact state, three times: here, in `uninstall`, and
     // in `check`.
-    if done.applied == 0 && done.left_in_place == 0 {
+    // Not under `--json`: the answer there is the document, and a sentence after it is a second
+    // answer in a second language that no consumer can read.
+    if done.applied == 0 && done.left_in_place == 0 && !json {
         println!("already up to date");
     }
     Ok(())

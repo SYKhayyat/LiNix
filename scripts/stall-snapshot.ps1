@@ -114,7 +114,7 @@ if ($roots.Count -eq 0) {
     Emit "watched-name table below is the whole of the evidence this run gets."
 } else {
     Emit ""
-    Emit ("linix processes: " + $roots.Count)
+    Emit ("LiNix processes: " + $roots.Count)
 }
 
 # --- The child list. The one thing four earlier opportunities threw away. ---

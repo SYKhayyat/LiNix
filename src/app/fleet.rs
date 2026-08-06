@@ -11,7 +11,7 @@
 
 use crate::app::App;
 use crate::core::{Error, Result};
-use serde_json::Value;
+use serde_json::{json, Value};
 use tracing::{info, warn};
 
 /// Reject a host `ssh` would read as an option. A value like `-oProxyCommand=…` runs a command
@@ -54,32 +54,91 @@ async fn ssh_capture(host: &str, remote_cmd: &str) -> Result<String> {
     )))
 }
 
-/// Per-host drift summary from a remote `linix status --json`.
+/// What the remote runs. `check` is the read-only "what is going on here" command, and its
+/// `--json` form is the only output of LiNix's that is a document rather than a report: it
+/// prints the array below and returns, so nothing else lands on the remote's stdout.
+///
+/// It used to ask for a `status --json` that no longer exists — the ten looking-commands
+/// collapsed into `check` and the old names were deleted rather than aliased. So every host
+/// answered "unrecognized subcommand" with exit 2, every row read ERROR, and `linix fleet`
+/// could not report a correctly installed machine as in sync. Nothing caught it, because the
+/// gate that compares invocations to the clap surface was drawn around `args.rs`;
+/// `tests/named_commands_exist_tests.rs` is drawn around the property instead.
+const REMOTE_CHECK: &str = "linix check --json";
+
+/// What the remote runs to converge. Named beside its twin so the two cannot drift apart.
+const REMOTE_SYNC: &str = "linix sync -y";
+
+/// Per-host drift summary, read from a remote `linix check --json`.
 #[derive(Debug)]
 pub struct HostDrift {
     pub host: String,
     pub to_install: usize,
     pub to_remove: usize,
     pub unmanaged: usize,
+    /// The drift section's own verdict, which is wider than the two counts beside it: a machine
+    /// whose packages match but whose `link:` tree does not has drifted, and reporting it as in
+    /// sync would be the fleet agreeing with a machine that disagrees with its files.
+    pub drifted: bool,
     pub error: Option<String>,
 }
 
 impl HostDrift {
     pub fn in_sync(&self) -> bool {
-        self.error.is_none() && self.to_install == 0 && self.to_remove == 0
+        self.error.is_none() && !self.drifted
     }
 }
 
-/// Parse the counts out of a remote `linix status --json` document. Pure — unit tested.
-fn parse_status(json: &str) -> Result<(usize, usize, usize)> {
+/// What one host said about itself.
+struct Reading {
+    to_install: usize,
+    to_remove: usize,
+    unmanaged: usize,
+    drifted: bool,
+}
+
+/// Read a remote `linix check --json` document. Pure — unit tested.
+///
+/// The counts come from each section's `counts` object, never from its `summary` sentence.
+/// Those numbers are in the document precisely so that a fleet does not have to make an API
+/// out of somebody's phrasing.
+fn parse_check(json: &str) -> Result<Reading> {
     let v: Value = serde_json::from_str(json).map_err(|e| Error::Json(e.to_string()))?;
-    let count = |key: &str| {
-        v.get(key)
-            .and_then(|x| x.as_array())
-            .map(|a| a.len())
-            .unwrap_or(0)
+    let Some(sections) = v.as_array() else {
+        return Err(Error::Json(
+            "`linix check --json` returns an array of sections; this host returned something \
+             else. Is `linix` on its PATH, and the same version?"
+                .into(),
+        ));
     };
-    Ok((count("to_install"), count("to_remove"), count("unmanaged")))
+    let section = |name: &str| {
+        sections
+            .iter()
+            .find(|s| s.get("section") == Some(&json!(name)))
+    };
+    let count = |s: Option<&Value>, key: &str| -> usize {
+        s.and_then(|s| s.get("counts"))
+            .and_then(|c| c.get(key))
+            .and_then(|n| n.as_u64())
+            .unwrap_or(0) as usize
+    };
+
+    // A document with no drift section is not a check report, and guessing "in sync" from its
+    // absence is the one wrong answer a fleet must never give.
+    let Some(drift) = section("drift") else {
+        return Err(Error::Json(
+            "`linix check --json` returned no `drift` section, so this host's answer says \
+             nothing about whether it matches its manifests"
+                .into(),
+        ));
+    };
+
+    Ok(Reading {
+        to_install: count(Some(drift), "install"),
+        to_remove: count(Some(drift), "remove"),
+        unmanaged: count(section("unmanaged"), "unmanaged"),
+        drifted: drift.get("ok").and_then(|b| b.as_bool()) != Some(true),
+    })
 }
 
 /// Query each host's drift versus its manifests and report; optionally reconcile.
@@ -107,20 +166,30 @@ pub async fn fleet(app: &App, hosts: &[String], do_sync: bool, do_apply: bool) -
     use futures::stream::StreamExt;
     let report: Vec<HostDrift> = futures::stream::iter(hosts.iter().cloned())
         .map(|host| async move {
-            let (to_install, to_remove, unmanaged, error) =
-                match ssh_capture(&host, "linix status --json").await {
-                    Ok(json) => match parse_status(&json) {
-                        Ok((ti, tr, un)) => (ti, tr, un, None),
-                        Err(e) => (0, 0, 0, Some(e.to_string())),
-                    },
-                    Err(e) => (0, 0, 0, Some(e.to_string())),
-                };
-            HostDrift {
-                host,
-                to_install,
-                to_remove,
-                unmanaged,
-                error,
+            let read = match ssh_capture(&host, REMOTE_CHECK).await {
+                Ok(json) => parse_check(&json),
+                Err(e) => Err(e),
+            };
+            match read {
+                Ok(r) => HostDrift {
+                    host,
+                    to_install: r.to_install,
+                    to_remove: r.to_remove,
+                    unmanaged: r.unmanaged,
+                    drifted: r.drifted,
+                    error: None,
+                },
+                // A host that could not answer is not a host that answered "in sync". `in_sync`
+                // already refuses on the error; `drifted` agrees with it rather than sitting at
+                // a default that would read as converged if the two ever came apart.
+                Err(e) => HostDrift {
+                    host,
+                    to_install: 0,
+                    to_remove: 0,
+                    unmanaged: 0,
+                    drifted: true,
+                    error: Some(e.to_string()),
+                },
             }
         })
         .buffered(app.config.network_parallel.max(1))
@@ -155,10 +224,10 @@ pub async fn fleet(app: &App, hosts: &[String], do_sync: bool, do_apply: bool) -
     // Reconciliation. `--apply` pushes to every reachable host; `--sync` touches only drift.
     if do_apply || do_sync {
         let targets: Vec<&HostDrift> = if do_apply {
-            println!("\nApplying `linix sync -y` to all reachable machines ...");
+            println!("\nApplying `{}` to all reachable machines ...", REMOTE_SYNC);
             report.iter().filter(|h| h.error.is_none()).collect()
         } else {
-            println!("\nReconciling drifted machines with `linix sync -y` ...");
+            println!("\nReconciling drifted machines with `{}` ...", REMOTE_SYNC);
             report
                 .iter()
                 .filter(|h| !h.in_sync() && h.error.is_none())
@@ -174,7 +243,7 @@ pub async fn fleet(app: &App, hosts: &[String], do_sync: bool, do_apply: bool) -
             futures::stream::iter(targets)
                 .map(|h| async move {
                     info!("syncing {} ...", h.host);
-                    let outcome = ssh_capture(&h.host, "linix sync -y")
+                    let outcome = ssh_capture(&h.host, REMOTE_SYNC)
                         .await
                         .map(|_| ())
                         .map_err(|e| e.to_string());
@@ -206,20 +275,83 @@ pub async fn fleet(app: &App, hosts: &[String], do_sync: bool, do_apply: bool) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory;
+
+    /// A drifted machine, in the exact shape `linix check --json` prints.
+    const DRIFTED: &str = r#"[
+        {"section":"config","ok":true,"summary":"9 package(s) declared","next":null,
+         "counts":{"declared":9}},
+        {"section":"drift","ok":false,"summary":"2 to install, 1 to remove, nothing else",
+         "next":"linix sync","counts":{"install":2,"remove":1,"skipped":0,"unverifiable":0}},
+        {"section":"unmanaged","ok":false,"summary":"3 package(s) `linix adopt` would take",
+         "next":"linix adopt","counts":{"unmanaged":3}}
+    ]"#;
+
+    /// The same machine, converged. This is the document `fleet` could never obtain: it asked
+    /// every host for `linix status --json`, a command that has not existed since the ten
+    /// looking-commands became `check`, so no host ever reported itself in sync.
+    const CONVERGED: &str = r#"[
+        {"section":"drift","ok":true,"summary":"the machine matches your files","next":null,
+         "counts":{"install":0,"remove":0,"skipped":0,"unverifiable":0}},
+        {"section":"unmanaged","ok":true,"summary":"everything you chose is managed",
+         "next":null,"counts":{"unmanaged":0}}
+    ]"#;
 
     #[test]
-    fn parse_status_counts_arrays() {
-        let json = r#"{
-            "to_install": [{"backend":"apt","name":"a"},{"backend":"apt","name":"b"}],
-            "to_remove": [{"backend":"apt","name":"c"}],
-            "unmanaged": []
-        }"#;
-        assert_eq!(parse_status(json).unwrap(), (2, 1, 0));
+    fn a_drifted_host_reports_its_counts() {
+        let r = parse_check(DRIFTED).unwrap();
+        assert_eq!((r.to_install, r.to_remove, r.unmanaged), (2, 1, 3));
+        assert!(r.drifted);
     }
 
     #[test]
-    fn parse_status_tolerates_missing_keys() {
-        assert_eq!(parse_status("{}").unwrap(), (0, 0, 0));
+    fn a_converged_host_reports_in_sync() {
+        let r = parse_check(CONVERGED).unwrap();
+        assert_eq!((r.to_install, r.to_remove, r.unmanaged), (0, 0, 0));
+        assert!(!r.drifted);
+    }
+
+    /// Drift is the section's own verdict, not the two counts beside it. A machine whose
+    /// packages match and whose `link:` tree does not has drifted, and a fleet that called it
+    /// in sync would be agreeing with the one machine that disagrees with its files.
+    #[test]
+    fn resource_drift_alone_is_still_drift() {
+        let json = r#"[{"section":"drift","ok":false,
+            "summary":"0 to install, 0 to remove, 1 resource to place","next":"linix sync",
+            "counts":{"install":0,"remove":0,"skipped":0,"unverifiable":0}}]"#;
+        let r = parse_check(json).unwrap();
+        assert_eq!((r.to_install, r.to_remove), (0, 0));
+        assert!(r.drifted, "the section said it needs attention");
+    }
+
+    /// The three ways a host can answer with something that is not a check report. Each has to
+    /// be an error and none may read as "in sync" — the answer a fleet must never invent.
+    #[test]
+    fn an_answer_that_is_not_a_check_report_is_an_error() {
+        for (what, json) in [
+            ("not JSON at all", "linix: unrecognized subcommand 'status'"),
+            ("JSON, but not an array of sections", r#"{"to_install":[]}"#),
+            (
+                "an array with no drift section",
+                r#"[{"section":"health","ok":true}]"#,
+            ),
+        ] {
+            assert!(
+                parse_check(json).is_err(),
+                "{} was accepted as a drift report",
+                what
+            );
+        }
+    }
+
+    /// A section present but silent about a number is nought, not a parse failure: `check` may
+    /// grow sections, and a fleet that refuses a document it does not fully recognise is a
+    /// fleet that stops working the next time `check` gains a line.
+    #[test]
+    fn a_missing_count_is_nought() {
+        let r = parse_check(r#"[{"section":"drift","ok":true,"counts":{}}]"#).unwrap();
+        assert_eq!((r.to_install, r.to_remove, r.unmanaged), (0, 0, 0));
+        assert!(!r.drifted);
     }
 
     #[test]
@@ -242,6 +374,7 @@ mod tests {
             to_install: 0,
             to_remove: 0,
             unmanaged: 3,
+            drifted: false,
             error: None,
         };
         assert!(clean.in_sync(), "unmanaged packages alone are not drift");
@@ -250,6 +383,7 @@ mod tests {
             to_install: 1,
             to_remove: 0,
             unmanaged: 0,
+            drifted: true,
             error: None,
         };
         assert!(!drift.in_sync());
@@ -258,8 +392,27 @@ mod tests {
             to_install: 0,
             to_remove: 0,
             unmanaged: 0,
+            drifted: true,
             error: Some("x".into()),
         };
         assert!(!errored.in_sync());
+    }
+
+    /// The commands sent over the wire are commands. `linix status --json` sat here for as long
+    /// as `fleet` existed; `tests/named_commands_exist_tests.rs` now reads these two constants
+    /// out of the source and checks them against clap, and this says the same thing from
+    /// inside, where a reader of this module can see it.
+    #[test]
+    fn what_the_remote_is_asked_to_run() {
+        for cmd in [REMOTE_CHECK, REMOTE_SYNC] {
+            let verb = cmd.split_whitespace().nth(1).expect("a verb");
+            assert!(
+                crate::cli::args::Cli::command()
+                    .get_subcommands()
+                    .any(|s| s.get_name() == verb),
+                "`{}` is not a command LiNix has, so no host can answer it",
+                cmd
+            );
+        }
     }
 }

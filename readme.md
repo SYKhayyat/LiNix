@@ -607,7 +607,7 @@ History is git — there is no second generation store.
 linix history            # browse commits, see what each changed, roll back from inside
 linix diff HEAD~3        # what changed, in packages rather than text
 linix rollback HEAD~3    # restore those manifests, then converge the machine to match
-linix undo               # interactive snapshot gallery (btrfs / ZFS / Timeshift / Windows)
+linix snapshot restore   # interactive snapshot gallery (btrfs / ZFS / Timeshift / Windows)
 ```
 
 `rollback` refuses to apply unconfirmed in a non-interactive shell; pass `--yes` for CI.
@@ -654,7 +654,7 @@ a number typed into a README does.
 | | |
 |---|---|
 | `sync` | Install, remove and update until the machine matches your files |
-| `status` | Read-only: what `sync` would change |
+| `check` | Read-only: drift, unmanaged software, backend health — what needs you |
 | `install` / `uninstall` | Edit the file and sync |
 | `list` / `search` / `info` | What is installed, what exists, what a package is |
 | `update` / `upgrade` | Refresh metadata; upgrade managed packages |
@@ -665,12 +665,12 @@ a number typed into a README does.
 
 | | |
 |---|---|
-| `check` | Parse everything the active profiles reach; report errors, change nothing |
 | `why` | Why a package is installed: where it is declared and what depends on it |
-| `unmanaged` | What `linix adopt` would take: installed, you chose it, nothing declares it |
-| `absent` | Every `absent:` rule in force, and which module it comes from |
-| `conflicts` | The same tool pinned to different versions by different backends |
-| `doctor` | Per-backend readiness, config and layout integrity; `--fix` repairs what is safe |
+| `check config` | Parse everything the active profiles reach; report errors, change nothing |
+| `check unmanaged` | What `linix adopt` would take: installed, you chose it, nothing declares it |
+| `check absent` | Every `absent:` rule in force, and which module it comes from |
+| `check conflicts` | The same tool pinned to different versions by different backends |
+| `check health` | Per-backend readiness. It only reports — `linix heal` is what repairs |
 | `path` | Print your config repo directory, so `cd $(linix path)` works. `--explain` says what decided it; `--set DIR` stores it |
 | `edit` | Open the repo, or one file in it, in `$VISUAL`/`$EDITOR` |
 
@@ -695,7 +695,7 @@ a number typed into a README does.
 | `lock` | Record every managed package's version so `sync --locked` reproduces it elsewhere |
 | `export` | Emit native manifests (Brewfile, requirements.txt, package.json, Aptfile) |
 | `bundle` | An offline/air-gapped bundle of config, lockfile and resolved package list |
-| `sbom` / `audit` | CycloneDX bill of materials; scan managed packages against OSV.dev |
+| `sbom` / `check security` | CycloneDX bill of materials; scan managed packages against OSV.dev |
 
 **Running things**
 
@@ -773,7 +773,7 @@ named and skipped rather than rebuilt. It cannot be put in `schedules`.
     # a committed file is a leaked secret (secrets are environment-only in LiNix).
     payload=$(cat)
     curl -sf -X POST -H 'Content-type: application/json' \
-      --data "$(printf '{"text":"linix on %s: %s"}' "$(hostname)" "$payload")" \
+      --data "$(printf '{"text":"LiNix on %s: %s"}' "$(hostname)" "$payload")" \
       "$LINIX_SLACK_WEBHOOK"
     ```
     Approve it once with `linix lock` (it runs code, so the ledger gates it), and swap the

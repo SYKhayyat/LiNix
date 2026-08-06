@@ -75,7 +75,7 @@ async fn main() -> Result<()> {
 
     // 3. CLI & Config Bootstrap
     // Expand user-defined command aliases (config `[command_aliases]`) BEFORE clap parses, so
-    // `linix up` can stand in for `linix upgrade --all`. Built-in subcommands always win.
+    // an alias `up` can stand in for `upgrade --all`. Built-in subcommands always win.
     let raw_argv: Vec<String> = std::env::args().collect();
     let prefs = preferences_path_from_argv(&raw_argv)
         .and_then(|p| linix::config::Config::from_file(&p).ok());
@@ -497,7 +497,7 @@ pub(crate) async fn handle_self_upgrade(git: Option<&str>, check: bool) -> Resul
             .await
             .context("running `cargo install`")?;
         if !second.success() {
-            anyhow::bail!("cargo install failed; linix was not upgraded.");
+            anyhow::bail!("cargo install failed; LiNix was not upgraded.");
         }
     }
     println!("Done. Run `linix --version` to confirm the new build.");
@@ -681,8 +681,8 @@ pub(crate) fn known_subcommands() -> std::collections::HashSet<String> {
 /// Global flags that take a separate-argument value (`-c path`), asked of clap rather than
 /// hand-listed. A hand-written list is a second copy of a fact clap already owns, and it
 /// silently rotted: it named `-b`/`-g` after both were deleted, and `--progress`, which is
-/// a `bool` and consumes nothing — so `linix --progress up` skipped past `up` and the alias
-/// never expanded.
+/// a `bool` and consumes nothing — so `--progress` in front of an alias swallowed the alias
+/// name, and it never expanded.
 pub(crate) fn global_value_flags() -> std::collections::HashSet<String> {
     let mut out = std::collections::HashSet::new();
     for a in <Cli as clap::CommandFactory>::command().get_arguments() {
@@ -760,7 +760,7 @@ pub(crate) fn expand_command_aliases(
 ///
 /// Pure and unit-tested. Each step inherits the leading global flags (`-c path`) so config
 /// selection is the same for every step, and gains no trailing arguments — a verb is a fixed
-/// composition, and threading `linix refresh --dry-run` into some steps and not others is the
+/// composition, and threading `linix update --dry-run` into some steps and not others is the
 /// kind of surprise the closed vocabulary exists to avoid. **Composition only:** a step whose
 /// first token is not a built-in subcommand is an error, because a verb that runs arbitrary argv
 /// is `exec:` wearing a command's clothes (U33, off by default).

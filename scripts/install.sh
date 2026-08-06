@@ -81,7 +81,7 @@ else
 fi
 
 say "running health check..."
-"$LINIX" doctor || true
+"$LINIX" check health || true
 
 if [ -z "${LINIX_NO_ADOPT:-}" ]; then
   printf '\033[1;36mlinix\033[0m adopt the packages already installed on this machine into a manifest now? [y/N] '
@@ -93,4 +93,4 @@ if [ -z "${LINIX_NO_ADOPT:-}" ]; then
   esac
 fi
 
-say "done. Try \`linix status\` or \`linix doctor\`."
+say "done. Try \`linix check\` or \`linix sync\`."

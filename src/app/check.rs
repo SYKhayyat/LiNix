@@ -14,6 +14,7 @@
 //! The default output is one line per section: a verdict, and the command that acts on it. A
 //! section named on the command line prints its detail instead.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 /// One question `check` can answer. Each is a section of the summary and a valid argument.
@@ -98,6 +99,14 @@ pub struct Finding {
     pub summary: String,
     /// What to run about it. `None` when there is nothing to do.
     pub next: Option<String>,
+    /// The numbers `summary` states, in a form nothing has to read English to get.
+    ///
+    /// Every number a section reports goes here as well as into the sentence. Without it the
+    /// only machine-readable thing in `check --json` was the `ok` flag, so `linix fleet` — whose
+    /// entire job is "how far is each machine from its manifests" — could learn *that* a host
+    /// had drifted and never *how much*. A consumer reaching for a count had to regex
+    /// `"3 to install, 1 to remove"`, which makes the wording of a sentence an API.
+    pub counts: BTreeMap<&'static str, usize>,
 }
 
 impl Finding {
@@ -107,6 +116,7 @@ impl Finding {
             ok: true,
             summary: summary.into(),
             next: None,
+            counts: BTreeMap::new(),
         }
     }
 
@@ -120,7 +130,14 @@ impl Finding {
             ok: false,
             summary: summary.into(),
             next: Some(next.into()),
+            counts: BTreeMap::new(),
         }
+    }
+
+    /// Record the numbers this section's sentence states.
+    pub fn counting(mut self, counts: impl IntoIterator<Item = (&'static str, usize)>) -> Finding {
+        self.counts.extend(counts);
+        self
     }
 
     /// The summary line: section, verdict, and the command to run about it.

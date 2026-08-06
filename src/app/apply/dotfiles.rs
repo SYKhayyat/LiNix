@@ -67,7 +67,7 @@ impl Dotfiles<'_> {
                 "refusing to place {} file(s) outside your home directory without \
                  confirmation in a non-interactive shell.\n\n\
                  What to do:\n  \
-                 linix status        see every destination first\n  \
+                 linix check         see every destination first\n  \
                  linix sync --yes    place them",
                 targets.len()
             )));

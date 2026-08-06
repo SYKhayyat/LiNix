@@ -537,9 +537,9 @@ fatal: unable to auto-detect email address",
         // this module. Change one, change the other.
         HERMETIC.call_once(|| {
             for (k, v) in [
-                ("GIT_AUTHOR_NAME", "linix test"),
+                ("GIT_AUTHOR_NAME", "linix-tests"),
                 ("GIT_AUTHOR_EMAIL", "test@example.invalid"),
-                ("GIT_COMMITTER_NAME", "linix test"),
+                ("GIT_COMMITTER_NAME", "linix-tests"),
                 ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
                 // Absent paths, so no `~/.gitconfig` or system config reaches these repos:
                 // a host that signs every commit would otherwise fail them at `git commit`.

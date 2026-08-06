@@ -417,7 +417,7 @@ pub enum Commands {
         #[arg(long)]
         all: bool,
 
-        /// Upgrade only packages that `linix audit` reports as vulnerable, to their fixed version
+        /// Upgrade only packages that `linix check security` reports as vulnerable, to their fixed version
         #[arg(long)]
         security: bool,
 

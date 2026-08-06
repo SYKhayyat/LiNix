@@ -248,7 +248,7 @@ for src in $SOURCES; do run_against "$src"; done
 # ---------------------------------------------------------------------------
 # Every subcommand a harness invokes must exist in the binary.
 #
-# This is not pedantry: `linix doctor`, `status`, `absent`, `unmanaged`, `conflicts` and
+# This is not pedantry: the `doctor`, `status`, `absent`, `unmanaged`, `conflicts` and
 # `audit` were folded into `check <section>`, the host harness was never updated, and
 # clap answered "unrecognized subcommand" with exit 2. One of those calls builds
 # READY_LIST — so the entire real-lifecycle section and the entire plan-smoke section
@@ -439,7 +439,7 @@ cat > "$_tiny" <<'TINYEOF'
 LX="${LINIX:-linix}"
 ok()  { echo "  PASS  $1"; }
 nok() { echo "  FAIL  $1"; }
-if "$LX" --version >/dev/null 2>&1; then ok "linix runs"; else nok "linix runs"; fi
+if "$LX" --version >/dev/null 2>&1; then ok "LiNix runs"; else nok "LiNix runs"; fi
 if "$LX" init      >/dev/null 2>&1; then ok "init runs";  else nok "init runs";  fi
 if "$LX" eval | grep -q schema;       then ok "eval emits a model"; else nok "eval emits a model"; fi
 TINYEOF

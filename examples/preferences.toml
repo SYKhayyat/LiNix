@@ -94,7 +94,7 @@ protected_packages = [
 # deny_packages = ["leftpad"]
 # pinned_only = false      # every install must carry an explicit @version=
 # require_snapshot = false # refuse to change anything unless a snapshot can be taken
-# deny_vulnerable = false  # refuse to apply when `linix audit` flags a managed package
+# deny_vulnerable = false  # refuse to apply when `linix check security` flags a managed package
 # confine_bin = true       # refuse a downloaded file a destination outside the backend's
                            # bin directory (SEC1). Not one of the nine: it is checked where
                            # a backend deploys, which is the only place that path exists.

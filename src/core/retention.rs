@@ -70,7 +70,7 @@ pub struct RetentionItem {
     /// Optional human label (e.g. "known-good-2026-07"); empty when unlabeled.
     pub label: String,
     pub timestamp: DateTime<Utc>,
-    /// Imperatively pinned (e.g. `linix generation pin <id>`); always survives.
+    /// Imperatively pinned by whatever stores the entry; always survives.
     pub pinned: bool,
 }
 

@@ -27,21 +27,28 @@ counts="$(awk '
 /^## [A-Z][0-9]+[a-z]?$/ { id=$2; found=0; total++; next }
 id != "" && !found && /\*\*Status:/ {
     found=1
-    if ($0 ~ /Status:[ ]*ANSWERED/)      answered++
-    else if ($0 ~ /Status:[ ]*PARKED/)   parked++
-    else if ($0 ~ /Status:[ ]*BUILT/)    built++
-    else if ($0 ~ /Status:[ ]*OPEN/)     open++
-    else                                 other++
+    if ($0 ~ /Status:[ ]*ANSWERED/)        answered++
+    else if ($0 ~ /Status:[ ]*PARKED/)     parked++
+    else if ($0 ~ /Status:[ ]*DEFERRED/)   deferred++
+    else if ($0 ~ /Status:[ ]*HALF/)       half++
+    else if ($0 ~ /Status:[ ]*BUILT/)      built++
+    else if ($0 ~ /Status:[ ]*OPEN/)       open++
+    else                                   other++
 }
-END { printf "%d %d %d %d %d %d\n", total, answered+0, parked+0, built+0, open+0, other+0 }
+END {
+    printf "%d %d %d %d %d %d %d %d\n",
+        total, answered+0, parked+0, built+0, open+0, other+0, deferred+0, half+0
+}
 ' "$REG")"
 
 set -- $counts
-TOTAL=$1; ANSWERED=$2; PARKED=$3; BUILT=$4; OPEN=$5; OTHER=$6
+TOTAL=$1; ANSWERED=$2; PARKED=$3; BUILT=$4; OPEN=$5; OTHER=$6; DEFERRED=$7; HALF=$8
 
 echo "decision register: $TOTAL entries"
 echo "  ANSWERED           $ANSWERED"
 echo "  PARKED             $PARKED"
+echo "  DEFERRED           $DEFERRED"
+echo "  HALF RULED         $HALF"
 echo "  BUILT, NEVER RULED $BUILT"
 echo "  OPEN               $OPEN"
 [ "$OTHER" = 0 ] || echo "  unrecognised       $OTHER"
@@ -51,6 +58,14 @@ echo "  OPEN               $OPEN"
 # --- the check: every number written down must equal the number counted ----------------
 BAD=0
 say_bad() { echo "  BAD   $1"; BAD=$((BAD + 1)); }
+
+# An entry whose status this script cannot read is an entry it did not count into any of the
+# four buckets — so every total below is computed over a register the script only partly
+# understood, and the "ok, every documented count matches" at the end is a claim about the
+# part it read. This printed `unrecognised 2` and exited 0 for as long as the check existed,
+# while `SPEC.md` and `decisions.md` both advertised 164 against 166 entries.
+[ "$OTHER" = 0 ] || say_bad "$OTHER entr(y/ies) have a **Status: this script cannot read, so \
+every count below is over $((TOTAL - OTHER)) of $TOTAL entries"
 
 # Any figure the docs state about the register's size has to be one of the counted ones.
 # Written as "every stated total is $TOTAL" rather than as a regex per sentence, so a new
@@ -68,17 +83,46 @@ for f in "$REG" "$MAP"; do
     # scanned instead, it is *banned* below: `[0-9]+ answered` also matches "D5 answered the
     # ownership half" and "59 open questions", so a case-blind grep reports ordinary prose as a
     # miscount and a checker that cries wolf gets switched off.
-    for n in $(grep -oE '[0-9]+ ANSWERED' "$f" | grep -oE '^[0-9]+' | sort -u); do
-        [ "$n" = "$ANSWERED" ] || say_bad "$(basename "$f") states $n ANSWERED where the register holds $ANSWERED"
-    done
-    for n in $(grep -oE '[0-9]+ PARKED' "$f" | grep -oE '^[0-9]+' | sort -u); do
-        [ "$n" = "$PARKED" ] || say_bad "$(basename "$f") states $n PARKED where the register holds $PARKED"
-    done
     # OPEN was never cross-checked in prose at all — only in the table below. The file that got
     # this wrong got it wrong on this status.
-    for n in $(grep -oE '[0-9]+ OPEN' "$f" | grep -oE '^[0-9]+' | sort -u); do
-        [ "$n" = "$OPEN" ] || say_bad "$(basename "$f") states $n OPEN where the register holds $OPEN"
+    #
+    # Every bucket, and as a loop rather than a block each, because three of the six were
+    # checked and three were not: a breakdown reading "160 ANSWERED, 2 PARKED, 1 BUILT NEVER
+    # RULED, 1 OPEN" adds to 164 and sat beside a total of 166 this same script had verified.
+    # The unchecked buckets are exactly where it went wrong, which is what an unchecked bucket
+    # is for.
+    for pair in "ANSWERED:$ANSWERED" "PARKED:$PARKED" "DEFERRED:$DEFERRED" \
+                "HALF:$HALF" "BUILT:$BUILT" "OPEN:$OPEN"; do
+        word="${pair%%:*}"
+        want="${pair##*:}"
+        for n in $(grep -oE "[0-9]+ $word" "$f" | grep -oE '^[0-9]+' | sort -u); do
+            [ "$n" = "$want" ] \
+                || say_bad "$(basename "$f") states $n $word where the register holds $want"
+        done
     done
+
+    # A breakdown that leaves a bucket out states no wrong number anywhere — it is a right
+    # number missing — so every check above passes it. Both files broke the register down as
+    # "160 ANSWERED, 2 PARKED, 1 BUILT NEVER RULED, 1 OPEN", omitted DEFERRED and HALF RULED,
+    # and so advertised 164 of 166 while each figure they printed was correct. A breakdown is
+    # a claim about the whole register, and this is the half of it that says so.
+    SUMS="${TMPDIR:-/tmp}/linix-decision-sums.$$"
+    awk -v total="$TOTAL" '
+    {
+        n = 0; sum = 0; rest = $0
+        while (match(rest, /[0-9]+ (ANSWERED|PARKED|DEFERRED|HALF|BUILT|OPEN)/)) {
+            sum += substr(rest, RSTART, RLENGTH) + 0
+            n++
+            rest = substr(rest, RSTART + RLENGTH)
+        }
+        # Three statuses on one line is a breakdown; one or two is a sentence about a status.
+        if (n >= 3 && sum != total)
+            printf "line %d breaks the register down as %d, and it holds %d\n", NR, sum, total
+    }' "$f" > "$SUMS"
+    while IFS= read -r l; do
+        [ -n "$l" ] && say_bad "$(basename "$f"): $l"
+    done < "$SUMS"
+    rm -f "$SUMS"
     # The ban: a count written in lower case is invisible to the three greps above, so it is a
     # failure in itself rather than a style note. Matched only where the number is a count and
     # not the tail of an ID (`D5 answered`) and the word is not starting a phrase

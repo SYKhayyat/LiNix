@@ -343,7 +343,10 @@ impl Adopter {
                 // one of the ways out of a broken config. It IS a reason to say what could not
                 // be checked, rather than quietly re-enabling the duplication.
                 warn!("could not read your declarations, so this run cannot tell whether a discovered package is already declared: {e}");
-                println!(
+                // stderr, not stdout: `discover` is also what `check --json` calls, and this
+                // note landing in front of the document made the answer unparseable on exactly
+                // the machines least able to spare it. The note is for a person either way.
+                eprintln!(
                     "Note: your modules did not resolve ({e}), so packages you have already\n\
                      declared may be listed below. Run `linix check config`."
                 );
@@ -401,7 +404,7 @@ impl Adopter {
             if !found.skipped.is_empty() {
                 println!();
                 print_left_alone(&found.skipped);
-        print_skipped_backends(&found.skipped_backends);
+                print_skipped_backends(&found.skipped_backends);
             }
             return Ok(());
         }

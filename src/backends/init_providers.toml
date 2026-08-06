@@ -17,7 +17,7 @@ os = "linux"
 detect = "systemctl"
 # `--no-pager` on every row, not only the two that print a screenful. systemctl decides to page
 # from the terminal and from $SYSTEMD_PAGER, and a pager waits for a keypress that a captured
-# child never receives — `linix status` hung there, on a read-only command.
+# child never receives — `linix check health` hung there, on a read-only command.
 enable  = [["systemctl", "--no-pager", "enable", "--", "{name}"]]
 disable = [["systemctl", "--no-pager", "disable", "--", "{name}"]]
 start   = [["systemctl", "--no-pager", "start", "--", "{name}"]]

@@ -150,10 +150,13 @@ pub(crate) async fn check_summary(app: &App, json: bool) -> Result<()> {
             .await;
     let state = match resolver.resolve_model().await {
         Ok(state) => {
-            findings.push(Finding::ok(
-                Section::Config,
-                format!("{} package(s) declared", state.total_present()),
-            ));
+            findings.push(
+                Finding::ok(
+                    Section::Config,
+                    format!("{} package(s) declared", state.total_present()),
+                )
+                .counting([("declared", state.total_present())]),
+            );
             Some(state)
         }
         Err(e) => {
@@ -188,46 +191,73 @@ pub(crate) async fn check_summary(app: &App, json: bool) -> Result<()> {
             // machine holding a managed, undeclared, protected package (AU1). The command
             // named is the one that explains the decision, because `sync` is precisely the
             // command that will not act on it.
-            (Ok(c), Ok(_)) if !c.skipped.is_empty() => findings.push(Finding::attention(
-                Section::Drift,
-                format!(
-                    "{} package(s) installed and declared nowhere that `sync` will not remove: {}",
-                    c.skipped.len(),
-                    c.skipped
-                        .iter()
-                        .map(|s| format!("{} ({})", s.key, s.reason))
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                ),
-                "linix protected",
-            )),
-            (Ok(c), Ok(r)) if c.is_empty() && r.is_empty() => {
-                findings.push(Finding::ok(
+            (Ok(c), Ok(_)) if !c.skipped.is_empty() => findings.push(
+                Finding::attention(
                     Section::Drift,
-                    match r.unverifiable.len() {
-                        0 => "the machine matches your files".to_string(),
-                        // Not "it matches": LiNix looked at the packages and at every resource
-                        // it can read back, and these it cannot. Saying so is the difference
-                        // between a converged machine and an unexamined one.
-                        n => format!(
-                            "the machine matches your files, except {} resource(s) LiNix \
-                             cannot read back ({})",
-                            n,
-                            r.unverifiable.join(", ")
-                        ),
-                    },
-                ));
+                    format!(
+                        "{} package(s) installed and declared nowhere that `sync` will not \
+                         remove: {}",
+                        c.skipped.len(),
+                        c.skipped
+                            .iter()
+                            .map(|s| format!("{} ({})", s.key, s.reason))
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    ),
+                    "linix protected",
+                )
+                .counting([
+                    ("install", c.total_install()),
+                    ("remove", c.total_remove()),
+                    ("skipped", c.skipped.len()),
+                ]),
+            ),
+            (Ok(c), Ok(r)) if c.is_empty() && r.is_empty() => {
+                findings.push(
+                    Finding::ok(
+                        Section::Drift,
+                        match r.unverifiable.len() {
+                            0 => "the machine matches your files".to_string(),
+                            // Not "it matches": LiNix looked at the packages and at every
+                            // resource it can read back, and these it cannot. Saying so is the
+                            // difference between a converged machine and an unexamined one.
+                            n => format!(
+                                "the machine matches your files, except {} resource(s) LiNix \
+                                 cannot read back ({})",
+                                n,
+                                r.unverifiable.join(", ")
+                            ),
+                        },
+                    )
+                    // Zeroes, spelled out. A consumer that has to treat "the key is absent" and
+                    // "the count is nought" as the same thing will one day be handed a real
+                    // absence and call the machine converged.
+                    .counting([
+                        ("install", 0),
+                        ("remove", 0),
+                        ("skipped", 0),
+                        ("unverifiable", r.unverifiable.len()),
+                    ]),
+                );
             }
-            (Ok(c), Ok(r)) => findings.push(Finding::attention(
-                Section::Drift,
-                format!(
-                    "{} to install, {} to remove, {}",
-                    c.total_install(),
-                    c.total_remove(),
-                    r.summary()
-                ),
-                "linix sync",
-            )),
+            (Ok(c), Ok(r)) => findings.push(
+                Finding::attention(
+                    Section::Drift,
+                    format!(
+                        "{} to install, {} to remove, {}",
+                        c.total_install(),
+                        c.total_remove(),
+                        r.summary()
+                    ),
+                    "linix sync",
+                )
+                .counting([
+                    ("install", c.total_install()),
+                    ("remove", c.total_remove()),
+                    ("skipped", c.skipped.len()),
+                    ("unverifiable", r.unverifiable.len()),
+                ]),
+            ),
             (Err(e), _) | (_, Err(e)) => findings.push(Finding::attention(
                 Section::Drift,
                 format!("could not be planned — {}", e),
@@ -237,38 +267,47 @@ pub(crate) async fn check_summary(app: &App, json: bool) -> Result<()> {
 
         // absent — declarations that are in force.
         let absent = state.absent().count();
-        findings.push(if absent == 0 {
-            Finding::ok(Section::Absent, "nothing is declared absent")
-        } else {
-            Finding::ok(Section::Absent, format!("{} line(s) in force", absent))
-        });
+        findings.push(
+            if absent == 0 {
+                Finding::ok(Section::Absent, "nothing is declared absent")
+            } else {
+                Finding::ok(Section::Absent, format!("{} line(s) in force", absent))
+            }
+            .counting([("absent", absent)]),
+        );
 
         // conflicts — the same package declared two ways.
         let specs: Vec<linix::core::PackageSpec> =
             state.packages.values().flatten().cloned().collect();
         let conflicts = linix::app::conflicts::detect_conflicts(&specs);
-        findings.push(if conflicts.is_empty() {
-            Finding::ok(Section::Conflicts, "none")
-        } else {
-            Finding::attention(
-                Section::Conflicts,
-                format!("{} package(s) declared two ways", conflicts.len()),
-                "linix check conflicts",
-            )
-        });
+        findings.push(
+            if conflicts.is_empty() {
+                Finding::ok(Section::Conflicts, "none")
+            } else {
+                Finding::attention(
+                    Section::Conflicts,
+                    format!("{} package(s) declared two ways", conflicts.len()),
+                    "linix check conflicts",
+                )
+            }
+            .counting([("conflicts", conflicts.len())]),
+        );
     }
 
     // unmanaged — what adopt would take.
     match app.adopter().discover().await {
-        Ok(found) if found.adopt.is_empty() => findings.push(Finding::ok(
-            Section::Unmanaged,
-            "everything you chose is managed",
-        )),
-        Ok(found) => findings.push(Finding::attention(
-            Section::Unmanaged,
-            format!("{} package(s) `linix adopt` would take", found.adopt.len()),
-            "linix adopt",
-        )),
+        Ok(found) if found.adopt.is_empty() => findings.push(
+            Finding::ok(Section::Unmanaged, "everything you chose is managed")
+                .counting([("unmanaged", 0)]),
+        ),
+        Ok(found) => findings.push(
+            Finding::attention(
+                Section::Unmanaged,
+                format!("{} package(s) `linix adopt` would take", found.adopt.len()),
+                "linix adopt",
+            )
+            .counting([("unmanaged", found.adopt.len())]),
+        ),
         Err(e) => findings.push(Finding::attention(
             Section::Unmanaged,
             format!("could not be crawled — {}", e),
@@ -298,32 +337,42 @@ pub(crate) async fn check_summary(app: &App, json: bool) -> Result<()> {
             linix::core::HealthStatus::Absent => {}
         }
     }
-    findings.push(if critical > 0 {
-        Finding::attention(
-            Section::Health,
-            format!("{} ready, {} cannot run", ok, critical),
-            "linix check health",
-        )
-    } else if degraded > 0 {
-        Finding::attention(
-            Section::Health,
-            format!("{} ready, {} degraded", ok, degraded),
-            "linix check health",
-        )
-    } else {
-        Finding::ok(Section::Health, format!("{} backend(s) ready", ok))
-    });
+    findings.push(
+        if critical > 0 {
+            Finding::attention(
+                Section::Health,
+                format!("{} ready, {} cannot run", ok, critical),
+                "linix check health",
+            )
+        } else if degraded > 0 {
+            Finding::attention(
+                Section::Health,
+                format!("{} ready, {} degraded", ok, degraded),
+                "linix check health",
+            )
+        } else {
+            Finding::ok(Section::Health, format!("{} backend(s) ready", ok))
+        }
+        .counting([
+            ("ready", ok),
+            ("degraded", degraded),
+            ("critical", critical),
+        ]),
+    );
 
     // security — anything managed with a known advisory.
     match linix::app::insight::audit(app).await {
-        Ok(report) if report.findings.is_empty() => {
-            findings.push(Finding::ok(Section::Security, "no known advisories"))
-        }
-        Ok(report) => findings.push(Finding::attention(
-            Section::Security,
-            format!("{} package(s) with advisories", report.findings.len()),
-            "linix check security",
-        )),
+        Ok(report) if report.findings.is_empty() => findings.push(
+            Finding::ok(Section::Security, "no known advisories").counting([("advisories", 0)]),
+        ),
+        Ok(report) => findings.push(
+            Finding::attention(
+                Section::Security,
+                format!("{} package(s) with advisories", report.findings.len()),
+                "linix check security",
+            )
+            .counting([("advisories", report.findings.len())]),
+        ),
         // The advisory database is a network call: not reaching it is a gap in the report,
         // never a clean bill of health.
         Err(e) => findings.push(Finding::attention(
@@ -337,15 +386,18 @@ pub(crate) async fn check_summary(app: &App, json: bool) -> Result<()> {
     let unapproved = linix::app::events::EventHooks::load(&app.config)
         .unapproved()
         .len();
-    findings.push(if unapproved == 0 {
-        Finding::ok(Section::Approvals, "every event hook will run")
-    } else {
-        Finding::attention(
-            Section::Approvals,
-            format!("{} event hook(s) will not run until approved", unapproved),
-            "linix lock",
-        )
-    });
+    findings.push(
+        if unapproved == 0 {
+            Finding::ok(Section::Approvals, "every event hook will run")
+        } else {
+            Finding::attention(
+                Section::Approvals,
+                format!("{} event hook(s) will not run until approved", unapproved),
+                "linix lock",
+            )
+        }
+        .counting([("unapproved", unapproved)]),
+    );
 
     if json {
         let rows: Vec<_> = findings
@@ -356,6 +408,9 @@ pub(crate) async fn check_summary(app: &App, json: bool) -> Result<()> {
                     "ok": f.ok,
                     "summary": f.summary,
                     "next": f.next,
+                    // Always present, even when empty: a consumer that has to distinguish
+                    // "no counts" from "the key is missing" writes the branch wrong once.
+                    "counts": f.counts,
                 })
             })
             .collect();
@@ -964,7 +1019,7 @@ pub(crate) async fn check_health(app: &App, json: bool) -> Result<()> {
     );
     // Readiness roster: one `[READY] <backend>` line per healthy backend, printed at column 0
     // (unindented, uncolored) so it is both human-readable AND machine-greppable —
-    // `linix doctor | grep '^\[READY\]'` enumerates every usable backend on this host. Without
+    // `linix check health | grep '^\[READY\]'` enumerates every usable backend on this host. Without
     // this, a healthy `doctor` printed nothing about which package managers actually work.
     for (name, r) in &reports {
         if r.status == HealthStatus::Ok {

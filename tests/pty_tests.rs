@@ -121,7 +121,7 @@ fn a_pty_and_a_pipe_report_the_same_packages() {
         .env("LINIX_CONFIG_DIR", root.join("cfg"))
         .env("LINIX_DATA_DIR", root.join("data"))
         .output()
-        .expect("linix should run");
+        .expect("LiNix should run");
     let piped = String::from_utf8_lossy(&piped.stdout).into_owned();
     let under_pty = linix_under_pty(&root, "list -b apt --json");
 
@@ -165,7 +165,7 @@ fn the_failure_class_line_is_for_a_pipe_and_not_for_a_terminal() {
         .env("LINIX_CONFIG_DIR", root.join("cfg"))
         .env("LINIX_DATA_DIR", root.join("data"))
         .output()
-        .expect("linix should run");
+        .expect("LiNix should run");
     let piped = format!(
         "{}{}",
         String::from_utf8_lossy(&piped.stdout),

@@ -14,6 +14,94 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Session 2026-08-05 — the gate moved to the property (`F-2`)
+
+**One finding from the whole-repo Lamdan review, scoped out and built: `F-2` — every gate in this
+repository is drawn around the artifact that was under review, never around the property, so the
+property escapes through the next copy of the fact.** The full argument is in `why.md`; the rule
+is `target-state.md` II.21. What follows is what it found and what changed.
+
+### The gate
+
+`tests/named_commands_exist_tests.rs` — four tests, no exemption list. It reads clap's own
+command tree through `CommandFactory` (names, aliases, nested subcommands, hidden commands) and
+asserts that every `linix <verb>` written in `src/`, `tests/`, `scripts/`, `docker/`, `examples/`,
+`.github/` and `readme.md` walks that tree. `docs/` is out of scope by design: it is a record, and
+a record must be free to name a command on the day it was deleted.
+
+It rests on a convention it also enforces — **prose calls the product `LiNix`; a lowercase `linix`
+at command position is an invocation.** That is what makes the scan exact without a list of
+English words to ignore, which would be one more artifact-shaped thing to rot.
+
+`readme.md`'s verb tables are checked by the same tree, since a table row is a command name with
+no `linix ` in front of it and the prefix scan structurally cannot see one. A verb table is
+identified by *what it contains* — a first column of backticked command paths, mostly live — and
+the number of them is pinned, so a table cannot rot past recognition and quietly leave the gate.
+
+Both halves were mutation-tested: `install.sh` put back to `doctor` and one readme row put back to
+`doctor`, each watched go red, then restored.
+
+### What it found — 34 invocations, six of them live defects
+
+`linix fleet` asked every host for `linix status --json`, so it could not report a correctly
+installed machine as in sync — 265 lines of a command that had never worked. `install.sh` and
+`install.ps1` ran `doctor` to vouch for the binary they had just built, and signed off
+recommending `status`. `purge-undeclared` told the user to run `linix undo`. `args.rs` documented
+`upgrade --security` in terms of `linix audit` — inside the file `help_map_tests.rs` gates.
+`apply/dotfiles.rs` and `backends/init_providers.toml` each named `linix status`. `readme.md`
+listed six dead verbs across two tables. The rest were prose respelled to `LiNix`.
+
+### What `fleet` cost to fix properly
+
+Renaming the string was not enough: `check --json` emitted `{section, ok, summary, next}`, and
+every count it reported lived only inside the English of `summary`. Each section now carries a
+`counts` object beside its sentence — always present, always including its zeroes — and `fleet`
+reads those plus the drift section's own `ok`, which is wider than the two package counts because
+a machine whose packages match and whose `link:` tree does not has drifted. `parse_check` refuses
+a document with no drift section rather than reading absence as convergence, and a host that could
+not answer is marked drifted so `--sync` cannot skip it on a failed read.
+
+### And the family under that: a `--json` path that is not a document
+
+`fleet` reads that output over SSH, so it has to *be* a document. Two verbs broke that, both on
+the branch a **healthy** machine takes:
+
+- **`sync --dry-run --json` on a converged machine printed no document at all.** The report was
+  emitted inside the dry-run block and the "nothing to do" exit returns above it, so the answer to
+  "is this machine already in sync?" was the words `already up to date`. The report now goes out
+  above that exit, and the sentence is suppressed under `--json`.
+- **`check --json` could be preceded by a plain-text note.** `Adopter::discover`, which the
+  `unmanaged` section calls, printed `Note: your modules did not resolve …` to stdout — so a
+  machine with a broken config, the one least able to spare a working report, returned something
+  unparseable. It goes to stderr now, beside the `warn!` that already said it.
+
+A `--json` flag gets exercised on the busy path where there is obviously something to print.
+**The empty case is the one nobody looks at, and it is the one a converged fleet is made of.**
+`tests/json_output_is_a_document_tests.rs` drives the real binary in a disposable config and data
+directory and pins both, plus the counts, plus a busy-path control so the empty-case tests are
+known to be about the empty case. Both were mutation-tested red before the fix went back in.
+
+**Not built, and named rather than hidden:** there is no general gate that every `--json`-capable
+verb emits only a document. Four cases are pinned; the property is not. That is the honest state.
+
+### The sibling in the same family
+
+`scripts/decision-count.sh` printed `unrecognised 2` and exited 0. Two entries carried statuses it
+had never learned (`DEFERRED`, `HALF RULED`), so every total it verified covered 164 of 166
+entries; three of its six buckets were cross-checked against the docs and three were not; and both
+`SPEC.md` and `decisions.md` broke the register down as four correct figures summing to 164 beside
+a total of 166 the same script had verified. **An omitted bucket states no wrong number anywhere.**
+The unreadable bucket now fails, all six buckets are cross-checked by one loop, and a documented
+breakdown must account for the whole register.
+
+### Not done, and deliberately
+
+`F-2` also reads `harness-logic-test.sh:553`'s `install.*` exemption as excusing the install
+scripts from subcommand validation. Checked: it does not — that exemption belongs to the "every
+script in `scripts/` is run by something" check, and `install.*` genuinely is not a gate. The real
+gap was that the harness's subcommand check only ever looked at the two container scripts in
+`SOURCES`. Left as it stands; the Rust gate covers `install.*` regardless, which is the point.
+
 ## Session 2026-08-04 — the ratchets, and what they found
 
 **The direction doc's seven steps, taken in order.** Steps 1 and 7 were already done; the
