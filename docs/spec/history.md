@@ -6603,3 +6603,116 @@ Historical documents keep the branch names they cite. `GRADE-2026-07-2x` through
 that stays true after the ref is gone; the commit SHAs they quote survive the deletion and still
 resolve on `main`. Rewriting them to say `main` would falsify a record to tidy a name — the same
 reason `Q31` left the old spellings in place.
+
+## 2026-08-06 — the planner stops asking what a package depends on (`Y9`, lamdan F-1)
+
+`lamdan/whole-repo-2026-08-05.md` ranked **F-1** the strongest finding in the review and the top
+speed one: the dependency DAG splits a manager's batch, and the code's own doc comment measures
+the difference at 3,161 ms against 31,901 ms. Taken as the single thing this session owns. It is
+accurate, and it is bigger than it was filed as.
+
+### What it actually was
+
+The planner ran `get_dependencies` on every declared spec (`planner.rs::direct_dependencies`),
+added each returned name to the desired set as an install node of its own
+(`expand_transitive_dependencies`), and then asked *those* nodes the same question. Seven
+backends answered for real — brew, dnf, flatpak, pacman, snap, vscode, xbps. Three consequences,
+of which the review named one:
+
+1. **It took ownership of packages nobody declared.** `sync/mod.rs:632` writes one `state.add`
+   per install node, so `apt:nginx` on one line put nginx's direct dependencies into
+   `registry.json` as packages LiNix *manages*, with `source: None` — a value no other
+   `state.add` caller in the tree produces. II.7 says LiNix removes what it manages and you
+   stopped declaring. Those rows survived only by being re-derived identically each run, and
+   `direct_dependencies` drops a spec's entry on *any* error: **one failed `apt-cache depends`
+   takes the whole set out of the desired state at once**, and the next plan is a mass removal
+   held back by `max_removals` alone. `Queryable::tracks_manual` refuses a backend that cannot
+   tell a dependency from a choice, with the outcome written beside it — *"gets a system's entire
+   dependency graph adopted and then purged"* — and `adopt.rs:445` carries the same warning from
+   when it happened there. The planner was writing those rows behind both.
+2. **It split the command line it had the best reason to keep.** Each such node wired an edge,
+   and an edge splits the wave (II.19) — so the one case where LiNix *knew* two declared packages
+   were related was the one case it refused to put on one `apt install`.
+3. **It cost a subprocess per declared package**, plus one per discovered dependency, upstream of
+   the fan-out — where time lost cannot be recovered downstream. This is the part F-1 reported.
+
+### It had been diagnosed five times, one backend at a time
+
+Every `ManagerConfig` in `registry.rs` sets `depends_args: None` — 17 literals, zero `Some`,
+including the shared `base_config` the rest build from. zypper's carries the whole finding as a
+comment — *"zypper resolves its own dependency closure at install time, so LiNix re-deriving one
+adds nodes the planner then tries to install by name"* — written after `zypper info --requires`
+returned `Loading`, `Reading` and `No` and the first real zypper run in the project's history died
+on a `requires` cycle between three adverbs. apt's had a dedicated test asserting apt answers with
+an empty set, whose comment said it *"guards against the expansion being silently re-enabled"*.
+
+Every one of those gates was drawn around the backend under review at the time. None of them
+reached the seven hand-written backends that answered for real. **This is F-2's mechanism, in the
+place F-2 did not look.**
+
+### What was built
+
+`direct_dependencies`, `dependency_memo` and `expand_transitive_dependencies` deleted;
+`build_execution_graph` keeps only the `@requires` edges a user wrote, and is no longer `async`
+because it no longer spawns anything. `MetadataProvider` stays and is unchanged for its two real
+consumers — `linix info <name>` prints dependencies, `linix why` searches them for reverse
+dependencies — and its doc no longer instructs backends to return names the planner will install.
+`StateRegistry::add_simple`, zero callers and the only other way to write a `source: None` row,
+deleted with it.
+
+The gate is drawn around the property this time: `tests/a_plan_installs_only_declarations_tests.rs`
+scans all of `src/` and fails on any call to `get_dependencies`/`as_metadata_provider` outside a
+two-file reporting allowlist that carries the sentence justifying each. Mutation-tested — a
+reintroduced call in `planner.rs` fails it by file and line — and the oracle test asserts the
+allowlisted files really do still ask, so a stale entry fails loudly instead of going quiet.
+apt's per-backend test was deleted in the same change: two gates for one rule is how the weaker
+one keeps passing.
+
+### What was deliberately not done
+
+A `@requires` edge between two packages of the **same** manager still splits that manager's
+command line, though `apt install a b` orders the two correctly on its own. `Y1` binds that clause
+in as many words, so reversing it is the owner's call and not the builder's — and unlike the
+native edges, it only fires where somebody wrote `@requires`.
+
+Ruled into `decisions.md` as **`Y9`, BUILT NEVER RULED**, rule in II.7 and II.19, reason in
+**V.115a**. Register now **167 entries, 160 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 2 BUILT
+NEVER RULED, 1 OPEN**, counted by `scripts/decision-count.sh --check`.
+
+### Measured, both sides, in a container
+
+`docker/integration/measure-batching.sh` — Y1's counting-shim instrument pointed at this
+question. Arch image, `pacman` wrapped, six declared packages, five of them missing, the same
+script run against a binary built from each tree:
+
+| | before | after |
+|---|---|---|
+| `pacman` invocations | **8** | **2** |
+| of which `pacman -Si` | **6** | **0** |
+| child time, summed (`--timings`) | 3.70 s | 1.20 s |
+| wall clock | 1.58 s | 1.33 s |
+| install commands | 1 × 5 names | 1 × 5 names |
+
+**The wall clock is the smallest number and it is the honest one.** The six queries ran
+concurrently — `--timings` reported 2.3× overlap — so they cost about 0.47 s of latency instead
+of the 2.67 s they spent. Rust's fan-out was hiding most of the waste rather than avoiding it,
+which is exactly why nine grade rounds walked past it: the run did not *look* slow. What is left
+is two commands, `pacman -Q` then one `pacman -S` with every name on it, and `--timings` reports
+two waves — the single quiet moment being "what is already installed", which has to be answered
+before anything can be planned. There is no third thing to delete.
+
+### The pacman dependency query had never worked
+
+The batch did not split in the *before* run either, and the reason is worth more than the
+measurement. `pacman -Si` prints `Depends On      :` — six spaces. `pacman.rs` stripped the
+literal `"Depends On     :"` — five. The prefix never matched, so `pacman:` answered every
+dependency query with an empty list for the entire life of the backend: six subprocesses per
+sync, to parse nothing.
+
+Nobody noticed because nothing downstream needed the answer to be right — the only consumer
+installed whatever came back, and was strictly better off with nothing. Fixed in the same
+change, matched by key rather than by column, with `pacman -Si jq`'s real output captured from
+the container as the fixture, and the neighbouring rows (`Optional Deps`, `Conflicts With`) in
+the test because they are the same shape and a prefix match would take them too. It matters now
+in a way it did not before: `linix info` *shows* that answer to a person, so an empty one is a
+lie rather than a lucky escape.

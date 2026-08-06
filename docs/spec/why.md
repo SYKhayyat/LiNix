@@ -2502,6 +2502,99 @@ installed, so it is fetched once per manager per run and a mutating command is w
 
 ---
 
+**V.115a — Why LiNix never asks what a package depends on.** *(2026-08-06, `Y9`. Rule in
+II.7 and II.19.)*
+
+V.115 says a wave splits on a dependency edge. It did not say where the edges came from, and
+most of them came from LiNix asking. The planner ran `get_dependencies` on every declared spec
+— `apt-cache depends`, `dnf repoquery --requires --resolve`, `pacman -Si`, `brew deps`,
+`xbps-query -x`, `snap info`, `flatpak info --show-metadata` — added every returned name to the
+desired set as an install node of its own, then asked *those* nodes the same question.
+
+**Three things were wrong with it, and only the third was ever reported.**
+
+**It manufactured managed packages.** `sync/mod.rs` writes one `state.add` per install node, so
+`apt:nginx` on one line took ownership of nginx's direct dependencies in `registry.json` — with
+`source: None`, the one value no other writer in the tree produces. And *"what LiNix may remove:
+what it manages and you stopped declaring"* (II.7) then points straight at them. They survived
+only by being re-derived identically on the next run: `direct_dependencies` drops a spec's
+entry on any error, so **one failed `apt-cache depends` takes every one of those packages out of
+the desired set at the same moment** and the next plan is a mass removal, stopped — if it is
+stopped — by `max_removals` alone. `Queryable::tracks_manual` refuses a backend that cannot tell
+a dependency from a choice, with the reason written beside it: *"gets a system's entire
+dependency graph adopted and then purged."* The planner was writing the same rows behind that
+refusal. `adopt` was fixed for this in 2026-07; the planner was not, because the fix was drawn
+around `adopt`.
+
+**It split the command line it had the best reason to keep.** The node wired an edge, and an
+edge splits the wave — so the one case where LiNix *knew* two declared packages were related is
+the one case it refused to put on one `apt install`. V.115 measured that at 3,161 ms against
+31,901 ms. `rebuild --backend apt` takes a backend's whole set down and puts it back up, which
+maximises the number of such edges.
+
+**It cost a subprocess per declared package**, plus one per discovered dependency, before any
+install began — upstream of the fan-out, so the time was unrecoverable downstream.
+
+**Measured, both sides, in the Arch integration image with `pacman` wrapped in a counting shim**
+(`docker/integration/measure-batching.sh`; Y1's instrument, this question). Six declared
+packages, five of them missing:
+
+| | before | after |
+|---|---|---|
+| `pacman` invocations | **8** | **2** |
+| of which `pacman -Si` (the dependency query) | **6** | **0** |
+| child time, summed | 3.70 s | 1.20 s |
+| wall clock | 1.58 s | 1.33 s |
+| install commands / widest | 1 × 5 names | 1 × 5 names |
+
+The wall clock moves least, and that is the honest reading: the six queries ran concurrently
+(`--timings` reported 2.3× overlap), so they cost ~0.47 s of latency rather than 2.67 s — Rust's
+fan-out was hiding most of the waste rather than avoiding it. **What the run does now is two
+commands: ask pacman what is installed, then install the difference in one line.** There is no
+third thing left to remove; `--timings` reports 2 waves, and the one quiet moment is the answer
+to "what is already here", which has to land before anything can be planned.
+
+**And the queries were buying nothing at all on this manager, literally.** `pacman -Si` prints
+`Depends On      :` with six spaces; the parser stripped a five-space literal, so it matched
+nothing and `pacman:` answered every dependency query with an empty list for the whole life of
+the backend. Six subprocesses per sync to parse nothing, and nothing ever noticed, because the
+only consumer installed whatever came back and was better off with nothing. The parser is fixed
+in the same change — matched by key, with `pacman -Si jq`'s real output as the fixture — because
+`linix info` now *shows* that answer to a person, and an empty one there is a lie rather than a
+lucky escape.
+
+**The buy was nothing.** Every manager here resolves and installs its own dependency closure at
+install time; `apt install nginx` installs libfoo whether or not LiNix mentions it, and `apt
+install nginx libfoo` orders the two correctly on its own. `planner.rs`'s own recursion guard
+said so — *"Every real package manager resolves and installs the full transitive closure itself
+at install time, so LiNix re-deriving it is redundant"* — directly above the code that re-derived
+one level of it.
+
+**And it had already been diagnosed, one backend at a time.** Every `ManagerConfig` in
+`registry.rs` sets `depends_args: None` — 17 literals and zero `Some`, including the shared
+`base_config` the rest are built from; zypper's carries the whole finding as a comment — *"zypper
+resolves its own dependency closure at install time, so LiNix re-deriving one adds nodes the
+planner then tries to install by name"* — after `zypper info --requires` returned `Loading`,
+`Reading` and `No`, and the first real zypper run in the project's history died on a `requires`
+cycle between three adverbs. apt's had a dedicated test asserting apt returns nothing, whose
+comment said it *"guards against the expansion being silently re-enabled"*. Every one of those
+was drawn around the backend under review at the time, and seven hand-written backends — brew,
+dnf, flatpak, pacman, snap, vscode, xbps — answered for real the whole time.
+
+So the rule is at the caller, where one sentence covers all 23 `MetadataProvider`
+implementations and the next one:
+**planning never reads a `MetadataProvider`**, gated by
+`tests/a_plan_installs_only_declarations_tests.rs`. Reporting one is untouched and is the
+feature: `linix info <name>` prints dependencies and `linix why` searches them for reverse
+dependencies.
+
+**What could reverse it:** a manager that installs a declared package and *not* its
+dependencies, leaving the closure to the caller. None of the 23 that answer does; a backend
+that did would have to say so, and would need its dependencies declared rather than
+discovered.
+
+---
+
 **V.116 — Why processes and sockets get different numbers.** *(Owner ruling, 2026-08-02 —
 `Y2`. Rule in II.19.)*
 

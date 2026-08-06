@@ -37,29 +37,30 @@ async fn test_kernel_isolates_both_config_and_data_roots() {
 // LOGIC TESTS: PLANNING & DEPENDENCIES
 // ============================================================================
 
-/// Verifies that the ChangePlanner correctly unrolls native transitive
-/// dependencies provided by a backend's MetadataProvider capability.
+/// **One declaration is one node, whatever `brew deps` says.** (`Y9`, V.115a.)
+///
+/// This test asserted the opposite until 2026-08-06 — that declaring `brew:pkg-a` produced two
+/// nodes, the second being whatever `brew deps` named. That second node was installed, and then
+/// written into `registry.json` as a package LiNix *manages*, with nobody declaring it: II.7
+/// then makes it drift, and `sync` removes what is drift. brew installs its own dependencies at
+/// `brew install` time regardless, so the whole exchange bought a subprocess, a graph edge that
+/// split brew's command line in two, and a package LiNix would later take away.
 #[tokio::test]
-async fn test_planner_recursive_native_dependencies() {
+async fn a_declared_package_is_one_node_however_many_things_it_depends_on() {
     let kernel = TestKernel::new().await;
     let state_lock = kernel.state.lock().await;
 
-    // Modernized: ChangePlanner requires Registry, State reference, and Config
     let planner = ChangePlanner::new(kernel.app.registry.clone(), &state_lock, &kernel.app.config);
 
-    // Mock Scenario: brew package 'pkg-a' natively depends on 'pkg-b'
-    let mock_output = "pkg-b\n";
+    // brew, asked, would say pkg-a needs pkg-b. Nothing asks.
     kernel.mock_executor.set_response(
         "brew deps -- pkg-a",
         Ok(DryRunOutput {
-            stdout: mock_output.as_bytes().to_vec(),
+            stdout: b"pkg-b\n".to_vec(),
             stderr: vec![],
         }
         .into()),
     );
-    kernel
-        .mock_executor
-        .set_response("brew deps -- pkg-b", Ok(DryRunOutput::default().into()));
 
     let mut desired = HashMap::new();
     desired.insert(
@@ -73,18 +74,20 @@ async fn test_planner_recursive_native_dependencies() {
         }],
     );
 
-    // Execute Planning
-    // Resolves E0061: Passes None (Global Sync)
     let plan = planner
         .plan(&desired, None)
         .await
-        .expect("Critical Path Error: Planning failed for native dependencies.");
+        .expect("Critical Path Error: Planning failed.");
 
-    // Verification: Closure must contain 2 nodes (pkg-a and native-dep pkg-b)
     assert_eq!(
         plan.graph.node_count(),
-        2,
-        "Planner failed to resolve recursive native closure."
+        1,
+        "one line was declared, so one package is LiNix's to install and to own"
+    );
+    assert_eq!(
+        plan.graph.edge_count(),
+        0,
+        "nobody wrote `@requires`, so nothing may split brew's command line"
     );
 }
 

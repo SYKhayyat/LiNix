@@ -866,9 +866,9 @@ impl<'a> SyncEngine<'a> {
             // Only edges *inside* the recovery set: a requirement that is already installed is
             // not this run's to schedule.
             // Keyed `backend:name`, which is the form `requires` is written in — the same
-            // lookup `ChangePlanner::wire_requires` does against its own install map. Keying it
-            // by the bare name would have matched nothing and silently produced an edgeless
-            // graph, which is a plan that runs but in the wrong order.
+            // lookup `ChangePlanner::build_execution_graph` does against its own install map.
+            // Keying it by the bare name would have matched nothing and silently produced an
+            // edgeless graph, which is a plan that runs but in the wrong order.
             let by_key: std::collections::HashMap<String, NodeIndex> = nodes
                 .iter()
                 .filter_map(|(idx, entry, _)| match &entry.action {

@@ -326,12 +326,18 @@ pub trait RepoManager: Send + Sync {
     async fn list_repos(&self) -> Result<Vec<(String, String)>>;
 }
 
-/// The `ChangePlanner` expands the returned names recursively against the same backend,
-/// so they must be the names that backend itself uses — a normalized or display name
-/// re-enters the graph as an unresolvable node.
+/// What a manager says one package depends on — **reported, never acted on**.
+///
+/// `linix info <name>` prints it and `linix why` searches it for reverse dependencies.
+/// Nothing plans from it. The planner used to: it added each returned name as an install node,
+/// which took ownership of a package nobody declared and wired an edge that split the manager's
+/// own command line in two. Whatever a manager installs alongside what you asked for is that
+/// manager's business, and it does it at install time whether or not LiNix asks first.
+///
+/// So a backend answering here owes only what it can honestly report — direct dependencies or
+/// the whole closure, whichever its own verb gives — and owes nothing about installability.
 #[async_trait]
 pub trait MetadataProvider: Send + Sync {
-    /// Direct dependencies only; the caller handles transitive expansion.
     async fn get_dependencies(&self, name: &str) -> Result<Vec<String>>;
 }
 

@@ -1315,6 +1315,14 @@ Both were found by *building the missing harness and running it*, which is the p
    like apt, dnf and pacman — it was the only system manager that asked), and
    `parse_dependency_output` now takes only what a dependency label introduces.
 
+   **Corrected 2026-08-06 (`Y9`):** "the only system manager that asked" was true of the
+   `ManagerConfig` rows and false of the tree. `dnf` and `pacman` are hand-written modules and
+   do not read `depends_args` at all — both ran a real dependency query (`dnf repoquery
+   --requires --resolve`, `pacman -Si`) for another six days, alongside brew, flatpak, snap,
+   vscode and xbps. Setting the row was a fix scoped to the artifact under review; the property
+   — nothing that plans asks a backend what a package depends on — is now the rule, and
+   `tests/a_plan_installs_only_declarations_tests.rs` is the gate.
+
 ## What is still open, and what it needs
 
 `LIFECYCLE_GAP_CEILING=12` on the container harness, 15 on Windows. Lower them, do not raise:

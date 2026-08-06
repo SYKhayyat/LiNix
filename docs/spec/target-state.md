@@ -998,9 +998,9 @@ identical from the outside and only one of them is fixed by editing the line.
 uses `b` uses `a`. **Self-reference is the one-element case** and is the same error.
 
 **`@requires` cycles are the same error** — `apt:a@requires=apt:b` and
-`apt:b@requires=apt:a`. Same graph, same walk, same answer: the planner orders by the native
-dependency graph plus `@requires` edges, and a loop has no order. **It owes the same error as
-a `use` loop**: which packages, and the file and line each edge came from.
+`apt:b@requires=apt:a`. Same graph, same walk, same answer: the planner orders by the
+`@requires` edges, and a loop has no order. **It owes the same error as a `use` loop**: which
+packages, and the file and line each edge came from.
 
 **The error names every file and line in the loop, in order, and stops.** It does not dedupe
 and carry on (V.45):
@@ -1026,8 +1026,11 @@ this host's facts like everything else, so a `when` arm written for another mach
 not walked.
 
 **Ordering is the planner's job, never the file layout's.** Repos first → refresh indexes →
-packages (native dependency graph + `@requires` edges) → things depending on packages
-(services, shims, links).
+packages (`@requires` edges) → things depending on packages (services, shims, links).
+
+**Within packages, the only ordering LiNix imposes is the one you wrote.** A manager resolves
+and installs its own dependency closure at install time, so LiNix does not ask what a package
+depends on and does not order by the answer. **V.115a.**
 
 **What LiNix may remove: what it manages and you stopped declaring. Plus `absent:`. Nothing
 else, ever.**
@@ -2070,8 +2073,8 @@ longest instead of the sum only if the ones that hand work to another thread get
 an `async fn` with no `.await` in it holds every future after it in the tuple until it returns.
 
 **One command per manager per wave, not one per package.** Every install and every removal that
-is ready at the same moment, for the same manager, with no dependency edge between them, goes on
-**one** command line. A dependency edge splits the wave; an install and a removal are two
+is ready at the same moment, for the same manager, with no `@requires` edge between them, goes on
+**one** command line. A `@requires` edge splits the wave; an install and a removal are two
 commands; the line is bounded so it fits (100 names, 6000 bytes). Rollback granularity is
 unchanged: what each package looked like before is captured per package, and a batch that fails
 fails every package in it — which is what a single node failure already meant, since any failure

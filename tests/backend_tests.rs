@@ -222,35 +222,13 @@ async fn test_link_backend_vfs_integrity() {
         .expect("Link purge failed");
 }
 
-#[cfg(target_os = "linux")]
-#[tokio::test]
-async fn test_metadata_provider_resolution() {
-    let kernel = TestKernel::new().await;
-    let backend = kernel.app.registry.get("apt").expect("Missing apt backend");
-
-    let provider = backend
-        .as_metadata_provider()
-        .expect("Apt must implement MetadataProvider trait.");
-
-    // apt DELIBERATELY disables transitive-dependency expansion (`depends_args: None` in the
-    // registry): apt resolves its own dependency closure at `apt-get install` time, and LiNix
-    // re-deriving it caused a recursive `apt depends` fan-out (jq -> libc6 -> libgcc-s1 -> …)
-    // that hung `status`/`sync`. So the provider must return an EMPTY set for apt. Asserting
-    // that here guards against the expansion being silently re-enabled and re-introducing the
-    // hang. (The generic depends-parsing path itself is covered by the backends::generic test
-    // `get_dependencies_parses_names_without_sudo`, which uses a backend that DOES set
-    // `depends_args`.)
-    let deps = provider
-        .get_dependencies("curl")
-        .await
-        .expect("Dependency resolution failed");
-
-    assert!(
-        deps.is_empty(),
-        "apt intentionally does not expand dependencies (anti-hang); got {:?}",
-        deps
-    );
-}
+// `test_metadata_provider_resolution` stood here: it asserted that *apt* answers a dependency
+// query with an empty set, "to guard against the expansion being silently re-enabled". It
+// guarded one backend against a defect that lived in the planner, and the six other managers
+// with a real dependency query were never in its reach. The property it wanted —
+// nothing that plans asks a backend what a package depends on — is
+// `tests/a_plan_installs_only_declarations_tests.rs`, which holds for every backend including
+// the ones not written yet. Two gates for one rule is how the weaker one keeps passing.
 
 // ============================================================================
 // REBUILD ORDERING (K1)

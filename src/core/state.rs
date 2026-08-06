@@ -280,10 +280,6 @@ impl StateRegistry {
         debug!("Package {}:{} is now under management.", backend, name);
     }
 
-    pub fn add_simple(&mut self, backend: &str, name: &str, version: Option<String>) {
-        self.add(backend, name, version, HashMap::new(), None, false);
-    }
-
     pub fn remove(&mut self, backend: &str, name: &str) {
         if let Some(pos) = self
             .packages

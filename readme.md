@@ -843,7 +843,7 @@ list_args    = ["list"]
 # first-class extras, each optional:
 essential_args   = ["essential"]         # what the removal guard must never take
 enumerate_args   = ["list", "--all"]     # the catalogue `re:` expands against
-depends_args     = ["deps"]              # a package's dependencies
+depends_args     = ["deps"]              # a package's dependencies, for `packages` and `why`
 repo_add_args    = ["repo", "add"]       # `repo:` lines
 repo_remove_args = ["repo", "rm"]
 repo_list_args   = ["repo", "list"]

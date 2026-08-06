@@ -78,6 +78,46 @@ impl BackendCore for PacmanBackendCore {
     }
 }
 
+/// The `Depends On` row of a `pacman -Si` report, as package names.
+///
+/// **Matched by key, not by column.** This stripped the literal `"Depends On     :"` — five
+/// spaces — and Arch prints six, so the prefix never matched and `pacman:` answered every
+/// dependency query with an empty list for the whole life of the backend. Nothing caught it,
+/// because the only consumer was a planner that installed whatever came back and was better off
+/// with nothing (`Y9`); now that the answer is only ever *shown*, an empty one is a lie a user
+/// reads. Captured from `pacman -Si jq` in the Arch integration image, 2026-08-06:
+///
+/// ```text
+/// Depends On      : glibc  oniguruma
+/// ```
+///
+/// `Optional Deps` and `Conflicts With` are rows of the same shape, which is why the key is
+/// compared whole rather than by prefix.
+fn parse_depends_on(output: &str) -> Vec<String> {
+    let mut deps = Vec::new();
+    for line in output.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        if key.trim() != "Depends On" {
+            continue;
+        }
+        for part in value.split_whitespace() {
+            // pacman writes `None` where there are no dependencies at all.
+            if part == "None" {
+                continue;
+            }
+            // `glibc>=2.36` and `sh=5` are one dependency each; the constraint is not part of
+            // the name a later command would have to use.
+            let name = part.split(['>', '<', '=']).next().unwrap_or(part);
+            if !name.is_empty() {
+                deps.push(name.to_string());
+            }
+        }
+    }
+    deps
+}
+
 #[async_trait]
 impl MetadataProvider for PacmanBackendCore {
     async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
@@ -85,19 +125,7 @@ impl MetadataProvider for PacmanBackendCore {
             .executor
             .run_output("pacman", &["-Si", name], false)
             .await?;
-        let mut deps = Vec::new();
-        for line in output.lines() {
-            if let Some(dep_line) = line.strip_prefix("Depends On     :") {
-                let parts: Vec<&str> = dep_line.split_whitespace().collect();
-                for part in parts {
-                    if part != "None" {
-                        let clean_dep = part.split(['>', '<', '=']).next().unwrap_or(part);
-                        deps.push(clean_dep.to_string());
-                    }
-                }
-            }
-        }
-        Ok(deps)
+        Ok(parse_depends_on(&output))
     }
 }
 
@@ -367,8 +395,10 @@ pub fn register(
     ));
 }
 
+/// What pacman prints, and what LiNix reads out of it. Both halves are here because both are
+/// the same risk: a report whose shape is assumed rather than captured.
 #[cfg(test)]
-mod outdated_semantics_tests {
+mod pacman_output_tests {
     use super::*;
     use crate::core::executor::MockExecutor;
     use crate::core::Searchable;
@@ -449,5 +479,44 @@ mod outdated_semantics_tests {
             1,
             "one call for the whole machine"
         );
+    }
+
+    /// Verbatim from `pacman -Si` in the Arch integration image, 2026-08-06 — the whole point
+    /// being the column width, which the old fixed-width `strip_prefix` was one space short of.
+    const SI_JQ: &str = "\
+Repository      : extra
+Name            : jq
+Version         : 1.8.1-1
+Depends On      : glibc  oniguruma
+Optional Deps   : None
+Conflicts With  : None
+Description     : Command-line JSON processor
+";
+
+    #[test]
+    fn a_depends_row_is_matched_by_its_key_and_not_by_its_column() {
+        assert_eq!(parse_depends_on(SI_JQ), vec!["glibc", "oniguruma"]);
+    }
+
+    #[test]
+    fn a_row_of_the_same_shape_that_is_not_a_dependency_is_left_alone() {
+        // `Optional Deps` and `Conflicts With` sit in the same column and are not dependencies;
+        // matching by prefix on `Depends` would have taken `Optional Deps` too once the width
+        // was right.
+        let deps = parse_depends_on(SI_JQ);
+        assert!(!deps.iter().any(|d| d == "None"), "{:?}", deps);
+        assert!(!deps.iter().any(|d| d == "Command-line"), "{:?}", deps);
+    }
+
+    #[test]
+    fn a_version_constraint_is_not_part_of_the_name() {
+        let out = "Depends On      : glibc>=2.36  sh=5  libc.so\n";
+        assert_eq!(parse_depends_on(out), vec!["glibc", "sh", "libc.so"]);
+    }
+
+    #[test]
+    fn a_package_with_no_dependencies_reports_none_of_them() {
+        assert!(parse_depends_on("Depends On      : None\n").is_empty());
+        assert!(parse_depends_on("Name            : tree\n").is_empty());
     }
 }

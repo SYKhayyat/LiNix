@@ -320,11 +320,6 @@ pub struct ChangePlanner<'a> {
     /// scoped: a managed package whose backend is not in `priority` is left alone, never
     /// removed, because "not listed = LiNix does not use it" (II.6).
     enabled: Vec<String>,
-    /// `backend:name` → its direct native dependencies, for the length of this plan.
-    ///
-    /// The expansion pass and the graph-building pass ask about overlapping sets, and each
-    /// `get_dependencies` is a subprocess. See [`ChangePlanner::direct_dependencies`].
-    dependency_memo: dashmap::DashMap<String, Vec<String>>,
 }
 
 impl<'a> ChangePlanner<'a> {
@@ -338,7 +333,6 @@ impl<'a> ChangePlanner<'a> {
             state,
             config,
             enabled: Vec::new(),
-            dependency_memo: dashmap::DashMap::new(),
         }
     }
 
@@ -462,18 +456,16 @@ impl<'a> ChangePlanner<'a> {
         let (wanted, unwanted) = partition_by_presence(desired);
 
         let filtered_desired = self.apply_scope_filtering(&wanted, scope.as_ref());
-        let expanded_desired = self
-            .expand_transitive_dependencies(&filtered_desired)
-            .await?;
+        let declared = Self::declared_specs(&filtered_desired);
 
         // Precompute desired keys for O(1) lookup
-        let desired_keys: HashSet<String> = expanded_desired.keys().cloned().collect();
+        let desired_keys: HashSet<String> = declared.keys().cloned().collect();
 
         // Every manager this plan will consult, asked before anything is asked about a package
         // — see `installed_sets`. Hoisted out of the removal block below because a scoped plan
         // skips that block and still asks each of these managers, one spec at a time, for the
         // listing it could have had at the start.
-        let consulted: std::collections::BTreeSet<String> = expanded_desired
+        let consulted: std::collections::BTreeSet<String> = declared
             .values()
             .map(|spec| spec.backend.clone())
             .chain(
@@ -584,9 +576,8 @@ impl<'a> ChangePlanner<'a> {
         }
 
         // Installations and dependency graph
-        let target_specs = self.identify_needed_actions(&expanded_desired).await?;
-        self.build_execution_graph(&mut changes, &target_specs)
-            .await?;
+        let target_specs = self.identify_needed_actions(&declared).await?;
+        self.build_execution_graph(&mut changes, &target_specs)?;
 
         // Stable order, for the same reason `generate_report` sorts: the crawl that produced
         // these follows a HashMap, so the same machine printed them differently each run.
@@ -774,55 +765,19 @@ impl<'a> ChangePlanner<'a> {
         Ok(false)
     }
 
-    /// Each spec's *direct* native dependencies, asked concurrently and asked once.
+    /// One install node per declared spec, plus the `@requires` edges written between them.
     ///
-    /// Two passes of the planner want this for overlapping sets — the expansion asks for the
-    /// roots, the graph build asks for the expanded set that contains them — and each asked
-    /// one spec at a time. That is a subprocess per spec, in series, upstream of the fan-out
-    /// that `identify_needed_actions` then does: time lost here cannot be recovered there.
-    /// Keyed `backend:name`; a backend that self-resolves contributes no entry.
-    async fn direct_dependencies(&self, specs: &[PackageSpec]) -> HashMap<String, Vec<String>> {
-        use futures::stream::StreamExt;
-        let unasked: Vec<(String, PackageSpec)> = specs
-            .iter()
-            .map(|s| (format!("{}:{}", s.backend, s.name), s.clone()))
-            .filter(|(key, _)| !self.dependency_memo.contains_key(key))
-            .collect();
-
-        let fetched: Vec<(String, Vec<String>)> = futures::stream::iter(unasked)
-            .map(|(key, spec)| {
-                let registry = self.registry.clone();
-                async move {
-                    let provider = registry.get(&spec.backend)?.as_metadata_provider()?.clone();
-                    let deps = provider.get_dependencies(&spec.name).await.ok()?;
-                    Some((key, deps))
-                }
-            })
-            .buffer_unordered(self.config.max_parallel.max(1))
-            .filter_map(|r| async move { r })
-            .collect()
-            .await;
-
-        for (key, deps) in fetched {
-            self.dependency_memo.insert(key, deps);
-        }
-
-        specs
-            .iter()
-            .filter_map(|s| {
-                let key = format!("{}:{}", s.backend, s.name);
-                let deps = self.dependency_memo.get(&key)?.clone();
-                Some((key, deps))
-            })
-            .collect()
-    }
-
-    async fn build_execution_graph(
+    /// **The only edges are the ones somebody wrote.** A node's neighbours in this graph are
+    /// what splits a manager's wave into two command lines (II.19), and a wave that splits for
+    /// a reason nobody declared is a wave that splits for nothing: every manager here resolves
+    /// and installs its own dependency closure, so `apt install nginx libfoo` needs no help
+    /// ordering the two — and `apt install nginx` then `apt install libfoo` is measurably the
+    /// slower way to ask for the same machine (V.115).
+    fn build_execution_graph(
         &self,
         changes: &mut SyncChanges,
         targets: &[PackageSpec],
     ) -> Result<()> {
-        let deps_of = self.direct_dependencies(targets).await;
         for spec in targets {
             let key = format!("{}:{}", spec.backend, spec.name);
             let idx = changes.graph.add_node(GraphAction::Install(spec.clone()));
@@ -838,62 +793,46 @@ impl<'a> ChangePlanner<'a> {
                     changes.graph.add_edge(parent_idx, child_idx, ());
                 }
             }
-            if let Some(native_deps) = deps_of.get(&child_key) {
-                for dep in native_deps {
-                    let dep_key = format!("{}:{}", spec.backend, dep);
-                    if let Some(&parent_idx) = changes.install_map.get(&dep_key) {
-                        changes.graph.add_edge(parent_idx, child_idx, ());
-                    }
-                }
-            }
         }
         Ok(())
     }
 
-    /// Expand each declared package with its *direct* native dependencies (one level).
+    /// Every declared spec, keyed `backend:name`, with duplicates collapsed.
     ///
-    /// We deliberately do NOT recurse into dependencies-of-dependencies. Every real
-    /// package manager resolves and installs the full transitive closure itself at install
-    /// time, so LiNix re-deriving it is redundant — and doing it recursively is actively
-    /// dangerous: for a backend whose `depends` query answers from a local cache (e.g.
-    /// apt), walking the whole tree fans out into hundreds of subprocess calls and hangs
-    /// `status`/`sync`. One level is enough to order any co-declared packages in the graph.
-    /// (Backends that self-resolve set `depends_args: None` and contribute no extra nodes.)
-    async fn expand_transitive_dependencies(
-        &self,
-        desired: &HashMap<String, Vec<PackageSpec>>,
-    ) -> Result<HashMap<String, PackageSpec>> {
-        let mut expanded: HashMap<String, PackageSpec> = HashMap::new();
-
-        // Seed with the user-declared specs (roots).
-        let mut roots: Vec<PackageSpec> = Vec::new();
-        for specs in desired.values() {
-            for spec in specs {
-                let key = format!("{}:{}", spec.backend, spec.name);
-                if expanded.insert(key, spec.clone()).is_none() {
-                    roots.push(spec.clone());
-                }
-            }
+    /// **What a package depends on is the manager's answer, not LiNix's question.** This used
+    /// to ask each backend for a package's dependencies and add each one as an install node of
+    /// its own. Three separate things were wrong with that, and only the first was ever
+    /// reported:
+    ///
+    /// - Every install node is written into `registry.json` as a package LiNix manages, so one
+    ///   `apt:nginx` line took ownership of nginx's direct dependencies — and a managed package
+    ///   nothing declares is drift, which `sync` removes. The dependencies were shielded only
+    ///   by being re-derived identically on the next run; a single failed `apt-cache depends`
+    ///   dropped every one of them out of the desired set at once. `Queryable::tracks_manual`
+    ///   refuses a backend that cannot tell a dependency from a choice, for exactly this
+    ///   outcome, and the planner was manufacturing the same rows behind it.
+    /// - The node it added wired an edge, and an edge splits the manager's wave into two
+    ///   command lines — so the one case where LiNix knew two declared packages were related
+    ///   was the one case it refused to put them on one `apt install`.
+    /// - It cost a subprocess per declared package and another per discovered dependency,
+    ///   before any install began.
+    ///
+    /// The data path had already reached this conclusion one row at a time — every
+    /// `ManagerConfig` in `registry.rs` sets `depends_args: None`, including the shared
+    /// `base_config` the rest are built from; apt's carried a test and zypper's a comment
+    /// saying re-deriving a closure "adds nodes the planner then tries to install by name".
+    /// Seven hand-written backends never got the same treatment. The rule belongs here, at
+    /// the one caller, rather than in each of 23 answers.
+    fn declared_specs(desired: &HashMap<String, Vec<PackageSpec>>) -> HashMap<String, PackageSpec> {
+        let mut out: HashMap<String, PackageSpec> = HashMap::new();
+        for spec in desired.values().flatten() {
+            // First writing wins, as it did when this was an expansion: two lines naming one
+            // package is the resolver's to collapse, and picking the later one here would make
+            // which set of `@` options survives depend on a HashMap crawl.
+            out.entry(format!("{}:{}", spec.backend, spec.name))
+                .or_insert_with(|| spec.clone());
         }
-
-        // Add each root's DIRECT native dependencies as install nodes (no recursion).
-        let deps_of = self.direct_dependencies(&roots).await;
-        for spec in &roots {
-            let Some(deps) = deps_of.get(&format!("{}:{}", spec.backend, spec.name)) else {
-                continue;
-            };
-            for dep in deps {
-                let dep_key = format!("{}:{}", spec.backend, dep);
-                expanded.entry(dep_key).or_insert_with(|| PackageSpec {
-                    name: dep.clone(),
-                    backend: spec.backend.clone(),
-                    options: HashMap::new(),
-                    requires: Vec::new(),
-                    present: true,
-                });
-            }
-        }
-        Ok(expanded)
+        out
     }
 
     fn satisfies_constraint(&self, installed: &str, constraint: &str) -> bool {
@@ -1457,5 +1396,201 @@ mod tests {
             .map(|e| (e.backend.as_str(), e.name.as_str()))
             .collect();
         assert_eq!(removes, vec![("apt", "nano"), ("cargo", "amp")]);
+    }
+
+    /// A manager that answers a dependency query, and counts how many times it was asked.
+    ///
+    /// Nothing on this machine has the packages it names, so anything the planner decides to
+    /// install shows up as a node — which is what makes "one declaration, one node" testable.
+    struct DepAnswering {
+        deps: HashMap<String, Vec<String>>,
+        asked: Arc<std::sync::atomic::AtomicUsize>,
+        listings: crate::core::installed::InstalledListings,
+    }
+
+    impl DepAnswering {
+        fn new(deps: &[(&str, &[&str])]) -> Arc<Self> {
+            Arc::new(Self {
+                deps: deps
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            (*k).to_string(),
+                            v.iter().map(|s| (*s).to_string()).collect(),
+                        )
+                    })
+                    .collect(),
+                asked: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                listings: crate::core::installed::InstalledListings::new(),
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::core::manager::BackendCore for DepAnswering {
+        fn name(&self) -> &str {
+            "deptest"
+        }
+        fn is_available(&self) -> bool {
+            true
+        }
+        fn probes(&self) -> Vec<String> {
+            Vec::new()
+        }
+        fn needs_root(&self) -> bool {
+            false
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::core::manager::Queryable for DepAnswering {
+        fn installed_cache(&self) -> (&crate::core::installed::InstalledListings, &str) {
+            (&self.listings, "deptest")
+        }
+        async fn fetch_installed(&self) -> Result<Vec<crate::core::Package>> {
+            Ok(Vec::new())
+        }
+        async fn list_manual(&self) -> Result<Vec<crate::core::Package>> {
+            Ok(Vec::new())
+        }
+        async fn info(&self, _name: &str) -> Result<Option<crate::core::Package>> {
+            Ok(None)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::core::manager::MetadataProvider for DepAnswering {
+        async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
+            self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(self.deps.get(name).cloned().unwrap_or_default())
+        }
+    }
+
+    fn dep_registry(backend: Arc<DepAnswering>) -> Arc<BackendRegistry> {
+        let mut registry = BackendRegistry::new();
+        registry.register(Arc::new(
+            crate::core::manager::BackendCapabilities::builder(backend.clone())
+                .with_queryable(backend.clone())
+                .with_metadata_provider(backend)
+                .build(),
+        ));
+        Arc::new(registry)
+    }
+
+    fn declared(name: &str) -> PackageSpec {
+        let mut options = HashMap::new();
+        options.insert("__source".to_string(), "modules/dev.txt:1".to_string());
+        PackageSpec {
+            name: name.into(),
+            backend: "deptest".into(),
+            options,
+            requires: vec![],
+            present: true,
+        }
+    }
+
+    /// **A plan installs what you declared. Not what your declarations depend on.**
+    ///
+    /// Every install node is written into the state registry as a package LiNix manages, and
+    /// anything in that registry is a removal candidate the moment nothing declares it. A
+    /// dependency is never declared, so expanding one manufactures a managed package with no
+    /// line behind it — `Queryable::tracks_manual` says exactly this about `adopt`, which
+    /// refuses a backend that cannot tell a dependency from a choice, and the planner was
+    /// doing by construction what `adopt` refuses to do.
+    #[tokio::test]
+    async fn a_declaration_is_the_only_thing_that_becomes_an_install() {
+        let backend = DepAnswering::new(&[("nginx", &["libfoo", "libbar"])]);
+        let asked = backend.asked.clone();
+        let registry = dep_registry(backend);
+        let config = Config::default();
+        let state = StateRegistry::new(PathBuf::from("test-state.json"));
+        let desired: HashMap<String, Vec<PackageSpec>> =
+            [("deptest".to_string(), vec![declared("nginx")])]
+                .into_iter()
+                .collect();
+
+        let changes = ChangePlanner::new(registry, &state, &config)
+            .plan(&desired, None)
+            .await
+            .unwrap();
+
+        let report = changes.generate_report();
+        let names: Vec<&str> = report.install.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["nginx"],
+            "libfoo and libbar are the manager's business, not LiNix's"
+        );
+        assert_eq!(
+            asked.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "planning must not spend a subprocess asking what a package depends on"
+        );
+    }
+
+    /// The instrument, self-tested: this fake really does answer, so the zero above is the
+    /// planner not asking rather than the fake not knowing.
+    #[tokio::test]
+    async fn the_fake_manager_really_does_answer_a_dependency_query() {
+        use crate::core::manager::MetadataProvider;
+        let backend = DepAnswering::new(&[("nginx", &["libfoo", "libbar"])]);
+        assert_eq!(
+            backend.get_dependencies("nginx").await.unwrap(),
+            vec!["libfoo".to_string(), "libbar".to_string()]
+        );
+        assert_eq!(backend.asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// **Two declared packages of one manager have no edge between them, so they are one
+    /// command** (II.19). They did, whenever one happened to depend on the other — which for a
+    /// system manager is most of a real config, and it is the case `rebuild --backend apt`
+    /// maximises. Measured on Ubuntu: eight packages one at a time took 31,901 ms against
+    /// 3,161 ms as one command.
+    #[tokio::test]
+    async fn a_native_dependency_between_declared_packages_does_not_split_the_command() {
+        let backend = DepAnswering::new(&[("nginx", &["libfoo"])]);
+        let registry = dep_registry(backend);
+        let config = Config::default();
+        let state = StateRegistry::new(PathBuf::from("test-state.json"));
+        let desired: HashMap<String, Vec<PackageSpec>> = [(
+            "deptest".to_string(),
+            vec![declared("nginx"), declared("libfoo")],
+        )]
+        .into_iter()
+        .collect();
+
+        let changes = ChangePlanner::new(registry, &state, &config)
+            .plan(&desired, None)
+            .await
+            .unwrap();
+
+        assert_eq!(changes.graph.node_count(), 2);
+        assert_eq!(
+            changes.graph.edge_count(),
+            0,
+            "nobody wrote `@requires`, so nothing may split the batch"
+        );
+    }
+
+    /// …and a `@requires` the user *did* write still orders the two sides (`Y1`).
+    #[tokio::test]
+    async fn a_written_requires_is_still_an_edge() {
+        let backend = DepAnswering::new(&[]);
+        let registry = dep_registry(backend);
+        let config = Config::default();
+        let state = StateRegistry::new(PathBuf::from("test-state.json"));
+        let mut dependent = declared("nginx");
+        dependent.requires = vec!["deptest:libfoo".to_string()];
+        let desired: HashMap<String, Vec<PackageSpec>> =
+            [("deptest".to_string(), vec![dependent, declared("libfoo")])]
+                .into_iter()
+                .collect();
+
+        let changes = ChangePlanner::new(registry, &state, &config)
+            .plan(&desired, None)
+            .await
+            .unwrap();
+
+        assert_eq!(changes.graph.edge_count(), 1);
     }
 }

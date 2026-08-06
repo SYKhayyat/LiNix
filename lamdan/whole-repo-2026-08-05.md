@@ -217,6 +217,24 @@ data, while a slow `apt install` loses time.
 
 ### F-1 · The dependency DAG pays N subprocesses per run to make installs ten times slower — `rewrite` **[verified]**
 
+> **Actioned 2026-08-06 — `Y9` in `decisions.md`, rule in II.7 + II.19, reason in V.115a.**
+> Accurate, and understated on one axis. The edges are gone because the *machinery that
+> manufactured them* is gone: `direct_dependencies` and `expand_transitive_dependencies` are
+> deleted, and `build_execution_graph` now wires only the `@requires` a user wrote. What this
+> review filed as a speed finding was also a data one — every discovered dependency became an
+> install node, and `sync/mod.rs:632` writes one `state.add` per install node, so a declared
+> package took ownership of its dependencies in `registry.json` with `source: None`. II.7 then
+> points at them, and `direct_dependencies` dropped a spec's entry on any error, so a single
+> failed `apt-cache depends` moved the whole set into drift at once.
+>
+> **Two parts of the proposed change were not made, deliberately.** The `StableDiGraph` stays: a
+> `@requires` edge is a user's declaration, `Y1` binds it explicitly, and the graph is what
+> carries cycle detection, `unreachable_from` and the per-node rollback history. And the 13
+> `MetadataProvider` stubs stay — the trait has two live consumers this review did not name
+> (`insight.rs:731` for `linix why`'s reverse dependencies, `verbs/packages.rs:965` for the
+> `Dependencies:` line), so deleting the trait would delete a feature. Reporting dependencies
+> was never the bug; planning from them was.
+
 This is the strongest finding in the review and nothing in eight grade rounds has named it.
 
 `transaction.rs:536-539` carries the measurement, in the code, in a doc comment:

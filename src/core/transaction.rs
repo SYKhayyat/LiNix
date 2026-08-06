@@ -475,6 +475,10 @@ impl Transaction {
     /// Everything in one batch shares a manager and a kind of change, and no two of them have
     /// an edge between them — they are ready at the same moment, which is what "ready" means.
     /// Batches come out in node order so a plan runs the same way twice.
+    ///
+    /// **Every edge in this graph is an `@requires` somebody wrote** (`Y9`). The planner used
+    /// to add one per native dependency it discovered, which split this batch for a
+    /// relationship the manager was going to resolve by itself anyway.
     fn batches(graph: &StableDiGraph<GraphAction, ()>, mut ready: Vec<NodeIndex>) -> Vec<Batch> {
         ready.sort();
         /// One manager, one kind of change, and the nodes gathered for it so far.
@@ -531,9 +535,9 @@ impl Transaction {
     /// Run one manager command covering every node in `batch`, with retry.
     ///
     /// **A batch is one command, not one package.** Every node here is ready at the same
-    /// moment, goes to the same manager, and is the same kind of change, with no edge between
-    /// any two of them — which is precisely the set that manager's own command line was built
-    /// to take. Measured on Ubuntu, six declared packages produced six separate `apt install`
+    /// moment, goes to the same manager, and is the same kind of change, with no `@requires`
+    /// edge between any two of them — which is precisely the set that manager's own command
+    /// line was built to take. Measured on Ubuntu, six declared packages produced six separate `apt install`
     /// processes and 12,465 ms; `apt install <8 packages>` as one command took 3,161 ms. Eight
     /// packages one at a time took 31,901 ms — superlinear, because each invocation re-reads
     /// the package cache, re-takes the dpkg lock and re-resolves a dependency graph the batch
@@ -1346,9 +1350,11 @@ mod batching_tests {
     }
 
     #[tokio::test]
-    async fn a_dependency_edge_still_orders_the_two_sides() {
+    async fn a_requires_edge_still_orders_the_two_sides() {
         // A batch is made of what is ready *at the same moment*, so an edge splits it —
         // otherwise a package would go on the same command line as the thing it requires.
+        // Only a written `@requires` produces one (`Y9`); a native dependency the manager
+        // resolves for itself does not, and the two used to be indistinguishable here.
         let mut graph = StableDiGraph::new();
         let first = graph.add_node(GraphAction::Install(spec("apt", "libfoo")));
         let second = graph.add_node(GraphAction::Install(spec("apt", "foo-tool")));
