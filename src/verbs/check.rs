@@ -173,12 +173,11 @@ pub(crate) async fn check_summary(app: &App, json: bool) -> Result<()> {
 
     if let Some(state) = state.as_ref() {
         // drift — what a sync would change.
-        let enabled = app.priority_backends().await;
+        let hosts = app.host_backends().await;
         let changes = {
             let guard = app.state.lock().await;
             linix::app::sync::planner::ChangePlanner::new(app.registry.clone(), &guard, &app.config)
-                .with_enabled(enabled)
-                .plan(&state.packages, None)
+                .plan(&state.packages, PlanScope::Whole(hosts))
                 .await
         };
         // N-2: the model is packages *and* resources. Asking only the package planner is how

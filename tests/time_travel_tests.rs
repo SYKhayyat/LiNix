@@ -1,6 +1,6 @@
 // tests/time_travel_tests.rs
 
-use linix::app::sync::planner::ChangePlanner;
+use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
 use linix::core::GraphAction;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -76,7 +76,7 @@ async fn test_lease_expiration_pruning_logic() {
 
     let planner = ChangePlanner::new(kernel.app.registry.clone(), &state, &kernel.app.config);
     let plan = planner
-        .plan(&desired, None)
+        .plan(&desired, PlanScope::Whole(HostBackends::default()))
         .await
         .expect("Temporal logic failure: Planning pass crashed.");
 
@@ -138,7 +138,10 @@ async fn test_lease_manifest_override_logic() {
     );
 
     let planner = ChangePlanner::new(kernel.app.registry.clone(), &state, &kernel.app.config);
-    let plan = planner.plan(&desired, None).await.unwrap();
+    let plan = planner
+        .plan(&desired, PlanScope::Whole(HostBackends::default()))
+        .await
+        .unwrap();
 
     assert_eq!(
         plan.total_remove(),

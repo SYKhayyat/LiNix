@@ -564,6 +564,14 @@ pub(crate) async fn handle_canary(
     let desired = resolver.resolve_desired_state().await?;
     enforce_policy(app, &desired).await?;
 
+    // `--canary` with no `--profile`/`--module` is a whole-machine converge behind a health
+    // check, so it reaps — but only what `priority` names. It used to reap every backend on the
+    // box, which made the one command that promises to roll back the one most likely to need to.
+    //
+    // Both variants are named at the call and not folded into a `scope` binding above it: the
+    // enumeration gate reads this file's source, and a scope computed out of sight is a scope
+    // the gate reports as unreadable — which is how it found this site in the first place.
+    let hosts = app.host_backends().await;
     let changes = {
         let state_guard = app.state.lock().await;
         let planner = linix::app::sync::planner::ChangePlanner::new(
@@ -571,7 +579,10 @@ pub(crate) async fn handle_canary(
             &state_guard,
             &app.config,
         );
-        planner.plan(&desired, scope).await?
+        match scope {
+            Some(s) => planner.plan(&desired, PlanScope::Narrowed(s)).await?,
+            None => planner.plan(&desired, PlanScope::Whole(hosts)).await?,
+        }
     };
     if changes.is_empty() {
         println!("nothing to upgrade.");

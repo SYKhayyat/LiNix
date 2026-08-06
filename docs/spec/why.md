@@ -3980,3 +3980,73 @@ dependencies; they are the only three system managers that do, and the test asse
 fifteen ask nothing stays as it is. Under `Y9` a dependency is *reported, never planned from*,
 so asking costs one subprocess on `linix info` and buys the `Dependencies:` line. Removing it
 would be a feature a user would notice, which is not a detail to settle inside a refactor.
+
+---
+
+**V.143 — Why a plan has to say what it was computed over.** *(Rule in II.7.)*
+
+A removal set is `managed − desired`. That subtraction is only as good as `desired`, and nothing
+in `ChangePlanner::plan`'s old signature could tell a `desired` that was the machine's whole
+declaration set from one that was a shell's four requests.
+
+The signature took `Option<Scope>`. `None` meant two things:
+
+- do not filter `desired` down to a profile or module, and
+- every managed package missing from `desired` is drift, on every backend, remove it.
+
+Those are unrelated facts and one of them is a decision about deleting software. Five of the
+eight call sites passed `None`; four wanted only the first.
+
+**The site that matters is `app/shell/mod.rs:269`.** `provision_transient_env` builds a desired
+map holding **only the packages `linix shell` was asked for** — it is not the config, it was
+never meant to be compared against the machine — and planned it as a whole-machine converge.
+Every other managed package became a `Remove` node, handed straight to
+`engine.sync(…, GuardScope::Sync)`. The test that pins this now prints, under the old code, the
+program's own parallel breakdown uninstalling four packages in response to `linix shell fd`.
+`max_removals` was the only thing between the plan and the machine, and a ceiling is not a rule —
+it is a number that is usually large enough.
+
+**Four hundred lines below that call, the planner describes the bug.** `planner.rs:480`:
+*"Removal planning is GLOBAL… When the caller narrows to a single profile/module/group, `desired`
+has already been reduced to that scope, so running removal here would delete every package
+OUTSIDE the scope."* The comment is correct, it is in the right place, and it did not stop a
+caller doing exactly that, because a comment cannot reach the call site and an `Option` gives it
+nothing to reach with.
+
+**And `planner.rs:39` recorded why it was an `Option` in the first place** — which is the part
+worth keeping:
+
+> *Absence of a scope is `Option::None` rather than a variant: as an enum variant it was an
+> implicit spare-everything switch that `matches!` early-returns skipped past, so adding a
+> variant produced no compiler error.*
+
+That objection is real and it is why the fix is not simply "put the variant back". A
+spare-everything variant is a hazard; an `Option` is the *same* hazard with less to read, because
+nothing about typing `None` looks like a decision about deleting software. The answer to both is
+a variant that **carries the thing that makes it safe**: `PlanScope::Whole(HostBackends)` cannot
+be written without producing the backend list, and the list can only come from the resolver that
+read `priority`. There is no spelling of "reap everything" that is shorter than saying so.
+
+**Why the newtype, when a `Vec<String>` would compile the same.** `priority`'s promise is in the
+error a new user reads when the file is missing: *"Listed means LiNix uses it. Not listed means
+LiNix does not touch it at all."* A `Vec<String>` can be assembled by anyone from anything; a
+`HostBackends` has one constructor and one caller, and `planner_scope_enumeration_tests` fails
+the build if a second appears. That is the same rule `priority` itself exists to enforce (V.15) —
+one place decides which managers are this host's own — applied to the code that acts on it.
+
+**The gate found a hole in itself, which is the part to keep.** Its first run reported the
+canary's file as *stale — it plans nothing any more*, because `upgrade --canary` bound its scope
+to a variable above the call and no `PlanScope::` literal appeared in the argument list. The scan
+had skipped it in silence: a clean report about a file it could not read. That is precisely the
+"check that cannot fail" family the review filed as F-2, reproduced inside a check written to
+close it — which is worth recording, because it says the disease is not carelessness. A scan
+written to answer "what does each site say" answers nothing for a site that says it elsewhere,
+and reads as a pass. An unreadable site now fails by name, and the canary states both variants at
+the call.
+
+**What this cost, honestly.** Two of the four broken sites are in `src/verbs/`, which `main.rs`
+declares as a private module, so no test binary can reach them and no behavioural test can cover
+them. They are covered by a source enumeration instead. That is a workaround for a module
+boundary in the wrong place, not a design; it is the second finding this month whose test had to
+be written sideways for that reason, and it belongs on the list of things to fix rather than in
+the list of things that are fine.

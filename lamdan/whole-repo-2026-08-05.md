@@ -383,6 +383,41 @@ high-value change in the review.
 
 ### F-3 · `activate` plans removals across every backend on the box — `rewrite` **[verified]**
 
+> **Actioned 2026-08-06 — `Y12` in `decisions.md`, rule in II.7, reason in V.143.** Accurate on
+> the site it names, and it found one of four.
+>
+> **Eight places build a `ChangePlanner`; five did not call `with_enabled`.** Besides
+> `app/profile.rs`: `verbs/plan.rs:202` froze unscoped removals into the saved plan that `apply`
+> executes later — its sibling three lines up in the same file has the fix *and the comment
+> explaining it* — and `verbs/setup.rs:569` did the same for `upgrade --canary`, the one command
+> that promises to roll back. `verbs/upgrade.rs:430` is reachable only with a scope, so it was
+> not live; the argument that made it safe was two steps long and written nowhere.
+>
+> **The one the review missed is the worst of them, and it is a different bug.**
+> `app/shell/mod.rs:269` builds a desired map holding **only the packages `linix shell` was asked
+> for** — not the config, never meant to be compared against the machine — and planned it as a
+> whole-machine converge. Every other managed package became a `Remove` node, handed to
+> `engine.sync(…, GuardScope::Sync)`. The test written for it prints, against the old code,
+> LiNix's own parallel breakdown uninstalling four packages in response to `linix shell fd`.
+> `max_removals` was the only thing in the way. **`planner.rs:480` describes this exact
+> combination as the thing that must never happen**, four hundred lines below the call that does
+> it.
+>
+> **The proposal's remedy was not what shipped, and could not be.** *"`sync_now` calls
+> `verbs::sync::reconcile`"* — `verbs/` is private to the binary (`main.rs:10`), so `app/` cannot
+> call it. That is F-9's module-boundary finding blocking F-3's fix, and it is the reason two of
+> the four sites are covered by a source enumeration rather than a behavioural test.
+>
+> What shipped is structural instead: `Option<Scope>` — where `None` meant both *do not filter
+> `desired`* and *reap every backend* — became `PlanScope::Whole(HostBackends)` /
+> `Narrowed(Scope)` / `JustThese`, and the case that reaps cannot be written without the backend
+> list, which only the resolver mints. `with_enabled` is deleted rather than fixed.
+>
+> **The new gate found a hole in itself on its first run**, which is F-2's family caught inside a
+> check written to close it: the canary bound its scope to a variable above the call, so no
+> `PlanScope::` literal appeared in the argument list and the scan skipped the file in silence —
+> reporting it clean without having read it. Unreadable sites now fail by name.
+
 `ChangePlanner::with_enabled` restricts which backends a *removal* may be scheduled from —
 `backend_enabled` is consulted at `planner.rs:375`, inside `declined`, and *"an empty scope means
 every backend"* (`planner.rs:353`).

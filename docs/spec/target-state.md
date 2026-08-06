@@ -941,6 +941,26 @@ first pass because a `vars` file names no backend.
      rule 5.)*
 7. Produce the desired state.
 
+**A plan states what it was computed over, and that decides what it may remove** *(Y12)*. The
+removal set is `managed − desired`, so it is only as good as `desired`: a caller that hands the
+planner something narrower than the machine's whole declaration set gets a removal planned for
+everything outside it. There are exactly three things `desired` can be, and a caller names which:
+
+| | what `desired` is | what may be removed |
+|---|---|---|
+| **whole** | the machine's whole declaration set | drift, bounded by the backends `priority` names |
+| **narrowed** | one profile or module, filtered from the config | nothing |
+| **just these** | a list that is not the config — a transient shell's requests | nothing |
+
+**The whole case cannot be written without the list that bounds it.** The backends `priority`
+names is a value the resolver mints from the file, not a list a caller assembles, because "not
+listed means LiNix does not touch it at all" (II.6) is a promise no caller can keep by
+remembering to. `activate`, `deactivate`, `plan`/`apply` and `upgrade --canary` each broke it by
+planning a removal with no list at all, and none of them had to hold one to do so.
+
+**A package left alone because its backend is not in `priority` is reported, not dropped in
+silence** — the same rule as a protected package (II.10).
+
 ### II.7a The setup a manager needs before it can install anything
 
 *(Owner ruling, 2026-07-29 — Q10, Q11, Q13.)*

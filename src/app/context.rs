@@ -984,6 +984,15 @@ impl App {
             .unwrap_or_default()
     }
 
+    /// The same list, as the thing a plan that reaps has to be handed
+    /// ([`StateResolver::host_backends`]).
+    pub async fn host_backends(&self) -> crate::app::sync::planner::HostBackends {
+        StateResolver::new(&self.config, self.registry.clone(), false)
+            .await
+            .host_backends()
+            .await
+    }
+
     pub async fn search(&self, query: &str) -> Result<Vec<Package>> {
         let enabled = self.priority_backends().await;
         let searcher = UniversalSearch::new(&self.registry, &self.config, enabled);

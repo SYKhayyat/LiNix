@@ -17,7 +17,7 @@ pub mod planner;
 pub mod resolver;
 pub mod saved_plan;
 
-pub use self::planner::{ChangePlanner, Scope, SyncChanges};
+pub use self::planner::{ChangePlanner, HostBackends, PlanScope, Scope, SyncChanges};
 
 /// K15: a rebuild's two transactions run through this engine like any other sync, so the
 /// summary has to be told which run it is narrating or it reports a rebuild's removals as

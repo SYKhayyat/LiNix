@@ -38,16 +38,15 @@ pub(crate) async fn handle_status(app: &App, json: bool) -> Result<()> {
     // one command over.
     let resources = app.extras().changes(&state).await.unwrap_or_default();
     // `status` reports what a full `sync` would do, so it scopes drift the same way.
-    let enabled = app.priority_backends().await;
+    let hosts = app.host_backends().await;
     let changes = {
         let state_guard = app.state.lock().await;
         let planner = linix::app::sync::planner::ChangePlanner::new(
             app.registry.clone(),
             &state_guard,
             &app.config,
-        )
-        .with_enabled(enabled);
-        planner.plan(&desired, None).await?
+        );
+        planner.plan(&desired, PlanScope::Whole(hosts)).await?
     };
     let report = changes.generate_report();
     let undeclared = app.installed_but_undeclared().await.unwrap_or_default();
@@ -197,6 +196,12 @@ pub(crate) async fn compute_full_changes(
     let state = resolver.resolve_model().await?;
     enforce_policy(app, &state.packages).await?;
     let resources = app.extras().changes(&state).await?;
+    // A saved plan is what `sync` would do, frozen — so it is scoped the way `sync` scopes,
+    // and for the stronger reason: `sync` re-plans every run and would correct itself, while
+    // this plan is written to a file and applied later. Unscoped, it froze a removal for every
+    // managed package whose backend `priority` does not name, and `apply` then carried them out
+    // against a machine that had never agreed to LiNix touching that manager.
+    let hosts = app.host_backends().await;
     let changes = {
         let state_guard = app.state.lock().await;
         let planner = linix::app::sync::planner::ChangePlanner::new(
@@ -204,7 +209,9 @@ pub(crate) async fn compute_full_changes(
             &state_guard,
             &app.config,
         );
-        planner.plan(&state.packages, None).await?
+        planner
+            .plan(&state.packages, PlanScope::Whole(hosts))
+            .await?
     };
     Ok(FullChanges {
         changes,

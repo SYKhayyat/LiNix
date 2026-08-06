@@ -416,7 +416,21 @@ async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
     }
 
     // Mode 4: scoped declarative upgrade (profile/module/group) via the change planner.
-    let scope = req.scope();
+    //
+    // Mode 3 above has already returned for every unscoped call, so this is a `Scope` and not
+    // an `Option<Scope>` — said here rather than left to the reader, because a plan built from
+    // `None` reaps, and "unreachable" is what the four unscoped-removal sites all were until
+    // one of them was reached.
+    // An error and not an early `Ok(())`: this branch reports success over an upgrade that did
+    // not happen, and a silent success is the thing that hid every finding this change came
+    // from. If mode 3 ever stops catching the unscoped call, that is a bug someone should be
+    // told about rather than a run that quietly did nothing.
+    let Some(scope) = req.scope() else {
+        return Err(anyhow::anyhow!(
+            "internal: the scoped upgrade was reached without a scope, which mode 3 exists to \
+             prevent. Nothing was upgraded. Please report this."
+        ));
+    };
     let json = req.json;
 
     let resolver =
@@ -432,7 +446,7 @@ async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
             &state_guard,
             &app.config,
         );
-        planner.plan(&desired, scope).await?
+        planner.plan(&desired, PlanScope::Narrowed(scope)).await?
     };
 
     if app.config.dry_run {

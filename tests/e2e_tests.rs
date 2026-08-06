@@ -1,4 +1,4 @@
-use linix::app::sync::planner::ChangePlanner;
+use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
 use linix::app::sync::resolver::StateResolver;
 use linix::core::executor::DryRunOutput;
 use linix::core::{GraphAction, PackageSpec, Transaction, TransactionConfig};
@@ -51,7 +51,7 @@ async fn test_e2e_sync_flow_hermetic() {
         );
         // None handles global system reconciliation
         planner
-            .plan(&desired, None)
+            .plan(&desired, PlanScope::Whole(HostBackends::default()))
             .await
             .expect("E2E Planning Error: Failed to generate SyncChanges DAG.")
     };

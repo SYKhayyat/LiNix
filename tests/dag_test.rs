@@ -1,4 +1,4 @@
-use linix::app::sync::planner::ChangePlanner;
+use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
 use linix::core::{GraphAction, PackageSpec, StateRegistry, Transaction};
 use petgraph::stable_graph::StableDiGraph;
 use std::collections::HashMap;
@@ -120,7 +120,9 @@ async fn test_circular_dependency_detection_wiring() {
 
     // 2. Attempt Planning
     // Resolves E0061: Provides None (Full Sync)
-    let plan_result = planner.plan(&desired, None).await;
+    let plan_result = planner
+        .plan(&desired, PlanScope::Whole(HostBackends::default()))
+        .await;
 
     // 3. Assert Failure
     assert!(

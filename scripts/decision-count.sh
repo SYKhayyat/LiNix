@@ -160,6 +160,22 @@ if [ "$_open_rows" != "$OPEN" ]; then
     say_bad "decisions.md's status table says $_open_rows OPEN (both rows) where the register holds $OPEN"
 fi
 
+# --- the index's per-series counts -----------------------------------------------------
+#
+# `### U — the next round (Part XIII) — 38` is a count of the entries below it, typed by hand,
+# and the only figure in this file that nothing read. On 2026-08-06 three of the nine were
+# wrong at once — U said 38 against 43, Q said 16 against 47, Y said 8 against 12 — while the
+# run above printed `ok`, because every number it checks is about the register's *total* and
+# these are about its parts. A total can be right while every part is wrong; that is what a
+# total is.
+for _h in $(grep -oE '^### [A-Z] .*— [0-9]+$' "$REG" | sed 's/^### \([A-Z]\) .*— \([0-9]*\)$/\1:\2/'); do
+    _series="${_h%%:*}"
+    _stated="${_h##*:}"
+    _actual="$(grep -cE "^## ${_series}[0-9]+[a-z]?$" "$REG")"
+    [ "$_stated" = "$_actual" ] \
+        || say_bad "decisions.md's ${_series} heading says $_stated where the series holds $_actual"
+done
+
 # --- every PARKED entry's condition must still be unmet --------------------------------
 #
 # **`PARKED` is not a state, it is a promise to come back**: "not asking you yet, and here is what

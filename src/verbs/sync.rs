@@ -104,16 +104,15 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> 
 
     // Drift is scoped to the backends this host lists in `priority`: a full sync must not
     // reap a backend you have simply stopped listing.
-    let enabled = app.priority_backends().await;
+    let hosts = app.host_backends().await;
     let mut changes = {
         let state_guard = app.state.lock().await;
         let planner = linix::app::sync::planner::ChangePlanner::new(
             app.registry.clone(),
             &state_guard,
             &app.config,
-        )
-        .with_enabled(enabled);
-        planner.plan(&desired, None).await?
+        );
+        planner.plan(&desired, PlanScope::Whole(hosts)).await?
     };
 
     // Before the "nothing to do" exit, never inside it: a plan can be empty of ACTIONS and

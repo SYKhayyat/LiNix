@@ -6929,3 +6929,50 @@ it excuses, self-tested against a planted falsehood first. `clean_cache` and `li
 now driven by `argv_drift_tests`, which had never seen either.
 
 Ruled as `Y11`. Rules in II.22 and II.12b; reasons in V.142.
+
+---
+
+## 2026-08-06 — a plan that reaps has to be handed the list of what it may reap from
+
+`lamdan/whole-repo-2026-08-05.md` filed F-3: `linix activate` plans removals across every backend
+on the box, because `ChangePlanner::with_enabled` — the call that confines drift to the managers
+`priority` names — was made at two sites and `app/profile.rs` was not one of them.
+
+**Accurate, and it found one of four.** There are eight places in `src/` that build a
+`ChangePlanner`. Three called `with_enabled`. Of the five that did not:
+
+- **`app/shell/mod.rs:269`** — and this is not the same bug as the other three, it is a worse
+  one. `provision_transient_env` builds a desired map holding **only the packages the shell was
+  asked for**, then planned it as a whole-machine converge. Every other managed package on the
+  machine became a `Remove` node, handed to `engine.sync(…, GuardScope::Sync)`. The test written
+  for this prints, against the old code, LiNix's own parallel breakdown uninstalling four
+  packages in response to `linix shell fd`.
+- **`verbs/plan.rs:202`** — `plan`/`apply` froze removals for managers `priority` does not name,
+  and `apply` executed them later. The sibling function three lines up in the same file has the
+  fix *and the comment explaining it*.
+- **`verbs/setup.rs:569`** — `upgrade --canary`, the one command that promises to roll back.
+- **`app/profile.rs:462`** — the site the review named.
+- **`verbs/upgrade.rs:430`** — reachable only with a scope, so not live; the argument that made
+  it safe was two steps long and written nowhere, and it is one step now.
+
+**The mechanism, which was written down and correct.** `plan` took `Option<Scope>`, and `None`
+meant both *do not filter `desired`* and *reap every backend*. `planner.rs:39` recorded why it
+was an `Option`: a spare-everything enum variant is one `matches!` skips past without a compiler
+error. True — and an `Option` is the same hazard with less to read, because nothing about typing
+`None` looks like a decision about deleting software. `PlanScope` splits the two facts into
+`Whole(HostBackends)` / `Narrowed(Scope)` / `JustThese`, and `Whole` cannot be written without
+producing the backend list, which only `StateResolver::host_backends` mints.
+
+**The gate found a hole in itself on its first run,** which is the part worth keeping. It reported
+`verbs/setup.rs` as *stale — it plans nothing any more*, because the canary bound its scope to a
+variable above the call and the scan saw no `PlanScope::` literal in the argument list. It had
+been skipping the site in silence — a clean report about a file it had not read, which is F-2's
+family reproduced inside a check written to close it. Unreadable sites now fail by name.
+
+Also fixed in passing, being the same disease one file over: three of the nine per-series counts
+in `decisions.md`'s index were stale — `U` said 38 against 43, `Q` 16 against 47, `Y` 8 against 12
+— while `decision-count.sh --check` printed `ok`, because every figure it verified is about the
+register's total and these are about its parts. `decision-count.sh` reads them now, self-tested
+against a planted miscount.
+
+Ruled as `Y12`. Rule in II.7; reason in V.143.

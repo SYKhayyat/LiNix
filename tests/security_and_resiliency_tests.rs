@@ -1,6 +1,6 @@
 // tests/security_and_resiliency_tests.rs
 
-use linix::app::sync::planner::ChangePlanner;
+use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
 use linix::core::executor::DryRunOutput;
 use linix::core::{Error, GraphAction, Transaction, TransactionConfig, Validator};
 use std::collections::HashMap;
@@ -112,7 +112,10 @@ async fn test_planner_protects_mission_critical_closure() {
     let state_guard = kernel.state.lock().await;
     let planner = ChangePlanner::new(kernel.app.registry.clone(), &state_guard, &config);
 
-    let plan = planner.plan(&desired, None).await.expect("Planning failed");
+    let plan = planner
+        .plan(&desired, PlanScope::Whole(HostBackends::default()))
+        .await
+        .expect("Planning failed");
 
     for node in plan.graph.node_weights() {
         if let GraphAction::Remove { name, .. } = node {
@@ -373,7 +376,7 @@ async fn a_manager_that_cannot_answer_stops_the_plan_rather_than_installing_ever
         &kernel.app.config,
     );
     let err = planner
-        .plan(&desired, None)
+        .plan(&desired, PlanScope::Whole(HostBackends::default()))
         .await
         .expect_err("a manager that cannot answer must stop the plan")
         .to_string();

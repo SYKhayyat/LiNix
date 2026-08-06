@@ -11,7 +11,7 @@
 //! `@channel`-hides-`@classic` cases are the same fault twice: a drift check that `return`ed on
 //! the first option it recognised, so writing two options together killed one of them.
 
-use linix::app::sync::planner::ChangePlanner;
+use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
 use linix::core::executor::DryRunOutput;
 use linix::core::{GraphAction, PackageSpec};
 use std::collections::HashMap;
@@ -53,7 +53,10 @@ async fn plans_a_change(reports: &[(&str, &str)], spec: PackageSpec) -> bool {
         &state_guard,
         &kernel.app.config,
     );
-    let changes = planner.plan(&desired, None).await.expect("planning failed");
+    let changes = planner
+        .plan(&desired, PlanScope::Whole(HostBackends::default()))
+        .await
+        .expect("planning failed");
     let scheduled = changes
         .graph
         .node_weights()

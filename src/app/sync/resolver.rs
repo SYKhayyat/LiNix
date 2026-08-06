@@ -405,6 +405,26 @@ impl<'a> StateResolver<'a> {
         Ok(self.resolve_model().await?.packages)
     }
 
+    /// The backends this host manages, for a plan that may reap (II.6).
+    ///
+    /// **The only place a [`HostBackends`] is made.** It lives here and not on `App` because
+    /// `App` is not reachable from `app/profile.rs` or `app/shell/`, and both of those planned
+    /// removals without the list precisely because asking for it meant reaching for something
+    /// they did not have.
+    ///
+    /// An unreadable `priority` yields the empty list, which allows every backend — the same
+    /// answer as before, and the honest one: a host that could not say which managers are its
+    /// own has not excluded any. Every caller that reaps resolves the config first, so a
+    /// `priority` this cannot read has already failed the run.
+    pub async fn host_backends(&self) -> crate::app::sync::planner::HostBackends {
+        crate::app::sync::planner::HostBackends::from_priority(
+            self.priority_for_host()
+                .await
+                .map(|p| p.order().to_vec())
+                .unwrap_or_default(),
+        )
+    }
+
     /// II.7, end to end: `active` -> profiles -> the modules they reach -> the desired state.
     ///
     /// The map the seam carries holds `absent:` lines too, marked `present: false`; the

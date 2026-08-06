@@ -1,5 +1,5 @@
 use crate::app::diagnostics::FailureDiagnosticEngine;
-use crate::app::sync::{ChangePlanner, StateResolver, SyncEngine};
+use crate::app::sync::{ChangePlanner, PlanScope, StateResolver, SyncEngine};
 use crate::app::vocab::Vocab;
 use crate::app::{LuaHooks, MetricsCollector};
 use crate::backends::BackendRegistry;
@@ -452,15 +452,18 @@ impl ProfileManager {
         )
         .await;
 
-        let desired = StateResolver::new(&self.config, self.registry.clone(), false)
-            .await
-            .resolve_desired_state()
-            .await?;
+        let resolver = StateResolver::new(&self.config, self.registry.clone(), false).await;
+        let desired = resolver.resolve_desired_state().await?;
+        // Activating a profile is a full converge — the whole config is the desired set — so it
+        // reaps, and reaps only what `priority` names. It used to reap every backend on the box:
+        // `sync` confined removals to the managers this host lists and `activate` did not, which
+        // made the narrower-sounding command the more destructive one.
+        let hosts = resolver.host_backends().await;
 
         let changes = {
             let state_guard = self.state.lock().await;
             let planner = ChangePlanner::new(self.registry.clone(), &state_guard, &self.config);
-            planner.plan(&desired, None).await?
+            planner.plan(&desired, PlanScope::Whole(hosts)).await?
         };
 
         if changes.is_empty() {

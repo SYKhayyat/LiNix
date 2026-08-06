@@ -11,7 +11,7 @@
 mod mock_providers;
 use mock_providers::TestKernel;
 
-use linix::app::sync::planner::{ChangePlanner, Scope};
+use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope, Scope};
 use linix::app::sync::resolver::StateResolver;
 use linix::core::executor::DryRunOutput;
 use linix::core::PackageSpec;
@@ -119,7 +119,7 @@ async fn scoped_upgrade_is_non_destructive_end_to_end() {
         let state = kernel.app.state.lock().await;
         let planner = ChangePlanner::new(kernel.app.registry.clone(), &state, &kernel.app.config);
         planner
-            .plan(&desired, Some(Scope::Module("dev".into())))
+            .plan(&desired, PlanScope::Narrowed(Scope::Module("dev".into())))
             .await
             .unwrap()
     };
@@ -134,7 +134,10 @@ async fn scoped_upgrade_is_non_destructive_end_to_end() {
     let unscoped = {
         let state = kernel.app.state.lock().await;
         let planner = ChangePlanner::new(kernel.app.registry.clone(), &state, &kernel.app.config);
-        planner.plan(&desired, None).await.unwrap()
+        planner
+            .plan(&desired, PlanScope::Whole(HostBackends::default()))
+            .await
+            .unwrap()
     };
     assert!(
         unscoped.total_remove() >= 1,

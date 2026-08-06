@@ -1,4 +1,4 @@
-# The decision register — all 170, one of them open
+# The decision register — all 171, one of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -17,7 +17,7 @@ not in this paragraph.
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **1** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **164** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **165** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -73,8 +73,8 @@ status loses that, so it is kept here:
 
 ## Index
 
-**One is open — `Z1`, raised 2026-08-03, a licence choice.** All 170 are accounted
-for: **164 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 1 OPEN** — and this line
+**One is open — `Z1`, raised 2026-08-03, a licence choice.** All 171 are accounted
+for: **165 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 1 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -188,7 +188,7 @@ there). It is when the question stopped being open, not when the code landed.
 | **T6** | Must there be a way to opt out of `backup_once`, or bound how many pile up? | 2026-07-23 |
 | **T7** | Runtime injection of secrets into process memory — reopened. | 2026-07-24 |
 
-### U — the next round (Part XIII) — 38
+### U — the next round (Part XIII) — 43
 
 | | question | answered |
 |---|---|---|
@@ -236,7 +236,7 @@ there). It is when the question stopped being open, not when the code landed.
 | **U42** | Do the overlapping command clusters get consolidated? | 2026-07-27 |
 | **U43** | How much does an ordinary run say about itself? | 2026-07-27 |
 
-### Q — the production-readiness round and the grading rounds after it — 16
+### Q — the production-readiness round and the grading rounds after it — 47
 
 *Not a proposal part. These are the questions the readiness assessment forced — behaviour a
 user notices, or a published contract — raised because `CLAUDE.md` requires a ruling for them
@@ -311,7 +311,7 @@ without asking. Two are not mine: one is a legal choice and one changes a publis
 | **Z1** | There is no `LICENSE` file and no `license` key in `Cargo.toml`, for a tool with an install script and a `self-upgrade` verb. Which licence? | **OPEN** |
 | **Z2** | `lock` and `unlock` touch unrelated files and are not inverses; `unlock` can cause package churn. Rename it, or give `lock` a real inverse? | **ANSWERED** — both verbs name their axis (`versions`/`backends`/`scripts`/`all`), and every path that moves a version re-records it |
 
-### Y — the efficiency pass — 8
+### Y — the efficiency pass — 13
 
 *Not a proposal part. `docs/INEFFICIENCIES.md` audited every place in the tree slower than it has
 to be and marked the findings a user would notice as needing a ruling; the owner ruled the lot on
@@ -333,6 +333,7 @@ II.19 and the reasons in V.115–V.118.*
 | **Y10** | The write-ahead log had two variants and all nine `apply/` modules referenced it zero times, while a `dotfiles:` tree destroyed the user's file with no backup, no ledger row and therefore no teardown — four documents said otherwise. RULED: **the log covers what cannot be recomputed**, and **a tree is the `link:` lines it stands for.** | 2026-08-06 |
 | **Q48** | Every `link:` on Windows took the cross-drive COPY fallback, same drive or not: `is_same_drive` compared a verbatim prefix against a plain one — and the limitation it guarded does not exist, since a Windows symlink spans volumes. RULED: **a `link:` links; only a missing privilege gets a copy, and it says so.** | 2026-08-06 |
 | **Y11** | Two backends built install and remove argv by hand and lost the `--` terminator; forty backends could not clear a cache because no row could say how; one manager took two locks over one database. The argv table recorded all of it and checked none of it. RULED: **one path per backend, and a capability the machinery lacks is a field.** | 2026-08-06 |
+| **Y12** | `ChangePlanner::plan` took `Option<Scope>`, where `None` meant both "do not filter the desired set" and "reap every backend on the box"; five of eight callers passed it and four wanted only the first — the transient shell, whose desired set is its own requests, planned a removal for every other package on the machine. RULED: **a plan says what it is computed over, and the case that reaps cannot be written without the list that bounds it.** | 2026-08-06 |
 
 ---
 
@@ -6396,3 +6397,85 @@ and never planned from, so the asymmetry costs one subprocess on `linix info` an
 settle inside a refactor.
 
 Rule in II.22 and II.12b; reason in V.142.
+
+---
+
+## Y12
+
+**Status: ANSWERED — built and ruled 2026-08-06.** Raised by
+`lamdan/whole-repo-2026-08-05.md` as F-3, ranked second on the accuracy axis. Accurate on the
+site it named, and understated: it found one of four, and the one it missed is the worst.
+
+**Y12 — When a plan is asked what to remove, what is it comparing against?** Whatever the caller
+handed it, and until now the caller had no way to say what that was.
+
+`ChangePlanner::plan` computes removals as `managed − desired`. The signature took
+`Option<Scope>`, and `None` carried two facts that have nothing to do with each other: *do not
+filter the desired set*, and *reap every backend on the box*. Five of the eight call sites passed
+`None`. Four of the five wanted only the first.
+
+`planner.rs:39` recorded the choice and its reason: *"Absence of a scope is `Option::None` rather
+than a variant: as an enum variant it was an implicit spare-everything switch that `matches!`
+early-returns skipped past, so adding a variant produced no compiler error."* The objection was
+real. The answer to it was not — an `Option` is a spare-everything switch too, and a quieter one,
+because nothing about writing `None` looks like a decision.
+
+**What was live:**
+
+- **`app/shell/mod.rs:269` — the transient shell, and it is not the same bug as the other three.**
+  `provision_transient_env` builds a desired map holding **only the packages the shell was asked
+  for**, then planned it as a whole-machine converge. Every other managed package on the box
+  became a `Remove` node, handed to `engine.sync(…, GuardScope::Sync)`. `linix shell ripgrep`
+  proposed to uninstall the machine. `max_removals` was the only thing in the way, and a ceiling
+  is not a rule. The planner's own comment four hundred lines below describes this exact
+  combination as the thing that must never happen.
+- **`verbs/plan.rs:202` — `plan`/`apply`.** The frozen plan carried removals for every backend
+  `priority` does not name, and `apply` carried them out later, against a machine that had never
+  agreed to LiNix touching that manager. Its sibling three lines up in the same file had the fix
+  **and the comment explaining it** — *"`status` reports what a full `sync` would do, so it
+  scopes drift the same way"* — and did not get it.
+- **`verbs/setup.rs:569` — `upgrade --canary`.** The one command that promises to roll back was
+  the one most likely to need to.
+- **`app/profile.rs:462` — `activate`/`deactivate`/`profile save`,** the site the review named.
+  `sync` confined removals to the managers this host lists and `activate` did not, which made the
+  narrower-sounding command the more destructive one.
+
+**RULED, part one: a plan says what it is computed over, and it is not optional.**
+
+`PlanScope` replaces `Option<Scope>` with three cases a caller has to choose between:
+
+- **`Whole(HostBackends)`** — the machine's whole declaration set. Drift is real, bounded by the
+  backends `priority` names.
+- **`Narrowed(Scope)`** — one profile or module. `desired` is filtered down to it, and nothing is
+  removed, because a package outside the scope is outside the question.
+- **`JustThese`** — a set of packages that is not the config at all. Installs only.
+
+**RULED, part two: the case that reaps cannot be written without the list that bounds it.**
+
+`HostBackends` is a newtype, and `StateResolver::host_backends` is the only thing in `src/` that
+mints one — gated by `planner_scope_enumeration_tests`, because the compiler cannot tell a list
+that came from `priority` from one somebody assembled by hand. `priority`'s promise is written in
+the error a new user reads when the file is missing: *"Listed means LiNix uses it. Not listed
+means LiNix does not touch it at all."* Four commands broke it, and none of them had to hold the
+list to do so.
+
+**RULED, part three: the enumeration reports a scope it cannot read, rather than skipping it.**
+
+The gate found this hole in itself on its first run. `upgrade --canary` bound its scope to a
+variable above the call, so no `PlanScope::` literal appeared in the argument list and the scan
+passed over the site in silence — a clean report about a file it had not read. An unreadable site
+now fails, and the canary names both of its variants at the call. This is the "check that cannot
+fail" family (F-2) caught in a check written to close it.
+
+**Where the tests can and cannot reach.** `verbs/` is private to the binary (`main.rs:10`), so
+two of the four sites are unreachable from any of the test binaries; they are covered by the
+source enumeration instead, and that is a workaround for a module boundary in the wrong place,
+not a preference. Recorded here because it is the second finding this month whose test had to be
+written sideways for that reason.
+
+**Behaviour a user could notice, and it is a narrowing in all four cases.** `upgrade --canary`,
+`plan`/`apply`, `activate` and `deactivate` now leave alone any managed package whose backend
+`priority` does not list, and say so in the skipped list rather than in silence (II.10). No
+command removes anything it did not before.
+
+Rule in II.7; reason in V.143.

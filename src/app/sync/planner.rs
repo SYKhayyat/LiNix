@@ -36,13 +36,84 @@ pub struct ReportEntry {
     pub source: Option<String>,
 }
 
-/// Narrows a sync to one profile or module. Absence of a scope is `Option::None` rather
-/// than a variant: as an enum variant it was an implicit spare-everything switch that
-/// `matches!` early-returns skipped past, so adding a variant produced no compiler error.
+/// Narrows a sync to one profile or module.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Scope {
     Profile(String),
     Module(String),
+}
+
+/// The backends this host's `priority` file names.
+///
+/// A newtype and not a `Vec<String>`, because this list is the whole of what `priority`
+/// promises — the promise is written in the error a new user reads when the file is missing:
+/// *"Listed means LiNix uses it. Not listed means LiNix does not touch it at all."* A plan that
+/// reaps has to be handed the list, and the only thing that can produce one is the resolver
+/// that read the file.
+///
+/// Empty means every backend, because a host whose `priority` could not be read has said
+/// nothing about which managers are its own — and the caller that got here without a readable
+/// `priority` is `sync` itself, which has already failed by then.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HostBackends(Vec<String>);
+
+impl HostBackends {
+    /// Mint one from what the `priority` file said, in its order.
+    ///
+    /// The resolver is the only caller in `src/`; `planner_scope_enumeration_tests` fails the
+    /// build if a second appears, because a list assembled anywhere else is a list that agrees
+    /// with `priority` only until someone edits it.
+    pub fn from_priority(order: Vec<String>) -> Self {
+        Self(order)
+    }
+
+    /// Whether `backend` is one this host manages.
+    fn allows(&self, backend: &str) -> bool {
+        self.0.is_empty() || self.0.iter().any(|b| b == backend)
+    }
+}
+
+/// What a plan is computed over — and therefore what it may take away.
+///
+/// **One argument, and it is not optional.** This was `Option<Scope>`, where `None` carried two
+/// unrelated facts: *do not filter the desired set*, and *reap every backend on the box*. Four
+/// callers wanted the first and got the second thrown in — `plan`/`apply` froze removals across
+/// managers `priority` never named, `upgrade --canary` and `activate` did the same, and the
+/// transient shell, whose desired set holds only the packages it was asked for, planned a
+/// removal for every other package on the machine. Naming the case is now the only way to get
+/// a plan at all, and the case that reaps cannot be written without the list that bounds it.
+#[derive(Debug, Clone)]
+pub enum PlanScope {
+    /// The machine's whole declaration set. Drift is real here: anything this host manages and
+    /// nothing declares any more is a removal, confined to the backends `priority` names.
+    Whole(HostBackends),
+    /// One profile or module. `desired` still holds the whole config and is filtered down to
+    /// the scope, so a package outside it is outside the question — nothing is removed.
+    Narrowed(Scope),
+    /// A set of packages that is not the config: a transient shell's requests. Installs only,
+    /// and no filter, because the set is already exactly what was asked for.
+    JustThese,
+}
+
+impl PlanScope {
+    /// The scope to filter `desired` by, if any.
+    fn filter(&self) -> Option<&Scope> {
+        match self {
+            PlanScope::Narrowed(s) => Some(s),
+            PlanScope::Whole(_) | PlanScope::JustThese => None,
+        }
+    }
+
+    /// The host's backends when this plan may reap, `None` when it may not.
+    ///
+    /// The two questions are one match, so a variant added later has to answer both before it
+    /// compiles — which is what the old `Option<Scope>` could not make anyone do.
+    fn reaps(&self) -> Option<&HostBackends> {
+        match self {
+            PlanScope::Whole(hosts) => Some(hosts),
+            PlanScope::Narrowed(_) | PlanScope::JustThese => None,
+        }
+    }
 }
 
 /// Split a desired-state map into what must exist and what must not.
@@ -314,12 +385,6 @@ pub struct ChangePlanner<'a> {
     registry: Arc<BackendRegistry>,
     state: &'a StateRegistry,
     config: &'a Config,
-    /// The backends this host manages, from II.6's `priority` file. Empty = every backend —
-    /// the default for the imperative paths (which act on exactly the package they were
-    /// given) and for tests. A full `sync`/`watch`/`prune` sets it, so drift removal is
-    /// scoped: a managed package whose backend is not in `priority` is left alone, never
-    /// removed, because "not listed = LiNix does not use it" (II.6).
-    enabled: Vec<String>,
 }
 
 impl<'a> ChangePlanner<'a> {
@@ -332,21 +397,7 @@ impl<'a> ChangePlanner<'a> {
             registry,
             state,
             config,
-            enabled: Vec::new(),
         }
-    }
-
-    /// Scope drift removal to these backends (the `priority` file). Without it, drift is
-    /// planned for every backend — right for an imperative command, wrong for a full sync
-    /// that must not reap a backend you have simply stopped listing.
-    pub fn with_enabled(mut self, enabled: Vec<String>) -> Self {
-        self.enabled = enabled;
-        self
-    }
-
-    /// Whether `backend` is one this host manages. An empty scope means every backend.
-    fn backend_enabled(&self, backend: &str) -> bool {
-        self.enabled.is_empty() || self.enabled.iter().any(|b| b == backend)
     }
 
     /// Why this managed package is not being scheduled for removal, or `None` to schedule it.
@@ -356,6 +407,7 @@ impl<'a> ChangePlanner<'a> {
     fn declined(
         &self,
         pkg: &crate::core::ManagedPackage,
+        hosts: &HostBackends,
         scheduled: &HashSet<String>,
         desired_keys: &HashSet<String>,
     ) -> Option<Declined> {
@@ -366,7 +418,7 @@ impl<'a> ChangePlanner<'a> {
         if desired_keys.contains(&key) {
             return Some(Declined::StillDeclared);
         }
-        if !self.backend_enabled(&pkg.backend) {
+        if !hosts.allows(&pkg.backend) {
             return Some(Declined::BackendNotInPriority(pkg.backend.clone()));
         }
         // Protection applies to EVERY removal reason, not only drift. A lease expiring on
@@ -445,7 +497,7 @@ impl<'a> ChangePlanner<'a> {
     pub async fn plan(
         &self,
         desired: &HashMap<String, Vec<PackageSpec>>,
-        scope: Option<Scope>,
+        scope: PlanScope,
     ) -> Result<SyncChanges> {
         let mut changes = SyncChanges::default();
 
@@ -455,7 +507,7 @@ impl<'a> ChangePlanner<'a> {
         // says. Partitioning at the top means no later branch can misread one.
         let (wanted, unwanted) = partition_by_presence(desired);
 
-        let filtered_desired = self.apply_scope_filtering(&wanted, scope.as_ref());
+        let filtered_desired = self.apply_scope_filtering(&wanted, scope.filter());
         let declared = Self::declared_specs(&filtered_desired);
 
         // Precompute desired keys for O(1) lookup
@@ -478,12 +530,14 @@ impl<'a> ChangePlanner<'a> {
         let installed = self.installed_sets(&consulted).await;
 
         // Removal planning (drift / bloatware / expired leases) is GLOBAL: it acts on
-        // every managed package not present in `desired`. That is only safe for a full,
-        // unscoped sync. When the caller narrows to a single profile/module/group
-        // (`upgrade --module X`), `desired` has already been reduced to that scope, so
-        // running removal here would delete every package OUTSIDE the scope. A targeted
-        // upgrade must be non-destructive — skip all removal planning when scoped.
-        if scope.is_none() {
+        // every managed package not present in `desired`. That is only safe when `desired` is
+        // the machine's whole declaration set. When the caller narrows to a profile or module,
+        // or hands over a list that is not the config at all, a package missing from `desired`
+        // is missing from the *question* — removing it would delete every package outside the
+        // caller's scope. `PlanScope::reaps` is where that decision is made, once, and it is
+        // the only way in here: the four callers that reached this block by passing `None` for
+        // a scope they did not have are the reason it is a value and not a bare `Option`.
+        if let Some(hosts) = scope.reaps() {
             // Removing something that is not there is not a change — it is a command that
             // fails every time it runs. `absent:jq` on a machine that has never had jq made
             // every sync fail, permanently, with an error from the package manager about a
@@ -521,7 +575,8 @@ impl<'a> ChangePlanner<'a> {
                 // one has to say whether the user hears about it, and `Declined::reported`
                 // matches exhaustively — so a reason added later does not compile until someone
                 // answers that question.
-                if let Some(declined) = self.declined(pkg, &changes.removal_tracker, &desired_keys)
+                if let Some(declined) =
+                    self.declined(pkg, hosts, &changes.removal_tracker, &desired_keys)
                 {
                     debug!("'{}' will not be removed: {:?}", key, declined);
                     if let Some(reason) = declined.reported() {
@@ -570,7 +625,7 @@ impl<'a> ChangePlanner<'a> {
             }
         } else {
             debug!(
-                "Scoped plan ({:?}) — skipping all removal planning (non-destructive).",
+                "{:?} plan — skipping all removal planning (non-destructive).",
                 scope
             );
         }
@@ -965,7 +1020,10 @@ mod tests {
         // Unscoped: drift removal IS planned.
         let unscoped = {
             let planner = ChangePlanner::new(registry.clone(), &state, &config);
-            planner.plan(&desired, None).await.unwrap()
+            planner
+                .plan(&desired, PlanScope::Whole(HostBackends::default()))
+                .await
+                .unwrap()
         };
         assert_eq!(
             unscoped.total_remove(),
@@ -977,7 +1035,7 @@ mod tests {
         let scoped = {
             let planner = ChangePlanner::new(registry.clone(), &state, &config);
             planner
-                .plan(&desired, Some(Scope::Module("dev".into())))
+                .plan(&desired, PlanScope::Narrowed(Scope::Module("dev".into())))
                 .await
                 .unwrap()
         };
@@ -1014,7 +1072,7 @@ mod tests {
         .collect();
 
         let changes = ChangePlanner::new(registry, &state, &config)
-            .plan(&desired, None)
+            .plan(&desired, PlanScope::Whole(HostBackends::default()))
             .await
             .unwrap();
 
@@ -1040,7 +1098,7 @@ mod tests {
         .collect();
 
         let changes = ChangePlanner::new(registry, &state, &config)
-            .plan(&desired, None)
+            .plan(&desired, PlanScope::Whole(HostBackends::default()))
             .await
             .unwrap();
 
@@ -1144,7 +1202,7 @@ mod tests {
         .into_iter()
         .collect();
         ChangePlanner::new(registry, &state, &config)
-            .plan(&desired, None)
+            .plan(&desired, PlanScope::Whole(HostBackends::default()))
             .await
             .unwrap()
             .total_remove()
@@ -1181,7 +1239,7 @@ mod tests {
         let config = Config::default();
         let state = StateRegistry::new(PathBuf::from("test-state.json"));
         let changes = ChangePlanner::new(registry, &state, &config)
-            .plan(&desired, None)
+            .plan(&desired, PlanScope::Whole(HostBackends::default()))
             .await
             .unwrap();
 
@@ -1245,7 +1303,7 @@ mod tests {
         .collect();
 
         let changes = ChangePlanner::new(registry, &state, &config)
-            .plan(&desired, Some(Scope::Module("dev".into())))
+            .plan(&desired, PlanScope::Narrowed(Scope::Module("dev".into())))
             .await
             .unwrap();
 
@@ -1267,7 +1325,7 @@ mod tests {
         let desired: HashMap<String, Vec<PackageSpec>> = HashMap::new();
 
         let changes = ChangePlanner::new(registry.clone(), &state, &config)
-            .plan(&desired, None)
+            .plan(&desired, PlanScope::Whole(HostBackends::default()))
             .await
             .unwrap();
         assert_eq!(
@@ -1292,7 +1350,7 @@ mod tests {
         let desired: HashMap<String, Vec<PackageSpec>> = HashMap::new();
 
         let changes = ChangePlanner::new(registry.clone(), &state, &config)
-            .plan(&desired, None)
+            .plan(&desired, PlanScope::Whole(HostBackends::default()))
             .await
             .unwrap();
         assert_eq!(changes.total_remove(), 1);
@@ -1312,7 +1370,7 @@ mod tests {
         let desired: HashMap<String, Vec<PackageSpec>> = HashMap::new();
 
         let changes = ChangePlanner::new(registry.clone(), &state, &config)
-            .plan(&desired, None)
+            .plan(&desired, PlanScope::Whole(HostBackends::default()))
             .await
             .unwrap();
         assert_eq!(
@@ -1510,7 +1568,7 @@ mod tests {
                 .collect();
 
         let changes = ChangePlanner::new(registry, &state, &config)
-            .plan(&desired, None)
+            .plan(&desired, PlanScope::Whole(HostBackends::default()))
             .await
             .unwrap();
 
@@ -1560,7 +1618,7 @@ mod tests {
         .collect();
 
         let changes = ChangePlanner::new(registry, &state, &config)
-            .plan(&desired, None)
+            .plan(&desired, PlanScope::Whole(HostBackends::default()))
             .await
             .unwrap();
 
@@ -1587,7 +1645,7 @@ mod tests {
                 .collect();
 
         let changes = ChangePlanner::new(registry, &state, &config)
-            .plan(&desired, None)
+            .plan(&desired, PlanScope::Whole(HostBackends::default()))
             .await
             .unwrap();
 

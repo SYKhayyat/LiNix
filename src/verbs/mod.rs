@@ -39,6 +39,7 @@ pub(crate) async fn write_unless_previewing(
 /// alternative is nine import blocks that drift apart.
 pub(crate) mod prelude {
     pub(crate) use anyhow::{Context, Result};
+    pub(crate) use linix::app::sync::planner::PlanScope;
     pub(crate) use linix::app::sync::planner::Scope as PlannerScope;
     pub(crate) use linix::app::{ui::TuiPreview, App};
     // The ledger file rules are a trait, so `HookLedger::load` needs it in scope. In the

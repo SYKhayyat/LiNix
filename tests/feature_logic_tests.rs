@@ -1,4 +1,4 @@
-use linix::app::sync::planner::{ChangePlanner, Scope};
+use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope, Scope};
 use linix::app::sync::resolver::StateResolver;
 use linix::core::LockFile;
 use linix::core::{Error, PackageSpec};
@@ -184,7 +184,10 @@ async fn test_sync_report_generation_schema_fidelity() {
     );
 
     // Plan with None (Global Sync)
-    let plan = planner.plan(&desired, None).await.unwrap();
+    let plan = planner
+        .plan(&desired, PlanScope::Whole(HostBackends::default()))
+        .await
+        .unwrap();
     let report = plan.generate_report();
 
     // 1. Verify business logic mapping to the Report structure
@@ -252,7 +255,7 @@ async fn test_scoped_planner_filtering_accuracy() {
     );
 
     let plan = planner
-        .plan(&desired, Some(Scope::Profile("Work".into())))
+        .plan(&desired, PlanScope::Narrowed(Scope::Profile("Work".into())))
         .await
         .unwrap();
 

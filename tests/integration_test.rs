@@ -1,5 +1,5 @@
 use chrono::Utc;
-use linix::app::sync::planner::ChangePlanner;
+use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
 use linix::app::MetricsCollector;
 use linix::core::{PackageSpec, StateRegistry, Validator};
 use std::collections::HashMap;
@@ -168,7 +168,7 @@ async fn test_planner_template_logic_integration() {
 
     // 4. Plan the transition (Global Scope)
     let plan = planner
-        .plan(&desired, None)
+        .plan(&desired, PlanScope::Whole(HostBackends::default()))
         .await
         .expect("Integration Planning Failure: Template logic closure failed.");
 

@@ -1,4 +1,4 @@
-use linix::app::sync::planner::ChangePlanner;
+use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
 use linix::app::sync::resolver::StateResolver;
 use linix::core::executor::DryRunOutput;
 use linix::core::journal::JournalAction;
@@ -75,7 +75,7 @@ async fn a_declared_package_is_one_node_however_many_things_it_depends_on() {
     );
 
     let plan = planner
-        .plan(&desired, None)
+        .plan(&desired, PlanScope::Whole(HostBackends::default()))
         .await
         .expect("Critical Path Error: Planning failed.");
 
@@ -120,7 +120,9 @@ async fn test_dag_cycle_detection_logic() {
     desired.insert("brew".to_string(), vec![spec_a, spec_b]);
 
     // Execute Planning
-    let result = planner.plan(&desired, None).await;
+    let result = planner
+        .plan(&desired, PlanScope::Whole(HostBackends::default()))
+        .await;
 
     // Verification
     assert!(

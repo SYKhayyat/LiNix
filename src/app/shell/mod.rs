@@ -2,7 +2,7 @@
 
 use crate::app::diagnostics::FailureDiagnosticEngine;
 use crate::app::sandbox::{Sandbox, SandboxConfig};
-use crate::app::sync::{ChangePlanner, StateResolver, SyncEngine};
+use crate::app::sync::{ChangePlanner, PlanScope, StateResolver, SyncEngine};
 use crate::app::{LuaHooks, MetricsCollector};
 use crate::backends::BackendRegistry;
 use crate::config::Config;
@@ -264,10 +264,17 @@ impl EphemeralShell {
         }
 
         // Plan the changes while holding the state lock.
+        //
+        // `JustThese`, because `transient_desired` holds the shell's requests and nothing else.
+        // Planned as a whole-machine converge it made every other managed package on the box a
+        // removal — `linix shell ripgrep` proposing to uninstall the machine — with `max_removals`
+        // the only thing in the way, and a ceiling is not a rule.
         let changes = {
             let state_guard = self.state.lock().await;
             let planner = ChangePlanner::new(self.registry.clone(), &state_guard, &self.config);
-            planner.plan(&transient_desired, None).await?
+            planner
+                .plan(&transient_desired, PlanScope::JustThese)
+                .await?
         }; // <-- state_guard dropped here
 
         if !changes.is_empty() {
