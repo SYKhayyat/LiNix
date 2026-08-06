@@ -674,10 +674,15 @@ impl<'a> SyncEngine<'a> {
         let mut seen: std::collections::HashMap<(String, String, bool), usize> =
             std::collections::HashMap::new();
         for entry in entries {
-            let key = match &entry.action {
-                JournalAction::Install(s) => (s.backend.clone(), s.name.clone(), true),
-                JournalAction::Remove { name, backend } => (backend.clone(), name.clone(), false),
-            };
+            let (backend, name) = entry.action.identity();
+            // The third element is "is this an install": an interrupted install and an
+            // interrupted removal of one package are two operations and must stay two. A
+            // script's own two kinds are already distinct in `backend` (`exec` / `exec-undo`).
+            let key = (
+                backend.to_string(),
+                name.to_string(),
+                matches!(entry.action, JournalAction::Install(_)),
+            );
             match seen.get(&key) {
                 Some(&at) => order[at].1.push(entry.id),
                 None => {
@@ -688,6 +693,28 @@ impl<'a> SyncEngine<'a> {
             }
         }
         order
+    }
+
+    /// The work recovery would run to finish a logged action, or `None` when re-running it is
+    /// not a recovery.
+    ///
+    /// **The one place the log's vocabulary becomes the engine's.** It used to be six places,
+    /// each matching on `JournalAction` for its own reason, and adding a variant that is not
+    /// package work to that shape would have meant six chances to route a script down a
+    /// package path. Past this function `heal` speaks `GraphAction` and can only say things
+    /// about packages.
+    fn replay_of(action: &crate::core::journal::JournalAction) -> Option<GraphAction> {
+        use crate::core::journal::JournalAction;
+        match action {
+            JournalAction::Install(spec) => Some(GraphAction::Install(spec.clone())),
+            JournalAction::Remove { name, backend } => Some(GraphAction::Remove {
+                name: name.clone(),
+                backend: backend.clone(),
+            }),
+            // See `JournalAction::is_replayable`: a half-run script has no recorded progress
+            // and no declared end state, so replaying it is inventing a mutation.
+            JournalAction::Exec { .. } | JournalAction::ExecUndo { .. } => None,
+        }
     }
 
     pub async fn heal(&self) -> Result<()> {
@@ -720,16 +747,23 @@ impl<'a> SyncEngine<'a> {
                 interrupted.len()
             );
             for (entry, _) in &interrupted {
-                match &entry.action {
-                    crate::core::journal::JournalAction::Install(spec) => {
+                match Self::replay_of(&entry.action) {
+                    Some(GraphAction::Install(spec)) => {
                         info!("[DRY-RUN]   reinstall {}:{}", spec.backend, spec.name)
                     }
-                    crate::core::journal::JournalAction::Remove { name, backend } => {
+                    Some(GraphAction::Remove { name, backend }) => {
                         info!(
                             "[DRY-RUN]   remove {}:{} (subject to the guard)",
                             backend, name
                         )
                     }
+                    // Nothing to replay, so the preview says the only true thing there is:
+                    // what was interrupted. Reporting it is the whole of the real run's
+                    // action too, so preview and run describe the same machine.
+                    None => info!(
+                        "[DRY-RUN]   report: {}",
+                        entry.action.describe_interruption()
+                    ),
                 }
             }
             return Ok(());
@@ -748,6 +782,9 @@ impl<'a> SyncEngine<'a> {
         // Packages whose interrupted removal the guard refused: kept, not removed (owner
         // decision), and the entry resolved so heal completes rather than sticking.
         let mut kept: Vec<String> = Vec::new();
+        // Interrupted work recovery can only account for, never finish — a half-run script.
+        // Counted separately from `recovered` because nothing on the machine changed.
+        let mut reported: Vec<String> = Vec::new();
         // Entries recovery cannot act on at all — the manager is not registered on this machine,
         // or it is registered and cannot install or remove. Until 2026-08-04 the loop below was
         // two nested `if let`s with **no `else` on either**, so such an entry was neither
@@ -760,15 +797,40 @@ impl<'a> SyncEngine<'a> {
         // process. This one decides what recovery can even attempt: a manager that is not set up
         // here, a manager that cannot install or remove, and a removal the guard refuses are all
         // settled without touching the machine.
-        let mut runnable: Vec<(crate::core::journal::JournalEntry, Vec<String>)> = Vec::new();
+        let mut runnable: Vec<(GraphAction, Vec<String>)> = Vec::new();
         for (entry, ids) in interrupted {
-            let (backend, package, is_install) = match &entry.action {
-                crate::core::journal::JournalAction::Install(spec) => {
-                    (spec.backend.clone(), spec.name.clone(), true)
+            // The one place the log's vocabulary is turned into the engine's. Everything below
+            // reads a `GraphAction`, so a variant that is not package work cannot silently take
+            // a package path — it never gets one.
+            let Some(action) = Self::replay_of(&entry.action) else {
+                // Recovery cannot finish a script, and must not pretend to. What it owes the
+                // user is the account nobody was given while these entries did not exist: a
+                // machine killed mid-`exec:` came back, said nothing, and ran the script again
+                // from the top on the next sync. The entry is then resolved — it has been
+                // acted on as fully as it can be, and leaving it open would keep
+                // `needs_recovery` true for ever and re-report it in front of every sync.
+                warn!("{}", entry.action.describe_interruption());
+                reported.push(entry.action.key());
+                // Resolved as a FAILURE, not a success. The entry has been acted on as fully as
+                // it can be, and leaving it open would keep `needs_recovery` true for ever and
+                // re-report it in front of every sync — but the script did not finish, and a
+                // log that records `Completed` for a mutation that was interrupted is exactly
+                // the dishonest record this change exists to remove. `Failed` is terminal, so
+                // recovery still stops asking, and it ages out on the same rule as any other
+                // terminal entry while carrying the reason.
+                let mut j = self.journal.lock().await;
+                for id in &ids {
+                    let _ = j.record_failure(
+                        id,
+                        "interrupted part-way through; recovery cannot finish a script and \
+                         reported it instead",
+                    );
                 }
-                crate::core::journal::JournalAction::Remove { name, backend } => {
-                    (backend.clone(), name.clone(), false)
-                }
+                continue;
+            };
+            let (backend, package, is_install) = match &action {
+                GraphAction::Install(spec) => (spec.backend.clone(), spec.name.clone(), true),
+                GraphAction::Remove { name, backend } => (backend.clone(), name.clone(), false),
             };
             let key = format!("{}:{}", backend, package);
 
@@ -821,7 +883,7 @@ impl<'a> SyncEngine<'a> {
                     continue;
                 }
             }
-            runnable.push((entry, ids));
+            runnable.push((action, ids));
         }
 
         if !runnable.is_empty() {
@@ -845,21 +907,9 @@ impl<'a> SyncEngine<'a> {
             // guard never saw (S24).
             use petgraph::stable_graph::{NodeIndex, StableDiGraph};
             let mut graph: StableDiGraph<GraphAction, ()> = StableDiGraph::new();
-            let mut nodes: Vec<(NodeIndex, crate::core::journal::JournalEntry, Vec<String>)> =
-                Vec::new();
-            for (entry, ids) in runnable {
-                let action = match &entry.action {
-                    crate::core::journal::JournalAction::Install(spec) => {
-                        GraphAction::Install(spec.clone())
-                    }
-                    crate::core::journal::JournalAction::Remove { name, backend } => {
-                        GraphAction::Remove {
-                            name: name.clone(),
-                            backend: backend.clone(),
-                        }
-                    }
-                };
-                nodes.push((graph.add_node(action), entry, ids));
+            let mut nodes: Vec<(NodeIndex, GraphAction, Vec<String>)> = Vec::new();
+            for (action, ids) in runnable {
+                nodes.push((graph.add_node(action.clone()), action, ids));
             }
             // An interrupted install whose dependency is also interrupted must wait for it, or
             // recovery reproduces the ordering failure that a dependency edge exists to prevent.
@@ -871,16 +921,16 @@ impl<'a> SyncEngine<'a> {
             // edgeless graph, which is a plan that runs but in the wrong order.
             let by_key: std::collections::HashMap<String, NodeIndex> = nodes
                 .iter()
-                .filter_map(|(idx, entry, _)| match &entry.action {
-                    crate::core::journal::JournalAction::Install(spec) => {
+                .filter_map(|(idx, action, _)| match action {
+                    GraphAction::Install(spec) => {
                         Some((format!("{}:{}", spec.backend, spec.name), *idx))
                     }
                     _ => None,
                 })
                 .collect();
             let mut edges: Vec<(NodeIndex, NodeIndex)> = Vec::new();
-            for (idx, entry, _) in &nodes {
-                if let crate::core::journal::JournalAction::Install(spec) = &entry.action {
+            for (idx, action, _) in &nodes {
+                if let GraphAction::Install(spec) = action {
                     for req in &spec.requires {
                         if let Some(dep) = by_key.get(req) {
                             if dep != idx {
@@ -925,14 +975,14 @@ impl<'a> SyncEngine<'a> {
                 outcome.insert(res.node_index, res.result);
             }
 
-            for (idx, entry, ids) in nodes {
-                let (key, verb, is_install) = match &entry.action {
-                    crate::core::journal::JournalAction::Install(spec) => (
+            for (idx, action, ids) in nodes {
+                let (key, verb, is_install) = match &action {
+                    GraphAction::Install(spec) => (
                         format!("{}:{}", spec.backend, spec.name),
                         "reinstalled",
                         true,
                     ),
-                    crate::core::journal::JournalAction::Remove { name, backend } => {
+                    GraphAction::Remove { name, backend } => {
                         (format!("{}:{}", backend, name), "removed", false)
                     }
                 };
@@ -953,8 +1003,8 @@ impl<'a> SyncEngine<'a> {
                         // away — the machine keeps it for ever and the one command for removing
                         // it reports success. That is Q28's class exactly, on the path that runs
                         // when nobody is watching.
-                        match &entry.action {
-                            crate::core::journal::JournalAction::Install(spec) => {
+                        match &action {
+                            GraphAction::Install(spec) => {
                                 let source =
                                     spec.options.get("__source").map_or("sync", String::as_str);
                                 let mut state = self.state.lock().await;
@@ -967,7 +1017,7 @@ impl<'a> SyncEngine<'a> {
                                     false,
                                 );
                             }
-                            crate::core::journal::JournalAction::Remove { name, backend } => {
+                            GraphAction::Remove { name, backend } => {
                                 let mut state = self.state.lock().await;
                                 state.remove(backend, name);
                             }
@@ -1021,6 +1071,17 @@ impl<'a> SyncEngine<'a> {
                 "kept {} protected package(s) whose interrupted removal was refused: {}.",
                 kept.len(),
                 kept.join(", ")
+            );
+        }
+        // `warn!`, and separate from the line above, because nothing was put right: these were
+        // reported, not recovered, and folding them into the recovered count would be the
+        // summary claiming a repair that did not happen.
+        if !reported.is_empty() {
+            warn!(
+                "{} interrupted script(s) could not be completed by recovery and were reported \
+                 above: {}.",
+                reported.len(),
+                reported.join(", ")
             );
         }
         // And it reaches disk. The registry lives in memory until somebody serialises it, and

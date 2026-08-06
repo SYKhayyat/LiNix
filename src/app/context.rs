@@ -223,7 +223,7 @@ impl App {
     pub fn dotfiles(&self) -> crate::app::Dotfiles<'_> {
         crate::app::Dotfiles {
             config: &self.config,
-            executor: &self.executor,
+            registry: &self.registry,
         }
     }
 
@@ -248,6 +248,7 @@ impl App {
             config: &self.config,
             executor: &self.executor,
             registry: &self.registry,
+            journal: &self.journal,
         }
     }
 

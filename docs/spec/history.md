@@ -14,6 +14,106 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Session 2026-08-06 — the log covers what cannot be recomputed, and a tree is its links (`F-0`)
+
+**One finding from the whole-repo Lamdan review, scoped out and built: `F-0` — the write-ahead
+log covers packages only.** Ruled as `Y10`; rules in `target-state.md` II.2 and II.19, reasons in
+`why.md` V.139 and V.140. The finding is accurate and wrong about its shape in both directions,
+and both corrections are below because they are the interesting part.
+
+### What was actually there
+
+`JournalAction` had two variants, `Install` and `Remove`. All nine `apply/` modules referenced
+the journal **zero** times. `readme.md` said *"a write-ahead log records every mutation before it
+runs."*
+
+### Correction one — the proposal over-reaches
+
+The review asked for one variant per phase. Its own steelman refutes it, and the steelman is
+right: a `service:`, a `setting:`, a `firewall:` rule or a placed `link:` is a read-then-write
+converge from a declaration. Killed halfway, the next sync reads the machine, sees the line
+unmet, and finishes the job — a **better** recovery than replaying a log, because it also
+corrects drift that happened while the process was dead. Those stay out, and II.19 now says so
+in those words, so a future variant has to argue with the reason rather than slip past it.
+
+`apply/extras.rs`'s teardown was named as one of three irreversible phases. **It is not.**
+`reconcile` computes drift from a ledger it writes only *after* the loop, so a kill mid-teardown
+leaves the ledger naming the same drift and the next sync retries it. Checked and cleared.
+
+Two mutations genuinely cannot be recomputed: an `exec:` script and an `@undo=` shell command.
+Both are now recorded before the process starts and resolved after. `heal` **reports** an
+interrupted script — name, content hash, and that the next sync will run it again from the top —
+and never replays one, because re-running a half-run script repeats the half that already ran.
+Then it resolves the entry, because an unresolvable `InProgress` keeps `needs_recovery` true for
+ever and that is `Q33`'s 208 seconds.
+
+### Correction two — the proposal under-reaches, badly, on `dotfiles:`
+
+The review described the gap as *"killed between the remove and the write"*. **A run that
+completed successfully destroyed the user's file too.**
+
+`link:` has had the whole lifecycle since `T6`: back the target up to `<dest>.linix-backup`
+before taking the path over, restore it when the line goes away, key by destination. `dotfiles:`
+— which `verbs/sync.rs` calls *"a pile of `link:` lines"* and applies in the same phase — had
+sixteen lines of its own: `create_dir_all`, `remove_file`, `symlink`. Four consequences, all
+from the one cause:
+
+- **`--replace-existing` threw the original away.** The flag waives the refusal to overwrite,
+  never the preservation. The identical `link:` line on the same run kept its own file.
+- **Nothing recorded what the tree placed**, so the shared teardown could not see it. A file
+  deleted from a tree left a **dangling symlink** for ever; deleting the line left the whole
+  tree. `S20`'s bug, still live for one statement kind eleven days after `S20` closed.
+- **No ledger row meant no removal guard**, so a path that deletes files was outside `max_removals`.
+- **The tree re-placed every file on every sync** — `grade3_resource_idempotency_tests`' defect,
+  in the one kind that test did not cover.
+
+**Four documents said the ledger row existed**: `model/dotfiles.rs`'s header, `core/extras_lock.rs`,
+this file's own 7n entry, and `plan.md`'s 7n — marked **DONE 2026-07-24**, with the exit
+condition *"a file deleted from the tree has its link removed by the same `extras_lock` teardown
+every other extra uses."* Every one describes the design correctly. None was true. Both 7n
+entries now carry the correction rather than the claim.
+
+### The change
+
+The tree expands into the `link:` lines it stands for — `Dotfiles::links`, one place — and
+everything downstream is machinery that already existed. `spec_from_extra` is now shared, so a
+tree's file and a hand-written line reach the backend as the same value. **~40 lines added, one
+placement loop deleted, four behaviours gained.** `Dotfiles` lost its `executor` field, which
+the deleted loop was the only reader of.
+
+Two siblings found while building:
+
+- **`Dotfiles::plan` answered "did LiNix put this here?" with `is_symlink`.** `link:` had
+  already learned that is wrong where the deploy falls back to a copy. It fired the moment the
+  tree started using the backend: LiNix called its own copy a destination it did not create and
+  refused, by name, to touch the tree. Ownership is now the ledger row, in union with the old
+  test so nothing placed before the row existed becomes a fresh `U23` refusal on upgrade.
+- **SEC3's out-of-home confirmation could not see a tree.** It read `state.extras`, where a tree
+  is one statement whose files are not — so `link:` into `/etc` asked and `dotfiles:./etc
+  @target=/etc` did not. It takes the expanded statements now.
+
+### The gates
+
+- `tests/dotfiles_tree_is_a_pile_of_links_tests.rs` — runs `dotfiles:` and `link:` against the
+  same bytes in the same tree and asserts they answer the same, three times over. **The `link:`
+  half is the control**: if it ever stops preserving the user's file, the tests fail on that
+  line first and say so, rather than passing because both halves broke together.
+- `tests/the_log_covers_what_cannot_be_recomputed_tests.rs` — the first test's instrument is the
+  mutation itself: **the script under test reads the journal while it is running.** An entry
+  written after the interpreter returns leaves it nothing to find, which is the only way to tell
+  a write-ahead log from a write-behind one. Verified by mutation — neutering `record_start`
+  turns it red with that message. The third test reads `JournalAction`'s own source and fails on
+  an unrecognised variant, so adding a converge to the log has to change the reasoning first.
+
+### Left for the owner
+
+`Q48` — `LinkBackendCore::is_same_drive` compares `Component::Prefix`, and `canonicalize`
+returns a `\\?\C:` verbatim prefix where the target carries a plain `C:`. They never match, so
+**every** `link:` on Windows logs *"Cross-drive fallback to COPY"* and copies, same drive or not.
+The three-line fix turns those copies into symlinks, which need a privilege a copy does not, so
+it is a behaviour change a user would notice. Not touched. The ownership predicate above is what
+makes it harmless rather than latent.
+
 ## Session 2026-08-05 — the gate moved to the property (`F-2`)
 
 **One finding from the whole-repo Lamdan review, scoped out and built: `F-2` — every gate in this
@@ -2316,8 +2416,11 @@ top of this file exists.
 - **7m the exit-code table (U21)** — `ed0d996` + `8837042`. Every guard refusal is
   `Error::Refused` → exit 3, from one place; the install ceiling used to exit 1 while its
   siblings exited 3.
-- **7n the dotfiles directory (U22–U25)** — `c7dea64`. Files, never directories; each file keyed
-  individually in the extras ledger so the teardown is the shared one; never decrypts.
+- **7n the dotfiles directory (U22–U25)** — `c7dea64`. Files, never directories; never decrypts.
+  **The keying was not built until `Y10`, 2026-08-06** — this entry claimed "each file keyed
+  individually in the extras ledger so the teardown is the shared one" and four documents agreed
+  with it, while `apply/dotfiles.rs` placed the tree through a private loop that wrote no row,
+  took no backup, and left a deleted file's symlink dangling for ever. See V.139.
 - **7o `firewall:` (N4–N7)** — `ca9466b`. Three adapter rows (`ufw`, `firewalld`,
   `windows-defender`) in `firewall_adapters.toml`, and the session-port lockout check that is the
   feature's precondition rather than one of its features.

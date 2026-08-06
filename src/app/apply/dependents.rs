@@ -158,7 +158,11 @@ impl Dependents<'_> {
 /// simply ignored, which is why the grammar — not this conversion — is where an unknown
 /// key is refused. Options are single-valued here (a service is enabled or not), so the
 /// first value of each key is taken.
-fn spec_from_extra(
+///
+/// Shared with the dotfiles tree, whose files reach the `link:` backend as the very same value
+/// a hand-written line does. A second converter beside it is how the two paths would drift
+/// apart again.
+pub(crate) fn spec_from_extra(
     backend: &str,
     name: &str,
     opts: &crate::config::grammar::Options,

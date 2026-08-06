@@ -10,6 +10,10 @@
 //! repo that was not put there deliberately. The cost is walking the tree each sync and one
 //! ledger row per file, and that is the cost worth paying.
 //!
+//! The rows are written by `Dotfiles::links`, which expands a tree into the `link:` lines it
+//! stands for — that expansion is what makes the teardown, the `<dest>.linix-backup` and the
+//! removal guard the tree's as much as a hand-written line's.
+//!
 //! **The tree never decrypts (U24).** A `.age` file in it is copied as the ciphertext it is.
 //! Deciding by file extension is magic, and magic that silently writes plaintext; secrets stay
 //! on explicit `link:` lines where `@decrypt=` is written down.

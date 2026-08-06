@@ -143,6 +143,36 @@ Two structural consequences, both now core rather than peripheral:
 
 ## F-0 · The write-ahead log covers packages only — `rewrite` **[verified]**
 
+> **Actioned 2026-08-06 — `Y10` in `decisions.md`, rules in II.2 + II.19, reasons in V.139 +
+> V.140.** Accurate on the gap. Wrong about its shape in both directions, and both corrections
+> are in the ruling.
+>
+> **The proposal over-reaches.** One variant per phase would journal work the next sync
+> recomputes anyway. The steelman written below and then set aside is correct: a `service:`,
+> `setting:`, `firewall:` or placed `link:` is a converge from a declaration, and recomputing it
+> is a *better* recovery than replaying a log because it also corrects drift the log never saw.
+> Those stay out, and the rule now says so, so a future variant has to argue with the reason.
+> **`apply/extras.rs` is likewise not one of the three** — `reconcile` computes drift from a
+> ledger it writes only after the loop, so a kill mid-teardown leaves the next sync retrying the
+> same drift. Checked and cleared, not fixed.
+>
+> **The proposal under-reaches, badly, on `dotfiles:`.** The gap is not "killed between the
+> remove and the write" — **a run that completed successfully destroyed the user's file too.**
+> `link:` has had `T6`'s backup-and-restore since 2026-07-23; the tree, which `verbs/sync.rs`
+> calls *"a pile of `link:` lines"*, had a private placement loop with no backup, no ledger row
+> and therefore no teardown, no restore and no removal guard. Deleting a file from a tree left a
+> **dangling symlink** for ever, under a summary reading `already up to date`. **Four documents
+> said the ledger row existed** — `model/dotfiles.rs`, `core/extras_lock.rs`, `history.md`, and
+> `plan.md`'s 7n, marked DONE 2026-07-24 with that exit condition stated. None was true.
+>
+> The tree now expands into the `link:` lines it stands for, once, and everything downstream is
+> machinery that already existed. `exec:` and `@undo=` — the two mutations nothing can recompute
+> — are journalled before they start, and `heal` reports an interrupted script rather than
+> replaying it. A sibling found while building: `Dotfiles::plan` answered "did LiNix put this
+> here?" with `is_symlink`, which `link:` had already learned is wrong under the copy fallback.
+> Still open and the owner's: `is_same_drive` makes **every** Windows `link:` take that fallback
+> (`Q48`).
+
 **Created by the 2026-08-05 ruling. This is the top finding on the accuracy axis.**
 
 `readme.md:738` is the headline safety claim: *"A write-ahead log records every mutation before it

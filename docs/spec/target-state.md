@@ -395,6 +395,26 @@ old destination instead of orphaning it forever.
 a config file they hand-wrote; a secret LiNix itself decrypted a moment ago is not that, and the
 copy would sit in plaintext under the ordinary umask beside a file that got `0600` (T1).
 
+**A `dotfiles:` tree is the `link:` lines it stands for, and gets every one of the rules above**
+(2026-08-06, `Y10`). It is expanded once into those lines, and from there it is not a second
+thing: the `link:` backend places each file, the extras ledger keys one row per placed file, and
+the shared teardown restores the original through the removal guard. So a tree that replaces a
+file you wrote backs it up, `--replace-existing` waives the refusal and never the preservation,
+deleting a file from the tree removes its link and puts your file back, and deleting the line
+does that for the whole tree. **A tree with its own placement loop had none of it** — it called
+`remove_file`, and a file deleted from a tree left a dangling symlink for ever. **V.139.**
+
+**A tree's removals count against `max_removals` like any others.** Deleting a `dotfiles:` line
+with more files than the ceiling is refused by name, pointing at `[guard] max_removals` — the
+same refusal twenty-one `link:` lines get, and `also_removing` puts a tree's files in the same
+budget as the packages in the same plan. Exempting a tree would be the second teardown again.
+
+**Ownership is what the ledger recorded, not what the filesystem looks like.** *Did LiNix put
+this here?* is answered by the row, in union with "is it a symlink" for anything placed before
+the row existed. Asked as `is_symlink` alone it is wrong wherever the deploy falls back to a
+copy: LiNix called its own file a destination it did not create, and refused to touch the tree
+containing it.
+
 ### Health checks (XIII.5, U7)
 
 **Two scopes, one revert path.** `@health=` on a line answers *did this upgrade break this*.
@@ -2093,6 +2113,21 @@ like any other change: batched per manager, run in parallel, with the dependency
 journal's own specs carry. It differs from a `sync` in exactly two ways, and both follow from
 what it is — it does not roll back, and one entry nobody can finish does not leave the others
 unfinished. **V.135.**
+
+**The log records what cannot be recomputed, and nothing else** (2026-08-06, `Y10`). A package,
+an `exec:` script, an `@undo=` command — each written and flushed *before* the process starts.
+Every other mutation a sync makes is a converge from a declaration: a `service:`, a `setting:`,
+a `firewall:` rule, a placed `link:`. Killed halfway, the next sync reads the machine, sees the
+line unmet and finishes the job, which is a **better** recovery than replaying a log because it
+also corrects drift the log never saw. A variant for one of those would be durability theatre,
+and adding one has to argue with this paragraph first.
+
+**Recovery replays a package and reports a script.** Reaching a state twice is reaching it once,
+so an interrupted install is finished by installing. A script that got half way has no recorded
+progress and no declared end state, so re-running it repeats the half that already ran: `heal`
+names it, says the next sync will run it again from the top, and resolves the entry as **failed**
+— not completed, because it did not complete, and not left open, because an entry that can never
+be recovered but stays `InProgress` keeps `needs_recovery` true for ever. **V.140.**
 
 **A failure names the declaration it happened for** (2026-08-05, `Q34`). Not the manager, not
 the command — the `backend:name` and the file and line it was written on. `install X` converges

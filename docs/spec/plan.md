@@ -1550,7 +1550,9 @@ changed out of band is reported by name rather than by file; a plan that would c
 carrying the session is refused naming the port and the rule, from `sync`, from
 `purge-undeclared`, and from a `watch` tick.
 
-**7n — the dotfiles directory (XIII.21, U22–U25). DONE 2026-07-24** (`c7dea64`).
+**7n — the dotfiles directory (XIII.21, U22–U25). DONE 2026-07-24** (`c7dea64`), **except the
+keying, which was not built until 2026-08-06** (`Y10`) — the exit condition below was written,
+marked met, and false for eleven days. See V.139.
 `Statement::Dotfiles` names a tree and stands for as many declarations as it holds;
 `model/dotfiles.rs` plans it, `App::plan_dotfiles` (`context.rs:824`) resolves it against this
 machine, and each file is keyed individually in the `extras_lock` so the teardown is the one

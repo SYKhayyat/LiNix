@@ -543,6 +543,12 @@ On a fresh machine those are usually untouched distribution defaults, which is w
 `--replace-existing` is for. It is a per-run flag and deliberately not a config key: a machine
 that always bypasses the check is one where the check does not exist.
 
+**`--replace-existing` waives the stop, never the backup.** A tree is the `link:` lines it
+stands for, so every file it replaces is preserved as `<destination>.linix-backup` first, the
+same as a hand-written line. Delete a file from the tree and its link goes and your original
+comes back; delete the `dotfiles:` line and that happens for the whole tree. The removals are
+counted against the same ceiling every other removal is.
+
 **The tree never decrypts.** A `.age` file in it is linked as the ciphertext it is — deciding by
 file extension would be magic that silently writes plaintext. Secrets stay on explicit `link:`
 lines where `@decrypt=` is written down.
@@ -735,9 +741,14 @@ named and skipped rather than rebuilt. It cannot be put in `schedules`.
 
 ## Safety
 
-- **Atomic transactions.** A write-ahead log records every mutation before it runs. If LiNix is
-  killed mid-transaction, the next run heals it — replaying or reverting what was in flight.
-  A crash that goes unattended for hours is still healable.
+- **Atomic transactions.** A write-ahead log records every mutation that cannot be recomputed —
+  every package, every `exec:` script, every `@undo=` — before it runs. If LiNix is killed
+  mid-transaction, the next run heals it: packages are replayed or reverted, and an interrupted
+  script is reported by name, because a half-run script has no recorded progress and re-running
+  it would repeat the half that already ran. A crash that goes unattended for hours is still
+  healable. Resources declared as an end state — a `service:`, a `setting:`, a `firewall:` rule,
+  a placed `link:` — are not logged and do not need to be: the next sync reads the machine and
+  finishes the job, which also corrects drift no log would have seen.
 - **Snapshots.** btrfs, ZFS, Timeshift and Windows Restore Points, taken automatically before a
   sync or upgrade where a provider exists.
 - **Dry run.** `linix --dry-run sync` previews without touching anything — and so does every

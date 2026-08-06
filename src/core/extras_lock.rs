@@ -33,21 +33,22 @@ pub fn extra_key(stmt: &Statement) -> Option<String> {
         // teardown the file in your repo and leave the deployed one in place. Keying the
         // destination also makes an edited `@target=` a removal of the old destination and an
         // install of the new, instead of leaving the old one forever.
-        Statement::Link(name, opts) => Some(format!(
-            "link:{}",
+        Statement::Link(name, opts) => Some(
             opts.one("target")
                 .and_then(|t| crate::backends::link::resolve_target(t).ok())
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| name.clone())
-        )),
+                .map(|p| link_key(&p))
+                .unwrap_or_else(|| format!("link:{}", name)),
+        ),
         // `exec:` is deliberately NOT an extra. Extras are nouns whose teardown undoes what
         // they put in place; a verb has no such inverse, and a script that succeeds makes its
         // own `when` false — so wiring it into this ledger would re-run or "undo" it every
         // time the condition swung. Its lifecycle is `locks/exec.toml`, not here (XIII.3).
         //
-        // A dotfiles tree is excluded for the opposite reason: its files ARE keyed here, but
-        // individually by the tree applier — one ledger row per placed file (U22), which this
-        // function has no way to enumerate from the declaration alone.
+        // A dotfiles tree is excluded for the opposite reason: its files ARE keyed here, one
+        // row per placed file (U22), but the rows come from `Dotfiles::links` — which walks
+        // the tree — because this function has only the declaration and a tree's contents are
+        // a fact about the disk. That is precisely why the row it documents did not exist for
+        // two weeks: nothing was in a position to write it, and four documents said otherwise.
         // `generate:` is excluded for the same reason as `exec:`: it is a verb that runs a
         // command, not a noun with an inverse. Its output declarations ARE nouns and are keyed
         // here individually once merged, but the generate line itself has no teardown.
@@ -56,6 +57,16 @@ pub fn extra_key(stmt: &Statement) -> Option<String> {
         // closes the port (N5), deleting a `service:` line disables the service.
         _ => stmt.kind().map(|_| stmt.key()),
     }
+}
+
+/// The ledger key of a file LiNix placed, from its destination.
+///
+/// A second caller asks this question from the other end: a `dotfiles:` tree has the
+/// destination in hand and needs to know whether the ledger already claims it. That question
+/// and [`extra_key`]'s `link:` arm must produce the same string or a teardown searches for a
+/// row nothing wrote, so there is one function and the arm above calls it.
+pub fn link_key(destination: &Path) -> String {
+    format!("link:{}", destination.display())
 }
 
 /// A drifted extra, split into what it is and what to act on: `service:nginx` → `("service",

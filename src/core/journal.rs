@@ -18,10 +18,104 @@ pub enum ActionStatus {
     Abandoned,
 }
 
+/// What the log records, and it is not only packages.
+///
+/// **A mutation needs a write-ahead record exactly when the next run cannot recompute it.**
+/// Most of what a sync does to a resource is a read-then-write converge from a line in your
+/// config — a `service:` is started, a `setting:` written, a `firewall:` port opened, a
+/// `link:` placed. Interrupted, none of those needs a log: the next sync reads the machine,
+/// sees the declaration unmet, and finishes the job. Recomputing from the declaration is a
+/// *better* recovery than replaying a log, because it also corrects drift the log never saw.
+/// Journalling them would be durability theatre, and is deliberately not done.
+///
+/// Two things a sync does are not that, and both live here:
+///
+/// - **A package.** An interrupted `apt install` wedges dpkg in a state no declaration
+///   describes, so the log is the only record that the mutation began.
+/// - **A script.** `exec:` runs code, and `@undo=` runs an arbitrary shell command. Nothing
+///   recorded how far either got, their authors never promised they could be run twice, and
+///   there is no declared end state to converge towards. Recovery cannot finish one — but a
+///   machine that was killed halfway through a script must not come back and say nothing,
+///   which is what it did while these variants did not exist.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum JournalAction {
     Install(PackageSpec),
-    Remove { name: String, backend: String },
+    Remove {
+        name: String,
+        backend: String,
+    },
+    /// A declared `exec:` script, recorded before the interpreter is started. The hash is the
+    /// content's, which is what `locks/exec.toml` counts runs of — so a reader can tell
+    /// whether the run that was interrupted is the one the next sync is about to repeat.
+    Exec {
+        script: String,
+        hash: String,
+    },
+    /// The `@undo=` of an `exec:` whose line went away (U3). Kept verbatim: it is a shell
+    /// command a human wrote, and naming it is the only way a reader can judge what a
+    /// half-execution left behind.
+    ExecUndo {
+        script: String,
+        command: String,
+    },
+}
+
+impl JournalAction {
+    /// The entry's subject as `<backend>:<name>` — the label every report prints and the key
+    /// recovery collapses repeated attempts on.
+    pub fn key(&self) -> String {
+        let (backend, name) = self.identity();
+        format!("{}:{}", backend, name)
+    }
+
+    /// The pair an id is minted from. A script is keyed by the two words that identify it to
+    /// the user: what kind of thing ran, and which one.
+    pub(crate) fn identity(&self) -> (&str, &str) {
+        match self {
+            Self::Install(s) => (s.backend.as_str(), s.name.as_str()),
+            Self::Remove { name, backend } => (backend.as_str(), name.as_str()),
+            Self::Exec { script, .. } => ("exec", script.as_str()),
+            Self::ExecUndo { script, .. } => ("exec-undo", script.as_str()),
+        }
+    }
+
+    /// Whether re-running this action is a recovery.
+    ///
+    /// A package: yes. Every manager LiNix drives reaches a state when told to, and reaching
+    /// it twice is reaching it once, so an interrupted install is finished by installing.
+    ///
+    /// A script: no. Replaying it would be recovery inventing a mutation rather than
+    /// completing one, and it could do real damage — the half that already ran would run
+    /// again. What recovery owes an interrupted script is an account of it, not a repeat.
+    pub fn is_replayable(&self) -> bool {
+        matches!(self, Self::Install(_) | Self::Remove { .. })
+    }
+
+    /// What was interrupted and what the next run will do about it — the whole value of
+    /// recording a script, since nothing can be replayed to fix one.
+    pub fn describe_interruption(&self) -> String {
+        match self {
+            Self::Exec { script, hash } => format!(
+                "`exec:{}` (content {}) was interrupted part-way through. Nothing recorded how \
+                 far it got, and the run was never counted — so the next `sync` will run it \
+                 again from the top. If that script is not safe to run twice, this is the \
+                 moment to check what it left behind.",
+                script,
+                // By characters, not bytes. `hash_script` returns hex, but by the time this
+                // runs the value has been through a file — and a byte slice landing inside a
+                // multi-byte character panics. Recovery is the last place in the program that
+                // may fall over on the contents of a damaged journal, which is the file it
+                // exists to read.
+                hash.chars().take(12).collect::<String>()
+            ),
+            Self::ExecUndo { script, command } => format!(
+                "the undo of `exec:{}` was interrupted part-way through: `{}`. It stays \
+                 recorded, so the next `sync` will run it again from the top.",
+                script, command
+            ),
+            other => format!("{} was interrupted.", other.key()),
+        }
+    }
 }
 
 /// The source of truth for the 'linix heal' command.
@@ -200,11 +294,7 @@ impl Journal {
 
     /// MUST be called and flushed before invoking any backend command.
     pub fn record_start(&mut self, action: JournalAction) -> Result<String> {
-        let (b_name, p_name) = match &action {
-            JournalAction::Install(s) => (&s.backend, &s.name),
-            JournalAction::Remove { name, backend } => (backend, name),
-        };
-
+        let (b_name, p_name) = action.identity();
         let id = Self::generate_id(b_name, p_name);
 
         let entry = JournalEntry {

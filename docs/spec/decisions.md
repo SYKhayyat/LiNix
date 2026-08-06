@@ -1,4 +1,4 @@
-# The decision register — all 167, one of them open
+# The decision register — all 169, two of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -15,9 +15,9 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **2** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **1** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **161** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **162** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -73,8 +73,9 @@ status loses that, so it is kept here:
 
 ## Index
 
-**One is open — `Z1`, raised 2026-08-03, a licence choice.** All 167 are accounted
-for: **161 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 1 OPEN** — and this line
+**Two are open — `Z1`, raised 2026-08-03, a licence choice; and `Q48`, raised 2026-08-06, what
+`link:` should do on Windows.** All 169 are accounted
+for: **162 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 2 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -330,6 +331,8 @@ II.19 and the reasons in V.115–V.118.*
 | **Y7** | `winget list` reports names with spaces in them and "a package name is one word" refused them, so a name LiNix printed was a name LiNix could not be given — RULED: **quote it.** `winget:"ARP\Machine\X64\Mozilla Firefox"`. | 2026-08-03 |
 | **Y8** | Nine managers started 5.4 s into a 9.1 s `check drift` and the run was idle before they did — why did it not overlap? — RULED: **ask every manager the run will ask, at once.** Not slower children: unasked ones. 9.1 s → 3.9 s, 2.7× → 5.4×, same report. | 2026-08-03 |
 | **Y9** | The planner asked seven backends what each declared package depends on and installed the answers — which took ownership of packages nobody declared, and split the one command line it had a reason to keep. RULED: **no.** LiNix installs what you declared, and `@requires` keeps splitting the wave. | 2026-08-06 |
+| **Y10** | The write-ahead log had two variants and all nine `apply/` modules referenced it zero times, while a `dotfiles:` tree destroyed the user's file with no backup, no ledger row and therefore no teardown — four documents said otherwise. RULED: **the log covers what cannot be recomputed**, and **a tree is the `link:` lines it stands for.** | 2026-08-06 |
+| **Q48** | Every `link:` on Windows takes the cross-drive COPY fallback, same drive or not: `is_same_drive` compares a verbatim prefix against a plain one. **OPEN** — fixing it needs the symlink privilege a copy does not. | — |
 
 ---
 
@@ -4885,6 +4888,123 @@ rewrite.
 **What could reverse it:** a manager that installs a declared package and *not* its
 dependencies. None of the 23 that answer a dependency query does; one that did would need its
 dependencies declared, not discovered.
+
+---
+
+## Y10
+
+**Status: ANSWERED — built and ruled 2026-08-06.** Raised by
+`lamdan/whole-repo-2026-08-05.md` as F-0, the top finding on the accuracy axis. Accurate on the
+gap; wrong about its shape in both directions, and the corrections are below.
+
+**Y10 — What does the write-ahead log cover, and what does a `dotfiles:` tree get?** Two
+questions, and they turned out to be one: *what happens to a mutation LiNix cannot recompute?*
+
+`JournalAction` had two variants, `Install` and `Remove`. All nine `apply/` modules contained
+**zero** references to the journal, so every non-package mutation happened outside the log,
+while `readme.md` said *"a write-ahead log records every mutation before it runs"*.
+
+**RULED, part one: the log covers what cannot be recomputed, and nothing else.**
+
+The review proposed one variant per phase. That is wrong, and its own steelman says why. A
+`service:`, a `setting:`, a `firewall:` rule, a placed `link:` is a read-then-write converge
+from a declaration: killed halfway, the next sync reads the machine, sees the line unmet and
+finishes the job. **Recomputing from the declaration is a better recovery than replaying a
+log**, because it also corrects drift the log never saw. Journalling those is durability
+theatre, and they stay out. Two things are not that and are now logged: an `exec:` script and
+an `@undo=` shell command. Nothing records how far either got, their authors never promised
+they were safe to run twice, and there is no declared end state to converge towards.
+
+**Recovery reports an interrupted script; it does not replay one.** A package is finished by
+installing it again — reaching a state twice is reaching it once. A script that got half way
+has no recorded progress, so re-running it repeats the half that already ran. What `heal` owes
+it is the account nobody was given: which script, its content hash, and that the next sync will
+run it again from the top. Then the entry is resolved as **failed** — not completed, because it
+did not complete, and not left open, because an entry that can never be recovered but stays
+`InProgress` keeps `needs_recovery` true for ever, which is `Q33`'s 208 seconds.
+
+**One correction to the finding.** It named `apply/extras.rs`'s teardown as one of three
+irreversible phases. It is not: `reconcile` computes drift from a ledger it only writes *after*
+the loop, so a kill mid-teardown leaves the ledger naming the same drift and the next sync
+retries it. Checked and cleared, not fixed.
+
+**RULED, part two: a `dotfiles:` tree is the `link:` lines it stands for.** This is the larger
+half and the review understated it. It described the gap as *"killed between the remove and the
+write"*. The gap was wider: **a run that completed successfully destroyed the user's file too.**
+
+`link:` has had the whole lifecycle since `T6` — back the target up to `<dest>.linix-backup`
+before taking the path over, restore it when the line goes away. `dotfiles:` — which
+`verbs/sync.rs` calls *"a pile of `link:` lines"* and applies in the same phase — had its own
+placement loop that called `remove_file` and symlinked over the top. No backup. No ledger row.
+Therefore no teardown, no restore, and no removal guard. Deleting a file from a tree left a
+**dangling symlink** on the machine for ever, under a summary reading `already up to date`.
+
+**Four documents said the ledger row existed** — `model/dotfiles.rs`, `core/extras_lock.rs`,
+`spec/history.md`, and `spec/plan.md`'s 7n, marked **DONE 2026-07-24**, whose stated exit
+condition is *"a file deleted from the tree has its link removed by the same `extras_lock`
+teardown every other extra uses."* No code wrote one. The tree was applied by a private loop
+that no document described, and the design everyone was reading was never built.
+
+So the tree now expands into the `link:` lines it stands for — one place, `Dotfiles::links` —
+and everything downstream is the machinery that already existed: the `link:` backend places
+them (backup, content short-circuit, cross-drive fallback), the extras ledger keys one row per
+placed file, and the shared teardown restores the original through the guard. **~40 lines added,
+one placement loop deleted, four behaviours gained.**
+
+**The one consequence a user will see, stated rather than shipped quietly.** The shared teardown
+is guarded, so deleting a `dotfiles:` line with more than `max_removals` files (20 by default)
+is now **refused by name**, pointing at `[guard] max_removals`, where before it silently orphaned
+every one of them. That is the ceiling doing exactly what it is for — it is already what happens
+to twenty-one `link:` lines, and `also_removing` counts a tree's files against the same budget as
+the packages in the same plan. It is called out here because it is the one place this change
+makes a previously-silent operation stop, and because reversing it means exempting trees from the
+guard, which would be the second teardown all over again.
+
+**A sibling found while building it.** `Dotfiles::plan` answered *"did LiNix put this here?"*
+with `is_symlink`. `link:` had already learned that is wrong — where the deploy falls back to a
+copy, a file LiNix placed itself is not a symlink — and the tree's copy of the question never
+heard. Under `is_symlink` alone the next sync called LiNix's own copy a destination LiNix did
+not create and refused to touch the tree. The ledger is the record of ownership and now answers
+it, in union with the old test so no destination becomes a fresh `U23` refusal on upgrade.
+
+Rule in **II.2** (the `link:`/T6 section) and **II.19**, reason in **V.139** and **V.140**. Gated by
+`tests/dotfiles_tree_is_a_pile_of_links_tests.rs`, which runs `dotfiles:` and `link:` against
+the same bytes and asserts they answer the same, and by
+`tests/the_log_covers_what_cannot_be_recomputed_tests.rs`, whose first test has the script under
+test **read the journal while it is running** — the only witness that can tell a write-ahead
+record from a write-behind one.
+
+**Still the owner's, found under this and not ruled:** `LinkBackendCore::is_same_drive`
+compares `Component::Prefix`, and `canonicalize` returns a `\\?\C:` verbatim prefix where the
+target carries a plain `C:` — so **every `link:` on Windows takes the cross-drive COPY fallback,
+including same-drive ones.** Fixing it turns those copies back into symlinks, which needs the
+symlink privilege a copy does not, so it is a behaviour change on a path that currently works.
+Not touched. See `Q48`.
+
+---
+
+## Q48
+
+**Status: OPEN.** Raised 2026-08-06 while building `Y10`. Not blocking: the current behaviour
+is correct, only slower and not what the line says it is.
+
+**Q48 — Should `link:` symlink on Windows, or is the copy fallback now the behaviour?**
+`is_same_drive` (`backends/link.rs`) compares the `Component::Prefix` of `source.canonicalize()`
+against the raw target. `canonicalize` returns `\\?\C:\...`, whose prefix is `VerbatimDisk('C')`;
+the target's is `Disk('C')`. They never match, so **every** `link:` on Windows logs
+*"Cross-drive fallback to COPY"* and copies — same drive or not. The dotfiles tree inherits it.
+
+**Why it was not fixed under `Y10`.** Comparing the drive letters instead of the prefixes is a
+three-line fix, and it changes what Windows users get: a copy needs no privilege, a symlink
+needs Developer Mode or an elevated shell. Turning copies into symlinks could start failing
+syncs that work today, which is a behaviour change a user would notice — rule 2 of *asking while
+building*. The ownership predicate was fixed instead, so a copy LiNix made is correctly
+recognised as LiNix's on the next run, which is what made the bug harmless rather than latent.
+
+**What an answer has to say:** whether a same-drive `link:` on Windows should symlink, and if so
+what happens on a machine without the privilege — refuse by name, or fall back to a copy *and
+say which one it did*. The third option is to rule that the copy is the behaviour and delete the
+symlink attempt on Windows, which would make the warning a fact rather than a fallback.
 
 ---
 

@@ -1,6 +1,11 @@
+use crate::config::grammar::{Origin, Statement};
 use crate::core::LockFile;
 use crate::core::{Error, Result};
 use tracing::warn;
+
+/// A declared resource and the line it came from. Named because a `dotfiles:` tree is expanded
+/// into these, so the pair travels between three functions here and reads worse spelled out.
+type Declared = (Statement, Origin);
 
 /// Extras holds only what it uses. It is built from an [`App`](crate::app::App) by
 /// `App::extras()` and can be built without one.
@@ -60,6 +65,24 @@ impl Extras<'_> {
         crate::app::ShimManager::with_bin_dir(self.config.bin_dir.clone()).await
     }
 
+    /// The `link:` lines the declared `dotfiles:` trees stand for (U22), which are extras like
+    /// any other once expanded.
+    ///
+    /// The expansion has to happen here rather than in [`extra_key`], because a tree's files
+    /// are a fact about the disk and that function only has the declaration. That is why the
+    /// row it documents never existed: nothing was in a position to write it.
+    ///
+    /// A tree that cannot be walked propagates its error rather than contributing nothing. An
+    /// empty answer would read as "every file this tree ever placed has departed" and tear the
+    /// lot down over a deleted directory — the same trap `declared_exec_paths` names.
+    fn tree_links(&self, state: &crate::model::DesiredState) -> Result<Vec<Declared>> {
+        crate::app::Dotfiles {
+            config: self.config,
+            registry: self.registry,
+        }
+        .links(state)
+    }
+
     /// The resource half of the plan: what would be placed, what would be undone.
     ///
     /// Two questions, and they are answered by two different sources on purpose. *Has this ever
@@ -70,7 +93,8 @@ impl Extras<'_> {
     pub async fn changes(&self, state: &crate::model::DesiredState) -> Result<ResourceChanges> {
         use crate::core::extras_lock::ExtrasLedger;
 
-        let declared = declared_extras(state);
+        let trees = self.tree_links(state)?;
+        let declared = declared_extras(state.extras.iter().chain(trees.iter()));
         let path = ExtrasLedger::path_in(&self.config.config_root().join("locks"));
         let ledger = ExtrasLedger::load(&path)?;
 
@@ -81,9 +105,10 @@ impl Extras<'_> {
         // By key, so a line declared twice is one entry and the order is the file's — the same
         // set `declared_extras` builds, carrying the statement each key came from because the
         // probe needs the source a `link:` was written from.
-        let by_key: std::collections::BTreeMap<String, &crate::config::grammar::Statement> = state
+        let by_key: std::collections::BTreeMap<String, &Statement> = state
             .extras
             .iter()
+            .chain(trees.iter())
             .filter_map(|(s, _)| crate::core::extras_lock::extra_key(s).map(|k| (k, s)))
             .collect();
         for (key, stmt) in by_key {
@@ -125,7 +150,8 @@ impl Extras<'_> {
         use crate::app::sync::guard;
         use crate::core::extras_lock::{split_key, ExtrasLedger};
 
-        let declared = declared_extras(state);
+        let trees = self.tree_links(state)?;
+        let declared = declared_extras(state.extras.iter().chain(trees.iter()));
 
         let path = ExtrasLedger::path_in(&self.config.config_root().join("locks"));
         let ledger = ExtrasLedger::load(&path)?;
@@ -343,10 +369,10 @@ pub(crate) async fn in_effect(
     }
 }
 
-fn declared_extras(state: &crate::model::DesiredState) -> std::collections::BTreeSet<String> {
-    state
-        .extras
-        .iter()
+fn declared_extras<'a>(
+    statements: impl Iterator<Item = &'a Declared>,
+) -> std::collections::BTreeSet<String> {
+    statements
         .filter_map(|(s, _)| crate::core::extras_lock::extra_key(s))
         .collect()
 }

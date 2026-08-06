@@ -3716,3 +3716,119 @@ states no wrong number anywhere**, so every per-figure check passed it. A breakd
 about the whole register, and it is now checked as one.
 
 ---
+
+**V.139 — Why a dotfiles tree is the `link:` lines it stands for, and not a loop of its own.**
+*(2026-08-06, `Y10`. Rule in II.2's `link:`/T6 section. Raised by
+`lamdan/whole-repo-2026-08-05.md` as F-0.)*
+
+`link:` earned a whole lifecycle over three rulings. `T6` says a line that replaces a file you
+wrote backs it up to `<dest>.linix-backup` first and puts it back when the line goes away. The
+key is the destination and never the source, because a teardown handed the source deleted the
+file in the user's own dotfiles repo and left the deployed copy standing. A copy counts as
+"already in effect" as much as a symlink does, because Windows falls back to copying and asking
+only `read_link` made every sync back up its own copy under a summary reading
+`already up to date`.
+
+`dotfiles:` is the same statement said once for forty files. `verbs/sync.rs` calls it *"a pile
+of `link:` lines"* and applies it in the same phase. It had **none** of the three. Its apply was
+sixteen lines of its own: create the parent, `remove_file` the destination, symlink. So:
+
+- **`--replace-existing` threw the original away.** The flag waives the refusal to overwrite; it
+  has never meant "and destroy what was there". The identical `link:` line on the same run
+  preserved its own file. One user, one sync, two statements, opposite outcomes.
+- **Nothing recorded what the tree placed**, so the shared teardown could not see it. Deleting a
+  file from your tree left a **dangling symlink** on the machine for ever; deleting the
+  `dotfiles:` line left the whole tree. That is `S20`'s bug — *deleting a line leaves the thing
+  in effect for ever* — still live for one statement kind, eleven days after `S20` was closed.
+- **No ledger row meant no removal guard.** A path that deletes files was outside the guard, and
+  outside `max_removals`, which is a ceiling over the whole plan precisely so that "three
+  packages and three links" is six removals and not two budgets.
+- **And the tree re-placed every file on every sync**, because it never asked whether the
+  destination was already right. That is the exact defect
+  `tests/grade3_resource_idempotency_tests.rs` was written for, surviving in the one statement
+  kind that test did not cover.
+
+**The mechanism that produced all four is one thing: a second implementation.** Not one of them
+is a hard problem; each is a rule `link:` already holds and the tree's private loop had no way to
+inherit. So the fix is not four fixes. The tree expands into the `link:` lines it stands for —
+`Dotfiles::links`, one place — and from there there is nothing tree-shaped left to get wrong.
+~40 lines added, one loop deleted, four behaviours gained, and `spec_from_extra` converts a
+tree's file and a hand-written line into the same value so they cannot drift apart again.
+
+**The part that should be uncomfortable.** Four documents said the ledger row existed:
+`model/dotfiles.rs`'s header (*"one ledger row per file, and that is the cost worth paying"*),
+`core/extras_lock.rs` (*"its files ARE keyed here … one ledger row per placed file"*),
+`history.md`'s 7n entry, and `plan.md`'s 7n — marked **DONE 2026-07-24**, with the exit condition
+*"a file deleted from the tree has its link removed by the same `extras_lock` teardown every
+other extra uses."* Every one of those describes the design correctly. None of them was true.
+The row was designed, documented four times, ruled, marked built, and never written — and
+because the tree's own loop worked for the case anybody tests by hand (place files on a fresh
+machine), nothing disagreed with the documents for eleven days. **A stated exit condition is not
+a test.** This one is now: `tests/dotfiles_tree_is_a_pile_of_links_tests.rs` runs `dotfiles:` and
+`link:` against the same bytes and asserts they answer the same, with the `link:` half as the
+control, so the two cannot silently diverge again in either direction.
+
+**And the sibling underneath.** `Dotfiles::plan` answered *did LiNix put this here?* with
+`is_symlink`. `link:` had already learned that is wrong — a file it placed via the copy fallback
+is not a symlink — and the tree's copy of the question never heard. It surfaced the moment the
+tree started using the backend: LiNix called its own copy a destination it did not create and
+refused, by name, to touch the tree. Ownership is now what the ledger recorded, in union with the
+old test so that a tree placed before the row existed does not become a fresh `U23` refusal on
+the sync after an upgrade.
+
+---
+
+**V.140 — Why the write-ahead log covers packages and scripts, and deliberately not resources.**
+*(2026-08-06, `Y10`. Rule in II.19. Raised by `lamdan/whole-repo-2026-08-05.md` as F-0.)*
+
+`readme.md` said *"a write-ahead log records every mutation before it runs."* `JournalAction`
+had two variants, both packages, and all nine `apply/` modules referenced the journal **zero**
+times. Under the 2026-08-05 ruling that *everything is the product*, that sentence was false for
+the majority of what LiNix converges.
+
+The review's proposed fix was one variant per phase, and its own steelman refutes it. **A
+mutation needs a durable record exactly when the next run cannot recompute it.** A `service:`, a
+`setting:`, a `firewall:` rule, a placed `link:` is a read-then-write converge from a
+declaration: killed halfway, the next sync reads the machine, sees the line unmet, and finishes
+the job. That is not a *worse* recovery than replaying a log, it is a **better** one — it also
+corrects drift that happened while the process was dead, which no log could have recorded. Nine
+new variants would have bought a slower sync and a bigger file, and would have moved the
+authority for "what is true about this machine" from the machine to a log. They stay out, and
+the rule says so, so that adding one has to argue with the reason rather than slip past it.
+
+Two mutations are not converges. `exec:` runs code and `@undo=` runs an arbitrary shell command.
+Nothing records how far either got, their authors never promised they were safe to run twice,
+and there is no declared end state to converge towards. Those get entries.
+
+**What recovery can do with one, and what it must not.** It must not replay it: a package is
+finished by installing it again because reaching a state twice is reaching it once, and a script
+has no such property — re-running it repeats the half that already ran. So `heal` reports it, by
+name, with its content hash and the sentence a user can act on: *the next sync will run it again
+from the top; if that script is not safe to run twice, this is the moment to check.* Before
+this, a machine killed mid-`exec:` came back **silent** and re-ran the script on the next sync.
+Reporting is a smaller thing than repairing, and it is the whole of what is honestly available.
+
+**Then the entry is resolved as a FAILURE**, which is not bookkeeping. Not a success: the
+script did not finish, and a log recording `Completed` for an interrupted mutation is the same
+dishonest record this whole entry is about. `Failed` is terminal, so recovery stops asking, and
+it ages out on the rule every other terminal entry ages out on while carrying the reason. `Q33` measured what an unresolvable
+`InProgress` entry costs: it keeps `needs_recovery` true for ever, so every `sync` runs a full
+recovery in front of itself — 208 seconds of one `watch --once`. An entry recovery can never
+finish is exactly that shape, so "reported" has to be a terminal state.
+
+**One correction to the finding.** It named `apply/extras.rs`'s teardown as the third
+irreversible phase. It is not. `reconcile` computes drift from a ledger it writes only after the
+loop, so a kill mid-teardown leaves the ledger naming the same drift and the next sync retries
+it — a converge, like the rest. Checked, cleared, and recorded here rather than fixed, because a
+sibling that turns out not to be one is worth as much as one that is.
+
+**How the shape is held.** `heal` used to match on `JournalAction` in six places, each for its
+own reason. Adding a variant that is not package work to that shape would have been six chances
+to route a script down a package path. There is now one function — `replay_of` — that turns the
+log's vocabulary into the engine's, and past it `heal` speaks `GraphAction` and can only say
+things about packages. The write-ahead half is pinned by a test whose instrument is the mutation
+itself: **the script under test reads the journal while it is running.** An entry recorded after
+the interpreter returns leaves it nothing to find, which is precisely the difference between a
+write-ahead log and a write-behind one, and the only witness that can tell them apart.
+
+---

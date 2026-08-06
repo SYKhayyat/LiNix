@@ -8,6 +8,7 @@ pub struct Execs<'a> {
     pub(crate) config: &'a std::sync::Arc<crate::config::Config>,
     pub(crate) executor: &'a crate::core::CommandExecutor,
     pub(crate) registry: &'a std::sync::Arc<crate::backends::BackendRegistry>,
+    pub(crate) journal: &'a std::sync::Arc<tokio::sync::Mutex<crate::core::Journal>>,
 }
 
 impl Execs<'_> {
@@ -134,7 +135,23 @@ impl Execs<'_> {
             } else {
                 info!("running exec:{} ({})", script, origin);
             }
-            self.run_exec_script(&path).await?;
+            // Written and flushed BEFORE the interpreter starts, which is the whole point of a
+            // write-ahead record: an entry made afterwards describes a mutation that already
+            // happened, and the case it exists for is the one where "afterwards" never comes.
+            // `exec:` is the only thing a sync runs that recovery cannot finish — a package can
+            // be installed again, a `service:` re-converged from its line, but a script that
+            // got half way has no recorded progress and no declared end state. So this record
+            // buys the one thing left: the next run says what was interrupted instead of
+            // silently running it again from the top.
+            let started = self
+                .record_start(crate::core::journal::JournalAction::Exec {
+                    script: script.to_string(),
+                    hash: hash.clone(),
+                })
+                .await;
+            let outcome = self.run_exec_script(&path).await;
+            self.resolve(started, &outcome).await;
+            outcome?;
             // Recorded only on success. A script that failed did not happen, and the next sync
             // must be free to try it again.
             runs.record_run(
@@ -189,7 +206,18 @@ impl Execs<'_> {
                 continue;
             }
             info!("`exec:{}` is no longer declared — running its undo.", name);
-            match self.run_shell_command(undo).await {
+            // An `@undo=` is an arbitrary shell command a human wrote, and it is the second of
+            // the two mutations a sync makes that nothing can recompute. Same rule as the
+            // script above: recorded before it starts, resolved after.
+            let started = self
+                .record_start(crate::core::journal::JournalAction::ExecUndo {
+                    script: name.to_string(),
+                    command: undo.to_string(),
+                })
+                .await;
+            let outcome = self.run_shell_command(undo).await;
+            self.resolve(started, &outcome).await;
+            match outcome {
                 Ok(()) => runs.forget(&hash),
                 // Kept in the ledger on failure, so the next sync tries again rather than
                 // forgetting an undo that never happened.
@@ -250,6 +278,42 @@ impl Execs<'_> {
         }
         Ok(out)
     }
+    /// Open a write-ahead entry for a mutation that is about to start.
+    ///
+    /// A journal that cannot be written must not stop the script running — the log exists to
+    /// describe work, not to gate it, and refusing to converge a machine because a lock file
+    /// is read-only would be the tail wagging the dog. It is said out loud, because a run
+    /// nothing recorded is a run `heal` cannot account for and the user is owed that fact.
+    async fn record_start(&self, action: crate::core::journal::JournalAction) -> Option<String> {
+        let described = action.key();
+        match self.journal.lock().await.record_start(action) {
+            Ok(id) => Some(id),
+            Err(e) => {
+                warn!(
+                    "could not record `{}` in the write-ahead log ({}); it will still run, but \
+                     an interruption will not be reported by the next sync.",
+                    described, e
+                );
+                None
+            }
+        }
+    }
+
+    /// Close the entry `record_start` opened. Paired with it here rather than at each call
+    /// site, so an outcome cannot be recorded against the wrong id or forgotten entirely —
+    /// forgotten is the one that matters, because an entry left open keeps `needs_recovery`
+    /// true and re-reports the same script in front of every sync for ever.
+    async fn resolve(&self, id: Option<String>, outcome: &Result<()>) {
+        let Some(id) = id else {
+            return;
+        };
+        let mut journal = self.journal.lock().await;
+        let _ = match outcome {
+            Ok(()) => journal.record_success(&id),
+            Err(e) => journal.record_failure(&id, &e.to_string()),
+        };
+    }
+
     /// Run a command line through the platform's shell. Used only for `@undo=`, which is
     /// written as a command rather than a script path.
     async fn run_shell_command(&self, command: &str) -> Result<()> {
