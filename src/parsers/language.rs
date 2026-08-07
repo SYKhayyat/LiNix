@@ -1,14 +1,25 @@
 use crate::core::Package;
+use crate::parsers::{or_unrecognised, ParseResult, Unrecognised};
 use crate::utils::text::sanitize;
 use serde_json::Value;
 
-pub fn parse_installed(backend: &str, output: &str) -> Vec<Package> {
+/// The nine language managers' installed listings, dispatched by name.
+///
+/// **The judgement is made once, here, rather than nine times below.** Each inner reader is a
+/// `Vec`-returning parse of one manager's shape, and every one of them has the same way of
+/// failing — a `serde_json` call ending in `unwrap_or_default()`, or a tree walk that matches
+/// nothing — which spells *"I did not understand this"* as *"nothing is installed"*. Wrapping
+/// the dispatch catches all nine at once and needs no change inside any of them.
+///
+/// It also closes the tenth, which was the widest: `_ => vec![]` answered *the machine is
+/// empty* for a backend nobody had written a reader for.
+pub fn parse_installed(backend: &str, output: &str) -> ParseResult {
     let clean = sanitize(output);
     if clean.is_empty() {
-        return vec![];
+        return Ok(vec![]);
     }
 
-    match backend {
+    let found = match backend {
         "npm" | "pnpm" => parse_npm_style_json(&clean, backend),
         // `bun pm ls -g` prints an ASCII tree (a header path line + "├── name@ver"
         // rows), NOT npm's `--json` object — routing it through the JSON parser
@@ -22,8 +33,16 @@ pub fn parse_installed(backend: &str, output: &str) -> Vec<Package> {
         "gem" => parse_gem_list(&clean),
         "composer" => parse_composer_json(&clean),
         "go" => parse_go_list(&clean),
-        _ => vec![],
-    }
+        other => {
+            return Err(Unrecognised {
+                backend: other.to_string(),
+                data_lines: 0,
+                sample: "no installed-listing reader is wired for this backend".into(),
+            })
+        }
+    };
+
+    or_unrecognised(backend, found, &crate::parsers::data_lines(&clean))
 }
 
 pub fn parse_search(backend: &str, output: &str) -> Vec<Package> {
@@ -561,7 +580,7 @@ mod gem_default_tests {
     #[test]
     fn a_default_gem_reports_its_version_and_not_the_marker() {
         let out = "bigdecimal (4.0.1)\nbundler (default: 4.0.10)\ncsv (3.3.5, 3.3.4)\n";
-        let p = parse_installed("gem", out);
+        let p = parse_installed("gem", out).expect("this fixture parses");
         assert_eq!(p.len(), 3);
         assert_eq!(p[0].version.as_deref(), Some("4.0.1"));
         assert_eq!(

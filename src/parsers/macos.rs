@@ -1,12 +1,15 @@
 use crate::core::Package;
+use crate::parsers::{or_unrecognised, ParseResult};
 use crate::utils::text::sanitize;
 
 /// Parses the output from the 'mas list' command.
 /// 'mas' (Mac App Store CLI) output format: "identifier Name (Version)"
 /// Example: "497799835 Xcode (14.3.1)"
-pub fn parse_mas_list(output: &str) -> Vec<Package> {
-    sanitize(output)
-        .lines()
+pub fn parse_mas_list(output: &str) -> ParseResult {
+    let clean = sanitize(output);
+    let candidates = crate::parsers::data_lines(&clean);
+    let found = candidates
+        .iter()
         .filter_map(|line| {
             let (id_name, ver_part) = line.rsplit_once(' ')?;
             let (id, name) = id_name.split_once(' ')?;
@@ -23,7 +26,8 @@ pub fn parse_mas_list(output: &str) -> Vec<Package> {
                 .insert("human_name".into(), name.trim().to_string());
             Some(p)
         })
-        .collect()
+        .collect();
+    or_unrecognised("mas", found, &candidates)
 }
 
 /// Parses the output from the 'mas search' command.
@@ -54,13 +58,17 @@ pub fn parse_mas_search(output: &str) -> Vec<Package> {
 ///     wget @1.21.3_0
 /// The leading `@` marks the version; a trailing `+variant` and `(active)` tag are
 /// dropped so the version is clean (e.g. "2.39.0_0").
-pub fn parse_macports_installed(output: &str) -> Vec<Package> {
-    sanitize(output)
-        .lines()
+pub fn parse_macports_installed(output: &str) -> ParseResult {
+    let clean = sanitize(output);
+    // `The following ports are currently installed:` is a heading and `No ports are installed.`
+    // is the answer on a clean Mac — both are prose, and neither is evidence of a format change.
+    let candidates = crate::parsers::data_lines(&clean);
+    let found = candidates
+        .iter()
         .filter_map(|line| {
             let line = line.trim();
-            // Skip the header and any line that doesn't carry a "@version" token.
-            if line.is_empty() || !line.contains('@') {
+            // Any line that doesn't carry a "@version" token.
+            if !line.contains('@') {
                 return None;
             }
             let mut parts = line.split_whitespace();
@@ -69,7 +77,8 @@ pub fn parse_macports_installed(output: &str) -> Vec<Package> {
             let version = clean_macports_version(ver_token);
             Some(Package::with_version(name, &version, "macports"))
         })
-        .collect()
+        .collect();
+    or_unrecognised("macports", found, &candidates)
 }
 
 /// Parses the output of `port search <query>` (MacPorts).
@@ -117,7 +126,7 @@ mod tests {
     fn test_macports_installed_parsing() {
         let input = "The following ports are currently installed:\n  \
                      git @2.39.0_0+doc (active)\n  wget @1.21.3_0\n";
-        let res = parse_macports_installed(input);
+        let res = parse_macports_installed(input).expect("this fixture parses");
         assert_eq!(res.len(), 2);
         assert_eq!(res[0].name, "git");
         assert_eq!(res[0].version.as_deref(), Some("2.39.0_0"));
@@ -144,7 +153,7 @@ mod tests {
     #[test]
     fn test_mas_list_parsing() {
         let input = "497799835 Xcode (14.3.1)\n1284863847 Unarchiver (3.35.2)\n";
-        let res = parse_mas_list(input);
+        let res = parse_mas_list(input).expect("this fixture parses");
         assert_eq!(res.len(), 2);
         assert_eq!(res[0].name, "497799835");
         assert_eq!(res[0].version, Some("14.3.1".into()));

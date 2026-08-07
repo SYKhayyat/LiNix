@@ -5,8 +5,21 @@
 //! candidate builds (ascending, so the last entry is the newest).
 
 use crate::core::Package;
+use crate::parsers::{ParseResult, Unrecognised};
 use crate::utils::text::sanitize;
 use serde_json::Value;
+
+/// `serde_json::from_str(..).unwrap_or_default()` gives `Value::Null`, and every accessor below
+/// then answers `None`, and every `unwrap_or_default()` after that gives the empty vector — so
+/// output that is not JSON at all arrived as *"this environment has no packages"*. Three
+/// functions in this file spelled it that way. This is what they say instead.
+fn unreadable(what: &str, output: &str) -> Unrecognised {
+    Unrecognised {
+        backend: "conda".into(),
+        data_lines: output.lines().filter(|l| !l.trim().is_empty()).count(),
+        sample: format!("{what}: {}", output.trim().chars().take(100).collect::<String>()),
+    }
+}
 
 /// Parses `conda env export -n <env> --from-history --json` — the packages a person
 /// actually asked for, as opposed to the environment's full solved closure.
@@ -19,41 +32,57 @@ use serde_json::Value;
 /// `"conda[version='>=26.3.2']"`, or a bare `"pip"` — so the name is everything before
 /// the first version/bracket delimiter. A nested `{"pip": [...]}` object can appear in a
 /// full export; it carries pip's packages, not conda's, and is skipped.
-pub fn parse_conda_history(output: &str) -> Vec<Package> {
+pub fn parse_conda_history(output: &str) -> ParseResult {
     let clean = sanitize(output);
-    let json: Value = serde_json::from_str(&clean).unwrap_or_default();
-    json.get("dependencies")
-        .and_then(|d| d.as_array())
-        .map(|deps| {
-            deps.iter()
-                .filter_map(|d| {
-                    let spec = d.as_str()?;
-                    let name = spec
-                        .split(['=', '<', '>', '[', ' ', '!', '~'])
-                        .next()?
-                        .trim();
-                    (!name.is_empty()).then(|| Package::new(name, "conda"))
-                })
-                .collect()
+    let Ok(json) = serde_json::from_str::<Value>(&clean) else {
+        return Err(unreadable("not JSON", &clean));
+    };
+    let Some(deps) = json.get("dependencies").and_then(|d| d.as_array()) else {
+        return Err(unreadable("JSON with no `dependencies` array", &clean));
+    };
+    let found: Vec<Package> = deps
+        .iter()
+        .filter_map(|d| {
+            let spec = d.as_str()?;
+            let name = spec
+                .split(['=', '<', '>', '[', ' ', '!', '~'])
+                .next()?
+                .trim();
+            (!name.is_empty()).then(|| Package::new(name, "conda"))
         })
-        .unwrap_or_default()
+        .collect();
+    // An empty `dependencies` is an environment nobody asked anything of, which is real. A
+    // populated one that yielded no name is a match-spec shape this does not read.
+    if found.is_empty() && !deps.is_empty() {
+        return Err(unreadable(
+            "a `dependencies` array of match-specs none of which yielded a name",
+            &clean,
+        ));
+    }
+    Ok(found)
 }
 
 /// Parses `conda list -n <env> --json` — an array of `{ "name", "version", ... }`.
-pub fn parse_conda_list(output: &str) -> Vec<Package> {
+pub fn parse_conda_list(output: &str) -> ParseResult {
     let clean = sanitize(output);
-    let json: Value = serde_json::from_str(&clean).unwrap_or_default();
-    json.as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|p| {
-                    let name = p.get("name")?.as_str()?;
-                    let ver = p.get("version").and_then(|v| v.as_str()).unwrap_or("");
-                    Some(Package::with_version(name, ver, "conda"))
-                })
-                .collect()
+    let Ok(json) = serde_json::from_str::<Value>(&clean) else {
+        return Err(unreadable("not JSON", &clean));
+    };
+    let Some(arr) = json.as_array() else {
+        return Err(unreadable("JSON, but not the array `conda list` returns", &clean));
+    };
+    let found: Vec<Package> = arr
+        .iter()
+        .filter_map(|p| {
+            let name = p.get("name")?.as_str()?;
+            let ver = p.get("version").and_then(|v| v.as_str()).unwrap_or("");
+            Some(Package::with_version(name, ver, "conda"))
         })
-        .unwrap_or_default()
+        .collect();
+    if found.is_empty() && !arr.is_empty() {
+        return Err(unreadable("an array of entries, none carrying a `name`", &clean));
+    }
+    Ok(found)
 }
 
 /// Parses `conda search <query> --json` — an object mapping each matching package
@@ -99,7 +128,7 @@ mod tests {
           ],
           "prefix": "/opt/conda"
         }"#;
-        let names: Vec<String> = parse_conda_history(input)
+        let names: Vec<String> = parse_conda_history(input).expect("this fixture parses")
             .into_iter()
             .map(|p| p.name)
             .collect();
@@ -110,8 +139,21 @@ mod tests {
     fn history_of_an_untouched_env_is_empty_not_everything() {
         // The failure that matters: if this ever returned the full closure instead, `adopt`
         // would adopt an entire dependency graph.
-        assert!(parse_conda_history(r#"{"name":"base","dependencies":[]}"#).is_empty());
-        assert!(parse_conda_history("not json").is_empty());
+        assert!(parse_conda_history(r#"{"name":"base","dependencies":[]}"#)
+            .expect("an env nobody asked anything of has an empty `dependencies`")
+            .is_empty());
+    }
+
+    /// The second half of that test used to be `parse_conda_history("not json").expect("this fixture parses").is_empty()`,
+    /// sitting beside the assertion above under one name. An untouched environment and a conda
+    /// that did not answer in JSON are opposite facts, and `adopt` acts on them in opposite
+    /// directions — the first means *take nothing*, the second means *ask again, something is
+    /// wrong*.
+    #[test]
+    fn output_that_is_not_json_is_not_an_untouched_environment() {
+        let err = parse_conda_history("not json").expect_err("not an untouched environment");
+        assert_eq!(err.backend, "conda");
+        assert!(err.sample.starts_with("not JSON"), "{err:?}");
     }
 
     #[test]
@@ -120,7 +162,7 @@ mod tests {
             {"name": "numpy", "version": "1.26.0", "channel": "defaults"},
             {"name": "pandas", "version": "2.1.1", "channel": "defaults"}
         ]"#;
-        let res = parse_conda_list(input);
+        let res = parse_conda_list(input).expect("this fixture parses");
         assert_eq!(res.len(), 2);
         assert_eq!(res[0].name, "numpy");
         assert_eq!(res[0].version.as_deref(), Some("1.26.0"));

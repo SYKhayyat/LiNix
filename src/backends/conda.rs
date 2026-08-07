@@ -135,7 +135,7 @@ impl Queryable for CondaQueryable {
             .executor
             .run_output("conda", &["list", "-n", &self.core.env, "--json"], false)
             .await?;
-        Ok(parse_conda_list(&output))
+        Ok(parse_conda_list(&output)?)
     }
 
     /// `conda list` returns the env's whole solved closure, so it cannot answer "what did
@@ -158,7 +158,7 @@ impl Queryable for CondaQueryable {
                 false,
             )
             .await?;
-        Ok(crate::parsers::conda::parse_conda_history(&output))
+        Ok(crate::parsers::conda::parse_conda_history(&output)?)
     }
 
     async fn info(&self, name: &str) -> Result<Option<Package>> {

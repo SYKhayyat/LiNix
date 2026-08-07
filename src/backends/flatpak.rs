@@ -183,7 +183,7 @@ impl Queryable for FlatpakQueryable {
                 false,
             )
             .await?;
-        Ok(crate::parsers::common::parse_simple_list(&out, "flatpak"))
+        Ok(crate::parsers::common::parse_simple_list(&out, "flatpak")?)
     }
 
     async fn list_manual(&self) -> Result<Vec<Package>> {

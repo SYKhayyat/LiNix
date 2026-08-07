@@ -7,6 +7,7 @@
 //! the wrong prefix on the packages.
 
 use crate::core::Package;
+use crate::parsers::{or_unrecognised, ParseResult};
 use crate::utils::text::sanitize;
 
 /// Split a `name-version` token into `(name, version)`. `None` when no dash is followed by a
@@ -23,9 +24,11 @@ fn split_name_version(token: &str) -> Option<(&str, &str)> {
     None
 }
 
-fn parse_with_backend(output: &str, backend: &str) -> Vec<Package> {
-    sanitize(output)
-        .lines()
+pub(crate) fn parse_with_backend(output: &str, backend: &str) -> ParseResult {
+    let clean = sanitize(output);
+    let candidates = crate::parsers::data_lines(&clean);
+    let found = candidates
+        .iter()
         .filter_map(|line| {
             let token = line.split_whitespace().next()?;
             match split_name_version(token) {
@@ -35,16 +38,17 @@ fn parse_with_backend(output: &str, backend: &str) -> Vec<Package> {
                 _ => None,
             }
         })
-        .collect()
+        .collect();
+    or_unrecognised(backend, found, &candidates)
 }
 
 /// FreeBSD: `pkg info` (installed) and `pkg search` (remote catalogue) share the layout.
-pub fn parse_pkg(output: &str) -> Vec<Package> {
+pub fn parse_pkg(output: &str) -> ParseResult {
     parse_with_backend(output, "pkg")
 }
 
 /// OpenBSD: `pkg_info` (installed) and `pkg_info -Q` (query the remote) share the layout.
-pub fn parse_pkg_add(output: &str) -> Vec<Package> {
+pub fn parse_pkg_add(output: &str) -> ParseResult {
     parse_with_backend(output, "pkg_add")
 }
 
@@ -57,7 +61,7 @@ mod tests {
         let input = "pkg-1.20.9                     Package manager\n\
                      py311-requests-2.31.0          HTTP library\n\
                      vim-9.0.1897                   improved vi\n";
-        let res = parse_pkg(input);
+        let res = parse_pkg(input).expect("real `pkg info` output");
         assert_eq!(res.len(), 3);
         assert_eq!(res[0].name, "pkg");
         assert_eq!(res[0].version.as_deref(), Some("1.20.9"));
@@ -70,7 +74,7 @@ mod tests {
     fn openbsd_pkg_info_names_and_versions_carry_the_pkg_add_label() {
         let input = "wget-1.21.4        retrieve files over HTTP/FTP\n\
                      gmake-4.4          GNU make\n";
-        let res = parse_pkg_add(input);
+        let res = parse_pkg_add(input).expect("real `pkg_info` output");
         assert_eq!(res.len(), 2);
         assert_eq!(res[0].name, "wget");
         assert_eq!(res[0].version.as_deref(), Some("1.21.4"));
@@ -81,9 +85,25 @@ mod tests {
     }
 
     #[test]
-    fn a_legend_or_versionless_line_is_skipped() {
-        // No dash-then-digit anywhere, so nothing is misread as a package.
-        assert!(parse_pkg("Updating FreeBSD repository catalogue...").is_empty());
+    fn a_line_that_parses_as_nothing_is_reported_rather_than_read_as_an_empty_machine() {
+        // No dash-then-digit anywhere, so nothing is misread as a package — and this used to
+        // end there, returning the empty vector that means *this machine has no packages*.
+        // It does not mean that. A `pkg info` that printed one line and yielded no package is
+        // a listing this parser did not understand, and the planner must not answer it by
+        // scheduling every declared package as a fresh install.
+        let err = parse_pkg("Updating FreeBSD repository catalogue...")
+            .expect_err("one unreadable line is not an empty machine");
+        assert_eq!(err.backend, "pkg");
+        assert_eq!(err.data_lines, 1);
+        assert!(err.sample.starts_with("Updating"), "{err:?}");
+    }
+
+    #[test]
+    fn genuinely_empty_output_is_an_empty_machine() {
+        // The control, without which the assertion above holds for a parser that errors on
+        // everything: a manager with nothing installed prints nothing, and that is an answer.
+        assert!(parse_pkg("").expect("no output is no packages").is_empty());
+        assert!(parse_pkg("\n  \n").expect("blank output").is_empty());
     }
 }
 
@@ -109,17 +129,16 @@ fn split_pkgver(tok: &str) -> Option<(&str, &str)> {
 /// `xbps-query -l` / `xbps-query -m`. `-l` lines carry a two-character state flag
 /// (`ii <pkgver> <desc>`); `-m` lines are the bare pkgver. Either way the pkgver is the first
 /// token that parses, so this reads both.
-pub fn parse_xbps_list(output: &str) -> Vec<Package> {
+pub fn parse_xbps_list(output: &str) -> ParseResult {
+    let clean = sanitize(output);
+    let candidates = crate::parsers::data_lines(&clean);
     let mut packages = Vec::new();
-    for line in sanitize(output).lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
+    for line in &candidates {
         if let Some((name, ver)) = line.split_whitespace().find_map(split_pkgver) {
             packages.push(Package::with_version(name, ver, "xbps"));
         }
     }
-    packages
+    or_unrecognised("xbps", packages, &candidates)
 }
 
 /// `xbps-query -Rs <query>`: `[-] bash-5.2.15_2   The GNU Bourne Again Shell`, where `[*]`
@@ -167,7 +186,7 @@ mod xbps_tests {
 ii bash-5.2.15_2            The GNU Bourne Again Shell
 ii xbps-triggers-0.128_1    XBPS triggers for Void Linux
 ";
-        let pkgs = parse_xbps_list(out);
+        let pkgs = parse_xbps_list(out).expect("real xbps -l output");
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[0].name, "bash");
         assert_eq!(pkgs[0].version.as_deref(), Some("5.2.15_2"));
@@ -179,7 +198,7 @@ ii xbps-triggers-0.128_1    XBPS triggers for Void Linux
 
     #[test]
     fn a_bare_pkgver_listing_reads_the_same_way() {
-        let pkgs = parse_xbps_list("curl-8.4.0_1\ngit-2.42.0_1\n");
+        let pkgs = parse_xbps_list("curl-8.4.0_1\ngit-2.42.0_1\n").expect("bare pkgver listing");
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[0].name, "curl");
         assert_eq!(pkgs[1].name, "git");

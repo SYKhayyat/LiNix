@@ -1,13 +1,45 @@
 use crate::core::Package;
+use crate::parsers::{or_unrecognised, ParseResult, Unrecognised};
 use crate::utils::text::sanitize;
 
-pub fn parse_installed(backend: &str, output: &str) -> Vec<Package> {
-    match backend {
+/// The three Windows managers' installed listings.
+///
+/// **This is the dispatch `4d4a890` was written about.** Sixteen concurrent `winget list` from
+/// cold produced three exits of `0x8A150001` in ~310 ms having written zero bytes; that became
+/// `Ok("")`, then a parser finding nothing, then `Ok(vec![])`, and nothing in the chain believed
+/// anything had failed. `run_output` was fixed; this was the next link and could not be until
+/// the return type changed.
+pub fn parse_installed(backend: &str, output: &str) -> ParseResult {
+    let found = match backend {
         "winget" => parse_winget_list(output),
-        "choco" => parse_choco_list(output),
+        "choco" => return parse_choco_list(output),
         "scoop" => parse_scoop_list(output),
-        _ => vec![],
+        other => {
+            return Err(Unrecognised {
+                backend: other.to_string(),
+                data_lines: 0,
+                sample: "no installed-listing reader is wired for this backend".into(),
+            })
+        }
+    };
+    // `None` is the header row missing. That is only a failure if something else was there:
+    // `winget list` answers a machine with nothing installed with the single sentence
+    // *"No installed package found matching input criteria."* and no table at all, so a rule
+    // that read "no header" as "unread" would refuse to run on exactly that machine. This is
+    // `or_unrecognised`'s rule applied to a table — nothing found out of nothing is an empty
+    // machine; nothing found out of lines that carried something is not.
+    //
+    // Found by a captured fixture, on the run that introduced the rule. It is the case a
+    // hand-written table fixture would never have contained.
+    if let Some(pkgs) = found {
+        return Ok(pkgs);
     }
+    let clean = sanitize(output);
+    let unread = crate::parsers::data_lines(&clean);
+    crate::parsers::or_unrecognised(backend, Vec::new(), &unread).map_err(|mut e| {
+        e.sample = format!("no header row: {}", e.sample);
+        e
+    })
 }
 
 pub fn parse_search(backend: &str, output: &str) -> Vec<Package> {
@@ -40,7 +72,7 @@ fn is_separator(line: &str) -> bool {
 /// Names/Ids legitimately contain spaces (e.g. "7-Zip 25.01 (x64)",
 /// "ARP\\Machine\\X64\\Android Studio"), so the columns MUST be sliced by the header
 /// positions — whitespace splitting corrupts multi-word fields.
-fn parse_winget_table(output: &str, columns_wanted: &[&str]) -> Vec<Vec<String>> {
+fn parse_winget_table(output: &str, columns_wanted: &[&str]) -> Option<Vec<Vec<String>>> {
     // The header is the first line containing both "Name" and "Id".
     let known = ["Name", "Id", "Version", "Available", "Match", "Source"];
     slice_fixed_table(
@@ -61,21 +93,24 @@ fn parse_winget_table(output: &str, columns_wanted: &[&str]) -> Vec<Vec<String>>
 /// EMPTY cell disappears, every later value shifts one place left, and the row still
 /// parses — so scoop's failed-install row (no Version, no Source) read as a package
 /// whose version was the date it was attempted.
+///
+/// **`None` is "there was no header row", and it is not the same answer as an empty table.**
+/// It used to be `vec![]` for both — so a `winget list` that died before printing anything, or
+/// printed a usage message, or printed a shape this no longer recognises, arrived at the caller
+/// as a machine with no packages installed. `Some(vec![])` is the real empty table: the header
+/// was found and no rows followed it.
 fn slice_fixed_table(
     output: &str,
     known: &[&str],
     header_matches: impl Fn(&str) -> bool,
     columns_wanted: &[&str],
-) -> Vec<Vec<String>> {
+) -> Option<Vec<Vec<String>>> {
     let text = sanitize(output);
     let lines: Vec<&str> = text.lines().collect();
 
-    let Some(hdr_idx) = lines
+    let hdr_idx = lines
         .iter()
-        .position(|l| header_matches(strip_cr_spinner(l)))
-    else {
-        return vec![];
-    };
+        .position(|l| header_matches(strip_cr_spinner(l)))?;
 
     let header = strip_cr_spinner(lines[hdr_idx]);
     // Locate every known column by its char-offset start in the cleaned header.
@@ -120,39 +155,48 @@ fn slice_fixed_table(
         }
         rows.push(values);
     }
-    rows
+    Some(rows)
 }
 
 /// Parses output from 'winget list' (Name / Id / Version / Available / Source).
 /// The Id is the canonical identity used by `winget install`, so prefer it (falling
 /// back to the display Name for rows that lack an Id).
-fn parse_winget_list(output: &str) -> Vec<Package> {
-    parse_winget_table(output, &["Id", "Name", "Version"])
-        .into_iter()
-        .filter_map(|row| {
-            let ident = if !row[0].is_empty() { &row[0] } else { &row[1] };
-            if ident.is_empty() {
-                return None;
-            }
-            let mut p = Package::new(ident, "winget");
-            if !row[2].is_empty() {
-                p.version = Some(row[2].clone());
-            }
-            Some(p)
-        })
-        .collect()
+fn parse_winget_list(output: &str) -> Option<Vec<Package>> {
+    Some(
+        parse_winget_table(output, &["Id", "Name", "Version"])?
+            .into_iter()
+            .filter_map(|row| {
+                let ident = if !row[0].is_empty() { &row[0] } else { &row[1] };
+                if ident.is_empty() {
+                    return None;
+                }
+                let mut p = Package::new(ident, "winget");
+                if !row[2].is_empty() {
+                    p.version = Some(row[2].clone());
+                }
+                Some(p)
+            })
+            .collect(),
+    )
 }
 
 /// Parses output from 'choco list -lo -r' (local only, readable/piped).
 /// Expected input format: "name|version"
-fn parse_choco_list(output: &str) -> Vec<Package> {
-    sanitize(output)
-        .lines()
+///
+/// No header to find, so the shared judgement applies: a line that carried something and yielded
+/// no `name|version` is a format this does not read. choco's own *"0 packages installed."* is
+/// prose and is excluded before the count.
+fn parse_choco_list(output: &str) -> ParseResult {
+    let clean = sanitize(output);
+    let candidates = crate::parsers::data_lines(&clean);
+    let found = candidates
+        .iter()
         .filter_map(|line| {
             let (name, ver) = line.split_once('|')?;
             Some(Package::with_version(name.trim(), ver.trim(), "choco"))
         })
-        .collect()
+        .collect();
+    or_unrecognised("choco", found, &candidates)
 }
 
 /// Parses output from 'scoop list' (Name / Version / Source / Updated / Info).
@@ -169,7 +213,7 @@ fn parse_choco_list(output: &str) -> Vec<Package> {
 /// A row like that is not an installed package. Read by splitting on whitespace it was
 /// one — named `jq`, versioned `2026-07-21` — so `sync` believed there was nothing to
 /// do, `adopt` wrote it into a manifest, and no `jq` was ever on PATH.
-fn parse_scoop_list(output: &str) -> Vec<Package> {
+fn parse_scoop_list(output: &str) -> Option<Vec<Package>> {
     let known = ["Name", "Version", "Source", "Updated", "Info"];
     slice_fixed_table(
         output,
@@ -177,6 +221,7 @@ fn parse_scoop_list(output: &str) -> Vec<Package> {
         |line| line.contains("Name") && line.contains("Version"),
         &["Name", "Version", "Info"],
     )
+    .map(|rows| rows
     .into_iter()
     .filter_map(|row| {
         let (name, version, info) = (&row[0], &row[1], &row[2]);
@@ -194,12 +239,17 @@ fn parse_scoop_list(output: &str) -> Vec<Package> {
         }
         Some(Package::with_version(name, version, "scoop"))
     })
-    .collect()
+    .collect())
 }
 
 /// Parses 'winget search' output table (Name / Id / Version / Match / Source).
+///
+/// A search is not an installed listing: a missing header here means the search found nothing
+/// or winget declined, and the caller's own empty-result handling is the right answer. Only
+/// `parse_installed` above treats the same absence as a fact it must not guess at.
 fn parse_winget_search(output: &str) -> Vec<Package> {
     parse_winget_table(output, &["Id", "Name", "Version"])
+        .unwrap_or_default()
         .into_iter()
         .filter_map(|row| {
             let ident = if !row[0].is_empty() { &row[0] } else { &row[1] };
@@ -276,6 +326,7 @@ fn parse_scoop_search(output: &str) -> Vec<Package> {
         |line| line.contains("Name") && line.contains("Version"),
         &["Name", "Version"],
     )
+    .unwrap_or_default()
     .into_iter()
     .filter_map(|row| {
         let (name, version) = (&row[0], &row[1]);
@@ -303,15 +354,28 @@ fn parse_scoop_search(output: &str) -> Vec<Package> {
 /// A malformed or truncated export yields no packages rather than an error: the caller has
 /// already established the file exists, and `Sources` being absent is how winget writes
 /// "nothing to export".
-pub fn parse_winget_export(json: &str) -> Vec<Package> {
+
+/// The two `export` readers below are `MachineListing` parsers — the negotiated path (`Q43`),
+/// asked for on a tool that may be too old for the flag. That makes them the *most* exposed
+/// readers in this file, not the least: the usage message an older winget or scoop prints in
+/// answer to a flag it does not have was being read as a machine with nothing installed. Both
+/// used to open with two `return Vec::new()` guards spelling exactly that.
+fn export_unreadable(backend: &'static str, what: &str, json: &str) -> Unrecognised {
+    Unrecognised {
+        backend: backend.to_string(),
+        data_lines: json.lines().filter(|l| !l.trim().is_empty()).count(),
+        sample: format!("{what}: {}", json.trim().chars().take(100).collect::<String>()),
+    }
+}
+pub fn parse_winget_export(json: &str) -> ParseResult {
     let Ok(doc) = serde_json::from_str::<serde_json::Value>(json) else {
-        return Vec::new();
+        return Err(export_unreadable("winget", "not JSON", json));
     };
     let Some(sources) = doc.get("Sources").and_then(|s| s.as_array()) else {
-        return Vec::new();
+        return Err(export_unreadable("winget", "JSON with no `Sources` array", json));
     };
     let mut seen = std::collections::HashSet::new();
-    sources
+    let found: Vec<Package> = sources
         .iter()
         .filter_map(|s| s.get("Packages")?.as_array())
         .flatten()
@@ -322,7 +386,21 @@ pub fn parse_winget_export(json: &str) -> Vec<Package> {
         // measured on. A manifest cannot hold the same declaration twice.
         .filter(|id| seen.insert(id.to_string()))
         .map(|id| Package::new(id, "winget"))
-        .collect()
+        .collect();
+    // `Sources` present and empty is a machine with nothing exported, which is real. Sources
+    // that carry packages none of which had a `PackageIdentifier` is a schema change.
+    let had_entries = sources
+        .iter()
+        .filter_map(|s| s.get("Packages")?.as_array())
+        .any(|a| !a.is_empty());
+    if found.is_empty() && had_entries {
+        return Err(export_unreadable(
+            "winget",
+            "packages, none carrying a `PackageIdentifier`",
+            json,
+        ));
+    }
+    Ok(found)
 }
 
 #[cfg(test)]
@@ -350,7 +428,7 @@ mod tests {
 
     #[test]
     fn scoop_list_drops_a_failed_install() {
-        let res = parse_scoop_list(&scoop_list_fixture());
+        let res = parse_scoop_list(&scoop_list_fixture()).expect("the fixture has a header row");
         let names: Vec<&str> = res.iter().map(|p| p.name.as_str()).collect();
         assert!(
             !names.contains(&"jq"),
@@ -366,7 +444,7 @@ mod tests {
 
     #[test]
     fn scoop_list_reads_versions_from_the_version_column() {
-        let res = parse_scoop_list(&scoop_list_fixture());
+        let res = parse_scoop_list(&scoop_list_fixture()).expect("the fixture has a header row");
         let seven = res.iter().find(|p| p.name == "7zip").unwrap();
         assert_eq!(seven.version.as_deref(), Some("26.00"));
         // The date must never reach a version field — that is what the shifted read did.
@@ -386,6 +464,7 @@ mod tests {
     #[test]
     fn scoop_list_ingests_no_header_or_separator() {
         let names: Vec<String> = parse_scoop_list(&scoop_list_fixture())
+            .expect("the fixture has a header row")
             .into_iter()
             .map(|p| p.name)
             .collect();
@@ -455,7 +534,7 @@ mod tests {
 
     #[test]
     fn winget_list_uses_columns_not_whitespace() {
-        let res = parse_installed("winget", &winget_list_fixture());
+        let res = parse_installed("winget", &winget_list_fixture()).expect("this fixture parses");
         assert_eq!(
             res.len(),
             8,
@@ -491,7 +570,7 @@ mod tests {
         // Prepend the bare-\r progress spinner winget draws before the header.
         let fixture = winget_list_fixture();
         let with_spinner = format!("  - \r  \\ \r  / \r{}", fixture);
-        let res = parse_installed("winget", &with_spinner);
+        let res = parse_installed("winget", &with_spinner).expect("this fixture parses");
         assert_eq!(res.len(), 8);
         assert!(res.iter().any(|p| p.name == "7zip.7zip"));
     }
@@ -516,7 +595,7 @@ mod tests {
     #[test]
     fn test_choco_list_parsing() {
         let input = "git|2.40.1\ncurl|8.1.2\n";
-        let res = parse_installed("choco", input);
+        let res = parse_installed("choco", input).expect("this fixture parses");
         assert_eq!(res.len(), 2);
         assert_eq!(res[0].name, "git");
         assert_eq!(res[1].version, Some("8.1.2".into()));
@@ -604,7 +683,7 @@ mod export_tests {
 
     #[test]
     fn an_export_yields_its_package_identifiers() {
-        let pkgs = parse_winget_export(EXPORT);
+        let pkgs = parse_winget_export(EXPORT).expect("this fixture parses");
         let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(
             names,
@@ -626,7 +705,7 @@ mod export_tests {
     /// the same declaration twice, and `sync` reading one twice plans it twice.
     #[test]
     fn a_package_exported_once_per_architecture_is_declared_once() {
-        let pkgs = parse_winget_export(EXPORT);
+        let pkgs = parse_winget_export(EXPORT).expect("this fixture parses");
         assert_eq!(
             pkgs.iter()
                 .filter(|p| p.name == "Microsoft.WindowsAppRuntime.1.8")
@@ -640,7 +719,7 @@ mod export_tests {
     /// export, adoption would plant a declaration that can never converge (Q36).
     #[test]
     fn no_pseudo_identifier_can_reach_a_declaration_through_the_export() {
-        let pkgs = parse_winget_export(EXPORT);
+        let pkgs = parse_winget_export(EXPORT).expect("this fixture parses");
         assert!(
             !pkgs
                 .iter()
@@ -653,12 +732,27 @@ mod export_tests {
     /// absence is an error the caller raises; a file that exists and says nothing is winget
     /// saying there is nothing to restore, which is a different and legitimate answer.
     #[test]
-    fn an_empty_or_broken_export_yields_nothing_rather_than_guessing() {
-        assert!(parse_winget_export("").is_empty());
-        assert!(parse_winget_export("not json at all").is_empty());
-        assert!(parse_winget_export(r#"{"Sources": []}"#).is_empty());
-        assert!(parse_winget_export(r#"{"WinGetVersion": "1.12.360"}"#).is_empty());
-        assert!(parse_winget_export(r#"{"Sources": [{"SourceDetails": {}}]}"#).is_empty());
+    fn an_empty_export_is_an_empty_machine_and_a_broken_one_is_not() {
+        // Five inputs, and this test used to assert one answer for all of them. Two of them are
+        // winget saying it has nothing to export, which is a fact. The other three are winget
+        // failing, and reading those as "nothing installed" is what `adopt` then writes down and
+        // `sync` then acts on.
+        for empty in [
+            r#"{"Sources": []}"#,
+            r#"{"Sources": [{"SourceDetails": {}}]}"#,
+        ] {
+            assert!(
+                parse_winget_export(empty)
+                    .expect("a source list with no packages is an export of nothing")
+                    .is_empty(),
+                "{empty}"
+            );
+        }
+        for broken in ["", "not json at all", r#"{"WinGetVersion": "1.12.360"}"#] {
+            let err = parse_winget_export(broken)
+                .expect_err("an export that could not be read is not an empty machine");
+            assert_eq!(err.backend, "winget", "{broken}");
+        }
     }
 
     /// A blank identifier is not a package name, and the validator would refuse it later with
@@ -667,7 +761,7 @@ mod export_tests {
     fn a_blank_identifier_is_not_a_package() {
         let pkgs = parse_winget_export(
             r#"{"Sources":[{"Packages":[{"PackageIdentifier":"  "},{"PackageIdentifier":"jq.jq"}]}]}"#,
-        );
+        ).expect("this fixture parses");
         assert_eq!(pkgs.len(), 1);
         assert_eq!(pkgs[0].name, "jq.jq");
     }
@@ -683,14 +777,15 @@ mod export_tests {
 /// version `2026-07-21`, `adopt` wrote it into a manifest, and no `jq` was ever on PATH. The
 /// JSON says the same thing in named fields — which is the point — but only if it is asked the
 /// same questions.
-pub fn parse_scoop_export(json: &str) -> Vec<Package> {
+pub fn parse_scoop_export(json: &str) -> ParseResult {
     let Ok(doc) = serde_json::from_str::<serde_json::Value>(json) else {
-        return Vec::new();
+        return Err(export_unreadable("scoop", "not JSON", json));
     };
     let Some(apps) = doc.get("apps").and_then(|a| a.as_array()) else {
-        return Vec::new();
+        return Err(export_unreadable("scoop", "JSON with no `apps` array", json));
     };
-    apps.iter()
+    let found: Vec<Package> = apps
+        .iter()
         .filter_map(|a| {
             let name = a.get("Name")?.as_str()?.trim();
             if name.is_empty() {
@@ -716,7 +811,32 @@ pub fn parse_scoop_export(json: &str) -> Vec<Package> {
             }
             Some(Package::with_version(name, version, "scoop"))
         })
-        .collect()
+        .collect();
+    // A scoop with no apps exports an empty `apps` array, which is the truth. Apps present and
+    // none readable is not — though note this reader also *deliberately* drops failed and
+    // half-installed rows, so a machine whose every app is in one of those states reports as
+    // empty. That is the correct answer: none of them is installed.
+    let usable = apps.iter().any(|a| {
+        let failed = a
+            .get("Info")
+            .and_then(|i| i.as_str())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .contains("failed");
+        let versioned = a
+            .get("Version")
+            .and_then(|v| v.as_str())
+            .is_some_and(|v| !v.trim().is_empty());
+        !failed && versioned
+    });
+    if found.is_empty() && usable {
+        return Err(export_unreadable(
+            "scoop",
+            "apps that should have read, none carrying a `Name`",
+            json,
+        ));
+    }
+    Ok(found)
 }
 
 #[cfg(test)]
@@ -736,7 +856,7 @@ mod scoop_export_tests {
 
     #[test]
     fn an_export_yields_the_installed_apps() {
-        let pkgs = parse_scoop_export(EXPORT);
+        let pkgs = parse_scoop_export(EXPORT).expect("this fixture parses");
         let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, vec!["7zip", "fd"]);
         assert_eq!(pkgs[0].version.as_deref(), Some("26.00"));
@@ -747,13 +867,13 @@ mod scoop_export_tests {
     /// software; `adopt` wrote one into a manifest once.
     #[test]
     fn a_failed_install_is_not_an_installed_package() {
-        assert!(!parse_scoop_export(EXPORT).iter().any(|p| p.name == "jq"));
+        assert!(!parse_scoop_export(EXPORT).expect("this fixture parses").iter().any(|p| p.name == "jq"));
     }
 
     /// The same half-state by the other route — a directory with no installed manifest.
     #[test]
     fn an_app_with_no_version_is_not_an_installed_package() {
-        assert!(!parse_scoop_export(EXPORT)
+        assert!(!parse_scoop_export(EXPORT).expect("this fixture parses")
             .iter()
             .any(|p| p.name == "halfway"));
     }
@@ -769,8 +889,8 @@ mod scoop_export_tests {
                      jq                              2026-07-21 13:48:29 Install failed\n\
                      halfway                         2026-07-21 13:48:29     \n\
                      fd       10.4.2          main   2026-07-08 15:15:49     \n";
-        let a = parse_installed("scoop", table);
-        let b = parse_scoop_export(EXPORT);
+        let a = parse_installed("scoop", table).expect("this fixture parses");
+        let b = parse_scoop_export(EXPORT).expect("this fixture parses");
         assert_eq!(
             a.iter().map(|p| (&p.name, &p.version)).collect::<Vec<_>>(),
             b.iter().map(|p| (&p.name, &p.version)).collect::<Vec<_>>(),
@@ -778,11 +898,19 @@ mod scoop_export_tests {
     }
 
     #[test]
-    fn a_malformed_or_appless_export_yields_nothing() {
-        assert!(parse_scoop_export("").is_empty());
-        assert!(parse_scoop_export("not json").is_empty());
-        assert!(parse_scoop_export(r#"{"buckets":[]}"#).is_empty());
-        assert!(parse_scoop_export(r#"{"apps":[]}"#).is_empty());
+    fn an_appless_export_is_an_empty_machine_and_a_malformed_one_is_not() {
+        assert!(
+            parse_scoop_export(r#"{"apps":[]}"#)
+                .expect("scoop with no apps exports an empty `apps` array")
+                .is_empty()
+        );
+        // `{"buckets":[]}` has no `apps` key at all. That is not scoop reporting no apps — it
+        // is a document this reader does not recognise, and the two were the same answer.
+        for broken in ["", "not json", r#"{"buckets":[]}"#] {
+            let err = parse_scoop_export(broken)
+                .expect_err("an export that could not be read is not an empty machine");
+            assert_eq!(err.backend, "scoop", "{broken}");
+        }
     }
 }
 
@@ -793,6 +921,7 @@ mod scoop_export_tests {
 /// already knows what is installed.
 pub fn parse_winget_outdated(output: &str) -> Vec<Package> {
     parse_winget_table(output, &["Id", "Available"])
+        .unwrap_or_default()
         .into_iter()
         .filter_map(|row| {
             let (id, available) = (&row[0], &row[1]);
@@ -823,6 +952,7 @@ pub fn parse_scoop_outdated(output: &str) -> Vec<Package> {
         |line| line.contains("Name") && line.contains("Latest Version"),
         &["Name", "Latest Version"],
     )
+    .unwrap_or_default()
     .into_iter()
     .filter_map(|row| {
         let (name, latest) = (&row[0], &row[1]);

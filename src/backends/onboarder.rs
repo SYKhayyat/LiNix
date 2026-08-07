@@ -113,14 +113,42 @@ impl Default for ParserSpec {
 }
 
 impl ParserSpec {
-    pub fn parse(&self, output: &str, backend: &str) -> Vec<Package> {
+    /// Interpret this spec against a manager's output.
+    ///
+    /// Fallible for the same reason the built-in parsers are, and with more at stake: a custom
+    /// backend's spec is written by someone who has never seen this code, against a manager
+    /// nobody here has run. **Every one of the four arms had a way of answering *"I could not
+    /// read this"* with *"the machine is empty"*** — a `serde_json` call ending in
+    /// `unwrap_or_default()`, an `array_path` that navigated to nothing, a JSON node that was
+    /// neither array nor object, and a regex that would not compile. The last one is the sharpest:
+    /// a typo in a user's pattern logged a warning nobody reads and reported a bare machine,
+    /// which `sync` answers by installing everything declared.
+    ///
+    /// U2's claim is that a custom backend is a first-class peer of a built-in. This is part of
+    /// paying for that claim.
+    pub fn parse(&self, output: &str, backend: &str) -> crate::parsers::ParseResult {
+        let unreadable = |what: String| {
+            Err(crate::parsers::Unrecognised {
+                backend: backend.to_string(),
+                data_lines: output.lines().filter(|l| !l.trim().is_empty()).count(),
+                sample: format!("{what}: {}", output.trim().chars().take(100).collect::<String>()),
+            })
+        };
+
         match self {
-            ParserSpec::Lines { skip_prefixes } => sanitize(output)
-                .lines()
-                .map(str::trim)
-                .filter(|l| !l.is_empty() && !starts_with_any(l, skip_prefixes))
-                .map(|l| Package::new(l, backend))
-                .collect(),
+            ParserSpec::Lines { skip_prefixes } => {
+                let clean = sanitize(output);
+                let candidates: Vec<&str> = clean
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty() && !starts_with_any(l, skip_prefixes))
+                    .collect();
+                let found = candidates
+                    .iter()
+                    .map(|l| Package::new(*l, backend))
+                    .collect();
+                crate::parsers::or_unrecognised(backend, found, &candidates)
+            }
 
             ParserSpec::Columns {
                 name_col,
@@ -128,55 +156,74 @@ impl ParserSpec {
                 skip_header,
                 delimiter,
                 skip_prefixes,
-            } => sanitize(output)
-                .lines()
-                .skip(*skip_header)
-                .filter_map(|line| {
-                    let trimmed = line.trim();
-                    if trimmed.is_empty() || starts_with_any(trimmed, skip_prefixes) {
-                        return None;
-                    }
-                    let cols: Vec<&str> = match delimiter {
-                        Some(d) if !d.is_empty() => line.split(d.as_str()).map(str::trim).collect(),
-                        _ => line.split_whitespace().collect(),
-                    };
-                    let name = cols.get(*name_col)?.trim();
-                    if name.is_empty() {
-                        return None;
-                    }
-                    match version_col
-                        .and_then(|i| cols.get(i))
-                        .map(|s| s.trim())
-                        .filter(|s| !s.is_empty())
-                    {
-                        Some(v) => Some(Package::with_version(name, v, backend)),
-                        None => Some(Package::new(name, backend)),
-                    }
-                })
-                .collect(),
+            } => {
+                let clean = sanitize(output);
+                let candidates: Vec<&str> = clean
+                    .lines()
+                    .skip(*skip_header)
+                    .filter(|line| {
+                        let t = line.trim();
+                        !t.is_empty() && !starts_with_any(t, skip_prefixes)
+                    })
+                    .collect();
+                let found = candidates
+                    .iter()
+                    .filter_map(|line| {
+                        let cols: Vec<&str> = match delimiter {
+                            Some(d) if !d.is_empty() => {
+                                line.split(d.as_str()).map(str::trim).collect()
+                            }
+                            _ => line.split_whitespace().collect(),
+                        };
+                        let name = cols.get(*name_col)?.trim();
+                        if name.is_empty() {
+                            return None;
+                        }
+                        match version_col
+                            .and_then(|i| cols.get(i))
+                            .map(|s| s.trim())
+                            .filter(|s| !s.is_empty())
+                        {
+                            Some(v) => Some(Package::with_version(name, v, backend)),
+                            None => Some(Package::new(name, backend)),
+                        }
+                    })
+                    .collect();
+                crate::parsers::or_unrecognised(backend, found, &candidates)
+            }
 
             ParserSpec::Json {
                 array_path,
                 name_key,
                 version_key,
             } => {
-                let json: Value = serde_json::from_str(&sanitize(output)).unwrap_or_default();
+                let Ok(json) = serde_json::from_str::<Value>(&sanitize(output)) else {
+                    return unreadable("not JSON".into());
+                };
                 let node = match array_path {
                     Some(p) if !p.is_empty() => match navigate(&json, p) {
                         Some(n) => n,
-                        None => return vec![],
+                        None => return unreadable(format!("JSON with nothing at `{p}`")),
                     },
                     _ => &json,
                 };
                 if let Some(arr) = node.as_array() {
-                    arr.iter()
+                    let found: Vec<Package> = arr
+                        .iter()
                         .filter_map(|item| json_package(item, name_key, version_key, backend))
-                        .collect()
+                        .collect();
+                    if found.is_empty() && !arr.is_empty() {
+                        return unreadable(format!(
+                            "an array of {} entries, none carrying `{name_key}`",
+                            arr.len()
+                        ));
+                    }
+                    Ok(found)
                 } else if let Some(obj) = node.as_object() {
                     // Object shape: keys are the package names.
-                    obj.keys().map(|k| Package::new(k, backend)).collect()
+                    Ok(obj.keys().map(|k| Package::new(k, backend)).collect())
                 } else {
-                    vec![]
+                    unreadable("JSON that is neither an array nor an object".into())
                 }
             }
 
@@ -188,12 +235,17 @@ impl ParserSpec {
                 let re = match crate::utils::regex_cache::compiled(pattern) {
                     Ok(re) => re,
                     Err(e) => {
+                        // Was a `warn!` and an empty vector, which is a typo in a user's
+                        // definition reported as a machine with nothing installed.
                         warn!("Custom backend '{}': invalid regex: {}", backend, e);
-                        return vec![];
+                        return unreadable(format!("`{pattern}` does not compile: {e}"));
                     }
                 };
-                sanitize(output)
-                    .lines()
+                let clean = sanitize(output);
+                let candidates: Vec<&str> =
+                    clean.lines().filter(|l| !l.trim().is_empty()).collect();
+                let found = candidates
+                    .iter()
                     .filter_map(|line| {
                         let caps = re.captures(line)?;
                         let name = caps.get(*name_group)?.as_str().trim();
@@ -209,7 +261,8 @@ impl ParserSpec {
                             None => Some(Package::new(name, backend)),
                         }
                     })
-                    .collect()
+                    .collect();
+                crate::parsers::or_unrecognised(backend, found, &candidates)
             }
         }
     }
@@ -260,11 +313,13 @@ pub struct ConfiguredParser {
 }
 
 impl OutputParser for ConfiguredParser {
-    fn parse_installed(&self, output: &str) -> Vec<Package> {
+    fn parse_installed(&self, output: &str) -> crate::parsers::ParseResult {
         self.installed.parse(output, &self.backend)
     }
+    /// A search that reads nothing is a search with no results — a fact the user asked for and
+    /// can see. Only the installed listing above is one the planner acts on unseen.
     fn parse_search(&self, output: &str) -> Vec<Package> {
-        self.search.parse(output, &self.backend)
+        self.search.parse(output, &self.backend).unwrap_or_default()
     }
 }
 
@@ -685,7 +740,11 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
         crate::backends::generic::OutdatedProbe {
             binary: def.outdated_binary.as_deref().map(expand_binary),
             args,
-            parse: Arc::new(move |o: &str| spec.parse(o, &name)),
+            // An outdated listing that reads as empty means nothing needs upgrading, which is
+            // the common answer and a safe one — unlike an *installed* listing, whose emptiness
+            // the planner answers by installing everything. `MachineListing` above keeps the
+            // failure; this drops it on purpose.
+            parse: Arc::new(move |o: &str| spec.parse(o, &name).unwrap_or_default()),
             silence_is_none: false,
         }
     });
@@ -847,7 +906,7 @@ mod tests {
             delimiter: None,
             skip_prefixes: vec![],
         };
-        let pkgs = spec.parse("ripgrep 13.0.0\nbat 0.24.0\n", "custom");
+        let pkgs = spec.parse("ripgrep 13.0.0\nbat 0.24.0\n", "custom").expect("this fixture parses");
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[0].name, "ripgrep");
         assert_eq!(pkgs[0].version.as_deref(), Some("13.0.0"));
@@ -863,7 +922,7 @@ mod tests {
             delimiter: Some("|".to_string()),
             skip_prefixes: vec!["#".to_string()],
         };
-        let pkgs = spec.parse("NAME|VER\ngit|2.40\n# comment|x\ncurl|8.1\n", "c");
+        let pkgs = spec.parse("NAME|VER\ngit|2.40\n# comment|x\ncurl|8.1\n", "c").expect("this fixture parses");
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[0].name, "git");
         assert_eq!(pkgs[1].name, "curl");
@@ -874,7 +933,7 @@ mod tests {
         let spec = ParserSpec::Lines {
             skip_prefixes: vec!["==".to_string()],
         };
-        let pkgs = spec.parse("foo\n== legend\nbar\n\n", "c");
+        let pkgs = spec.parse("foo\n== legend\nbar\n\n", "c").expect("this fixture parses");
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[0].name, "foo");
         assert_eq!(pkgs[1].name, "bar");
@@ -889,7 +948,7 @@ mod tests {
         };
         let out =
             r#"{"results":[{"name":"httpie","version":"3.2"},{"name":"jq","version":"1.7"}]}"#;
-        let pkgs = spec.parse(out, "c");
+        let pkgs = spec.parse(out, "c").expect("this fixture parses");
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[0].name, "httpie");
         assert_eq!(pkgs[0].version.as_deref(), Some("3.2"));
@@ -902,7 +961,7 @@ mod tests {
             name_key: default_name_key(),
             version_key: None,
         };
-        let pkgs = spec.parse(r#"{"numpy":[],"pandas":[]}"#, "c");
+        let pkgs = spec.parse(r#"{"numpy":[],"pandas":[]}"#, "c").expect("this fixture parses");
         assert_eq!(pkgs.len(), 2);
         assert!(pkgs.iter().any(|p| p.name == "numpy"));
     }
@@ -914,7 +973,7 @@ mod tests {
             name_group: 1,
             version_group: Some(2),
         };
-        let pkgs = spec.parse("exa v0.10.1\nripgrep v13.0.0\n", "c");
+        let pkgs = spec.parse("exa v0.10.1\nripgrep v13.0.0\n", "c").expect("this fixture parses");
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[1].name, "ripgrep");
         assert_eq!(pkgs[1].version.as_deref(), Some("13.0.0"));

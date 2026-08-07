@@ -1534,8 +1534,12 @@ mod tests {
         use std::path::PathBuf;
         use std::process::Output as StdOutput;
 
-        fn one_per_line(output: &str) -> Vec<Package> {
+        fn one_per_line(output: &str) -> crate::parsers::ParseResult {
             crate::parsers::parse_bare_names(output, "test")
+        }
+
+        fn one_per_line_search(output: &str) -> Vec<Package> {
+            crate::parsers::parse_bare_names(output, "test").unwrap_or_default()
         }
 
         fn manager(name: &str, exec: CommandExecutor) -> Arc<BackendCapabilities> {
@@ -1583,7 +1587,7 @@ mod tests {
                 config,
                 parser: Arc::new(crate::parsers::LambdaParser {
                     installed_fn: one_per_line,
-                    search_fn: one_per_line,
+                    search_fn: one_per_line_search,
                 }),
             });
             Arc::new(

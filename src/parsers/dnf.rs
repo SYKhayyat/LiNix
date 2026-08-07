@@ -1,17 +1,21 @@
 use crate::core::Package;
+use crate::parsers::{or_unrecognised, ParseResult};
 use crate::utils::text::sanitize;
 
 /// Standard RPM query parser used by DNF and Zypper.
 /// Command: rpm -qa --queryformat '%{NAME}|%{VERSION}\n'
 /// Expected input format: "package-name|1.2.3-r1"
-pub fn parse_rpm_qa(output: &str, backend: &str) -> Vec<Package> {
-    sanitize(output)
-        .lines()
+pub fn parse_rpm_qa(output: &str, backend: &str) -> ParseResult {
+    let clean = sanitize(output);
+    let candidates = crate::parsers::data_lines(&clean);
+    let found = candidates
+        .iter()
         .filter_map(|l| {
             let (name, ver) = l.split_once('|')?;
             Some(Package::with_version(name.trim(), ver.trim(), backend))
         })
-        .collect()
+        .collect();
+    or_unrecognised(backend, found, &candidates)
 }
 
 /// The architectures dnf appends to a name. Only these are stripped: taking everything
@@ -53,15 +57,28 @@ fn strip_rpm_arch(name: &str) -> &str {
 
 /// Parses the table-based output of 'zypper search'.
 /// Zypper output includes status indicators like 'i+' for installed.
-pub fn parse_zypper_search(output: &str) -> Vec<Package> {
-    sanitize(output)
+///
+/// **This is the parser whose failure mode the whole `Unrecognised` type exists for**, and its
+/// comment below has said so since the `skip_while` bug: it is zypper's *installed* lister as
+/// well as its search, so an output it cannot read is a mass-removal input. It can now say it
+/// could not read one.
+pub fn parse_zypper_search(output: &str) -> ParseResult {
+    let clean = sanitize(output);
+    let candidates: Vec<&str> = clean
         .lines()
         // The rule under the header is skipped where it appears, rather than used as the
         // gate that starts reading. `skip_while(|l| !l.contains("---"))` consumed the WHOLE
         // output when zypper printed no rule — and this parser is wired as zypper's
         // installed lister as well as its search, so "no rule" meant "nothing is installed",
         // which is not a bad search result but a mass-removal input.
-        .filter(|l| !l.trim_start().starts_with("---"))
+        .filter(|l| {
+            !l.trim_start().starts_with("---")
+                && !l.trim().is_empty()
+                && !crate::parsers::is_prose_line(l)
+        })
+        .collect();
+    let found = candidates
+        .iter()
         .filter_map(|line| {
             // Table format: S | Name | Summary | Type
             let parts: Vec<&str> = line.split('|').collect();
@@ -89,7 +106,8 @@ pub fn parse_zypper_search(output: &str) -> Vec<Package> {
                 None
             }
         })
-        .collect()
+        .collect();
+    or_unrecognised("zypper", found, &candidates)
 }
 
 #[cfg(test)]
@@ -99,7 +117,7 @@ mod tests {
     #[test]
     fn test_rpm_qa_parsing() {
         let input = "kernel|6.3.5\ngit|2.40.1\n";
-        let res = parse_rpm_qa(input, "dnf");
+        let res = parse_rpm_qa(input, "dnf").expect("this fixture parses");
         assert_eq!(res.len(), 2);
         assert_eq!(res[0].name, "kernel");
         assert_eq!(res[1].version, Some("2.40.1".into()));
@@ -151,7 +169,7 @@ mod tests {
                             i | jq   | JSON    | package\n\
                               | htop | Viewer  | package\n";
         for (label, input) in [("with", with_rule), ("without", without_rule)] {
-            let res = parse_zypper_search(input);
+            let res = parse_zypper_search(input).expect("this fixture parses");
             assert_eq!(res.len(), 2, "{} the rule", label);
             assert_eq!(res[0].name, "jq");
             assert_eq!(

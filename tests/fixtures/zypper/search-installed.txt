@@ -1,0 +1,189 @@
+Looking for gpg keys in repository Update repository of openSUSE Backports.
+  gpgkey=http://download.opensuse.org/update/leap/15.6/backports/repodata/repomd.xml.key
+Building repository 'Update repository of openSUSE Backports' cache [....done]
+Looking for gpg keys in repository Non-OSS Repository.
+  gpgkey=http://download.opensuse.org/distribution/leap/15.6/repo/non-oss/repodata/repomd.xml.key
+Warning: The gpg key signing file 'repomd.xml' has expired.
+  Repository:       Non-OSS Repository
+  Key Fingerprint:  AD48 5664 E901 B867 051A B15F 35A2 F86E 29B7 00A4
+  Key Name:         openSUSE Project Signing Key <opensuse@opensuse.org>
+  Key Algorithm:    RSA 4096
+  Key Created:      Mon Jun 20 14:03:14 2022
+  Key Expires:      Fri Jun 19 14:03:14 2026 (EXPIRED)
+  Rpm Name:         gpg-pubkey-29b700a4-62b07e22
+Building repository 'Non-OSS Repository' cache [....done]
+Warning: The gpg key signing file 'repomd.xml' has expired.
+  Repository:       Open H.264 Codec (openSUSE Leap)
+  Key Fingerprint:  AD48 5664 E901 B867 051A B15F 35A2 F86E 29B7 00A4
+  Key Name:         openSUSE Project Signing Key <opensuse@opensuse.org>
+  Key Algorithm:    RSA 4096
+  Key Created:      Mon Jun 20 14:03:14 2022
+  Key Expires:      Fri Jun 19 14:03:14 2026 (EXPIRED)
+  Rpm Name:         gpg-pubkey-29b700a4-62b07e22
+Building repository 'Open H.264 Codec (openSUSE Leap)' cache [....done]
+Looking for gpg keys in repository Main Repository.
+  gpgkey=http://download.opensuse.org/distribution/leap/15.6/repo/oss/repodata/repomd.xml.key
+Warning: The gpg key signing file 'repomd.xml' has expired.
+  Repository:       Main Repository
+  Key Fingerprint:  AD48 5664 E901 B867 051A B15F 35A2 F86E 29B7 00A4
+  Key Name:         openSUSE Project Signing Key <opensuse@opensuse.org>
+  Key Algorithm:    RSA 4096
+  Key Created:      Mon Jun 20 14:03:14 2022
+  Key Expires:      Fri Jun 19 14:03:14 2026 (EXPIRED)
+  Rpm Name:         gpg-pubkey-29b700a4-62b07e22
+Building repository 'Main Repository' cache [....done]
+Looking for gpg keys in repository Update repository with updates from SUSE Linux Enterprise 15.
+  gpgkey=http://download.opensuse.org/update/leap/15.6/sle/repodata/repomd.xml.key
+Building repository 'Update repository with updates from SUSE Linux Enterprise 15' cache [....done]
+Looking for gpg keys in repository Main Update Repository.
+  gpgkey=http://download.opensuse.org/update/leap/15.6/oss/repodata/repomd.xml.key
+Building repository 'Main Update Repository' cache [....done]
+Looking for gpg keys in repository Update Repository (Non-Oss).
+  gpgkey=http://download.opensuse.org/update/leap/15.6/non-oss/repodata/repomd.xml.key
+Building repository 'Update Repository (Non-Oss)' cache [....done]
+Loading repository data...
+Warning: Repository 'Update repository of openSUSE Backports' metadata expired since 2026-07-10 11:19:15 UTC.
+
+    Warning: Repository metadata expired: Check if 'autorefresh' is turned on (zypper lr), otherwise
+    manually refresh the repository (zypper ref). If this does not solve the issue, it could be that
+    you are using a broken mirror or the server has actually discontinued to support the repository.
+
+Reading installed packages...
+
+S  | Name                              | Summary                                                                  | Type
+---+-----------------------------------+--------------------------------------------------------------------------+--------
+i+ | aaa_base                          | openSUSE Base Package                                                    | package
+i  | bash                              | The GNU Bourne-Again Shell                                               | package
+i  | bash-sh                           | Handle behaviour of /bin/sh                                              | package
+i  | boost-license1_66_0               | Boost License                                                            | package
+i+ | ca-certificates                   | Utilities for system wide CA certificate installation                    | package
+i+ | ca-certificates-mozilla           | CA certificates for OpenSSL                                              | package
+i  | coreutils                         | GNU Core Utilities                                                       | package
+i  | cpio                              | A Backup and Archiving Utility                                           | package
+i  | cracklib                          | Library to crack passwords using dictionaries                            | package
+i+ | cracklib-dict-small               | Small dictionary for cracklib, a password checking library               | package
+i  | crypto-policies                   | System-wide crypto policies                                              | package
+i+ | curl                              | A Tool for Transferring Data from URLs                                   | package
+i  | diffutils                         | GNU diff Utilities                                                       | package
+i  | file-magic                        | Database for libmagic to help identify files                             | package
+i+ | filesystem                        | Basic Directory Layout                                                   | package
+i  | fillup                            | Tool for Merging Config Files                                            | package
+i  | findutils                         | The GNU versions of find utilities (find and xargs)                      | package
+i  | gawk                              | GNU awk                                                                  | package
+i+ | glibc                             | Standard Shared Libraries (from the GNU C Library)                       | package
+i  | gpg2                              | File encryption, decryption, signature creation and verification utility | package
+i  | grep                              | Print lines matching a pattern                                           | package
+i  | info                              | A Stand-Alone Terminal-Based Info Browser                                | package
+i  | krb5                              | MIT Kerberos5 implementation                                             | package
+i+ | kubic-locale-archive              | Minimal locale archive for very small systems                            | package
+i  | libacl1                           | A dynamic library for accessing POSIX Access Control Lists               | package
+i  | libassuan0                        | IPC library used by GnuPG version 2                                      | package
+i  | libattr1                          | A dynamic library for filesystem extended attribute support              | package
+i  | libaudit1                         | Library for interfacing with the kernel audit subsystem                  | package
+i  | libaugeas0                        | A library for changing configuration files                               | package
+i  | libblkid1                         | Filesystem detection library                                             | package
+i  | libboost_system1_66_0             | Boost.System runtime library                                             | package
+i  | libboost_thread1_66_0             | Boost.Thread runtime libraries                                           | package
+i  | libbrotlicommon1                  | Common Library for Brotli Compression                                    | package
+i  | libbrotlidec1                     | Library for Brotli Decompression                                         | package
+i  | libbz2-1                          | The bzip2 runtime library                                                | package
+i  | libcap-ng0                        | An alternate Linux/POSIX capabilities library                            | package
+i  | libcap2                           | Library for Capabilities (linux-privs) Support                           | package
+i  | libcom_err2                       | E2fsprogs error reporting library                                        | package
+i  | libcrack2                         | Library to crack passwords using dictionaries                            | package
+i  | libcrypt1                         | Extended crypt library for DES, MD5, Blowfish and others                 | package
+i  | libcurl4                          | Library for transferring data from URLs                                  | package
+i  | libdw1                            | Library to access DWARF debugging information                            | package
+i  | libeconf0                         | Enhanced config file parser ala systemd                                  | package
+i  | libelf1                           | Library to read and write ELF files                                      | package
+i  | libfa1                            | Finite automaton library for Augeas                                      | package
+i  | libfdisk1                         | Filesystem detection library                                             | package
+i  | libffi7                           | Foreign Function Interface Library                                       | package
+i  | libgcc_s1                         | C compiler runtime library                                               | package
+i  | libgcrypt20                       | The GNU Crypto Library                                                   | package
+i  | libglib-2_0-0                     | General-Purpose Utility Library                                          | package
+i  | libgmp10                          | Shared library for the GNU MP Library                                    | package
+i  | libgpg-error0                     | Library That Defines Common Error Values for All GnuPG Components        | package
+i  | libgpgme11                        | Programmatic library interface to GnuPG                                  | package
+i  | libidn2-0                         | Support for Internationalized Domain Names (IDN)                         | package
+i  | libjitterentropy3                 | Jitter entropy generator shared library                                  | package
+i  | libkeyutils1                      | Key utilities library                                                    | package
+i  | libksba8                          | A X.509 Library                                                          | package
+i  | libldap-2_4-2                     | OpenLDAP Client Libraries                                                | package
+i  | libldap-data                      | Configuration file for system-wide defaults for all uses of libldap      | package
+i  | liblua5_3-5                       | The Lua integration library                                              | package
+i  | liblz4-1                          | Hash-based predictive Lempel-Ziv compressor                              | package
+i  | liblzma5                          | Lempel–Ziv–Markov chain algorithm compression library                    | package
+i  | libmagic1                         | Library for heuristic file type identification                           | package
+i  | libmount1                         | Device mount library                                                     | package
+i  | libncurses6                       | Terminal control library                                                 | package
+i  | libnghttp2-14                     | Shared library for nghttp2                                               | package
+i  | libnpth0                          | New GNU Portable Threads library                                         | package
+i  | libnsl2                           | Network Support Library (NIS/NIS+)                                       | package
+i  | libopenssl3                       | Secure Sockets and Transport Layer Security                              | package
+i  | libp11-kit0                       | Library to work with PKCS#11 modules                                     | package
+i  | libpcre1                          | A library for Perl-compatible regular expressions                        | package
+i  | libpcre2-8-0                      | A library for Perl-compatible regular expressions                        | package
+i  | libpopt0                          | A C library for parsing command line parameters                          | package
+i  | libprocps8                        | The procps library                                                       | package
+i  | libpsl5                           | C library for the Publix Suffix List                                     | package
+i  | libreadline7                      | The Readline Library                                                     | package
+i  | libsasl2-3                        | Simple Authentication and Security Layer (SASL) library                  | package
+i  | libselinux1                       | SELinux runtime library                                                  | package
+i  | libsemanage-conf                  | Configuration for the SELinux policy management library                  | package
+i  | libsemanage2                      | SELinux policy management library                                        | package
+i  | libsepol2                         | SELinux binary policy manipulation library                               | package
+i  | libsigc-2_0-0                     | Typesafe Signal Framework for C++                                        | package
+i  | libsmartcols1                     | Column-based text sort engine                                            | package
+i  | libsolv-tools-base                | Utilities used by libzypp to manage .solv files                          | package
+i  | libsqlite3-0                      | Shared libraries for the Embeddable SQL Database Engine                  | package
+i  | libssh-config                     | SSH library configuration files                                          | package
+i  | libssh4                           | SSH library                                                              | package
+i  | libstdc++6                        | The standard C++ shared library                                          | package
+i  | libsubid5                         | A library to manage subordinate uid and gid ranges                       | package
+i  | libsystemd0                       | Component library for systemd                                            | package
+i  | libtasn1                          | ASN.1 parsing library                                                    | package
+i  | libtasn1-6                        | ASN.1 parsing library                                                    | package
+i  | libtirpc-netconfig                | Netconfig configuration file for TI-RPC Library                          | package
+i  | libtirpc3                         | Transport Independent RPC Library                                        | package
+i  | libudev1                          | Dynamic library to access udev device information                        | package
+i  | libunistring2                     | GNU Unicode string library                                               | package
+i  | libusb-1_0-0                      | USB Library                                                              | package
+i  | libutempter0                      | Shared library of utempter                                               | package
+i  | libuuid1                          | Library to generate UUIDs                                                | package
+i  | libverto1                         | Runtime libraries for libverto                                           | package
+i  | libxml2-2                         | A Library to Manipulate XML Files                                        | package
+i  | libyaml-cpp0_6                    | YAML parser and emitter in C++                                           | package
+i  | libz1                             | Library implementing the DEFLATE compression algorithm                   | package
+i  | libzck1                           | Zchunk library                                                           | package
+i  | libzio1                           | A Library for Accessing Compressed Text Files                            | package
+i  | libzstd1                          | Zstd compression library                                                 | package
+i  | libzypp                           | Library for package, patch, pattern and product management               | package
+i  | login_defs                        | The login.defs configuration file                                        | package
+i  | ncurses-utils                     | Tools using the new curses libraries                                     | package
+i+ | netcfg                            | Network Configuration Files in /etc                                      | package
+i  | openssl                           | Secure Sockets and Transport Layer Security                              | package
+i  | openssl-3                         | Secure Sockets and Transport Layer Security                              | package
+i+ | openSUSE-build-key                | The public gpg keys for rpm package signature verification               | package
+i+ | openSUSE-release                  | openSUSE Leap 15.6                                                       | package
+i+ | openSUSE-release-appliance-docker | openSUSE Leap 15.6                                                       | package
+i  | p11-kit                           | Library to work with PKCS#11 modules                                     | package
+i  | p11-kit-tools                     | Library to work with PKCS#11 modules -- Tools                            | package
+i  | pam                               | A Security Tool that Provides Authentication for Applications            | package
+i+ | patterns-base-fips                | FIPS 140-3 specific packages                                             | package
+i  | perl-base                         | The Perl interpreter                                                     | package
+i  | permissions                       | SUSE Linux Default Permissions                                           | package
+i  | pinentry                          | Collection of Simple PIN or Passphrase Entry Dialogs                     | package
+i+ | procps                            | The ps utilities for /proc                                               | package
+i  | rpm-config-SUSE                   | SUSE specific RPM configuration files                                    | package
+i+ | rpm-ndb                           | The RPM Package Manager, ndb only version                                | package
+i  | sed                               | A Stream-Oriented Non-Interactive Text Editor                            | package
+i+ | shadow                            | Utilities to Manage User and Group Accounts                              | package
+i  | system-group-hardware             | Hardware related system groups                                           | package
+i  | system-user-root                  | System user and group root                                               | package
+i  | sysuser-shadow                    | Tool to execute sysusers.d with shadow utilities                         | package
+i  | terminfo-base                     | A terminal descriptions database                                         | package
+i+ | timezone                          | Time Zone Descriptions                                                   | package
+i  | update-alternatives               | Maintain symbolic links determining default commands                     | package
+i  | util-linux                        | A collection of basic system utilities (core part)                       | package
+i+ | zypper                            | Command line software manager using libzypp                              | package

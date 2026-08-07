@@ -29,7 +29,7 @@ const FIXTURE: &str = include_str!("fixtures/pixi/list-one-tool.txt");
 /// second tool.
 #[test]
 fn pixi_list_reads_one_tool_as_one_package() {
-    let pkgs = pixi_list(FIXTURE, "pixi");
+    let pkgs = pixi_list(FIXTURE, "pixi").expect("the captured fixture parses");
     let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(
         names,
@@ -48,7 +48,7 @@ fn pixi_list_reads_one_tool_as_one_package() {
 fn pixi_list_with_nothing_installed_is_empty() {
     let empty =
         "Global environments as specified in 'C:\\Users\\u\\.pixi\\manifests\\pixi-global.toml'\n";
-    let pkgs = pixi_list(empty, "pixi");
+    let pkgs = pixi_list(empty, "pixi").expect("pixi's banner alone is an empty machine");
     let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
     assert!(
         pkgs.is_empty(),

@@ -1,12 +1,15 @@
 use crate::core::Package;
+use crate::parsers::{or_unrecognised, ParseResult};
 use crate::utils::text::sanitize;
 
 /// A generic parser for backends that return a simple space-separated list.
 /// Format: "package-name version" or just "package-name"
 /// Used by backends like 'apk' or internal search utilities.
-pub fn parse_simple_list(output: &str, backend: &str) -> Vec<Package> {
-    sanitize(output)
-        .lines()
+pub fn parse_simple_list(output: &str, backend: &str) -> ParseResult {
+    let clean = sanitize(output);
+    let candidates = crate::parsers::data_lines(&clean);
+    let found = candidates
+        .iter()
         .filter_map(|line| {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 2 {
@@ -17,7 +20,8 @@ pub fn parse_simple_list(output: &str, backend: &str) -> Vec<Package> {
                 None
             }
         })
-        .collect()
+        .collect();
+    or_unrecognised(backend, found, &candidates)
 }
 
 /// Parses a list where the version is attached to the name via a dash.
@@ -31,9 +35,11 @@ pub fn parse_simple_list(output: &str, backend: &str) -> Vec<Package> {
 /// lister, a package under the wrong name can never be matched by `info()`, so `remove`
 /// silently does nothing. `xbps` and `pkgsrc` already parse this shape with the digit check;
 /// this is the same rule, not a new one.
-pub fn parse_dash_version_list(output: &str, backend: &str) -> Vec<Package> {
-    sanitize(output)
-        .lines()
+pub fn parse_dash_version_list(output: &str, backend: &str) -> ParseResult {
+    let clean = sanitize(output);
+    let candidates = crate::parsers::data_lines(&clean);
+    let found = candidates
+        .iter()
         .filter_map(|line| {
             let token = line.split_whitespace().next()?;
             Some(match split_trailing_version(token) {
@@ -41,7 +47,8 @@ pub fn parse_dash_version_list(output: &str, backend: &str) -> Vec<Package> {
                 None => Package::new(token, backend),
             })
         })
-        .collect()
+        .collect();
+    or_unrecognised(backend, found, &candidates)
 }
 
 /// `name-1.2.3-r1` -> `("name", "1.2.3-r1")`, and `None` when no trailing field looks like a
@@ -64,9 +71,11 @@ pub(crate) fn split_trailing_version(token: &str) -> Option<(&str, String)> {
 }
 
 /// A strict CSV-style parser for backends that support delimited output.
-pub fn parse_delimited(output: &str, delimiter: char, backend: &str) -> Vec<Package> {
-    sanitize(output)
-        .lines()
+pub fn parse_delimited(output: &str, delimiter: char, backend: &str) -> ParseResult {
+    let clean = sanitize(output);
+    let candidates = crate::parsers::data_lines(&clean);
+    let found = candidates
+        .iter()
         .filter_map(|line| {
             let parts: Vec<&str> = line.split(delimiter).collect();
             if parts.len() >= 2 {
@@ -81,7 +90,8 @@ pub fn parse_delimited(output: &str, delimiter: char, backend: &str) -> Vec<Pack
                 None
             }
         })
-        .collect()
+        .collect();
+    or_unrecognised(backend, found, &candidates)
 }
 
 #[cfg(test)]
@@ -93,7 +103,7 @@ mod tests {
         // `apk search -v` adds ` - description` after the token. Splitting on whitespace
         // alone left the name as `jq-1.7.1-r0`, which never equals the name a line asked
         // for — so apk answered "I don't have it" for everything it had.
-        let res = parse_dash_version_list("jq-1.7.1-r0 - Command-line JSON processor\n", "apk");
+        let res = parse_dash_version_list("jq-1.7.1-r0 - Command-line JSON processor\n", "apk").expect("this fixture parses");
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].name, "jq");
         assert_eq!(res[0].version.as_deref(), Some("1.7.1-r0"));
@@ -105,7 +115,7 @@ mod tests {
         // `xz` — and this is the installed lister, so `info()` could never find the real
         // package and `remove` silently did nothing.
         let res =
-            parse_dash_version_list("xz-libs-dev\npy3-requests-2.31.0-r0\nbash-5.2.15\n", "apk");
+            parse_dash_version_list("xz-libs-dev\npy3-requests-2.31.0-r0\nbash-5.2.15\n", "apk").expect("this fixture parses");
         assert_eq!(res[0].name, "xz-libs-dev");
         assert_eq!(res[0].version, None);
         assert_eq!(res[1].name, "py3-requests");
@@ -117,7 +127,7 @@ mod tests {
 
     #[test]
     fn a_name_with_no_version_survives_whole() {
-        let res = parse_dash_version_list("tree\n", "apk");
+        let res = parse_dash_version_list("tree\n", "apk").expect("this fixture parses");
         assert_eq!(res[0].name, "tree");
         assert_eq!(res[0].version, None);
     }

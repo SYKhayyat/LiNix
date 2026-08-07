@@ -1,0 +1,10 @@
+base-bigarray
+base-domains
+base-nnp
+base-threads
+base-unix
+ocaml
+ocaml-base-compiler
+ocaml-config
+ocaml-options-vanilla
+opam-depext

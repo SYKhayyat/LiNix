@@ -7622,3 +7622,104 @@ property rather than the artifact — and then drew its roots around the code th
 Six shipped defects were inside the roots; three shipped specification defects were outside them.
 **One fact, several copies, a gate around one copy** — the mechanism the file's header names,
 found in the file's header's own scope line.
+
+## Session 2026-08-07 — the parser can say it did not understand (`LX-1`)
+
+**Lamdan's highest-ranked finding, built.** *"Three separate layers of this program answer 'I do
+not understand this' with 'there is nothing here, exit 0' — and a reconciler cannot tell those
+apart, so it acts on the second reading."*
+
+**You had already found this bug and fixed it beautifully, at one layer.** `4d4a890` is as good
+as commit messages get: measured (sixteen concurrent `winget list` from cold, three exits of
+`0x8A150001` in ~310 ms having written zero bytes), swept across every config layer, self-critical
+about its own first cut. Its diagnosis names the whole chain — *"`Ok("")` → a parser finding
+nothing → `list_installed` answering `Ok(vec![])`. Nothing in the chain believed anything had
+failed."* It fixed four links. **The parser, the link it named itself, is not in the fix list** —
+not from carelessness, but because that link could not be fixed without changing a type, and
+nothing recorded that it had been skipped.
+
+Ruled as `Y19`, **BUILT, NEVER RULED**: Part II had already made this call for one field
+(`target-state.md:71`, *"Absent means this backend cannot answer that, never the answer is
+none"*) and the layer below it had no way to say so.
+
+### What the type is
+
+`parse_installed` returns `Result<Vec<Package>, Unrecognised>`. `Unrecognised` carries the
+manager, how many lines carried something nobody read, and the first of them — so a report from
+somebody else's distro arrives as a fixture rather than as a request to reproduce, which for a
+format change on a machine we do not have is the one thing they cannot do for us. It crosses into
+`Error::Unreadable`, classified `Permanent`, because a manager prints the same bytes next time.
+
+**The judgement is made once**, in `or_unrecognised`: nothing found out of lines that carried
+something is the failure; nothing found out of nothing is an empty machine. Two parsers needed
+their own and both are argued in place. `asdf_list` — a plugin added with no version installed is
+a real state that yields no packages out of two data lines, and the shared rule would call that
+drift on every machine that added a plugin and had not installed one yet. `pixi_list` — it has no
+unread case at all, because every unindented line resolves to a package, to pixi's own banner, or
+to noise it already names; its failure mode is *junk*, and there are fixtures for that.
+
+### The family
+
+- **`MachineListing.parse`**, which is *more* exposed than the text parser, not less: it exists
+  because a flag may or may not be present in the installed version of the tool, so it is the one
+  listing whose shape LiNix has already admitted it cannot predict. `target-state.md:1979` says
+  exactly this and calls it `Q40` under a new name.
+- **`ParserSpec`** in the onboarder, where all four arms had a way to spell it. The sharpest was
+  `Regex`: a typo in a user's own pattern logged a warning nobody reads and returned a bare
+  machine, which `sync` answers by installing everything declared. U2's claim is that a custom
+  backend is a first-class peer of a built-in; this is part of paying for it.
+- **`slice_fixed_table`**, where a missing header row and an empty table were the same `vec![]`.
+- **Both `_ => vec![]` dispatch arms** in `language::parse_installed` and
+  `windows::parse_installed` — the widest spelling in the tree, because it is not one manager's
+  format drifting but *any name at all* reporting an empty machine.
+- **`registry.rs:2199`**, `installed_fn: |_| vec![]` for `stack`, a manager with no listing verb.
+  Now `CannotList("stack")`. Inert, since such a manager gets no `Queryable` — written down
+  because the next one will be added by someone reading that row.
+- **`parse_search` is deliberately not fallible**, and the asymmetry is asserted rather than left
+  to be found later and "made consistent". A search that returns nothing is a fact the user asked
+  for and can see; an installed listing that returns nothing is a fact the planner acts on unseen.
+
+### Fixtures, captured rather than typed
+
+The four managers that matter on Linux had real captured `outdated` output and **zero** captured
+`installed` output — the listing the planner actually acts on. Now captured from stock containers,
+byte for byte, using the argv `core/argv.rs` sends: `ubuntu:24.04`, `fedora:41`, `archlinux:base`,
+`opensuse/leap:15`, `alpine:3.20`, plus `apt-mark showmanual`. Nothing was edited afterwards,
+including the inconvenient parts: zypper's opens with 52 lines of repository refresh, gpg-key
+prose and an expired-key warning before its table, because that is what it prints on a cold image
+and therefore what the parser has to survive.
+
+**The self-test is the rule made concrete.** `bsd::parse_pkg` fed apt's listing does not fail and
+does not come back empty — it reads 7 of 92 lines, **every one of them wrong**: `libbz2-1.0`
+becomes the package `libbz2` at version `1.0`, `gcc-14-base` becomes `gcc` at version `14-base`.
+Silent, confident, and naming packages that can never be removed because they do not exist. That
+is what `ecosystem.rs:633` is about — *"a parser is tested against output captured from the tool
+it parses, and from no other tool"* — and **no return type catches it**. Only the right fixture
+does.
+
+**And a captured fixture caught the change's own false positive, on the run that introduced
+it.** `winget list` on a machine with nothing installed prints one sentence — *"No installed
+package found matching input criteria."* — and no table at all, so "the header row is missing"
+read as "unread" would have refused to run on exactly that machine. The rule is the same one
+`or_unrecognised` already states: nothing found out of nothing is an empty machine. A hand-written
+table fixture would never have contained that line.
+
+`opam` now has its `--installed --short` listing from `ocaml/opam:debian-12-ocaml-5.2`.
+**`emerge` still has none and cannot get one from here** — the Gentoo image bakes
+`SMOKE_ONLY=1`, so emerge installs nothing and lists nothing anywhere in this matrix. Saying that
+is better than inventing one.
+
+`names_only_skips_headers_and_noise` — the hand-typed test labelled `"spack"` that the rule 250
+lines below it condemns — is renamed
+`names_only_drops_furniture_synthetic_not_a_managers_output` and says in its own doc comment that
+it is synthetic. It asserts a property of the function, which is real; it was being read as
+coverage of a manager, which it never was.
+
+### What this does not fix, asserted so it cannot be mistaken for fixed
+
+**Junk.** `apt::parse_list` reads apt's own `E: Could not open lock file` as a package named `E:`
+at that version. That is a wrong package rather than a missing one, no return type distinguishes
+them, and fixing it means constraining names to what dpkg can emit — a different argument with a
+different blast radius, including multi-arch names that legitimately carry a colon. Pinned by
+`junk_is_a_different_failure_from_emptiness_and_this_change_does_not_address_it`, which asserts
+the current behaviour exactly, so the finding cannot be lost and cannot be claimed as covered.

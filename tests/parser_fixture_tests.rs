@@ -22,7 +22,7 @@ use std::path::Path;
 #[test]
 fn scoop_list_reads_every_app_and_no_furniture() {
     const LIST: &str = include_str!("fixtures/scoop/list.txt");
-    let pkgs = windows::parse_installed("scoop", LIST);
+    let pkgs = windows::parse_installed("scoop", LIST).expect("a captured real listing parses");
     let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
 
     assert_eq!(
@@ -48,7 +48,7 @@ fn scoop_list_reads_every_app_and_no_furniture() {
 #[test]
 fn choco_list_reads_the_machine_readable_rows() {
     const LIST: &str = include_str!("fixtures/choco/list-r.txt");
-    let pkgs = windows::parse_installed("choco", LIST);
+    let pkgs = windows::parse_installed("choco", LIST).expect("a captured real listing parses");
     let rows: Vec<(&str, Option<&str>)> = pkgs
         .iter()
         .map(|p| (p.name.as_str(), p.version.as_deref()))
@@ -61,7 +61,7 @@ fn choco_list_reads_the_machine_readable_rows() {
 #[test]
 fn pipx_list_reads_its_json() {
     const LIST: &str = include_str!("fixtures/pipx/list-json.txt");
-    let pkgs = language::parse_installed("pipx", LIST);
+    let pkgs = language::parse_installed("pipx", LIST).expect("a captured real listing parses");
     let rows: Vec<(&str, Option<&str>)> = pkgs
         .iter()
         .map(|p| (p.name.as_str(), p.version.as_deref()))
@@ -79,7 +79,7 @@ fn the_npm_style_json_parser_reads_both_tools() {
     const PNPM: &str = include_str!("fixtures/pnpm/ls-global-json.txt");
 
     for (label, fixture, backend) in [("npm", NPM, "npm"), ("pnpm", PNPM, "pnpm")] {
-        let pkgs = language::parse_installed(backend, fixture);
+        let pkgs = language::parse_installed(backend, fixture).expect("a captured real listing parses");
         let rows: Vec<(&str, Option<&str>)> = pkgs
             .iter()
             .map(|p| (p.name.as_str(), p.version.as_deref()))
@@ -98,7 +98,7 @@ fn the_npm_style_json_parser_reads_both_tools() {
 #[test]
 fn helm_plugin_list_is_not_its_own_header() {
     const LIST: &str = include_str!("fixtures/helm/plugin-list.txt");
-    let pkgs = ecosystem::ws_name_version(LIST, "helm");
+    let pkgs = ecosystem::ws_name_version(LIST, "helm").expect("a captured real listing parses");
     let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(
         names,
@@ -120,7 +120,7 @@ fn helm_plugin_list_is_not_its_own_header() {
 #[test]
 fn cargo_list_reads_the_crates_and_not_their_binaries() {
     const LIST: &str = include_str!("fixtures/cargo/install-list.txt");
-    let pkgs = language::parse_installed("cargo", LIST);
+    let pkgs = language::parse_installed("cargo", LIST).expect("a captured real listing parses");
     let rows: Vec<(&str, Option<&str>)> = pkgs
         .iter()
         .map(|p| (p.name.as_str(), p.version.as_deref()))
@@ -155,7 +155,7 @@ fn cargo_list_reads_the_crates_and_not_their_binaries() {
 #[test]
 fn winget_list_reads_the_id_column_whatever_punctuation_it_carries() {
     const LIST: &str = include_str!("fixtures/winget/list.txt");
-    let pkgs = windows::parse_installed("winget", LIST);
+    let pkgs = windows::parse_installed("winget", LIST).expect("a captured real listing parses");
     let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
 
     assert_eq!(
@@ -181,7 +181,7 @@ fn winget_list_reads_the_id_column_whatever_punctuation_it_carries() {
 #[test]
 fn winget_list_reads_one_result_and_no_result() {
     const ONE: &str = include_str!("fixtures/winget/list-one.txt");
-    let pkgs = windows::parse_installed("winget", ONE);
+    let pkgs = windows::parse_installed("winget", ONE).expect("a captured real listing parses");
     assert_eq!(
         pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
         vec!["7zip.7zip"],
@@ -189,7 +189,7 @@ fn winget_list_reads_one_result_and_no_result() {
     );
 
     const NONE: &str = include_str!("fixtures/winget/list-not-found.txt");
-    let pkgs = windows::parse_installed("winget", NONE);
+    let pkgs = windows::parse_installed("winget", NONE).expect("a captured real listing parses");
     assert!(
         pkgs.is_empty(),
         "`No installed package found matching input criteria.` is a sentence, not a package: \
@@ -203,7 +203,7 @@ fn winget_list_reads_one_result_and_no_result() {
 #[test]
 fn winget_reports_a_version_it_cannot_pin_down_as_winget_wrote_it() {
     const ODD: &str = include_str!("fixtures/winget/list-unknown-version.txt");
-    let pkgs = windows::parse_installed("winget", ODD);
+    let pkgs = windows::parse_installed("winget", ODD).expect("a captured real listing parses");
     assert_eq!(
         pkgs.iter()
             .map(|p| (p.name.as_str(), p.version.as_deref()))

@@ -246,6 +246,17 @@ pub struct OutdatedProbe {
 /// the exception.
 pub type PackageReader = std::sync::Arc<dyn Fn(&str) -> Vec<Package> + Send + Sync>;
 
+/// Reads a manager's output into the packages it says are **installed**, or admits it did not
+/// recognise the bytes.
+///
+/// Separate from [`PackageReader`] because the two answer different questions and only one of
+/// them is dangerous when it comes back empty. An empty *outdated* list means nothing needs
+/// upgrading, which is the common case and a fact the caller can act on. An empty *installed*
+/// list means the machine is bare, which the planner answers by installing every declaration
+/// and dropping every removal — so a listing nobody could parse must not be able to spell
+/// itself that way. See [`crate::parsers::Unrecognised`].
+pub type InstalledReader = std::sync::Arc<dyn Fn(&str) -> crate::parsers::ParseResult + Send + Sync>;
+
 #[derive(Clone)]
 pub struct MachineListing {
     /// `None` falls back to `list_binary`, then the backend name.
@@ -254,7 +265,11 @@ pub struct MachineListing {
     /// Reads what those args produce. A *different* function from the text parser, never the
     /// same one made lenient: one parser that accepts two shapes is how a malformed answer in
     /// one of them gets silently read as the other.
-    pub parse: PackageReader,
+    ///
+    /// Fallible for the same reason the text parser is. This path is *more* exposed, not less:
+    /// it exists because a flag may or may not be present in the installed version of the tool,
+    /// so it is the one listing whose shape LiNix has already admitted it cannot predict.
+    pub parse: InstalledReader,
 }
 
 /// Reads a manager's output into bare names — dependencies, and anything else that is a list
@@ -924,7 +939,7 @@ impl Queryable for GenericQueryable {
                 .unwrap_or(self.core.binary());
             let args: Vec<&str> = machine.args.iter().map(|s| s.as_str()).collect();
             match self.core.executor.probe_output(bin, &args).await {
-                Ok(output) => return Ok((machine.parse)(&output)),
+                Ok(output) => return Ok((machine.parse)(&output)?),
                 Err(e) => debug!(
                     "`{} {}` was refused, so `{}` is being read from its text listing instead \
                      — an older {} that does not have the flag: {e}",
@@ -951,7 +966,7 @@ impl Queryable for GenericQueryable {
             .as_deref()
             .unwrap_or(self.core.binary());
         let output = self.core.executor.run_output(bin, &args, false).await?;
-        Ok(self.core.parser.parse_installed(&output))
+        Ok(self.core.parser.parse_installed(&output)?)
     }
 
     async fn list_manual(&self) -> Result<Vec<Package>> {
@@ -970,9 +985,9 @@ impl Queryable for GenericQueryable {
                 let output = self.core.executor.run_output(bin, &args, false).await?;
                 Ok(match format {
                     ManualFormat::BareNames => {
-                        crate::parsers::parse_bare_names(&output, &self.core.name)
+                        crate::parsers::parse_bare_names(&output, &self.core.name)?
                     }
-                    ManualFormat::SameAsInstalled => self.core.parser.parse_installed(&output),
+                    ManualFormat::SameAsInstalled => self.core.parser.parse_installed(&output)?,
                 })
             }
             ManualListing::ExportFile {
@@ -1123,7 +1138,7 @@ impl GenericQueryable {
             ))
         })?;
         let restorable = match format {
-            ExportFormat::WingetJson => crate::parsers::windows::parse_winget_export(&text),
+            ExportFormat::WingetJson => crate::parsers::windows::parse_winget_export(&text)?,
         };
         self.report_unrestorable(&restorable).await;
         Ok(restorable)
@@ -1911,7 +1926,7 @@ mod tests {
                 search_source: SearchSource::Command,
             },
             parser: Arc::new(LambdaParser {
-                installed_fn: |_| vec![],
+                installed_fn: |_| Ok(vec![]),
                 search_fn: |_| vec![],
             }),
         }
@@ -2074,7 +2089,7 @@ ripgrep 15.2.0
         core.config.machine_list = Some(MachineListing {
             binary: None,
             args: vec!["--format".into(), "json".into()],
-            parse: std::sync::Arc::new(|_: &str| vec![Package::new("WRONG", "apt")]),
+            parse: std::sync::Arc::new(|_: &str| Ok(vec![Package::new("WRONG", "apt")])),
         });
         core.parser = Arc::new(crate::parsers::apt::AptParser);
         let q = GenericQueryable {
@@ -2121,7 +2136,7 @@ ripgrep 15.2.0
         core.config.machine_list = Some(MachineListing {
             binary: None,
             args: vec!["--format".into(), "json".into()],
-            parse: std::sync::Arc::new(|_: &str| vec![Package::new("from-json", "apt")]),
+            parse: std::sync::Arc::new(|_: &str| Ok(vec![Package::new("from-json", "apt")])),
         });
         core.parser = Arc::new(crate::parsers::apt::AptParser);
         let q = GenericQueryable {
@@ -2878,11 +2893,11 @@ ripgrep 15.2.0
         core.config.upgrade_reinstall_args = Some(vec!["install".into(), "-g".into()]);
         core.parser = Arc::new(crate::parsers::LambdaParser {
             installed_fn: |_| {
-                vec![
+                Ok(vec![
                     Package::new("a", "npm"),
                     Package::new("b", "npm"),
                     Package::new("c", "npm"),
-                ]
+                ])
             },
             search_fn: |_| Vec::new(),
         });

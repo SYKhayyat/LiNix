@@ -121,7 +121,7 @@ impl Queryable for BrewQueryable {
             .executor
             .run_output("brew", &["list", "--versions"], false)
             .await?;
-        Ok(crate::parsers::common::parse_simple_list(&output, "brew"))
+        Ok(crate::parsers::common::parse_simple_list(&output, "brew")?)
     }
 
     async fn list_manual(&self) -> Result<Vec<Package>> {

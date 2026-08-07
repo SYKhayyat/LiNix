@@ -258,7 +258,7 @@ impl Queryable for PsResourceQueryable {
         // NuGetVersion type's JSON shape.
         let script = r#"Get-InstalledPSResource | ForEach-Object { "$($_.Name) $($_.Version)" }"#;
         let output = self.core.run_ps(script).await?;
-        Ok(parse_simple_list(&output, "psresource"))
+        Ok(parse_simple_list(&output, "psresource")?)
     }
 
     async fn list_manual(&self) -> Result<Vec<Package>> {
@@ -284,7 +284,9 @@ impl Searchable for PsResourceSearchable {
             query
         );
         let output = self.core.search_ps(&script).await?;
-        Ok(parse_simple_list(&output, "psresource"))
+        // A search that reads nothing is a search with no results, which is an answer the user
+        // asked for and can see. Only the installed listing above may not guess.
+        Ok(parse_simple_list(&output, "psresource").unwrap_or_default())
     }
 }
 

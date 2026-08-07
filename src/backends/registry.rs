@@ -641,7 +641,7 @@ fn register_aur_helper(
     reg: &mut BackendRegistry,
     executor: &CommandExecutor,
     name: &'static str,
-    installed_fn: fn(&str) -> Vec<crate::core::Package>,
+    installed_fn: fn(&str) -> crate::parsers::ParseResult,
     search_fn: fn(&str) -> Vec<crate::core::Package>,
 ) {
     let core = Arc::new(GenericBackendCore {
@@ -802,7 +802,7 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             // ` - description`. Splitting on whitespace alone kept `jq-1.7.1-r0` as the name,
             // so a search result could never equal the name asked for — which made apk
             // invisible to every unpinned line, the way dnf was on Fedora.
-            search_fn: |o| crate::parsers::common::parse_dash_version_list(o, "apk"),
+            search_fn: |o| crate::parsers::common::parse_dash_version_list(o, "apk").unwrap_or_default(),
         }),
     });
     let core = with_manager_policy(core);
@@ -881,7 +881,7 @@ fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         },
         parser: Arc::new(LambdaParser {
             installed_fn: crate::parsers::dnf::parse_zypper_search,
-            search_fn: crate::parsers::dnf::parse_zypper_search,
+            search_fn: |o| crate::parsers::dnf::parse_zypper_search(o).unwrap_or_default(),
         }),
     });
     let core = with_manager_policy(core);
@@ -1559,7 +1559,7 @@ fn register_pkgin(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         },
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::pkgsrc::parse_pkgin(o),
-            search_fn: |o| crate::parsers::pkgsrc::parse_pkgin(o),
+            search_fn: |o| crate::parsers::pkgsrc::parse_pkgin(o).unwrap_or_default(),
         }),
     });
     let core = with_manager_policy(core);
@@ -1634,7 +1634,7 @@ fn register_pkg_freebsd(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         },
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::bsd::parse_pkg(o),
-            search_fn: |o| crate::parsers::bsd::parse_pkg(o),
+            search_fn: |o| crate::parsers::bsd::parse_pkg(o).unwrap_or_default(),
         }),
     });
     let core = with_manager_policy(core);
@@ -1705,7 +1705,7 @@ fn register_pkg_add_openbsd(reg: &mut BackendRegistry, executor: &CommandExecuto
         },
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::bsd::parse_pkg_add(o),
-            search_fn: |o| crate::parsers::bsd::parse_pkg_add(o),
+            search_fn: |o| crate::parsers::bsd::parse_pkg_add(o).unwrap_or_default(),
         }),
     });
     let core = with_manager_policy(core);
@@ -1798,7 +1798,7 @@ fn register_dotnet(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         },
         parser: Arc::new(LambdaParser {
             installed_fn: crate::parsers::dotnet::parse_dotnet_list,
-            search_fn: crate::parsers::dotnet::parse_dotnet_search,
+            search_fn: |o| crate::parsers::dotnet::parse_dotnet_search(o).unwrap_or_default(),
         }),
     });
     let core = with_manager_policy(core);
@@ -1981,7 +1981,7 @@ fn register_opam(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::ecosystem::names_only(o, "opam"),
-            search_fn: |o| crate::parsers::ecosystem::names_only(o, "opam"),
+            search_fn: |o| crate::parsers::ecosystem::names_only(o, "opam").unwrap_or_default(),
         }),
     });
     register_generic(reg, core, true, true, true);
@@ -2011,7 +2011,7 @@ fn register_luarocks(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "luarocks"),
-            search_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "luarocks"),
+            search_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "luarocks").unwrap_or_default(),
         }),
     });
     register_generic(reg, core, true, true, false);
@@ -2091,7 +2091,7 @@ fn register_spack(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "spack"),
-            search_fn: |o| crate::parsers::ecosystem::names_only(o, "spack"),
+            search_fn: |o| crate::parsers::ecosystem::names_only(o, "spack").unwrap_or_default(),
         }),
     });
     register_generic(reg, core, true, true, false);
@@ -2176,7 +2176,7 @@ fn register_cabal(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "cabal"),
-            search_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "cabal"),
+            search_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "cabal").unwrap_or_default(),
         }),
     });
     register_generic(reg, core, true, true, false);
@@ -2195,10 +2195,7 @@ fn register_stack(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         name: "stack".into(),
         executor: executor.duplicate(),
         config: cfg,
-        parser: Arc::new(LambdaParser {
-            installed_fn: |_| vec![],
-            search_fn: |_| vec![],
-        }),
+        parser: Arc::new(crate::parsers::CannotList("stack")),
     });
     register_generic(reg, core, false, false, false);
 }
@@ -2502,7 +2499,7 @@ fn register_krew(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             // `kubectl krew list` prints `PLUGIN  VERSION` (older versions: bare names);
             // `search` prints `NAME  DESCRIPTION  INSTALLED`, so only the first column is a name.
             installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "krew"),
-            search_fn: |o| crate::parsers::ecosystem::names_only(o, "krew"),
+            search_fn: |o| crate::parsers::ecosystem::names_only(o, "krew").unwrap_or_default(),
         }),
     });
     register_generic(reg, core, true, true, true);
@@ -2645,7 +2642,7 @@ fn register_eopkg(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::ecosystem::eopkg_list(o, "eopkg"),
-            search_fn: |o| crate::parsers::ecosystem::eopkg_list(o, "eopkg"),
+            search_fn: |o| crate::parsers::ecosystem::eopkg_list(o, "eopkg").unwrap_or_default(),
         }),
     });
     register_generic(reg, core, true, true, true);
@@ -4326,7 +4323,7 @@ mod tests {
                 executor: exec,
                 config: base_config(name),
                 parser: Arc::new(LambdaParser {
-                    installed_fn: |_| vec![],
+                    installed_fn: |_| Ok(vec![]),
                     search_fn: |_| vec![],
                 }),
             });

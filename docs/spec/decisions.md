@@ -1,4 +1,4 @@
-# The decision register — all 177, two of them open
+# The decision register — all 178, two of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -74,8 +74,8 @@ status loses that, so it is kept here:
 ## Index
 
 **Two are open — `Z1`, raised 2026-08-03, a licence choice; and `Y18`, raised 2026-08-07, three
-findings against Part II.** All 177 are accounted
-for: **170 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 2 OPEN** — and this line
+findings against Part II.** All 178 are accounted
+for: **170 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 2 BUILT NEVER RULED, 2 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -312,7 +312,7 @@ without asking. Two are not mine: one is a legal choice and one changes a publis
 | **Z1** | There is no `LICENSE` file and no `license` key in `Cargo.toml`, for a tool with an install script and a `self-upgrade` verb. Which licence? | **OPEN** |
 | **Z2** | `lock` and `unlock` touch unrelated files and are not inverses; `unlock` can cause package churn. Rename it, or give `lock` a real inverse? | **ANSWERED** — both verbs name their axis (`versions`/`backends`/`scripts`/`all`), and every path that moves a version re-records it |
 
-### Y — the efficiency pass — 19
+### Y — the efficiency pass — 20
 
 *Not a proposal part. `docs/INEFFICIENCIES.md` audited every place in the tree slower than it has
 to be and marked the findings a user would notice as needing a ruling; the owner ruled the lot on
@@ -6912,3 +6912,79 @@ property rather than the artifact and then drew the roots around `src/`-and-frie
 same mistake one level up: the gate was drawn around the code that was under review. The six
 defects in its header were shipped product; these three are shipped specification, and the
 mechanism that hid them was identical — one fact, several copies, a gate around one copy.
+
+## Y19
+
+**Status: BUILT, NEVER RULED — built 2026-08-07 from `LX-1`.** Not a new rule: Part II already
+made this ruling for one field and the parser layer had no type to express it with. Recorded here
+because the *visible* behaviour changed — a manager whose output a parser cannot read now stops
+the read instead of reporting an empty machine — and a user could notice that.
+
+**Y19 — `parse_installed` could not say "I read four hundred bytes and recognised nothing".**
+
+`4d4a890` (2026-08-05) diagnosed the whole chain and fixed four links of it:
+
+> *"Through LiNix that became `Ok("")` → **a parser finding nothing** → `list_installed`
+> answering `Ok(vec![])`. Nothing in the chain believed anything had failed."*
+
+`run_output`, `info`, `list` and `hook-reconcile` were fixed. **The parser — the link the commit
+named itself — was not**, because the fix needed a type change and nothing recorded that it had
+been skipped. Eighty-one parser functions, and not one could express the difference between
+*this machine has no packages* and *I did not understand this*.
+
+**The consequence is asymmetric, and the wrong branch is the likely one.** A manager that
+*fails* raises, the backend drops out of `installed_sets`, `is_installed` answers true and
+removals stay scheduled — safe. A manager that *succeeds with a changed format* returns
+present-and-empty: every declaration is planned as a fresh install, every drift removal is
+dropped, `check drift` reports the whole machine as drifted, `adopt` adopts nothing, exit 0.
+Format drift is precisely the failure mode of the backends nobody has run.
+
+**Part II already ruled this**, at `target-state.md:71`, about `machine_list_parser`:
+
+> ***"Absent means *this backend cannot answer that*, never *the answer is none*"***
+
+and again at `:1979`: *"an unsupported flag fails with a usage message, which every reader here
+hands back as an empty result — so assuming it would report an empty machine to exactly the users
+on older tooling, which is `Q40` under a new name."* Both sentences are about this. Neither could
+be enforced, because below them sat a signature with no way to say it.
+
+**What shipped:** `parse_installed` returns `Result<Vec<Package>, Unrecognised>`; `Unrecognised`
+carries the manager, the count of lines nobody read, and the first of them, so a report becomes a
+fixture instead of a request to reproduce. It crosses into `Error::Unreadable`, classified
+`Permanent` — a manager prints the same bytes next time.
+
+**The judgement is made once**, in `or_unrecognised`: found nothing out of lines that carried
+something is the failure; found nothing out of nothing is an empty machine. Two parsers overrode
+it with their own, and both were required to: `asdf_list`, where a plugin added with no version
+installed is a real state that produces no packages out of two data lines, and `pixi_list`, which
+has no unread case at all because every unindented line resolves to a package, its own banner, or
+noise it names — its failure mode is junk, and there are fixtures for that.
+
+**The family, swept.** `MachineListing.parse` (the *more* exposed path, since it is a negotiated
+flag on a tool whose version LiNix does not control), `ParserSpec` in the onboarder — where all
+four arms had a way of spelling it, and the sharpest was a user's regex failing to compile into a
+warning nobody reads and a bare machine — `slice_fixed_table`, where a missing header row was the
+same answer as an empty table, and both `_ => vec![]` dispatch arms, which answered *the machine
+is empty* for any backend name at all. `parse_search` is deliberately **not** fallible, and that
+asymmetry is asserted rather than left to be rediscovered: a search returning nothing is a fact
+the user asked for and can see; an installed listing returning nothing is a fact the planner acts
+on unseen.
+
+`registry.rs`'s `installed_fn: |_| vec![]` for `stack` — a manager with no listing verb — is now
+`CannotList("stack")`. It is inert, because such a manager gets no `Queryable`. It is written down
+because the next one will be added by someone reading that row.
+
+**Fixtures, captured rather than typed.** apt, dnf, pacman, zypper, apk and `apt-mark showmanual`
+now have their *installed* listings from real containers; before this they had captured
+`outdated` output and nothing for the listing the planner acts on. `zypper`'s carries 52 lines of
+repository refresh and an expired-key warning before its table, because that is what it prints on
+a cold image. The instrument's self-test is the finding made concrete: `bsd::parse_pkg` fed apt's
+listing reads 7 of 92 lines, **every one of them wrong** — `libbz2-1.0` becomes `libbz2` at
+version `1.0` — silently, confidently, and naming packages that cannot be removed because they do
+not exist. That is what `ecosystem.rs:633`'s rule is about, and no return type catches it.
+
+**Not addressed, and asserted so it cannot be mistaken for addressed:** junk. `apt::parse_list`
+reads apt's own `E: Could not open lock file` as a package named `E:` at that version. It is a
+different failure from emptiness — a wrong package rather than a missing one — and no return type
+distinguishes them. `junk_is_a_different_failure_from_emptiness_and_this_change_does_not_address_it`
+pins it.

@@ -91,6 +91,17 @@ pub enum Error {
     #[error("Package '{name}' was not found: {message}")]
     NoSuchPackage { name: String, message: String },
 
+    /// A manager ran, succeeded, and printed something its parser does not recognise.
+    ///
+    /// Its own variant because the alternative reading is the dangerous one and has to be
+    /// unavailable: a listing nobody could parse must never arrive as `Ok(vec![])`, which the
+    /// planner reads as an empty machine and answers by planning every declaration as a fresh
+    /// install and dropping every drift removal. Arriving as an error instead puts the backend
+    /// *outside* `installed_sets`, where `is_installed` answers true and removals stay
+    /// scheduled — the branch that fails safe.
+    #[error("{0}")]
+    Unreadable(String),
+
     #[error("Operation was cancelled by the user")]
     Cancelled,
 
@@ -258,6 +269,10 @@ impl Error {
             | Error::LuaScript(_)
             | Error::Refused(_)
             | Error::Differences(_)
+            // A manager will print the same bytes on the next attempt, and the parser will
+            // fail to recognise them the same way. Retrying an output-format change is time
+            // spent proving the format did not change back.
+            | Error::Unreadable(_)
             | Error::Cancelled => Retryability::Permanent,
 
             // A sudo timestamp does not warm up on its own inside a backoff, and a second
@@ -332,5 +347,11 @@ impl From<dialoguer::Error> for Error {
 impl From<String> for Error {
     fn from(s: String) -> Self {
         Error::Other(s)
+    }
+}
+
+impl From<crate::parsers::Unrecognised> for Error {
+    fn from(u: crate::parsers::Unrecognised) -> Self {
+        Error::Unreadable(u.to_string())
     }
 }

@@ -1,25 +1,29 @@
 use crate::core::Package;
+use crate::parsers::{or_unrecognised, ParseResult};
 use crate::utils::text::sanitize;
 
 /// Parses output from 'pacman -Q' for installed packages.
 /// Expected input format: "name version"
-pub fn parse_list(output: &str) -> Vec<Package> {
+pub fn parse_list(output: &str) -> ParseResult {
     parse_list_for(output, "pacman")
 }
 
 /// Like [`parse_list`], but stamps a caller-supplied backend name. AUR helpers
 /// (`yay`, `paru`) speak pacman's `-Q` syntax verbatim but must label their packages
 /// with their own backend so state tracking stays per-backend correct.
-pub fn parse_list_for(output: &str, backend: &str) -> Vec<Package> {
-    sanitize(output)
-        .lines()
+pub fn parse_list_for(output: &str, backend: &str) -> ParseResult {
+    let clean = sanitize(output);
+    let candidates = crate::parsers::data_lines(&clean);
+    let found = candidates
+        .iter()
         .filter_map(|line| {
             let mut parts = line.split_whitespace();
             let name = parts.next()?;
             let ver = parts.next()?;
             Some(Package::with_version(name, ver, backend))
         })
-        .collect()
+        .collect();
+    or_unrecognised(backend, found, &candidates)
 }
 
 /// Parses the multi-line output of 'pacman -Ss' for remote searching.
@@ -70,7 +74,7 @@ mod tests {
     #[test]
     fn test_pacman_list_parsing() {
         let input = "bash 5.1.016-1\nlinux 6.3.5.arch1-1\n";
-        let res = parse_list(input);
+        let res = parse_list(input).expect("this fixture parses");
         assert_eq!(res.len(), 2);
         assert_eq!(res[0].name, "bash");
         assert_eq!(res[1].version, Some("6.3.5.arch1-1".into()));
