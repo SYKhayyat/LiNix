@@ -37,7 +37,7 @@ async fn run_capability_test(backend: Arc<BackendCapabilities>, package_name: &s
     );
 
     let rem_res = installer
-        .remove(&[package_name.to_string()], backend.needs_root())
+        .remove(&[package_name.to_string()], backend.needs_root(), linix::app::sync::guard::Reaped::for_reason(linix::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"))
         .await;
     assert!(
         rem_res.is_ok(),
@@ -217,7 +217,7 @@ async fn test_link_backend_vfs_integrity() {
     );
 
     installer
-        .remove(&[target_path.to_string_lossy().to_string()], false)
+        .remove(&[target_path.to_string_lossy().to_string()], false, linix::app::sync::guard::Reaped::for_reason(linix::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"))
         .await
         .expect("Link purge failed");
 }

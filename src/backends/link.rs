@@ -559,7 +559,7 @@ impl Installable for LinkInstallable {
     /// backup file removed, so a `link:` line that comes and goes leaves the machine as it found
     /// it and nothing accumulates. With no backup there was nothing there before, so the target
     /// is removed.
-    async fn remove(&self, names: &[String], _: bool) -> Result<()> {
+    async fn remove(&self, names: &[String], _: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
         for name in names {
             let path = Path::new(name);
             let exists = tokio::fs::try_exists(path).await.unwrap_or(false);

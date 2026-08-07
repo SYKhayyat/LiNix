@@ -143,7 +143,14 @@ impl ShimManager {
         Ok(())
     }
 
-    pub async fn remove_shim(&self, binary_name: &str) -> Result<()> {
+    /// `reaped` is proof the removal guard was consulted — see
+    /// [`Reaped`](crate::app::sync::guard::Reaped). Unread here on purpose: its job is to be
+    /// impossible to obtain without asking.
+    pub async fn remove_shim(
+        &self,
+        binary_name: &str,
+        _reaped: crate::app::sync::guard::Reaped,
+    ) -> Result<()> {
         // Was its own copy of the `.exe` rule, and the copy had drifted: it appended the
         // extension only when there was none, while `create_shim` replaced any extension that
         // was not `exe`. So `shim:tool.bat` deployed `tool.exe` and removal went looking for
@@ -225,7 +232,7 @@ mod tests {
             .await
             .unwrap();
 
-        mgr.remove_shim("jq").await.unwrap();
+        mgr.remove_shim("jq", crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself")).await.unwrap();
 
         assert!(
             victim.exists(),
@@ -261,7 +268,7 @@ mod tests {
                  reporting would call a placed shim missing"
             );
 
-            mgr.remove_shim(name).await.unwrap();
+            mgr.remove_shim(name, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself")).await.unwrap();
             assert!(
                 !deployed.exists(),
                 "`{name}` survived removal at {deployed:?} — removal looked somewhere else and \
@@ -318,7 +325,7 @@ mod tests {
         });
         tokio::fs::copy(&exe, &shim).await.unwrap();
 
-        mgr.remove_shim("ripgrep").await.unwrap();
+        mgr.remove_shim("ripgrep", crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself")).await.unwrap();
 
         assert!(!shim.exists(), "a real shim must still be removable");
     }

@@ -1,4 +1,12 @@
-// tests/mock_providers.rs
+//! Shared test doubles: snapshot providers, task provisioners, and the scaffolding eighteen
+//! integration binaries build an `App` out of.
+//!
+//! **This file is `mock_providers/mod.rs` rather than `mock_providers.rs`, and the directory is
+//! the point.** Cargo auto-discovers every `tests/*.rs` as its own test target, so at the top
+//! level this became a 716 KB binary containing **zero tests**, linked with `lto = true` and
+//! `codegen-units = 1`, and its 312 lines were compiled nineteen times: once as that binary and
+//! once inside each `mod mock_providers;` that includes it. A directory is not a target, and
+//! `mod mock_providers;` resolves here unchanged — so no caller moved.
 #![allow(clippy::field_reassign_with_default, dead_code)]
 
 use async_trait::async_trait;

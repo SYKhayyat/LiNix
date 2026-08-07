@@ -75,7 +75,14 @@ impl SchedulerManager {
 
     /// Remove a task from the OS scheduler by name, without touching preferences.toml — the undo
     /// side of [`provision`], used when a `schedule:` line is deleted (S20 drift).
-    pub async fn deprovision(&self, executor: &CommandExecutor, name: &str) -> Result<()> {
+    /// `reaped` is proof the removal guard was consulted — see
+    /// [`Reaped`](crate::app::sync::guard::Reaped).
+    pub async fn deprovision(
+        &self,
+        executor: &CommandExecutor,
+        name: &str,
+        _reaped: crate::app::sync::guard::Reaped,
+    ) -> Result<()> {
         self.provisioner.remove_task(executor, name).await
     }
 

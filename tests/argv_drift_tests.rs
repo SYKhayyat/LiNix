@@ -250,7 +250,7 @@ async fn every_subcommand_linix_invokes_still_exists_upstream() {
         };
         if let Some(i) = backend.as_installable() {
             let _ = i.install(std::slice::from_ref(&spec), false).await;
-            let _ = i.remove(&["jq".to_string()], false).await;
+            let _ = i.remove(&["jq".to_string()], false, linix::app::sync::guard::Reaped::for_reason(linix::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself")).await;
             // And the same install carrying `@unverified`, because that is where the
             // capability tables add flags — and the first flag this repo added after building
             // this gate is one helm 3 rejects (G-8). A gate that never drives the option

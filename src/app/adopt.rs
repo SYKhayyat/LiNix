@@ -773,7 +773,7 @@ mod tests {
         // from dependencies, adoption must skip it entirely rather than adopt all of it.
         let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
         let mock = Arc::new(MockExecutor::new(vfs));
-        mock.set_response(
+        mock.set_response_that_must_not_be_used(
             "dpkg-query -W",
             Ok(DryRunOutput {
                 stdout: b"apt 2.7.14\nlibperl5.38t64 5.38.2\npython3 3.12.3\n".to_vec(),
@@ -807,7 +807,7 @@ mod tests {
             }
             .into()),
         );
-        mock.set_response(
+        mock.set_response_that_must_not_be_used(
             "dpkg-query -W",
             Ok(DryRunOutput {
                 stdout: b"apt 2.7.14\njq 1.7.1\nlibperl5.38t64 5.38.2\n".to_vec(),
@@ -907,7 +907,10 @@ mod tests {
             .into()),
         );
         // The OS's own answer, in dpkg's real format: bash is Essential, jq is not.
-        mock.set_response(
+        // `Q47` ruled that adoption does not consult the guard, so this stub going unused *is*
+        // the proof of that ruling — and nothing checked it until it was registered as one that
+        // must not be used. Its content is dpkg's real format: bash is Essential, jq is not.
+        mock.set_response_that_must_not_be_used(
             "dpkg-query -W -f=${Essential} ${Priority} ${Package}\\n",
             Ok(DryRunOutput {
                 stdout: b"yes required bash\nno optional jq\n".to_vec(),
@@ -1090,7 +1093,10 @@ mod tests {
             }
             .into()),
         );
-        mock.set_response(
+        // `Q47` ruled that adoption does not consult the guard, so this stub going unused *is*
+        // the proof of that ruling — and nothing checked it until it was registered as one that
+        // must not be used. Its content is dpkg's real format: bash is Essential, jq is not.
+        mock.set_response_that_must_not_be_used(
             "dpkg-query -W -f=${Essential} ${Priority} ${Package}\\n",
             Ok(DryRunOutput {
                 stdout: b"yes required bash\nno optional jq\n".to_vec(),

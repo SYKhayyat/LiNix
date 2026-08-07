@@ -608,8 +608,10 @@ pub async fn suspend_for_session(app: &App, packages: &[String]) -> Result<()> {
                 continue;
             }
 
-            // Every removal path calls the guard (II.10), this one included.
-            crate::app::sync::guard::enforce(
+            // Every removal path calls the guard (II.10), this one included — and since the
+            // token below is what `remove` will not run without, the sentence is now the
+            // compiler's to keep rather than this comment's.
+            let reaped = crate::app::sync::guard::enforce(
                 &app.config,
                 &app.registry,
                 &[(b.name().to_string(), bare_name.clone())],
@@ -633,7 +635,7 @@ pub async fn suspend_for_session(app: &App, packages: &[String]) -> Result<()> {
                     name: bare_name.clone(),
                     backend: b.name().to_string(),
                 }],
-                inst.remove(std::slice::from_ref(&bare_name), b.sudo_for_write()),
+                inst.remove(std::slice::from_ref(&bare_name), b.sudo_for_write(), reaped),
             )
             .await?;
             app.state.lock().await.remove(b.name(), &bare_name);

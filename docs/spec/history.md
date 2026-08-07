@@ -7723,3 +7723,85 @@ them, and fixing it means constraining names to what dpkg can emit — a differe
 different blast radius, including multi-arch names that legitimately carry a colon. Pinned by
 `junk_is_a_different_failure_from_emptiness_and_this_change_does_not_address_it`, which asserts
 the current behaviour exactly, so the finding cannot be lost and cannot be claimed as covered.
+
+## Session 2026-08-07 — the compiler enumerates the removal paths (`LX-2`, `LX-8`)
+
+Two findings, both the same shape one level apart: **a promise checked by a scan over source
+text, where the scan could not see the case that mattered.**
+
+### `LX-2` — the firewall was the one teardown outside the guard
+
+`readme.md:358` promises every path that removes anything goes through one guard, and names six
+resource kinds. **`firewall:` is the seventh.** `apply/firewall.rs` closes every open port no
+`firewall:` line declares, and the word `guard` appeared nowhere in the file — not an import, not
+a call, not a comment. Zero tests. `max_removals` did not count those closures, `protected` could
+not name them, `--allow-mass-removal` was not consulted, and `enforce_extras` — which exists
+*precisely* because the extras teardown runs outside the transaction — was not called.
+
+The check written to prevent exactly this could not see it: `is_removal_call` keyed on
+`.remove(`/`.purge(` with `sudo`, `.remove_repo(`, `.remove_shim(`, `.deprovision(`. A firewall
+closes a port with `deny_command`. **The fix for `G-1` replaced a stale list of paths with a stale
+list of verbs**, and the staleness moved into a predicate with a passing self-test — a self-test
+that fed it four lines already in the ledger, proving only that the scanner could see what it
+already knew about.
+
+**Steelman, and it is real.** The file returns early when nothing is declared, so a user with no
+`firewall:` lines is untouched. And it carries *three* bespoke refusals — an unreadable baseline,
+the SSH lockout, the linked-ruleset warning. Whoever wrote it understood the danger exactly.
+**Which is what makes it worse:** three custom guards were written rather than calling the one two
+hundred lines away that already counts, caps, protects and reports.
+
+**`Reaped` is the fix.** A private-field token minted only by the guard, required by
+`Installable::remove`, `Installable::purge`, `RepoManager::remove_repo`,
+`ShimManager::remove_shim`, `SchedulerManager::deprovision`, and the firewall's `close_port` —
+split out of `run_firewall` so the one call in that file that takes something away is a different
+function from the ones that do not. Ruled as `Y20`, with the `max_removals` question inside it
+left **OPEN**: a machine with 40 open ports and one `firewall:22/tcp` line now hits the default
+ceiling of 20 and refuses, which is either exactly right or unusable on a real server, and that is
+`N7`'s call.
+
+**What the change cost, honestly.** The executor's check is a runtime refusal rather than a
+compile error, because making it compile-time means typing the graph by whether it contains a
+removal — a larger change than this earns. The five effectors *are* compile-enforced.
+
+**`removal_guard_enumeration_tests.rs` stopped counting.** Its `calls: N` per file were grep
+totals, so a legitimate second removal in an already-guarded file reddened the build until someone
+incremented an integer — which teaches a reader to bump the number rather than read the call. With
+the token required, a new removal in a guarded file already *has* a guard; the compiler made it
+get one. The file keeps the ledger of *which guard stands where*, which is the part a person still
+has to know.
+
+### `LX-8` — the mock said yes to everything
+
+`executor.rs:850` returned `Ok(DryRunOutput::new())` — empty, success — for any unregistered
+command. Same "silence means fine" default as the parser layer, one storey up, doing the same
+damage: a test registers a stub, the product emits a slightly different argv, the stub is never
+matched, the call falls through to the default, and the test passes having asserted nothing.
+
+`e2e_tests.rs:108` registered `brew install {name}` while the product emits
+`brew install -- neovim`. All five of that file's registrations were dead strings.
+`a_machine_converges_tests.rs:115`, in the same suite, registered the `--` form. **Two tests
+disagreed about the product's own argv and both were green.**
+
+The mock keeps two ledgers now. **Unstubbed commands** are recorded, not refused — most callers of
+an unstubbed command are asserting the argv or the state afterwards, and refusing would redden
+hundreds of tests that are asserting something real. **An unmatched registration fails**, at drop,
+without the test having to remember: there is no innocent reading of a stub the product never ran.
+
+**Five lib tests reddened, and all five were the same good idea gone unasserted.** Each registered
+the *wrong* listing beside the right one — `dpkg-query -W` next to `apt-mark showmanual`, the
+essential query next to the manual one — to say *"and if it asks this instead, it gets a different
+answer and the assertion below will notice."* Every one of those stubs was dead, its deadness was
+the whole point, and nothing checked it. Wire the product to the wrong listing and they would have
+gone green on the overlap between the two answers.
+
+So the mock grew `set_response_that_must_not_be_used`: the stub answers if it is ever reached, so
+a product asking the wrong question gets a wrong-shaped answer rather than empty success — and
+going unreached is asserted rather than assumed. **Two of the five are the proof of `Q47`**, which
+ruled that adoption does not consult the guard; their dead essential-query stub *is* that ruling,
+and it was checked by nothing.
+
+`tests/mock_providers.rs` moved to `tests/mock_providers/mod.rs`. Cargo auto-discovers every
+`tests/*.rs` as a target, so at the top level it was a 716 KB binary containing **zero tests**,
+linked under `lto = true, codegen-units = 1`, its 312 lines compiled nineteen times. A directory
+is not a target and `mod mock_providers;` resolves there unchanged, so no caller moved.

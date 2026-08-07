@@ -135,7 +135,7 @@ impl Installable for FlatpakInstallable {
         Ok(())
     }
 
-    async fn remove(&self, names: &[String], sudo: bool) -> Result<()> {
+    async fn remove(&self, names: &[String], sudo: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
         if names.is_empty() {
             return Ok(());
         }
@@ -376,7 +376,7 @@ mod tests {
         let core = Arc::new(FlatpakBackendCore::new(exec, HashMap::new()));
 
         FlatpakInstallable { core: core.clone() }
-            .remove(&["org.gimp.GIMP".to_string()], false)
+            .remove(&["org.gimp.GIMP".to_string()], false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"))
             .await
             .unwrap();
         FlatpakSearchable { core: core.clone() }

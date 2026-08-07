@@ -1,5 +1,6 @@
 use crate::config::grammar::{Origin, Statement};
 use crate::core::LockFile;
+use crate::app::sync::guard;
 use crate::core::{Error, Result};
 use tracing::warn;
 
@@ -144,10 +145,9 @@ impl Extras<'_> {
     pub async fn reconcile(
         &self,
         state: &crate::model::DesiredState,
-        scope: crate::app::sync::guard::GuardScope,
+        scope: guard::GuardScope,
         packages_being_removed: usize,
     ) -> Result<usize> {
-        use crate::app::sync::guard;
         use crate::core::extras_lock::{split_key, ExtrasLedger};
 
         let trees = self.tree_links(state)?;
@@ -166,16 +166,24 @@ impl Extras<'_> {
         // Before the first resource is torn down, and before the dry-run branch: a preview that
         // skipped the guard would report a teardown the real run then refuses, and the two must
         // never disagree about the same machine.
-        if !drift.is_empty() {
-            guard::enforce_extras(
-                self.config,
-                self.registry,
-                &guard::extra_removal_pairs(&drift),
-                packages_being_removed,
-                scope,
+        // The token this returns is what the four effectors below will not run without, so
+        // the `if` cannot be widened into a path that skips the call: there would be nothing to
+        // pass. Before it existed, `enforce_extras` was a statement whose absence a reader had
+        // to notice.
+        let reaped = if drift.is_empty() {
+            None
+        } else {
+            Some(
+                guard::enforce_extras(
+                    self.config,
+                    self.registry,
+                    &guard::extra_removal_pairs(&drift),
+                    packages_being_removed,
+                    scope,
+                )
+                .await?,
             )
-            .await?;
-        }
+        };
 
         // Said with `warn!` rather than `info!`: a deletion the user cannot see coming is the
         // wrong shape, and `info!` is below the default filter, which is why this teardown
@@ -202,7 +210,13 @@ impl Extras<'_> {
             if self.config.dry_run {
                 continue;
             }
-            if let Err(e) = self.undo_extra(kind, id).await {
+            let Some(reaped) = reaped else {
+                // Unreachable: `drift` is non-empty inside this loop, so the guard ran above.
+                // Written as a skip rather than an `unwrap` because an effector that removes is
+                // the wrong place to learn that an invariant was wrong.
+                continue;
+            };
+            if let Err(e) = self.undo_extra(kind, id, reaped).await {
                 warn!(
                     "could not undo `{}` ({}); it is still in place and the next sync will \
                      try again.",
@@ -225,10 +239,10 @@ impl Extras<'_> {
     }
     /// Execute the undo for one drifted extra, dispatched on its kind (S20). Each arm uses the
     /// same removal path the imperative command would.
-    async fn undo_extra(&self, kind: &str, id: &str) -> Result<()> {
+    async fn undo_extra(&self, kind: &str, id: &str, reaped: guard::Reaped) -> Result<()> {
         match kind {
-            "shim" => self.shim_manager().await?.remove_shim(id).await,
-            "schedule" => self.scheduler.deprovision(self.executor, id).await,
+            "shim" => self.shim_manager().await?.remove_shim(id, reaped).await,
+            "schedule" => self.scheduler.deprovision(self.executor, id, reaped).await,
             "service" | "link" | "setting" => {
                 let Some(b) = self.registry.get(kind) else {
                     return Err(Error::BackendNotFound(format!(
@@ -239,9 +253,13 @@ impl Extras<'_> {
                 let Some(inst) = b.as_installable() else {
                     return Ok(());
                 };
-                inst.remove(std::slice::from_ref(&id.to_string()), b.sudo_for_write())
-                    .await
-                    .map(|_| ())
+                inst.remove(
+                    std::slice::from_ref(&id.to_string()),
+                    b.sudo_for_write(),
+                    reaped,
+                )
+                .await
+                .map(|_| ())
             }
             "repo" => {
                 // A repo key is `repo:<backend>:<spec>`; `id` here is `<backend>:<spec>`.
@@ -260,7 +278,9 @@ impl Extras<'_> {
                         backend
                     )));
                 };
-                mgr.remove_repo(spec, b.sudo_for_write()).await.map(|_| ())
+                mgr.remove_repo(spec, b.sudo_for_write(), reaped)
+                    .await
+                    .map(|_| ())
             }
             other => {
                 warn!("no undo known for extra kind `{}`.", other);

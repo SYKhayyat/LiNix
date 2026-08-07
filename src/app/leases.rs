@@ -58,7 +58,7 @@ impl Leases<'_> {
         // The count check still applies: a state file that expires hundreds of packages at
         // once is a bug, not an intention.
         let pairs: Vec<(String, String)> = expired.clone();
-        if let Err(e) = crate::app::sync::guard::enforce(
+        let reaped = match crate::app::sync::guard::enforce(
             self.config,
             self.registry,
             &pairs,
@@ -66,12 +66,15 @@ impl Leases<'_> {
         )
         .await
         {
-            warn!(
-                "expired-lease sweep refused, leaving them installed.\n{}",
-                e
-            );
-            return Ok(());
-        }
+            Ok(reaped) => reaped,
+            Err(e) => {
+                warn!(
+                    "expired-lease sweep refused, leaving them installed.\n{}",
+                    e
+                );
+                return Ok(());
+            }
+        };
 
         info!(
             "{} package(s) have expired leases — reclaiming.",
@@ -100,7 +103,7 @@ impl Leases<'_> {
                             name: name.clone(),
                             backend: backend.clone(),
                         }],
-                        inst.remove(std::slice::from_ref(&name), b.sudo_for_write()),
+                        inst.remove(std::slice::from_ref(&name), b.sudo_for_write(), reaped),
                     )
                     .await
                     {

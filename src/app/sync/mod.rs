@@ -176,7 +176,10 @@ impl<'a> SyncEngine<'a> {
         // Gathered into one block so a refusal can stop the snapshot it was overlapping. A
         // sync that is refused must not leave a half-taken restore point behind it.
         let events = self.events();
-        let preflight: Result<()> = async {
+        // The block yields the guard's token rather than `()`, so the proof that the removal
+        // set was cleared travels to the executor that acts on it instead of being discarded on
+        // the line that produced it.
+        let preflight: Result<guard::Reaped> = async {
             // The machine and the configuration disagree — which is what `on_drift` is for.
             // Fired before anything is applied, so a hook that wants to veto by other means
             // (page someone, open a ticket) is told while the drift is still the truth.
@@ -190,7 +193,7 @@ impl<'a> SyncEngine<'a> {
             // Before any package is touched: refuse a removal set that is oversized or takes
             // something the system needs. `on_guard_refusal` fires inside the guard, not here,
             // so every command that removes gets it — see `guard::refuse`.
-            guard::enforce(
+            let reaped = guard::enforce(
                 self.config,
                 &self.registry,
                 &guard::removal_pairs(&changes),
@@ -212,13 +215,16 @@ impl<'a> SyncEngine<'a> {
             // so this refuses before the change rather than doing it and then reverting on a
             // check LiNix was never allowed to execute.
             self.require_health_commands_approved(&changes)?;
-            Ok(())
+            Ok(reaped)
         }
         .await;
-        if let Err(e) = preflight {
-            taking_snapshot.abort();
-            return Err(e);
-        }
+        let reaped = match preflight {
+            Ok(reaped) => reaped,
+            Err(e) => {
+                taking_snapshot.abort();
+                return Err(e);
+            }
+        };
 
         // Joined here, immediately before the first mutating command — which is the whole
         // requirement. A snapshot taken after the change would revert to the change.
@@ -251,7 +257,7 @@ impl<'a> SyncEngine<'a> {
 
         let result = {
             let mut state_guard = self.state.lock().await;
-            self.execute_transaction(&changes, &mut state_guard).await
+            self.execute_transaction(&changes, &mut state_guard, reaped).await
         };
         // Set below, once the transaction has succeeded and the out-of-tree modules have been
         // rebuilt. Declared here so it survives the block.
@@ -602,6 +608,7 @@ impl<'a> SyncEngine<'a> {
         &self,
         changes: &SyncChanges,
         state: &mut StateRegistry,
+        reaped: guard::Reaped,
     ) -> Result<()> {
         let tx_config = TransactionConfig::from_config(self.config);
 
@@ -618,7 +625,7 @@ impl<'a> SyncEngine<'a> {
         );
         // Per-package `before_install`/`after_install` hooks fire inside the engine,
         // at the moment each package installs (see Transaction::with_hooks).
-        let mut tx = tx.with_hooks(self.hooks.clone());
+        let mut tx = tx.with_hooks(self.hooks.clone()).guarded_by(reaped);
 
         let pb = self
             .progress
@@ -962,6 +969,14 @@ impl<'a> SyncEngine<'a> {
                 })
                 .collect();
 
+            // Recovery guards each interrupted removal on its own, above, and drops the ones
+            // it refuses before they reach this graph — so the graph here contains only
+            // removals that already passed. Named rather than re-derived, because re-running
+            // the guard over the survivors would be asking a question already answered.
+            let heal_reaped = guard::Reaped::for_reason(
+                guard::GuardScope::Heal,
+                "each interrupted removal is enforced individually at sync/mod.rs:872 and                  refused ones never enter this graph",
+            );
             let mut tx = Transaction::with_config(
                 changes.graph.clone(),
                 self.registry.clone(),
@@ -974,7 +989,8 @@ impl<'a> SyncEngine<'a> {
                     continue_on_error: true,
                     ..TransactionConfig::patient()
                 },
-            );
+            )
+            .guarded_by(heal_reaped);
             let results = tx.execute_with_telemetry().await?;
 
             let mut outcome: std::collections::HashMap<NodeIndex, Result<()>> =

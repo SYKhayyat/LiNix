@@ -482,7 +482,7 @@ impl Installable for BtrfsInstallable {
         Ok(())
     }
 
-    async fn remove(&self, names: &[String], sudo: bool) -> Result<()> {
+    async fn remove(&self, names: &[String], sudo: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
         for name in names {
             // The declared mount goes before the subvolume does, in that order: a mounted
             // subvolume cannot be deleted, and an fstab entry outliving its subvolume is a

@@ -124,7 +124,20 @@ pub trait Installable: Send + Sync {
     /// The `sudo` parameter is provided by the execution engine based on `needs_root()`.
     async fn install(&self, specs: &[PackageSpec], sudo: bool) -> Result<()>;
 
-    async fn remove(&self, names: &[String], sudo: bool) -> Result<()>;
+    /// Remove these packages.
+    ///
+    /// **`reaped` is proof the removal guard was consulted**, and it is the reason this
+    /// signature carries a parameter it never reads. `readme.md:358` promises that every path
+    /// removing anything goes through one guard; before this the promise was checked by a regex
+    /// over source text, which could not see `apply/firewall.rs` closing a port and so did not.
+    /// A token mintable only by [`guard::enforce`](crate::app::sync::guard::enforce) makes the
+    /// compiler keep the promise instead. See [`Reaped`](crate::app::sync::guard::Reaped).
+    async fn remove(
+        &self,
+        names: &[String],
+        sudo: bool,
+        reaped: crate::app::sync::guard::Reaped,
+    ) -> Result<()>;
 
     /// Remove, and also destroy the package's configuration — Debian's `purge`.
     ///
@@ -132,7 +145,12 @@ pub trait Installable: Send + Sync {
     /// which is not the same sentence as "destroy how I had it set up". A manager that
     /// draws no such distinction refuses, rather than silently doing an ordinary removal
     /// under a name that promised more.
-    async fn purge(&self, _names: &[String], _sudo: bool) -> Result<()> {
+    async fn purge(
+        &self,
+        _names: &[String],
+        _sudo: bool,
+        _reaped: crate::app::sync::guard::Reaped,
+    ) -> Result<()> {
         Err(crate::core::Error::Unsupported("purge".into()))
     }
 
@@ -345,7 +363,12 @@ pub trait Upgradable: Send + Sync {
 #[async_trait]
 pub trait RepoManager: Send + Sync {
     async fn add_repo(&self, name: &str, url: &str, sudo: bool) -> Result<()>;
-    async fn remove_repo(&self, name: &str, sudo: bool) -> Result<()>;
+    async fn remove_repo(
+        &self,
+        name: &str,
+        sudo: bool,
+        reaped: crate::app::sync::guard::Reaped,
+    ) -> Result<()>;
     async fn list_repos(&self) -> Result<Vec<(String, String)>>;
 }
 

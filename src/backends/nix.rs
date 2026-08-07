@@ -92,7 +92,7 @@ impl Installable for NixInstallable {
         Ok(())
     }
 
-    async fn remove(&self, names: &[String], sudo: bool) -> Result<()> {
+    async fn remove(&self, names: &[String], sudo: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
         let installed = self.core.list_installed_internal().await?;
 
         // `nix profile` identifies elements by their array position ("index"). Each

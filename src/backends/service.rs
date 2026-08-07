@@ -395,7 +395,7 @@ impl Installable for ServiceInstallable {
         Ok(())
     }
 
-    async fn remove(&self, names: &[String], sudo: bool) -> Result<()> {
+    async fn remove(&self, names: &[String], sudo: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
         for name in names {
             // Stop then disable; never let a missing service abort the sweep.
             self.core

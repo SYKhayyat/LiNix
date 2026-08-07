@@ -217,6 +217,7 @@ impl App {
         crate::app::Firewall {
             config: &self.config,
             executor: &self.executor,
+            registry: &self.registry,
         }
     }
 

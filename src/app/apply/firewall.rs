@@ -6,6 +6,10 @@ use tracing::{info, warn};
 pub struct Firewall<'a> {
     pub(crate) config: &'a std::sync::Arc<crate::config::Config>,
     pub(crate) executor: &'a crate::core::CommandExecutor,
+    /// Held for one reason: [`crate::app::sync::guard::enforce_extras`] takes it, and closing an
+    /// undeclared port is a removal. This struct carried only what it used, and what it used did
+    /// not include the guard.
+    pub(crate) registry: &'a std::sync::Arc<crate::backends::BackendRegistry>,
 }
 
 impl Firewall<'_> {
@@ -124,11 +128,35 @@ impl Firewall<'_> {
         }
         // N7: drift is corrected, because it is corrected everywhere else in this model — and
         // the one exception was refused above rather than special-cased here.
-        for rule in &to_close {
-            if let Rule::Port { port, proto } = rule {
-                let argv = adapter.deny_command(*port, *proto);
-                self.run_firewall(&argv).await?;
-                info!("closed {} — it was not declared ({})", rule, adapter.name);
+        // **The teardown that was outside the guard.** `readme.md:358` promised every path
+        // removing anything went through one guard and named six resource kinds; `firewall:` is
+        // the seventh, and the word `guard` appeared nowhere in this file — not an import, not a
+        // call, not a comment. `max_removals` did not count these, `protected` could not name
+        // them, `--allow-mass-removal` was not consulted.
+        //
+        // Whoever wrote this understood the danger exactly: there are three bespoke refusals
+        // above — an unreadable baseline, the SSH lockout, the linked-ruleset warning. **That is
+        // what made it worse rather than better.** Three custom guards were written instead of
+        // calling the one two hundred lines away that already counts, caps, protects and reports.
+        if !to_close.is_empty() {
+            let removals: Vec<(String, String)> = to_close
+                .iter()
+                .map(|r| ("firewall".to_string(), r.to_string()))
+                .collect();
+            let reaped = crate::app::sync::guard::enforce_extras(
+                self.config,
+                self.registry,
+                &removals,
+                0,
+                guard_scope(scope),
+            )
+            .await?;
+            for rule in &to_close {
+                if let Rule::Port { port, proto } = rule {
+                    let argv = adapter.deny_command(*port, *proto);
+                    self.close_port(&argv, reaped).await?;
+                    info!("closed {} — it was not declared ({})", rule, adapter.name);
+                }
             }
         }
         for (rule, opts) in &declared {
@@ -211,6 +239,11 @@ impl Firewall<'_> {
         let raw = std::env::var("SSH_CONNECTION").ok()?;
         raw.split_whitespace().nth(3)?.parse().ok()
     }
+    /// Run a firewall command that **opens** a port or sets a policy — anything but a removal.
+    ///
+    /// The split from [`Firewall::close_port`] is the point: one function for every firewall
+    /// command meant the removing call and the non-removing calls were indistinguishable, which
+    /// is why `removal_guard_enumeration_tests.rs`'s scanner could not see one of them.
     async fn run_firewall(&self, argv: &[String]) -> Result<()> {
         let (program, args) = argv
             .split_first()
@@ -218,5 +251,32 @@ impl Firewall<'_> {
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         // A firewall is root's business on every platform LiNix drives.
         self.executor.run(program, &refs, true).await.map(|_| ())
+    }
+
+    /// Close a port that is open and undeclared. **A removal**, and it takes the proof.
+    ///
+    /// `deny_command` returns argv rather than performing the removal, so the token goes on the
+    /// call that runs it. The shape is not perfectly uniform with the other five effectors and
+    /// that is better said than papered over — what matters is that the only path in this file
+    /// that takes something away cannot be reached without asking.
+    async fn close_port(
+        &self,
+        argv: &[String],
+        _reaped: crate::app::sync::guard::Reaped,
+    ) -> Result<()> {
+        self.run_firewall(argv).await
+    }
+}
+
+/// The guard scope for a firewall teardown, from the label `sync` passes down.
+///
+/// `N1` names the three commands that can close a port. A label this does not recognise gets
+/// `Sync`, which is the strictest of the three rather than the most convenient.
+fn guard_scope(scope: &str) -> crate::app::sync::guard::GuardScope {
+    use crate::app::sync::guard::GuardScope;
+    match scope {
+        "purge-undeclared" => GuardScope::PurgeUndeclared,
+        "watch" => GuardScope::Watch,
+        _ => GuardScope::Sync,
     }
 }

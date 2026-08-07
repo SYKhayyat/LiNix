@@ -341,7 +341,7 @@ impl Installable for WebInstallable {
         Ok(())
     }
 
-    async fn remove(&self, urls: &[String], _: bool) -> Result<()> {
+    async fn remove(&self, urls: &[String], _: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
         let mut state = self.core.load_state().await;
         let mut failures = Vec::new();
         for url in urls {

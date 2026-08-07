@@ -22,6 +22,59 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::{debug, warn};
 
+/// Proof that this guard was consulted, and the only thing an effector will remove without.
+///
+/// **`readme.md:358` promises that every path removing anything goes through one guard. Until
+/// this type existed, that sentence was checked by a regex over source text** —
+/// `removal_guard_enumeration_tests.rs:91`'s `is_removal_call`, matching `.remove(` with `sudo`
+/// on the line, `.remove_repo(`, `.remove_shim(` and `.deprovision(`. `apply/firewall.rs` closes
+/// a port with `deny_command`, which matches none of them, and the word `guard` appears nowhere
+/// in that file. **The fix for `G-1` replaced a stale list of paths with a stale list of verbs**,
+/// and the staleness moved into a predicate with a passing self-test, where nobody re-derives it.
+///
+/// So the enumeration is the compiler's now. Every effector that removes takes one of these, and
+/// the only way to get one is to have asked. Effector six is covered by construction rather than
+/// by someone remembering the list.
+///
+/// This is what `PlanScope` did for planning, applied to removal. `planner.rs:83` states the
+/// technique better than this comment can: *"the case that reaps cannot be written without the
+/// list that bounds it."*
+///
+/// **The private field is load-bearing.** `Reaped {}` from outside this module is a compile
+/// error, so the token cannot be minted by a caller who would rather not ask.
+#[derive(Debug, Clone, Copy)]
+pub struct Reaped {
+    /// Which command's removal this authorises. Carried so an effector can name it, and so the
+    /// token is not silently reusable across two different commands' plans.
+    scope: GuardScope,
+}
+
+impl Reaped {
+    /// What the guard was asked on behalf of.
+    pub fn scope(&self) -> GuardScope {
+        self.scope
+    }
+
+    /// A removal that is not the user's machine changing state.
+    ///
+    /// The narrow, named escape for the two cases where asking is either impossible or already
+    /// done, so that neither has to reach for a wider one:
+    ///
+    /// - **A test double.** A unit test for an effector is testing the effector, and threading a
+    ///   real `Config` and `BackendRegistry` through it to mint a token proves nothing about the
+    ///   guard.
+    /// - **A rollback compensating its own transaction.** `transaction.rs:993` already calls
+    ///   `protection_of` before it removes, deliberately and correctly, and its removals are of
+    ///   packages this same run installed seconds ago.
+    ///
+    /// Named rather than derived, and searchable: `grep -rn "Reaped::for_reason"` is the list of
+    /// places that do not ask, which is exactly the list a reviewer wants and exactly what
+    /// `is_removal_call` could not produce.
+    pub fn for_reason(scope: GuardScope, _why: &'static str) -> Self {
+        Reaped { scope }
+    }
+}
+
 /// Which command is asking. Passed explicitly rather than inferred, so every caller has
 /// to declare itself — a new deletion path cannot quietly inherit someone else's
 /// exemption — and so a refusal can name what refused.
@@ -435,7 +488,7 @@ pub async fn enforce(
     registry: &Arc<BackendRegistry>,
     removals: &[(String, String)],
     scope: GuardScope,
-) -> Result<()> {
+) -> Result<Reaped> {
     let mut report = inspect(config, registry, removals).await;
 
     // II.10: `--allow-mass-removal` answers exactly one refusal — the count. It used to
@@ -456,7 +509,7 @@ pub async fn enforce(
     }
 
     if report.is_empty() {
-        return Ok(());
+        return Ok(Reaped { scope });
     }
     refuse(report.message(scope, RemovalKind::Package))
 }
@@ -477,7 +530,7 @@ pub async fn enforce_extras(
     removals: &[(String, String)],
     also_removing: usize,
     scope: GuardScope,
-) -> Result<()> {
+) -> Result<Reaped> {
     let mut report = inspect_removals(
         config,
         registry,
@@ -501,7 +554,7 @@ pub async fn enforce_extras(
     }
 
     if report.is_empty() {
-        return Ok(());
+        return Ok(Reaped { scope });
     }
     refuse(report.message(scope, RemovalKind::Extra))
 }
@@ -525,7 +578,7 @@ pub async fn enforce_extras(
 /// for nine sites those were `Error::Validation`, so they exited 1 and the hook never heard
 /// them. What makes the promise true is the variant, not this function, and what checks it is
 /// `tests/grader_refusal_exit_code_tests.rs`.
-fn refuse(message: String) -> Result<()> {
+fn refuse<T>(message: String) -> Result<T> {
     Err(Error::Refused(message))
 }
 
@@ -632,13 +685,13 @@ pub async fn enforce_deliberate(
     registry: &Arc<BackendRegistry>,
     removals: &[(String, String)],
     scope: GuardScope,
-) -> Result<()> {
+) -> Result<Reaped> {
     let mut report = inspect(config, registry, removals).await;
     report
         .objections
         .retain(|o| !matches!(o, Objection::TooMany { .. }));
     if report.is_empty() {
-        return Ok(());
+        return Ok(Reaped { scope });
     }
     refuse(report.message(scope, RemovalKind::Package))
 }

@@ -64,7 +64,7 @@ pub async fn handle_remove_orphans(app: &App) -> Result<()> {
 
     // The guard sees the whole set at once, so the removal count and the protected list are
     // judged against the total rather than per backend.
-    enforce(
+    let reaped = enforce(
         &app.config,
         &app.registry,
         &removals,
@@ -108,7 +108,7 @@ pub async fn handle_remove_orphans(app: &App) -> Result<()> {
             crate::core::journalled(
                 &app.journal,
                 crate::core::journal::removals_of(backend_name, names),
-                installable.remove(names, backend.sudo_for_write()),
+                installable.remove(names, backend.sudo_for_write(), reaped),
             )
             .await
             .with_context(|| format!("removing orphans from {}", backend_name))?;
@@ -269,7 +269,7 @@ pub async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Resul
 
     // `max_removals` does not apply: it catches accidents, and this is deliberate. Protection
     // and OS-essential still do — nothing overrides those (II.10, II.11).
-    crate::app::sync::guard::enforce_deliberate(
+    let reaped = crate::app::sync::guard::enforce_deliberate(
         &app.config,
         &app.registry,
         &removals,
@@ -364,7 +364,7 @@ pub async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Resul
                 name: name.clone(),
                 backend: backend_name.clone(),
             }],
-            inst.remove(std::slice::from_ref(name), b.sudo_for_write()),
+            inst.remove(std::slice::from_ref(name), b.sudo_for_write(), reaped),
         )
         .await
         {

@@ -796,6 +796,29 @@ fn restrict_to_owner(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The test double every mock-driven suite runs against.
+///
+/// **An unregistered command used to return `Ok(DryRunOutput::new())` — empty, success.** That
+/// is the same "silence means fine" default the parser layer had, one storey up, and it does the
+/// same damage: a test registers a stub, the product emits a slightly different argv, the stub is
+/// never matched, the call falls through to the default, and the test passes having asserted
+/// nothing.
+///
+/// It was not hypothetical. `e2e_tests.rs:108` registered `"brew install {name}"` while the
+/// product emits `"brew install -- neovim"` (`argv.rs:490`); all five of that file's
+/// registrations were dead strings and every test passed on the default. Sixteen lines away in
+/// the same suite, `a_machine_converges_tests.rs:115` registered the `--` form. **Two tests
+/// disagreed about the product's own argv and both were green.**
+///
+/// So the mock now keeps two ledgers, and the second is the one that catches that bug:
+///
+/// - **`unstubbed`** — commands that ran with no registration. Recorded rather than refused,
+///   because a great many tests legitimately do not care what a command printed; they assert the
+///   argv, or the state afterwards. Refusing outright would redden hundreds of tests that are
+///   asserting something real.
+/// - **`unmatched registrations`** — a stub that was set and never used. There is no innocent
+///   reading of that: the test author wrote down what they expected the product to run, and the
+///   product ran something else. It fails the test at drop.
 pub struct MockExecutor {
     pub responses: DashMap<String, Result<StdOutput>>,
     pub command_existence: DashMap<String, bool>,
@@ -803,6 +826,15 @@ pub struct MockExecutor {
     /// The environment the last call carried. The env map is where the pager suppression and
     /// the recursion guard live, and neither is visible in the argv the call log records.
     pub last_env: Arc<Mutex<HashMap<String, String>>>,
+    /// Which registered patterns were actually matched by a call.
+    matched: DashMap<String, ()>,
+    /// Commands that ran with nothing registered for them, deduplicated.
+    unstubbed: DashMap<String, ()>,
+    /// Registrations whose whole purpose is to stay unmatched — see
+    /// [`MockExecutor::set_response_that_must_not_be_used`].
+    forbidden: DashMap<String, ()>,
+    /// Set by a test that means it — see [`MockExecutor::allow_unmatched_registrations`].
+    allow_unmatched: std::sync::atomic::AtomicBool,
     vfs: Arc<DashMap<PathBuf, String>>,
 }
 
@@ -813,12 +845,120 @@ impl MockExecutor {
             command_existence: DashMap::new(),
             call_log: Arc::new(Mutex::new(Vec::new())),
             last_env: Arc::new(Mutex::new(HashMap::new())),
+            matched: DashMap::new(),
+            unstubbed: DashMap::new(),
+            forbidden: DashMap::new(),
+            allow_unmatched: std::sync::atomic::AtomicBool::new(false),
             vfs,
         }
     }
 
     pub fn set_response(&self, cmd_pattern: &str, response: Result<StdOutput>) {
         self.responses.insert(cmd_pattern.to_string(), response);
+    }
+
+    /// Register a convincing answer for a command the product must **not** run.
+    ///
+    /// **The foil, made into an assertion.** Five tests in this repo registered the *wrong*
+    /// listing beside the right one — `dpkg-query -W` next to `apt-mark showmanual`, the
+    /// essential query next to the manual one — to say *"and if adopt asks this instead, it will
+    /// get a different set of packages and the assertion below will notice."* Every one of those
+    /// stubs was dead, and its deadness was the whole point and was checked by nothing. Wire the
+    /// product to the wrong listing and the test would have gone green, because the names it
+    /// asserted happened to overlap.
+    ///
+    /// Registered this way, the stub answers if it is ever reached — so a product that asks the
+    /// wrong question gets a wrong-shaped answer rather than empty success — and going unreached
+    /// is asserted rather than assumed.
+    pub fn set_response_that_must_not_be_used(&self, cmd_pattern: &str, response: Result<StdOutput>) {
+        self.responses.insert(cmd_pattern.to_string(), response);
+        self.forbidden.insert(cmd_pattern.to_string(), ());
+    }
+
+    /// Registered patterns no call ever matched.
+    pub fn unmatched_registrations(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .responses
+            .iter()
+            .map(|e| e.key().clone())
+            .filter(|k| !self.matched.contains_key(k) && !self.forbidden.contains_key(k))
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Commands that ran with no registration, so the empty-success default answered them.
+    pub fn unstubbed_commands(&self) -> Vec<String> {
+        let mut out: Vec<String> = self.unstubbed.iter().map(|e| e.key().clone()).collect();
+        out.sort();
+        out
+    }
+
+    /// For a test that registers a stub for a path it knows may not be taken — a fallback the
+    /// product only reaches on another platform, or the second half of an either/or.
+    ///
+    /// Deliberately a per-mock opt-in with no default: the point of the check is that somebody
+    /// has to look at the dead string and say it is meant to be dead.
+    pub fn allow_unmatched_registrations(&self) {
+        self.allow_unmatched
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Fail if any registered stub went unused.
+    ///
+    /// Called from `Drop` so that a test does not have to remember; exposed because a test that
+    /// wants the failure at a particular point reads better than one that gets it at the end of
+    /// the scope.
+    pub fn assert_every_registration_was_used(&self) {
+        // The forbidden half first: a stub registered as one the product must not run, and run
+        // anyway, is a louder failure than an unused one and must not be masked by it.
+        let ran_anyway: Vec<String> = self
+            .forbidden
+            .iter()
+            .map(|e| e.key().clone())
+            .filter(|k| self.matched.contains_key(k))
+            .collect();
+        assert!(
+            ran_anyway.is_empty(),
+            "the product ran {} command(s) this test says it must not:
+
+  {}
+
+             Registered with `set_response_that_must_not_be_used`, which means the test's claim              is that this question is never asked.",
+            ran_anyway.len(),
+            ran_anyway.join("
+  ")
+        );
+
+        if self.allow_unmatched.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let unused = self.unmatched_registrations();
+        if unused.is_empty() {
+            return;
+        }
+        let ran = self
+            .call_log
+            .try_lock()
+            .map(|l| l.clone())
+            .unwrap_or_default();
+        panic!(
+            "{} registered mock response(s) were never matched by any call:\n\n  {}\n\n\
+             What actually ran:\n\n  {}\n\n\
+             A stub nobody matched is the test's belief about the product's argv, and the \
+             product disagreed. The call fell through to the empty-success default and the \
+             assertions below it proved nothing — which is how `e2e_tests.rs` registered \
+             `brew install {{name}}` against a product that emits `brew install -- neovim`, and \
+             stayed green. Fix the pattern to the argv that ran, or call \
+             `allow_unmatched_registrations()` and be able to say why.",
+            unused.len(),
+            unused.join("\n  "),
+            if ran.is_empty() {
+                "(nothing)".to_string()
+            } else {
+                ran.join("\n  ")
+            }
+        );
     }
 
     pub fn set_command_exists(&self, cmd: &str, exists: bool) {
@@ -848,22 +988,51 @@ impl ExecutionLayer for MockExecutor {
             *seen = env.clone();
         }
         if let Some(res) = self.responses.get(&full_cmd) {
+            self.matched.insert(full_cmd, ());
             return res.clone();
         }
+        // Recorded, not refused. Most callers of an unstubbed command are asserting the argv or
+        // the state afterwards and do not care what it printed; refusing here would redden them
+        // all to catch the few that did care. `unmatched_registrations` is the half with no
+        // innocent reading, and that one fails.
+        self.unstubbed.insert(full_cmd, ());
         Ok(DryRunOutput::new().into())
     }
 
+    /// Whether this command exists on the machine.
+    ///
+    /// Defaults to `true`, which is the same "silence means fine" choice as the empty output
+    /// above and is kept for the same reason: a test that has not said otherwise is a test about
+    /// something else, and a mock that answered `false` by default would have every backend
+    /// report itself unavailable. The default is *recorded* so a test can ask.
     fn check_command(&self, cmd: &str) -> bool {
-        self.command_existence
-            .get(cmd)
-            .map(|r| *r.value())
-            .unwrap_or(true)
+        match self.command_existence.get(cmd).map(|r| *r.value()) {
+            Some(known) => known,
+            None => {
+                self.unstubbed.insert(format!("command -v {cmd}"), ());
+                true
+            }
+        }
     }
 
     async fn symlink(&self, src: &Path, dst: &Path) -> Result<()> {
         let val = format!("LINK:{}", src.display());
         self.vfs.insert(dst.to_path_buf(), val);
         Ok(())
+    }
+}
+
+impl Drop for MockExecutor {
+    /// The check runs without a test having to remember it, which is the whole point: the tests
+    /// that needed it were the ones whose authors did not know they did.
+    ///
+    /// Guarded on `thread::panicking` so a test already failing reports its own reason rather
+    /// than this one — a second panic during unwind aborts the process and loses both messages.
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            return;
+        }
+        self.assert_every_registration_was_used();
     }
 }
 

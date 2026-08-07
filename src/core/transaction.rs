@@ -148,6 +148,20 @@ pub struct Transaction {
     /// backwards, and cannot compensate correctly without the second half.
     history: Vec<(NodeIndex, Prior)>,
     cancellation_token: CancellationToken,
+    /// Proof that the plan this graph came from passed the removal guard.
+    ///
+    /// `None` until [`Transaction::guarded_by`] is called, and a graph carrying a removal node
+    /// **refuses to execute without it**. The guard runs at plan time, in the engine, over the
+    /// whole plan at once — which is where it has to run, because `max_removals` is a ceiling
+    /// over a plan and cannot be checked one argv at a time. What was missing was any way for
+    /// the executor to know it had happened; a plan built by some other path and handed
+    /// straight here would have removed packages with nothing in between.
+    ///
+    /// This one is a runtime refusal rather than a compile error, and that is worth saying
+    /// plainly: making it a compile error would mean typing the graph itself by whether it
+    /// contains a removal, which is a larger change than this finding earns. The five effectors
+    /// **are** compile-enforced; this is the seam that hands them their token.
+    reaped: Option<crate::app::sync::guard::Reaped>,
 }
 
 impl Transaction {
@@ -183,6 +197,7 @@ impl Transaction {
             diagnostics,
             config,
             app_config,
+            reaped: None,
             hooks: None,
             completed_indices: HashSet::new(),
             history: Vec::new(),
@@ -194,6 +209,17 @@ impl Transaction {
     /// lookup, so this is safe to always set.
     pub fn with_hooks(mut self, hooks: Arc<LuaHooks>) -> Self {
         self.hooks = Some(hooks);
+        self
+    }
+
+    /// Hand the executor proof that this plan's removals passed the guard.
+    ///
+    /// Required before executing any graph that contains a `Remove` node — see the `reaped`
+    /// field. A graph of pure installs needs nothing, which is why this is a builder step
+    /// rather than a constructor argument: an install-only plan should not have to produce a
+    /// removal authorisation it has no removals for.
+    pub fn guarded_by(mut self, reaped: crate::app::sync::guard::Reaped) -> Self {
+        self.reaped = Some(reaped);
         self
     }
 
@@ -291,6 +317,7 @@ impl Transaction {
                 let journal = self.journal.clone();
                 let cancel_token = self.cancellation_token.clone();
                 let config = self.config.clone();
+                let reaped = self.reaped;
                 let hooks = self.hooks.clone();
 
                 worker_pool.spawn(async move {
@@ -300,6 +327,7 @@ impl Transaction {
                         registry,
                         journal,
                         config,
+                        reaped,
                         hooks,
                         cancel_token,
                     )
@@ -573,6 +601,7 @@ impl Transaction {
         registry: Arc<BackendRegistry>,
         journal: Arc<Mutex<Journal>>,
         config: TransactionConfig,
+        reaped: Option<crate::app::sync::guard::Reaped>,
         hooks: Option<Arc<LuaHooks>>,
         cancel_token: CancellationToken,
     ) -> Vec<TaskResult> {
@@ -782,10 +811,16 @@ impl Transaction {
                     handler.install(&specs, backend_cap.sudo_for_write()).await
                 } else {
                     let sudo = backend_cap.sudo_for_write();
+                    let Some(reaped) = reaped else {
+                        return Err(crate::core::Error::Refused(format!(
+                            "a plan containing removals reached the executor without passing                              the removal guard — refusing to remove {}. This is a defect in                              whichever command built the plan, not in the config: the guard                              runs once over a whole plan (`max_removals` is a ceiling over a                              plan, not over one command), and the engine hands the executor                              the proof it ran.",
+                            names.join(", ")
+                        )));
+                    };
                     if config.purge && handler.supports_purge() {
-                        handler.purge(&names, sudo).await
+                        handler.purge(&names, sudo, reaped).await
                     } else {
-                        handler.remove(&names, sudo).await
+                        handler.remove(&names, sudo, reaped).await
                     }
                 }
             })
@@ -1015,8 +1050,15 @@ impl Transaction {
                             let Some(h) = b.as_installable() else {
                                 continue;
                             };
+                            // Rollback asks `protection_of` itself, four lines above, and its
+                            // removals are of packages this same run installed seconds ago —
+                            // so it is one of the two named cases that do not re-ask.
+                            let reaped = crate::app::sync::guard::Reaped::for_reason(
+                                crate::app::sync::guard::GuardScope::Sync,
+                                "rollback checks `protection_of` itself at transaction.rs:993,                                  and compensates only work this run performed",
+                            );
                             if let Err(e) = h
-                                .remove(std::slice::from_ref(&spec.name), b.sudo_for_write())
+                                .remove(std::slice::from_ref(&spec.name), b.sudo_for_write(), reaped)
                                 .await
                             {
                                 error!(
@@ -1224,7 +1266,7 @@ mod batching_tests {
             self.widest.fetch_max(specs.len(), Ordering::SeqCst);
             Ok(())
         }
-        async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
+        async fn remove(&self, names: &[String], _sudo: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.widest.fetch_max(names.len(), Ordering::SeqCst);
             Ok(())

@@ -1202,7 +1202,7 @@ mod tests {
         caps.as_queryable().unwrap().list_installed().await.unwrap();
         caps.as_installable()
             .unwrap()
-            .remove(&["22/tcp".to_string()], false)
+            .remove(&["22/tcp".to_string()], false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"))
             .await
             .unwrap();
 

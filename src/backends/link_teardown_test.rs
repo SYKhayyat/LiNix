@@ -48,7 +48,7 @@ async fn removing_a_declaration_restores_what_was_there_before() {
         .unwrap();
     assert_eq!(tokio::fs::read_to_string(&target).await.unwrap(), "MANAGED");
 
-    inst.remove(&[target.to_string_lossy().to_string()], false)
+    inst.remove(&[target.to_string_lossy().to_string()], false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"))
         .await
         .unwrap();
 
@@ -74,7 +74,7 @@ async fn removing_a_declaration_that_took_over_nothing_removes_the_file() {
     inst.install(&[inline_spec(&target, "MANAGED")], false)
         .await
         .unwrap();
-    inst.remove(&[target.to_string_lossy().to_string()], false)
+    inst.remove(&[target.to_string_lossy().to_string()], false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"))
         .await
         .unwrap();
 

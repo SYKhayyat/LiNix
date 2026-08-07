@@ -27,19 +27,22 @@ use std::path::{Path, PathBuf};
 /// has checked. Nine of these were verified by reading the call, not by trusting a list.
 struct Accounted {
     file: &'static str,
-    calls: usize,
+    /// **No longer a count.** It was `calls: usize`, and the doc comment above still explains
+    /// why that was the wrong shape: a legitimate second removal added to an already-guarded
+    /// file reddened the build until somebody incremented an integer, which teaches a reader to
+    /// bump the number rather than to check the call. With `Reaped` required by every effector,
+    /// a new removal in a guarded file already *has* a guard — the compiler made it get one —
+    /// so the number was measuring churn.
     guarded_by: &'static str,
 }
 
 const LEDGER: &[Accounted] = &[
     Accounted {
         file: "src/app/leases.rs",
-        calls: 1,
         guarded_by: "guard::enforce at leases.rs:51, GuardScope::ExpirySweep",
     },
     Accounted {
         file: "src/app/apply/extras.rs",
-        calls: 4,
         guarded_by: "guard::enforce_extras at extras.rs:65, over the whole drift set before \
                      any kind is dispatched (W21) — including the shim a package line asks \
                      for with `@shim`/`@sandbox`, which resolves to a `shim:` extra (G-1)",
@@ -58,7 +61,6 @@ const LEDGER: &[Accounted] = &[
     // the graph at all, which is what the entry below records.
     Accounted {
         file: "src/core/transaction.rs",
-        calls: 3,
         guarded_by: "the purge/remove pair at :500-502 executes a plan enforced at \
                      sync/mod.rs:141 — or, for a recovery, per entry at sync/mod.rs:798 \
                      (GuardScope::Heal) before that entry becomes a node; the rollback \
@@ -66,32 +68,71 @@ const LEDGER: &[Accounted] = &[
     },
     Accounted {
         file: "src/verbs/cleanup.rs",
-        calls: 2,
         guarded_by: "enforce at cleanup.rs:57 (RemoveOrphans) and enforce_deliberate at :220 \
                      (PurgeUndeclared)",
     },
     Accounted {
         file: "src/verbs/declare.rs",
-        calls: 1,
         guarded_by: "guard::enforce_extras at declare.rs:36, GuardScope::Remove (W21) — the \
                      imperative twin of the `repo:` teardown",
     },
     Accounted {
         file: "src/verbs/packages.rs",
-        calls: 1,
-        guarded_by: "guard::enforce at packages.rs:423, GuardScope::Remove",
+        guarded_by: "guard::enforce at packages.rs:612, GuardScope::Remove — and the token it                      returns is what `inst.remove` at :638 takes, so the comment above that                      call is now the compiler's to keep",
+    },
+    // The three new entries below are the `Reaped` change itself, and none of them is a
+    // removal *site*: they are where the type is declared and where it travels.
+    Accounted {
+        file: "src/app/sync/guard.rs",
+        guarded_by: "the guard itself: `Reaped` is declared here and minted by `enforce`,                      `enforce_extras` and `enforce_deliberate`",
+    },
+    Accounted {
+        file: "src/app/sync/mod.rs",
+        guarded_by: "guard::enforce at mod.rs:193 (the sync plan) and :872 (per interrupted                      entry, GuardScope::Heal). The engine carries the token to the executor                      rather than dropping it on the line that produced it",
+    },
+    Accounted {
+        file: "src/app/apply/firewall.rs",
+        guarded_by: "**THE FINDING.** `guard::enforce_extras` over `to_close`, before the                      first `deny_command` runs. Until 2026-08-07 the word `guard` appeared                      nowhere in this file — not an import, not a call, not a comment — while                      it closed every open port no `firewall:` line declared. `max_removals`                      did not count them, `protected` could not name them, and                      `--allow-mass-removal` was not consulted. Three bespoke refusals were                      written here instead of calling the one guard two hundred lines away",
     },
 ];
 
 /// Does this line reach a backend's removal?
 ///
-/// Keyed on the `sudo` argument every backend removal carries rather than on the method name
-/// alone, so `HashMap::remove` and `Vec::remove` — of which this codebase has many — do not
-/// drown the signal. The three resource removals that take no `sudo` are named outright.
+/// **Keyed on `Reaped`, the type the guard mints, rather than on how the call is spelled.**
+///
+/// It was spelled: `.remove(`/`.purge(` with `sudo` on the line, plus `.remove_repo(`,
+/// `.remove_shim(` and `.deprovision(` named outright. That predicate is what let
+/// `apply/firewall.rs` close every undeclared port with `deny_command` and match none of it —
+/// the word `guard` appeared nowhere in the file, and the check written to prevent exactly that
+/// could not see it. **The fix for `G-1` replaced a stale list of paths with a stale list of
+/// verbs**, and the staleness moved into a predicate with a passing self-test, where nobody
+/// re-derives it.
+///
+/// The verbs are kept below because they still identify the calls; what changed is that they no
+/// longer *have* to be right. An effector cannot be called without a `Reaped`, and a `Reaped`
+/// cannot be obtained without asking, so a sixth removal path added tomorrow fails to compile
+/// rather than failing to be noticed. This scan is now the ledger's index, not the safety
+/// property.
 fn is_removal_call(line: &str) -> bool {
     let t = line.trim_start();
-    if t.starts_with("//") {
+    if t.starts_with("//") || t.starts_with("///") {
         return false;
+    }
+    // A *declaration* names the token as a parameter with a type; a *call* passes it as an
+    // argument. Twenty backends implement `remove`, and an implementation is not a path — it is
+    // the far end of one. Without this the scan reports every implementor and says nothing.
+    let declares = t.contains("fn ")
+        || t.starts_with("reaped:")
+        || t.starts_with("_reaped:")
+        || t.contains("reaped: crate::app::sync::guard::Reaped")
+        || t.contains("reaped: guard::Reaped")
+        || t.contains("reaped: Option<");
+    if declares {
+        return false;
+    }
+    // The token names itself at every call site, whatever the method is called.
+    if t.contains("reaped") || t.contains("Reaped") {
+        return true;
     }
     let sudo_removal = (t.contains(".remove(") || t.contains(".purge(")) && line.contains("sudo");
     sudo_removal
@@ -110,7 +151,15 @@ fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
         if p.is_dir() {
             sources(&p, out);
         } else if p.extension().map(|x| x == "rs").unwrap_or(false) {
-            out.push(p);
+            // A test module that lives in its own file under `src/` carries no in-file
+            // `#[cfg(test)]` marker — the gate is on the `mod` line in its parent. Its removals
+            // are a unit test's, not a path a user can reach, and counting them would make the
+            // ledger track test churn instead of the safety surface, which is the same reason
+            // the scan below stops at `#[cfg(test)]`.
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+            if !(name.ends_with("_test.rs") || name.ends_with("_tests.rs")) {
+                out.push(p);
+            }
         }
     }
 }
@@ -166,16 +215,6 @@ fn every_path_that_removes_anything_is_accounted_for() {
                  or, if nothing does, put a guard there first. This is exactly how G-1 \
                  survived: the path existed and the sentence about it was never re-counted.",
                 file,
-                sites.iter().map(|(l, _)| *l).collect::<Vec<_>>()
-            )),
-            Some(acc) if acc.calls != sites.len() => problems.push(format!(
-                "COUNT MOVED: {} was recorded with {} removal call(s) guarded by [{}], and \
-                 now has {} — at lines {:?}.\n    A new removal in an already-guarded file is \
-                 not automatically guarded: check it, then update the count.",
-                file,
-                acc.calls,
-                acc.guarded_by,
-                sites.len(),
                 sites.iter().map(|(l, _)| *l).collect::<Vec<_>>()
             )),
             Some(_) => {}

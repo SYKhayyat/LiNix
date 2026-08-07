@@ -232,7 +232,7 @@ impl Installable for PsResourceInstallable {
         Ok(())
     }
 
-    async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
+    async fn remove(&self, names: &[String], _sudo: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
         for name in names {
             validate_name(name)?;
             let script = format!("Uninstall-PSResource -Name '{}'", name);

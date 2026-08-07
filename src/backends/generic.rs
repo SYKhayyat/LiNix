@@ -719,7 +719,7 @@ impl Installable for GenericInstallable {
         self.install_group(specs, sudo).await
     }
 
-    async fn remove(&self, names: &[String], sudo: bool) -> Result<()> {
+    async fn remove(&self, names: &[String], sudo: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
         // Some managers (e.g. Haskell's cabal/stack) genuinely have no uninstall verb.
         // An empty `remove_args` encodes that — UNLESS the manager removes with a separate
         // binary that is itself the verb (OpenBSD's `pkg_delete <name>`, no subcommand). A
@@ -735,7 +735,12 @@ impl Installable for GenericInstallable {
         self.core.config.purge_args.is_some()
     }
 
-    async fn purge(&self, names: &[String], sudo: bool) -> Result<()> {
+    async fn purge(
+        &self,
+        names: &[String],
+        sudo: bool,
+        _reaped: crate::app::sync::guard::Reaped,
+    ) -> Result<()> {
         let Some(args) = self.core.config.purge_args.clone() else {
             return Err(crate::core::Error::Unsupported(format!(
                 "{} has no purge — it does not keep a package's configuration apart from the \
@@ -1747,7 +1752,12 @@ impl RepoManager for GenericRepoManager {
         Ok(())
     }
 
-    async fn remove_repo(&self, name: &str, sudo: bool) -> Result<()> {
+    async fn remove_repo(
+        &self,
+        name: &str,
+        sudo: bool,
+        _reaped: crate::app::sync::guard::Reaped,
+    ) -> Result<()> {
         reject_shell_meta("name", name)?;
         let base_args = self.core.config.repo_remove_args.as_ref().ok_or_else(|| {
             crate::core::Error::Other("Repository removal not supported for this backend".into())
@@ -2219,8 +2229,11 @@ ripgrep 15.2.0
             }
             .into()),
         );
-        // If it wrongly fell back, it would hit this instead — and adopt a dependency.
-        mock.set_response(
+        // If it wrongly fell back, it would hit this instead — and adopt a dependency. That
+        // sentence is the test's whole claim, and until this stub was registered as one that
+        // must not be used, nothing checked it: the stub sat dead, and a product wired to the
+        // wrong listing would have been caught only by the overlap between the two answers.
+        mock.set_response_that_must_not_be_used(
             "dpkg-query -W -f=${Package} ${Version}\\n",
             Ok(DryRunOutput {
                 stdout: b"apt 2.7.14\njq 1.7.1\nlibperl5.38t64 5.38.2\n".to_vec(),
@@ -2424,7 +2437,7 @@ ripgrep 15.2.0
         inst.install(&[spec_with("diff", &[("url", url)])], false)
             .await
             .unwrap();
-        inst.remove(&["diff".to_string()], false).await.unwrap();
+        inst.remove(&["diff".to_string()], false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself")).await.unwrap();
 
         let calls = mock.get_calls().await;
         assert!(
@@ -2690,7 +2703,7 @@ ripgrep 15.2.0
         let mock = Arc::new(MockExecutor::new(vfs.clone()));
         let core = Arc::new(apt_like_core(mock, vfs)); // apt_like_core sets remove_args: vec![]
         let inst = GenericInstallable { core };
-        match inst.remove(&["ghc".to_string()], false).await {
+        match inst.remove(&["ghc".to_string()], false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself")).await {
             Err(crate::core::Error::Unsupported(name)) => assert_eq!(name, "apt"),
             other => panic!("expected Unsupported, got {:?}", other),
         }
@@ -2738,7 +2751,7 @@ ripgrep 15.2.0
         let vfs = Arc::new(DashMap::new());
         let mock = Arc::new(MockExecutor::new(vfs.clone()));
         let mgr = apk_repo(mock.clone(), vfs);
-        mgr.remove_repo("https://dl-cdn.alpinelinux.org/alpine/edge/testing", false)
+        mgr.remove_repo("https://dl-cdn.alpinelinux.org/alpine/edge/testing", false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"))
             .await
             .expect("a URL is a repository apk can be told to forget");
         let calls = mock.get_calls().await;
@@ -2761,7 +2774,7 @@ ripgrep 15.2.0
         let mock = Arc::new(MockExecutor::new(vfs.clone()));
         let mgr = apk_repo(mock.clone(), vfs);
         let err = mgr
-            .remove_repo("testing", false)
+            .remove_repo("testing", false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"))
             .await
             .expect_err("apk knows no repository called `testing`")
             .to_string();
@@ -2790,7 +2803,7 @@ ripgrep 15.2.0
             c.repo_remove_args = Some(vec!["sources".into(), "-r".into(), "{url}".into()]);
             c.repo_list_args = Some(vec!["sources".into()]);
         });
-        mgr.remove_repo("internal", false).await.unwrap();
+        mgr.remove_repo("internal", false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself")).await.unwrap();
         let calls = mock.get_calls().await;
         assert!(
             calls
@@ -2812,7 +2825,7 @@ ripgrep 15.2.0
             c.repo_remove_args = Some(vec!["drop".into(), "{name}".into(), "{channel}".into()]);
         });
         let err = mgr
-            .remove_repo("internal", false)
+            .remove_repo("internal", false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"))
             .await
             .expect_err("an unfilled placeholder is not a repository name")
             .to_string();

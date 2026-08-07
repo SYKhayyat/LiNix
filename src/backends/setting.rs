@@ -359,7 +359,7 @@ impl Installable for SettingInstallable {
         Ok(())
     }
 
-    async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
+    async fn remove(&self, names: &[String], _sudo: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
         for name in names {
             let (schema, key) = SettingBackendCore::split(name)?;
             // A store with no adapter never held the value, so there is nothing to reset and

@@ -87,7 +87,7 @@ impl Installable for BrewInstallable {
         Ok(())
     }
 
-    async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
+    async fn remove(&self, names: &[String], _sudo: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
         if names.is_empty() {
             return Ok(());
         }
@@ -310,7 +310,7 @@ mod tests {
             .await
             .unwrap();
         BrewInstallable { core: core.clone() }
-            .remove(&["ripgrep".to_string()], false)
+            .remove(&["ripgrep".to_string()], false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"))
             .await
             .unwrap();
         BrewQueryable { core: core.clone() }
@@ -379,7 +379,7 @@ mod tests {
             .await
             .unwrap();
         BrewInstallable { core: core.clone() }
-            .remove(&["jq".to_string(), "ripgrep".to_string()], false)
+            .remove(&["jq".to_string(), "ripgrep".to_string()], false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"))
             .await
             .unwrap();
 

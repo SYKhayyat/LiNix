@@ -1,4 +1,4 @@
-# The decision register — all 178, two of them open
+# The decision register — all 179, two of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -16,7 +16,7 @@ not in this paragraph.
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **2** |
-| **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **2** |
+| **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **3** |
 | **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **170** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
@@ -74,8 +74,8 @@ status loses that, so it is kept here:
 ## Index
 
 **Two are open — `Z1`, raised 2026-08-03, a licence choice; and `Y18`, raised 2026-08-07, three
-findings against Part II.** All 178 are accounted
-for: **170 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 2 BUILT NEVER RULED, 2 OPEN** — and this line
+findings against Part II.** All 179 are accounted
+for: **170 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 3 BUILT NEVER RULED, 2 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -312,7 +312,7 @@ without asking. Two are not mine: one is a legal choice and one changes a publis
 | **Z1** | There is no `LICENSE` file and no `license` key in `Cargo.toml`, for a tool with an install script and a `self-upgrade` verb. Which licence? | **OPEN** |
 | **Z2** | `lock` and `unlock` touch unrelated files and are not inverses; `unlock` can cause package churn. Rename it, or give `lock` a real inverse? | **ANSWERED** — both verbs name their axis (`versions`/`backends`/`scripts`/`all`), and every path that moves a version re-records it |
 
-### Y — the efficiency pass — 20
+### Y — the efficiency pass — 21
 
 *Not a proposal part. `docs/INEFFICIENCIES.md` audited every place in the tree slower than it has
 to be and marked the findings a user would notice as needing a ruling; the owner ruled the lot on
@@ -6988,3 +6988,60 @@ reads apt's own `E: Could not open lock file` as a package named `E:` at that ve
 different failure from emptiness — a wrong package rather than a missing one — and no return type
 distinguishes them. `junk_is_a_different_failure_from_emptiness_and_this_change_does_not_address_it`
 pins it.
+
+## Y20
+
+**Status: BUILT, NEVER RULED — built 2026-08-07 from `LX-2`, with one question inside it that is
+OPEN and is `N7`'s to answer.**
+
+**Y20 — every path that removes now carries proof it asked, and closing an undeclared port is one
+of them. Should it count against `max_removals`?**
+
+`readme.md:358` promises that *every path that removes anything goes through one guard*, and the
+next sentence says the promise is checked by `removal_guard_enumeration_tests.rs` — *"it was
+written because the sentence was false for the whole resource family until 2026-07-28."* The
+check implemented it as `is_removal_call`, a predicate matching `.remove(`/`.purge(` with `sudo`
+on the line, plus `.remove_repo(`, `.remove_shim(` and `.deprovision(`.
+
+**`apply/firewall.rs` closes every open port no `firewall:` line declares, using `deny_command`.
+It matches none of them.** The word `guard` appeared nowhere in that file — not an import, not a
+call, not a comment — and the file had zero tests. `max_removals` did not count those closures,
+`protected` could not name them, `--allow-mass-removal` was not consulted, and `enforce_extras` —
+which exists *precisely* because the extras teardown runs outside the transaction — was not
+called.
+
+**The fix for `G-1` replaced a stale list of paths with a stale list of verbs.** The staleness
+moved into a predicate, where nobody re-derives it, because it had a passing self-test — and that
+self-test fed it four lines already in the ledger, so it proved the scanner could see what it
+already knew about.
+
+**What shipped: `Reaped`.** A token with a private field, mintable only by `guard::enforce`,
+`enforce_extras` and `enforce_deliberate`, required by every effector that removes —
+`Installable::remove`, `Installable::purge`, `RepoManager::remove_repo`,
+`ShimManager::remove_shim`, `SchedulerManager::deprovision`, and the firewall's `close_port`,
+which is split out of `run_firewall` so that the one call in that file which takes something away
+is a different function from the ones that do not. **The compiler enumerates the removal paths
+now**, and effector six is covered by construction rather than by someone remembering the list.
+This is what `PlanScope` did for planning, applied to removal.
+
+**Two things are honest about the shape rather than papered over.** `deny_command` returns argv
+rather than performing the removal, so the token sits on the call that runs it — not perfectly
+uniform with the other five. And the executor's check is a *runtime* refusal: a graph carrying a
+removal that reaches `Transaction` without a token refuses rather than failing to compile, because
+making that a compile error means typing the graph by whether it contains a removal, which is a
+larger change than this finding earns. The five effectors **are** compile-enforced; that seam is
+what hands them their token.
+
+**`Reaped::for_reason` is the ledger of what does not ask**, named and greppable, and it has
+exactly two kinds of entry: a unit test of an effector, and `heal`, which enforces each
+interrupted removal individually *before* it becomes a graph node. `grep -rn "Reaped::for_reason"`
+is the list a reviewer wants, and it is the list `is_removal_call` could never produce.
+
+**THE OPEN QUESTION, and it is not mine.** *Is closing an undeclared port a removal for the
+purposes of `max_removals`?* The guard now counts them, which is the conservative reading and the
+one that follows from wiring `enforce_extras`. It has a cost a user would meet immediately: **a
+machine with 40 ports open and one `firewall:22/tcp` line hits the default ceiling of 20 and
+refuses.** That may be exactly right — 39 ports closing at once is the shape `max_removals` exists
+to interrupt — or it may make the feature unusable on any real server. `N7` says drift is
+corrected; it does not say at what count a person should be asked first. **Ruling wanted; the
+count is trivially separable if the answer is no.**
