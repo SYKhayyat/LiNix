@@ -4366,7 +4366,7 @@ The rule is therefore three properties, not one fix:
 
 - **The marker is consumed by whatever it selects.** `#rhai` is LiNix's word and is stripped
   before the engine sees it; a shebang is the *script's* first instruction and is kept, because
-  removing it leaves the kernel with no interpreter to choose. The stripped line is blanked
+  removing it leaves nothing to name the interpreter the author chose. The stripped line is blanked
   rather than deleted, so a runtime error still names the line the author wrote — a one-line
   offset in an error message is a bug that hides inside the fix for another bug.
 - **Every dialect is handed the same four facts** — `PKG_NAME`, `HOOK_TYPE`, `OS`, `ARCH`, and
@@ -4388,3 +4388,58 @@ tests, not about the feature: all three are reachable by a user, all three are r
 defect was that nothing ever ran two of them. The fix is one engine builder, one fact list, one
 place that decides a dialect — and a test that executes each arm, which is the part that was
 actually missing.
+
+**And then the arm that *did* run turned out not to run here (Y17, owner ruling 2026-08-07).**
+Fixing `#rhai` meant putting a real binary in front of all three dialects, which is how the third
+one was found dead on Windows. A script file handed to `CreateProcess` comes back *"The specified
+executable is not a valid application for this OS platform"* — measured against the OS, not
+inferred. The shebang is a **kernel** feature; Windows has no equivalent at any layer, so no
+amount of care inside the hook reaches it. What a user saw was `Polyglot execution failed: … (os
+error 193)`: a message about their script, for a script that was fine.
+
+Routing it through PowerShell was the obvious repair and is the wrong one. `#!/usr/bin/env
+python3` would then run under PowerShell, which treats the line that chose Python as a comment —
+**that does not run the script, it runs a different one**, and it converts a clear failure into a
+confusing success. A blanket refusal was the honest alternative, and it costs the thing the
+product is for: one config, every machine.
+
+So LiNix reads the shebang itself. The measurement that made this cheap rather than a
+reimplementation of the kernel: **the `#!` line does not have to be removed first.** Every
+language a shebang names treats it as a comment, so `python foo.py` runs an unmodified
+`#!/usr/bin/env python3` file. What is left is a name lookup.
+
+- **On every platform, not just the broken one.** Three callers shared this file and used two
+  different answers, which is the shape of the bug the file was created to prevent. An absolute
+  interpreter that exists is used as written, so Unix launches exactly the binary the kernel would
+  have — the platforms agree instead of diverging.
+- **`/usr/bin/env` is dropped, not launched.** It is a PATH search wearing a path, there is none
+  to launch on Windows, and the search now happens here. Leaving it in place is the difference
+  between finding `python` and reporting that `/usr/bin/env` is missing.
+- **`python3` falls back to `python`, then `py`.** `python3` is the name Unix uses and almost no
+  Windows machine has it. This is the case the whole ruling was about, and a fallback list that
+  omitted it would have been a feature that works in principle.
+- **A candidate with bytes in it is preferred over one without.** On Windows `which python3`
+  returns `%LOCALAPPDATA%\Microsoft\WindowsApps\python3.exe`, a zero-length reparse point.
+  Configured, it launches Python; unconfigured, it opens the Microsoft Store and runs nothing —
+  **and the two are identical to inspect**, since the working one on this host is also zero bytes.
+  So the rule is not "detect the dead alias", which cannot be done, but "prefer a candidate that
+  is unambiguously a program". `winget`, which has no other form, keeps its alias.
+- **`env -S FOO=1 python3` is refused.** `exec:` runs through an executor with no per-command
+  environment, so this could be honoured by two callers out of three — and a form that works in
+  two places out of three is the two-of-everything disease with a friendlier face.
+
+**The temp file dropped from 0755 to 0600 in the same change.** The execute bit existed because
+the kernel was being asked to run the file; an interpreter named on the command line only reads
+it. What was left was the author's script sitting world-readable in a shared temp directory for
+as long as the hook took.
+
+**The fourth site had the same bug inverted, and shows why one lookup is the point.** A
+`vars.<ext>` provider picks its interpreter by *extension* — IX.6's whole point is that a
+`vars.py` runs without a shebang or a chmod, and that stays. But the name it produced was
+literally `python` on Windows and literally `python3` everywhere else, so the assumption that a
+program has one spelling per platform had simply been made twice, in opposite directions. A
+Windows box with only `python3` and a Linux box with only `python` each had a provider that could
+not run. The extension table is untouched; the name it yields now goes through the same lookup,
+which is what carries the fallbacks and the alias-avoidance to it. **It was deliberately not
+given shebang parsing** — a second dispatch inside the file whose rule is "no shebang needed"
+would be two-of-everything wearing the costume of a fix.

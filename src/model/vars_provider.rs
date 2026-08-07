@@ -183,6 +183,13 @@ fn file_name(path: &Path) -> String {
 /// The conventional interpreter for a provider's extension — `.py` is Python, `.js` is Node — so
 /// a user writes `vars.py` and it runs without a shebang or a chmod, which is what IX.6 means by
 /// "an executable run by LiNix". An unknown extension is run directly, trusting the OS.
+///
+/// The *name* here is a Unix spelling, and finding this machine's copy of it is
+/// `model::script`'s question, not a second one: `.py` used to mean literally `python` on Windows
+/// and literally `python3` everywhere else, so a Windows box with only `python3` and a Linux box
+/// with only `python` each had a `vars.py` that could not run (Y17). A name that resolves to
+/// nothing is left as written, so the failure is still the provider's own "could not run" with
+/// the interpreter named in it.
 fn interpreter_argv(path: &Path) -> Vec<std::ffi::OsString> {
     let ext = path
         .extension()
@@ -191,13 +198,7 @@ fn interpreter_argv(path: &Path) -> Vec<std::ffi::OsString> {
         .to_lowercase();
     let words: &[&str] = match ext.as_str() {
         "sh" | "bash" => &["sh"],
-        "py" => {
-            if cfg!(windows) {
-                &["python"]
-            } else {
-                &["python3"]
-            }
-        }
+        "py" => &["python3"],
         "js" | "mjs" | "cjs" => &["node"],
         "rb" => &["ruby"],
         "pl" => &["perl"],
@@ -211,7 +212,19 @@ fn interpreter_argv(path: &Path) -> Vec<std::ffi::OsString> {
         "cmd" | "bat" => &["cmd", "/c"],
         _ => &[],
     };
-    words.iter().map(std::ffi::OsString::from).collect()
+    let mut argv = words
+        .iter()
+        .map(std::ffi::OsString::from)
+        .collect::<Vec<_>>();
+    if let Some(first) = argv.first_mut() {
+        if let Some(found) = first
+            .to_str()
+            .and_then(crate::model::script::interpreter_named)
+        {
+            *first = std::ffi::OsString::from(found);
+        }
+    }
+    argv
 }
 
 /// Parse a provider's stdout: a JSON object, or `name = value` lines. JSON carries its own types;
@@ -343,6 +356,43 @@ mod tests {
     /// what stops the next run inheriting anything.
     fn tmp() -> tempfile::TempDir {
         tempfile::tempdir().expect("a temp dir")
+    }
+
+    /// A `.py` provider finds whatever this machine calls Python.
+    ///
+    /// It used to name literally `python` on Windows and literally `python3` everywhere else, so
+    /// a Windows box with only `python3` and a Linux box with only `python` each had a `vars.py`
+    /// they could not run — the same one-spelling assumption that made `#!` hooks fail (Y17).
+    #[test]
+    fn a_py_provider_finds_this_machines_python_whatever_it_is_called() {
+        let argv = interpreter_argv(Path::new("vars.py"));
+        let first = argv.first().expect("an interpreter").to_string_lossy().into_owned();
+        match crate::model::script::interpreter_named("python3") {
+            Some(_) => assert!(
+                Path::new(&first).is_file(),
+                "python was found but the argv still says `{}`",
+                first
+            ),
+            None => assert_eq!(first, "python3", "an unresolvable name is left as written"),
+        }
+    }
+
+    /// Resolving the interpreter must not eat the flag beside it — `powershell` without `-File`
+    /// reads the provider as an expression rather than running it as a file.
+    #[test]
+    fn resolving_the_interpreter_keeps_the_flags_that_follow_it() {
+        for (file, flag) in [("vars.ps1", "-File"), ("vars.bat", "/c"), ("vars.cmd", "/c")] {
+            let argv = interpreter_argv(Path::new(file));
+            assert_eq!(argv.len(), 2, "{}: {:?}", file, argv);
+            assert_eq!(argv[1].to_string_lossy(), flag, "{}", file);
+        }
+    }
+
+    /// An extension with no convention is run directly, which is what IX.6 says.
+    #[test]
+    fn an_unknown_extension_names_no_interpreter() {
+        assert!(interpreter_argv(Path::new("vars.wat")).is_empty());
+        assert!(interpreter_argv(Path::new("vars")).is_empty());
     }
 
     fn facts() -> HostFacts {

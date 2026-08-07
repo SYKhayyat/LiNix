@@ -239,9 +239,33 @@ pub fn resolve_program(cmd: &str) -> Option<PathBuf> {
     if let Some(hit) = PATH_LOOKUP.get(cmd) {
         return hit.clone();
     }
-    let found = which::which(cmd).ok();
+    let found = first_runnable(cmd);
     PATH_LOOKUP.insert(cmd.to_string(), found.clone());
     found
+}
+
+/// The first candidate on PATH with bytes in it, falling back to the first candidate at all.
+///
+/// A Windows *app execution alias* — `%LOCALAPPDATA%\Microsoft\WindowsApps\python3.exe` — is a
+/// zero-length reparse point. A configured one launches the real program; an unconfigured one
+/// opens the Microsoft Store and runs nothing at all. **The two cannot be told apart by
+/// inspection:** measured on this host, the *working* `python3.exe` alias is also zero bytes, and
+/// it is what `which` returns first. So the rule is not "detect the dead alias" but "prefer a
+/// candidate that is unambiguously a program" — which finds the real `python3` two PATH entries
+/// later, and still leaves the alias in place for `winget`, which has no other form.
+fn first_runnable(cmd: &str) -> Option<PathBuf> {
+    let first = which::which(cmd).ok()?;
+    if has_bytes(&first) {
+        return Some(first);
+    }
+    which::which_all(cmd)
+        .ok()
+        .and_then(|mut all| all.find(|candidate| has_bytes(candidate)))
+        .or(Some(first))
+}
+
+fn has_bytes(path: &Path) -> bool {
+    std::fs::metadata(path).map(|m| m.len() > 0).unwrap_or(false)
 }
 
 pub fn program_exists(cmd: &str) -> bool {
@@ -1569,6 +1593,34 @@ impl Drop for SudoKeepalive {
         if let Some(handle) = self.0.take() {
             handle.abort();
         }
+    }
+}
+
+#[cfg(test)]
+mod path_lookup_tests {
+    use super::has_bytes;
+
+    /// The predicate that steps over a Windows app execution alias.
+    ///
+    /// It is deliberately "has bytes", not "is an alias": a *working* alias and a dead one are
+    /// both zero-length reparse points and cannot be told apart, so the alias is out-preferred
+    /// rather than detected. A zero-length file is not a program on any platform, which is why
+    /// this is safe to apply everywhere rather than only where the aliases live.
+    #[test]
+    fn a_zero_length_candidate_is_not_a_program() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+
+        let alias = dir.path().join("alias.exe");
+        std::fs::write(&alias, b"").expect("write");
+        assert!(!has_bytes(&alias), "a zero-length file is not a program");
+
+        let real = dir.path().join("real.exe");
+        std::fs::write(&real, b"MZ\x90\x00").expect("write");
+        assert!(has_bytes(&real));
+
+        // A candidate that is not there at all is not a program either — `metadata` fails, and
+        // the fallback must read that as "no", never panic.
+        assert!(!has_bytes(&dir.path().join("absent.exe")));
     }
 }
 

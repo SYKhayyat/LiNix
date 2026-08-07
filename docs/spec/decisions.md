@@ -1,4 +1,4 @@
-# The decision register — all 175, one of them open
+# The decision register — all 176, one of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -17,7 +17,7 @@ not in this paragraph.
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **2** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **169** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **170** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -73,8 +73,8 @@ status loses that, so it is kept here:
 
 ## Index
 
-**One is open — `Z1`, raised 2026-08-03, a licence choice.** All 175 are accounted
-for: **169 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 1 OPEN** — and this line
+**One is open — `Z1`, raised 2026-08-03, a licence choice.** All 176 are accounted
+for: **170 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 1 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -311,7 +311,7 @@ without asking. Two are not mine: one is a legal choice and one changes a publis
 | **Z1** | There is no `LICENSE` file and no `license` key in `Cargo.toml`, for a tool with an install script and a `self-upgrade` verb. Which licence? | **OPEN** |
 | **Z2** | `lock` and `unlock` touch unrelated files and are not inverses; `unlock` can cause package churn. Rename it, or give `lock` a real inverse? | **ANSWERED** — both verbs name their axis (`versions`/`backends`/`scripts`/`all`), and every path that moves a version re-records it |
 
-### Y — the efficiency pass — 17
+### Y — the efficiency pass — 18
 
 *Not a proposal part. `docs/INEFFICIENCIES.md` audited every place in the tree slower than it has
 to be and marked the findings a user would notice as needing a ruling; the owner ruled the lot on
@@ -338,6 +338,7 @@ II.19 and the reasons in V.115–V.118.*
 | **Y14** | `apply` executed a frozen plan in two serial loops of its own — no write-ahead log, so `heal` could not recover the one command named after review and deliberation; no transaction, no snapshot, no health check; one manager invocation per package; and a failure was a warning under a summary reading `Applied plan`. Eight more commands reached a package manager with no record at all. BUILT, NEVER RULED: **the record belongs to the mutation, not to the verb**, and a frozen plan is executed by the engine that executes every other plan. | 2026-08-06 |
 | **Y15** | A line pinned to a manager this machine does not have failed the whole run: `spec_is_missing` raised `BackendNotFound` from inside the planner's fan-out, so one `apt:` line dropped the twenty `winget:` lines beside it and `sync` planned nothing. RULED: **that is a portable config, not a broken one** — skipped, reported in `skipped`, and the command succeeds; a package that genuinely fails still fails, with `--keep-going` as the per-run opt-in. Reverses `Y14` item 2. | 2026-08-06 |
 | **Y16** | An audit proposed deleting `linix repl`, the two ratatui screens, and the Lua hook arm — the last on the grounds that `mlua` vendors 28,687 lines of C rebuilt ten times per CI push to serve one branch of one `if`. RULED: **keep all three and make them work** — *"it not working is not cause for deletion but fixing"*. The `#rhai` arm had never executed anything (the marker line reached the engine, and `#` is reserved in Rhai), and the one shipped example called an `exec()` nothing registers. The marker is now stripped, all three dialects get the same four facts, and `#rhai` gets the standard library `vars.linix` has. | 2026-08-07 |
+| **Y17** | The dialect `Y16` kept was dead on Windows: `CreateProcess` answers *"not a valid application for this OS platform"* for any script file, because Windows has no shebang mechanism — so a `#!` hook that worked on the author's Linux box failed on a teammate's machine with a message blaming the script. Refuse there, or make it work? — RULED: **read the shebang ourselves**, on every platform. `python3` finds a Windows `python` (then `py`); an absolute interpreter that exists is used as written, so Unix launches what the kernel would have; a missing one is named. `exec:` and event hooks read it too — they had been ignoring it on *both* platforms. | 2026-08-07 |
 
 ---
 
@@ -6786,3 +6787,62 @@ disputed and is not the reason to keep it: Lua is the *fall-through* dialect, so
 does not say otherwise is Lua, including the two in the shipped example config. Reversing that
 is a user-visible change to configs that already exist, and the owner declined it. **Rule in
 II.12, reasons in V.150.**
+
+## Y17
+
+**Status: ANSWERED — ruled and built 2026-08-07.** Raised out of `Y16`: fixing the `#rhai` arm
+put a real binary in front of all three dialects, and the third one did not run on this platform
+at all.
+
+**Y17 — a `#!` hook is dead on Windows. Refuse it there, or make it work?**
+
+Confirmed against the OS rather than reasoned: a script file handed to `CreateProcess` comes back
+*"The specified executable is not a valid application for this OS platform."* A Unix kernel reads
+the first line and launches what it names; **Windows has no such mechanism at any level**, so the
+failure is not fixable inside the hook. What the user saw was `Polyglot execution failed: … (os
+error 193)`, which reads as *your script is broken* for a script that is fine.
+
+Three ways out were put to the owner:
+
+1. **Refuse on Windows**, naming `#rhai` and Lua as the dialects that run everywhere. Honest, but
+   it breaks the one-config-every-machine promise the product is for.
+2. **Route it through PowerShell.** Rejected in the asking: `#!/usr/bin/env python3` would then
+   run under PowerShell, which treats the line that chose Python as a comment. That does not run
+   the script, it runs a different one.
+3. **Read the shebang ourselves** — take the interpreter's name, find it on PATH, run
+   `python3 <script>`.
+
+**RULED (owner, 2026-08-07): option 3, built robust.**
+
+The measurement that made it cheap: **the `#!` line does not have to be stripped.** Every language
+a shebang names treats it as a comment, so the file runs unmodified — the whole Windows arm is
+"resolve a name, put the script last". What the ruling shipped:
+
+- **The shebang is read on every platform, not just Windows**, in `model/script.rs` — the file
+  whose stated job is this question and which had *three* callers using two different answers. An
+  absolute interpreter that exists is used as written, so on Unix this launches the same binary
+  the kernel would have. `/usr/bin/env` is dropped rather than launched, because the PATH search
+  it stands for now happens here.
+- **`python3` finds a Windows `python`.** A shebang says `python3` because that is what Unix calls
+  it; a Windows install is almost always `python`, with `py` there when neither is. The fallback
+  list is deliberately short — the same program under the name this OS gives it, never something
+  similar.
+- **A missing interpreter is named, with every spelling that was tried.** `#!/bin/bash` on a
+  machine with no bash is still a refusal — it always will be — but it now says which program is
+  missing instead of blaming the script.
+- **Environment assignments in a shebang (`env -S FOO=1 python3`) are refused**, because one of
+  the three callers runs through an executor with no per-command environment and a form honoured
+  by two callers out of three is worse than one refused by all three.
+- **`exec:` and LiNix's own event hooks read the shebang too.** They shared the file and ignored
+  the first line on both platforms — `sh <script>` does not consult a shebang either — so a
+  `#!/usr/bin/env python3` event hook was already broken on Linux. One question, one answer, three
+  callers.
+- **A `vars.<ext>` provider was the fourth site, with the same bug inverted.** It picks its
+  interpreter by extension (IX.6, not by shebang, and that stays), but it named literally `python`
+  on Windows and literally `python3` everywhere else — so a Windows box with only `python3`, or a
+  Linux box with only `python`, had a `vars.py` it could not run. The extension table is kept; the
+  *name* it produces now goes through the same lookup, so the fallbacks and the alias-avoidance
+  reach it. **Not** given shebang parsing: IX.6 says a provider needs no shebang, and a second
+  dispatch there would be the disease, not the cure.
+
+**Rule in II.12, reasons in V.150.**

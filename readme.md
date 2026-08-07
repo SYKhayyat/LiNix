@@ -798,6 +798,12 @@ named and skipped rather than rebuilt. It cannot be put in `schedules`.
     `http_get`, `parse_json`, the clock); anything else is Lua. All three are handed `PKG_NAME`,
     `HOOK_TYPE`, `OS` and `ARCH` — as `LINIX_`-prefixed environment variables for a process —
     and all three go through the same approval.
+  - **A shebang works on Windows too.** LiNix reads that first line itself rather than handing
+    the file to the OS, which has no shebang mechanism of its own — so `#!/usr/bin/env python3`
+    runs your Python on Linux, macOS and Windows alike. `python3` is looked up as `python` and
+    `py` as well, because that is what a Windows install is usually called. An interpreter the
+    machine does not have is refused by name, so a `#!/bin/bash` hook on a box without bash says
+    which program is missing instead of failing as if the script were broken.
     ```toml
     [hooks.after_install]
     docker = '''

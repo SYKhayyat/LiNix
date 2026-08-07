@@ -1828,6 +1828,34 @@ else is **Lua**. All three stay (owner ruling 2026-07-20), and all three get the
   the engine — it is not Rhai syntax, and leaving it in is a syntax error on line 1. A shebang
   is the script's own first instruction and is kept.
 
+**LiNix reads the shebang; the kernel is not asked to (Y17).** The interpreter a `#!` line names
+is looked up and put on the command line, on every platform — `python3 <script>`, not `<script>`.
+Windows has no shebang mechanism at all, so a script handed to it directly fails whatever its
+first line says, and every language a shebang names treats that line as a comment, so nothing has
+to be rewritten to run this way.
+
+- **An absolute interpreter that exists is used as written**, which on Unix is the same binary
+  the kernel would have launched.
+- **Otherwise the name is looked up on PATH**, because `/bin/bash` and `/usr/bin/python3` are Unix
+  spellings and only the name travels. `/usr/bin/env` is dropped rather than launched: it *is* a
+  PATH search, and that search now happens here.
+- **A `python3` shebang finds a Windows `python`, then `py`.** The list is the same program under
+  the name an OS gives it — never something merely similar.
+- **A missing interpreter is refused by name, listing every spelling tried.** `#!/bin/bash` on a
+  machine without bash cannot be made to work; it can be made to say so.
+- **`env`'s environment assignments are refused, not half-honoured** — `exec:` runs through an
+  executor with no per-command environment, and a form two of three callers support is worse than
+  one none do.
+
+**This is one answer for all three, and `exec:` and event hooks obey it too.** They ignored the
+first line on both platforms before — `sh <script>` does not consult a shebang either — so a
+`#!/usr/bin/env python3` event hook was broken on Linux as well as Windows.
+
+**A `vars.<ext>` provider still chooses by extension, not by shebang (IX.6) — but it finds the
+interpreter the same way.** `vars.py` named literally `python` on Windows and literally `python3`
+elsewhere, so the one-spelling-per-platform assumption had been made twice, in opposite
+directions, and each was wrong on the machine that had the other name.
+
 **None of the three is sandboxed, and the ledger is why that is not a hole.** Lua loads
 `os.execute`, a shebang is a process, Rhai has `sh`. Withholding a shell from one notation stops
 nobody while the one beside it opens `#!`; what gates every hook is the approval below.

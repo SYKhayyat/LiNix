@@ -144,6 +144,12 @@ ext = "vscode"
 # All three are handed PKG_NAME, HOOK_TYPE, OS and ARCH (a shebang gets them as LINIX_*), and
 # every one of them is hashed into locks/ — `linix lock` approves, and a changed script stops
 # the next sync until you approve it again.
+#
+# A shebang works on Windows too: LiNix reads that first line itself rather than handing the file
+# to an OS that has no shebang mechanism, so `#!/usr/bin/env python3` runs your Python everywhere
+# (looked up as python3, then python, then py). What it cannot conjure is an interpreter the
+# machine does not have — `#!/bin/sh` needs a shell on PATH, which a stock Windows box has not
+# got. `#rhai` and Lua need no interpreter at all and run wherever LiNix does.
 [hooks.before_install]
 "*" = '''
 print("Starting installation of " .. PKG_NAME)

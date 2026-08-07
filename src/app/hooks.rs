@@ -22,7 +22,6 @@ use rhai::{Engine, Scope};
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
-use tempfile::NamedTempFile;
 use tokio::process::Command;
 use tracing::{debug, info};
 
@@ -130,14 +129,27 @@ impl LuaHooks {
         out
     }
 
+    /// Run a `#!` hook, with the interpreter its first line names.
+    ///
+    /// The interpreter is named on the command line rather than left to the kernel, because
+    /// Windows has no shebang mechanism: a script handed straight to `CreateProcess` there fails
+    /// with *"not a valid application for this OS platform"* whatever language it is written in,
+    /// which reads as "your script is broken" when the platform is what could not read it.
     async fn run_external_polyglot(&self, code: &str, hook: &str, pkg: &str) -> Result<()> {
         debug!("Hooks: Launching Polyglot Bridge for {}/{}", hook, pkg);
 
         let code_owned = code.to_string();
 
-        let tmp_script = tokio::task::spawn_blocking(move || -> Result<NamedTempFile> {
-            let mut tmp = NamedTempFile::new().map_err(Error::from)?;
+        let tmp_script = tokio::task::spawn_blocking(move || -> Result<tempfile::TempPath> {
+            // The suffix comes from the same place the interpreter does. A shebang naming this
+            // platform's own shell lands on `powershell -File`, which refuses any name that does
+            // not end in `.ps1`; every other interpreter reads the file and ignores its name.
+            let mut tmp = tempfile::Builder::new()
+                .suffix(crate::model::script::SCRIPT_SUFFIX)
+                .tempfile()
+                .map_err(Error::from)?;
             tmp.write_all(code_owned.as_bytes()).map_err(Error::from)?;
+            tmp.flush().map_err(Error::from)?;
 
             #[cfg(unix)]
             {
@@ -145,15 +157,28 @@ impl LuaHooks {
                 let mut perms = std::fs::metadata(tmp.path())
                     .map_err(Error::from)?
                     .permissions();
-                perms.set_mode(0o755);
+                // 0600, where this was 0755. An interpreter named on the command line reads the
+                // file, so it never needs the execute bit — and this is the author's script,
+                // sitting in a world-readable temp directory for as long as the hook runs.
+                perms.set_mode(0o600);
                 std::fs::set_permissions(tmp.path(), perms).map_err(Error::from)?;
             }
-            Ok(tmp)
+            // The handle is closed here, keeping only the path (and the delete-on-drop): Windows
+            // refuses to let a second process open a file this one still holds.
+            Ok(tmp.into_temp_path())
         })
         .await
         .map_err(|e| Error::Other(e.to_string()))??;
 
-        let mut cmd = Command::new(tmp_script.path());
+        let launch = crate::model::script::launch_for(&tmp_script, code).map_err(|e| {
+            Error::Other(format!(
+                "{}\nA `#rhai` or Lua hook needs no interpreter and runs wherever LiNix does.",
+                e
+            ))
+        })?;
+
+        let mut cmd = Command::new(&launch.program);
+        cmd.args(&launch.args);
         for (name, value) in Self::hook_facts(hook, pkg) {
             cmd.env(format!("LINIX_{}", name), value);
         }
@@ -376,11 +401,78 @@ mod tests {
         hooks.run_hook("after_install", "pkg").await.unwrap();
     }
 
+    /// A `#!` hook runs a real process, and the four facts reach it as environment variables.
+    ///
+    /// The interpreter here is whichever shell the platform is certain to have, so this covers
+    /// the mechanism on every machine; the Python test beside it covers the case that made the
+    /// mechanism necessary.
+    #[tokio::test]
+    async fn a_shebang_hook_runs_a_process_and_is_told_which_package() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let marker = dir.path().join("ran.txt");
+        let hooks = hooks_with(&if cfg!(windows) {
+            format!(
+                "#!/usr/bin/env powershell\nSet-Content -Path '{}' -Value $env:LINIX_PKG_NAME\n",
+                marker.display()
+            )
+        } else {
+            format!(
+                "#!/bin/sh\nprintf %s \"$LINIX_PKG_NAME\" > '{}'\n",
+                marker.display()
+            )
+        });
+
+        hooks.run_hook("after_install", "pkg").await.expect("the hook ran");
+        let wrote = std::fs::read_to_string(&marker).expect("the hook wrote its marker");
+        assert_eq!(wrote.trim(), "pkg");
+    }
+
+    /// A Python hook, which is the case the ruling was about.
+    ///
+    /// Windows has no shebang mechanism: this hook used to reach `CreateProcess` as a bare file
+    /// and come back *"not a valid application for this OS platform"* — a message about the
+    /// script, for a failure of the platform. `python3` is also the name Unix uses and a Windows
+    /// machine usually spells `python`, so the lookup tries both, and `py` after them.
+    #[tokio::test]
+    async fn a_python_hook_runs_wherever_python_is_installed() {
+        let installed = ["python3", "python", "py"]
+            .iter()
+            .any(|name| crate::core::executor::resolve_program(name).is_some());
+        if !installed {
+            // Not silent: a skipped test that reads as a pass is how a dead path survives.
+            eprintln!("skipped: no python on this machine (tried python3, python, py)");
+            return;
+        }
+
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let marker = dir.path().join("ran.txt");
+        let hooks = hooks_with(&format!(
+            "#!/usr/bin/env python3\nimport os\nopen(r'{}', 'w').write(os.environ['LINIX_PKG_NAME'])\n",
+            marker.to_string_lossy().replace('\\', "/")
+        ));
+
+        hooks.run_hook("after_install", "pkg").await.expect("the hook ran");
+        let wrote = std::fs::read_to_string(&marker).expect("python wrote its marker");
+        assert_eq!(wrote.trim(), "pkg");
+    }
+
+    /// An interpreter this machine does not have is named, not guessed at, and the message says
+    /// what to write instead.
+    #[tokio::test]
+    async fn a_hook_naming_an_absent_interpreter_says_so_plainly() {
+        let hooks = hooks_with("#!/usr/bin/env definitely-not-an-interpreter\nbody\n");
+        let err = hooks.run_hook("after_install", "pkg").await.unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains("definitely-not-an-interpreter"), "{}", text);
+        assert!(text.contains("PATH"), "{}", text);
+        assert!(text.contains("`#rhai` or Lua"), "{}", text);
+    }
+
     #[test]
     fn the_rhai_marker_is_not_handed_to_the_engine_but_the_shebang_is() {
         // `#rhai` is a LiNix marker; `#!` is the script's own first instruction. Confusing the
         // two either way breaks a dialect: a kept `#rhai` is a syntax error on line 1, and a
-        // stripped `#!` leaves the kernel with no interpreter to run.
+        // stripped `#!` leaves nothing to name the interpreter the author chose.
         let (dialect, body) = Dialect::of("#rhai\nlet x = 1;\n");
         assert!(matches!(dialect, Dialect::Rhai));
         assert!(!body.contains("#rhai"), "the marker survived: {:?}", body);

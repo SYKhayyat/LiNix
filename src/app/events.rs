@@ -231,9 +231,9 @@ async fn run(hook: &EventHook, stdin: &str) -> Result<()> {
     .await
     .map_err(|e| Error::Other(e.to_string()))??;
 
-    let (program, args) = crate::model::script::interpreter_for(&script);
-    let mut child = tokio::process::Command::new(program)
-        .args(&args)
+    let launch = crate::model::script::launch_for(&script, &hook.script)?;
+    let mut child = tokio::process::Command::new(&launch.program)
+        .args(&launch.args)
         .env("LINIX_EVENT", hook.event.as_str())
         .env("LINIX_OS", std::env::consts::OS)
         .env("LINIX_ARCH", std::env::consts::ARCH)

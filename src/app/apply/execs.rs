@@ -333,12 +333,19 @@ impl Execs<'_> {
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         self.executor.run(program, &refs, false).await.map(|_| ())
     }
-    /// Execute one script through the platform's interpreter. `sh` on Unix and PowerShell on
-    /// Windows, because a repo that must ship two spellings of every script is a repo that
-    /// cannot be shared — which is the reason the file travels with the config at all.
+    /// Execute one script through the interpreter its first line names, or this platform's
+    /// shell if it names none — `sh` on Unix and PowerShell on Windows. A repo that must ship
+    /// two spellings of every script is a repo that cannot be shared, which is the reason the
+    /// file travels with the config at all.
     async fn run_exec_script(&self, path: &std::path::Path) -> Result<()> {
-        let (program, args) = crate::model::script::interpreter_for(path);
-        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        self.executor.run(program, &refs, false).await.map(|_| ())
+        // A script that is not UTF-8 has no first line this can read, and falls through to the
+        // platform default — which is what every `exec:` script got before shebangs were read.
+        let contents = tokio::fs::read_to_string(path).await.unwrap_or_default();
+        let launch = crate::model::script::launch_for(path, &contents)?;
+        let refs: Vec<&str> = launch.args.iter().map(String::as_str).collect();
+        self.executor
+            .run(&launch.program, &refs, false)
+            .await
+            .map(|_| ())
     }
 }

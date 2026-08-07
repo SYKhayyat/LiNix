@@ -122,6 +122,28 @@ ask at all, ask in one breath.*
 
 
 ### Fixed
+- **A `#!` hook runs on Windows** (`Y17`). It never had: Windows has no shebang mechanism, so a
+  script file reached `CreateProcess` and came back *"not a valid application for this OS
+  platform"* — a message blaming a script that was fine. LiNix now reads that first line itself
+  and names the interpreter on the command line, on every platform. `#!/usr/bin/env python3` is
+  looked up as `python3`, then **`python`, then `py`**, because that is what a Windows install is
+  usually called; an absolute interpreter that exists is used as written, so Unix launches exactly
+  the binary the kernel would have; and an interpreter the machine lacks is refused **by name**,
+  listing every spelling tried. The `#!` line itself needs no stripping — every language a shebang
+  names treats it as a comment.
+  - **`exec:` scripts and event hooks read it too.** They were the other two callers of the same
+    file and ignored the first line on *both* platforms, since `sh <script>` does not consult a
+    shebang either — so a `#!/usr/bin/env python3` event hook was already broken on Linux.
+  - **A PATH candidate with bytes in it beats one without.** `which python3` on Windows returns a
+    zero-length `WindowsApps` reparse point; configured it runs Python, unconfigured it opens the
+    Microsoft Store — and **the two are identical to inspect**, so the dead one is out-preferred
+    rather than detected. `winget`, which has no other form, keeps its alias.
+  - **A `vars.py` provider finds whatever this machine calls Python.** It named literally
+    `python` on Windows and literally `python3` elsewhere, so a machine with only the other
+    spelling had a provider it could not run. Providers still choose by extension, not by
+    shebang (IX.6) — only the name lookup is shared.
+  - **The hook's temporary file dropped from 0755 to 0600.** The execute bit was there for the
+    kernel; an interpreter named on the command line only reads it.
 - **A read that fails no longer becomes an empty answer** (`Q40`). `run_output` ignored exit
   status by design — "no such package" is an ordinary non-zero reply — but it ignored the *silent*
   failures too. Measured without LiNix present: 3 of 16 concurrent cold-start `winget list` exit

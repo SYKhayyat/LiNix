@@ -7517,11 +7517,40 @@ marker/no-marker property is pinned in both directions, the four facts are asser
 and the shipped example is checked for the function name it calls. The bug was never subtle; it
 was simply never run.
 
-**Not fixed, and filed for a ruling: a `#!` hook cannot run on Windows.**
-`run_external_polyglot` writes a `NamedTempFile` with no extension and executes it directly.
+**Filed for a ruling, and ruled the same day: a `#!` hook could not run on Windows (Y17).**
+`run_external_polyglot` wrote a `NamedTempFile` with no extension and executed it directly.
 Confirmed against the OS, not assumed: `CreateProcess` on an extensionless script returns *"The
 specified executable is not a valid application for this OS platform."* `model/script.rs` exists
-to answer exactly this and its header says it has **two** callers — the hook arm is the third and
-does not use it. Left alone deliberately: routing through `interpreter_for` would make Unix run
-every polyglot hook under `sh`, ignoring the shebang that chose `python3`, which is a
-user-visible behaviour change and the owner's call.
+to answer exactly this and its header said it had **two** callers — the hook arm was the third and
+did not use it. It was left alone rather than routed through `interpreter_for`, because that would
+have made Unix run every polyglot hook under `sh`, ignoring the shebang that chose `python3`.
+
+**RULED (owner, 2026-08-07): read the shebang ourselves, on every platform.** The kernel is no
+longer asked — `model/script.rs` looks the interpreter up and puts it on the command line. The
+measurement that made it small: **the `#!` line needs no stripping**, because every language a
+shebang names treats it as a comment, so the file runs unmodified. `python3` falls back to
+`python` and then `py`, which is the case the ruling was about; an absolute interpreter that
+exists is used as written, so Unix launches what the kernel would have; a missing one is refused
+by name with every spelling that was tried.
+
+**Three siblings went with it.** `exec:` and LiNix's own event hooks are the other two callers,
+and both ignored the first line on *both* platforms — `sh <script>` does not consult a shebang
+either, so a `#!/usr/bin/env python3` event hook was already broken on Linux. All three go through
+one function now. And `resolve_program` learned to prefer a PATH candidate with bytes in it: on
+Windows `which python3` returns a zero-length `WindowsApps` reparse point, and the working alias
+is *also* zero bytes, so the dead one cannot be detected — only out-preferred.
+
+**The third sibling had the bug inverted.** `vars_provider::interpreter_argv` is a fourth answer
+to "which program runs this script", by extension rather than by shebang — which is IX.6's design
+and stays. But it named literally `python` on Windows and literally `python3` everywhere else, so
+the same one-spelling assumption had been made twice in opposite directions, and a machine with
+only the other name had a `vars.py` it could not run. The table stays; the name it yields now goes
+through the shared lookup. It was **not** given shebang parsing — IX.6's rule is that a provider
+needs none, and a second dispatch there would be the disease rather than the cure.
+
+**The temp file dropped from 0755 to 0600.** The execute bit was there for the kernel; an
+interpreter named on the command line only reads the file. What remained was the author's script,
+world-readable in a shared temp directory, for as long as the hook ran.
+
+**Proved by running it, not by argument:** a `#!/usr/bin/env python3` hook now executes on this
+Windows host and its `LINIX_PKG_NAME` reaches the Python process.
