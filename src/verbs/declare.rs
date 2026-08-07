@@ -1,6 +1,6 @@
 use crate::verbs::prelude::*;
 
-pub(crate) async fn handle_repo(app: &App, cmd: &RepoCommand) -> Result<()> {
+pub async fn handle_repo(app: &App, cmd: &RepoCommand) -> Result<()> {
     let explicit = match cmd {
         RepoCommand::Add { backend, .. } => backend.clone(),
         RepoCommand::Remove { backend, .. } => backend.clone(),
@@ -37,12 +37,12 @@ pub(crate) async fn handle_repo(app: &App, cmd: &RepoCommand) -> Result<()> {
             // the declarative path and not this one is how a guard comes to cover a resource
             // on Tuesday and not on Wednesday, depending on which command the user reached
             // for — the twin-branch shape `spec/history.md` records as S6.
-            linix::app::sync::guard::enforce_extras(
+            crate::app::sync::guard::enforce_extras(
                 &app.config,
                 &app.registry,
                 &[("repo".to_string(), format!("{}:{}", b_name, name))],
                 0,
-                linix::app::sync::guard::GuardScope::Remove,
+                crate::app::sync::guard::GuardScope::Remove,
             )
             .await?;
             info!("Repo: Removing {} from {}...", name, b_name);
@@ -62,7 +62,7 @@ pub(crate) async fn handle_repo(app: &App, cmd: &RepoCommand) -> Result<()> {
 /// Destroying a file you wrote is a plain refusal plus `--force`, like every other tool
 /// (II.8). It has nothing to do with packages, so no removal setting reaches it — one prompt
 /// standing for two unrelated questions is how it came to mean neither (E12).
-pub(crate) fn refuse_overwrite(path: &std::path::Path, name: &str, force: bool) -> Result<()> {
+pub fn refuse_overwrite(path: &std::path::Path, name: &str, force: bool) -> Result<()> {
     if force || !path.exists() {
         return Ok(());
     }
@@ -74,11 +74,11 @@ pub(crate) fn refuse_overwrite(path: &std::path::Path, name: &str, force: bool) 
     )
 }
 
-pub(crate) fn module_name(name: &str) -> Result<linix::model::ModuleName> {
-    linix::model::ModuleName::new(name).map_err(|e| anyhow::anyhow!(e))
+pub fn module_name(name: &str) -> Result<crate::model::ModuleName> {
+    crate::model::ModuleName::new(name).map_err(|e| anyhow::anyhow!(e))
 }
 
-pub(crate) async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
+pub async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
     let layout = app.config.layout();
     match cmd {
         ModuleCommand::List => {
@@ -86,7 +86,7 @@ pub(crate) async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> 
             // nothing. It used to list `*.module.txt`, a suffix II.1 does not have — so this
             // listed nothing on a real repo.
             let vocab = app.vocabulary().await?;
-            let loader = linix::model::modules::ModuleLoader::new(&layout, &vocab);
+            let loader = crate::model::modules::ModuleLoader::new(&layout, &vocab);
             let names = loader.available();
             if names.is_empty() {
                 println!(
@@ -141,7 +141,7 @@ pub(crate) async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> 
             name,
             force,
         } => {
-            use linix::app::module_registry;
+            use crate::app::module_registry;
             let (url, default_name) = module_registry::resolve_module_source(source)?;
             let final_name = name.clone().unwrap_or(default_name);
             let path = layout.module_file(&module_name(&final_name)?);
@@ -149,7 +149,7 @@ pub(crate) async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> 
 
             // Honour the configured value (F1); the pool raises a literal 0 to 1s, which
             // reqwest would otherwise read as an instant-fail timeout rather than "no timeout".
-            let client = linix::core::http::api("linix-module", app.config.network_timeout_secs)?;
+            let client = crate::core::http::api("linix-module", app.config.network_timeout_secs)?;
             info!("Fetching module from {}", url);
             let resp = client.get(&url).send().await?;
             if !resp.status().is_success() {
@@ -188,7 +188,7 @@ pub(crate) async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> 
 }
 
 /// Apply a service spec (`service:<name>@<opts>`) through the install path.
-pub(crate) async fn service_apply(app: &App, name: &str, opts: &str) -> Result<()> {
+pub async fn service_apply(app: &App, name: &str, opts: &str) -> Result<()> {
     let spec_str = if opts.is_empty() {
         format!("service:{}", name)
     } else {
@@ -208,7 +208,7 @@ pub(crate) async fn service_apply(app: &App, name: &str, opts: &str) -> Result<(
     Ok(())
 }
 
-pub(crate) async fn handle_service(app: &App, cmd: &ServiceCommand) -> Result<()> {
+pub async fn handle_service(app: &App, cmd: &ServiceCommand) -> Result<()> {
     // Enable/disable/start/stop/restart mutate the system and (enable/disable) the manifest.
     // Honor --dry-run by describing the action without touching either. Status/List are
     // read-only and always run.
@@ -233,7 +233,7 @@ pub(crate) async fn handle_service(app: &App, cmd: &ServiceCommand) -> Result<()
             app.declare(
                 &format!("service:{}@enabled=true", name),
                 None,
-                linix::model::Landing::Imperative,
+                crate::model::Landing::Imperative,
             )
             .await?;
             println!("Service '{}' enabled and started.", name);
@@ -297,8 +297,8 @@ pub(crate) async fn handle_service(app: &App, cmd: &ServiceCommand) -> Result<()
     Ok(())
 }
 
-pub(crate) async fn handle_hooks(app: &App, cmd: &HooksCommand) -> Result<()> {
-    use linix::app::pm_hooks;
+pub async fn handle_hooks(app: &App, cmd: &HooksCommand) -> Result<()> {
+    use crate::app::pm_hooks;
 
     // Path to this very binary, so a hook can call back into `linix`.
     let linix_bin = std::env::current_exe()
@@ -407,13 +407,13 @@ pub(crate) async fn handle_hooks(app: &App, cmd: &HooksCommand) -> Result<()> {
 /// Shared recording path for a single hooked target. Repo installs become declarative
 /// (recorded + appended to the active module); local-file installs are recorded imperatively
 /// and kept OUT of the modules (not reproducible), so a sync never removes them as drift.
-pub(crate) async fn record_hooked_target(
+pub async fn record_hooked_target(
     app: &App,
     manager: &str,
-    op: linix::app::pm_hooks::HookOp,
+    op: crate::app::pm_hooks::HookOp,
     target: &str,
 ) -> Result<()> {
-    use linix::app::pm_hooks::{classify_install_target, local_file_stem, HookOp, InstallKind};
+    use crate::app::pm_hooks::{classify_install_target, local_file_stem, HookOp, InstallKind};
 
     match op {
         HookOp::Install => {
@@ -436,7 +436,7 @@ pub(crate) async fn record_hooked_target(
                 app.declare(
                     &format!("{manager}:{name}"),
                     None,
-                    linix::model::Landing::Hooks,
+                    crate::model::Landing::Hooks,
                 )
                 .await?;
             }
@@ -460,13 +460,13 @@ pub(crate) async fn record_hooked_target(
     Ok(())
 }
 
-pub(crate) async fn handle_hook_record(
+pub async fn handle_hook_record(
     app: &App,
     manager: &str,
     op: &str,
     targets: &[String],
 ) -> Result<()> {
-    let op = linix::app::pm_hooks::HookOp::parse(op)
+    let op = crate::app::pm_hooks::HookOp::parse(op)
         .ok_or_else(|| anyhow::anyhow!("hook-record: --op must be 'install' or 'remove'"))?;
     for target in targets {
         record_hooked_target(app, manager, op, target).await?;
@@ -477,7 +477,7 @@ pub(crate) async fn handle_hook_record(
     Ok(())
 }
 
-pub(crate) async fn handle_hook_reconcile(app: &App, manager: &str) -> Result<()> {
+pub async fn handle_hook_reconcile(app: &App, manager: &str) -> Result<()> {
     // Additive reconcile: record packages the manager reports installed that LiNix isn't yet
     // tracking. We never auto-remove here — a missing package could be a transient query
     // hiccup, and destructive action from a background hook would be a nasty surprise.
@@ -533,13 +533,13 @@ pub(crate) async fn handle_hook_reconcile(app: &App, manager: &str) -> Result<()
     Ok(())
 }
 
-pub(crate) async fn handle_hook_observe(
+pub async fn handle_hook_observe(
     app: &App,
     manager: Option<&str>,
     learn: bool,
     argv: &[String],
 ) -> Result<()> {
-    use linix::app::pm_hooks::{detect_operation, extract_targets};
+    use crate::app::pm_hooks::{detect_operation, extract_targets};
 
     let Some(op) = detect_operation(argv) else {
         // Not an install/remove command (e.g. `apt list`); nothing to record.
@@ -578,8 +578,8 @@ pub(crate) async fn handle_hook_observe(
 /// it and `sync` provisions what changed. They do not talk to the OS scheduler directly: a
 /// command that registered a timer the file did not describe would be a second store, and the
 /// two would disagree about what this machine runs.
-pub(crate) async fn handle_schedule(app: &App, cmd: &ScheduleCommand) -> Result<()> {
-    use linix::model::schedule::{add_line, remove_line};
+pub async fn handle_schedule(app: &App, cmd: &ScheduleCommand) -> Result<()> {
+    use crate::model::schedule::{add_line, remove_line};
 
     let file = app.config.layout().schedules_file();
     let body = tokio::fs::read_to_string(&file).await.unwrap_or_default();
@@ -597,7 +597,7 @@ pub(crate) async fn handle_schedule(app: &App, cmd: &ScheduleCommand) -> Result<
                 .map_err(|e| anyhow::anyhow!(e))?;
             // Parse what was just written before it is written: a bad cron or an unknown key
             // must be refused at the door, naming the line, not discovered at provision time.
-            linix::config::grammar::parse_document(&file, &updated, &known)?;
+            crate::config::grammar::parse_document(&file, &updated, &known)?;
             let verb = crate::verbs::write_unless_previewing(
                 app,
                 &file,
@@ -624,12 +624,12 @@ pub(crate) async fn handle_schedule(app: &App, cmd: &ScheduleCommand) -> Result<
             println!("{} `schedule:{}` from {}.", verb, name, file.display());
         }
         ScheduleCommand::List => {
-            let doc = linix::config::grammar::parse_document(&file, &body, &known)?;
-            let facts = linix::config::parser::HostFacts::current();
+            let doc = crate::config::grammar::parse_document(&file, &body, &known)?;
+            let facts = crate::config::parser::HostFacts::current();
             let mut listed = 0usize;
             for (stmt, origin) in doc.statements_for(&facts)? {
-                if let linix::config::grammar::Statement::Schedule(name, opts) = stmt {
-                    let cfg = linix::model::schedule::schedule_config(
+                if let crate::config::grammar::Statement::Schedule(name, opts) = stmt {
+                    let cfg = crate::model::schedule::schedule_config(
                         &name,
                         &opts,
                         &origin,
@@ -654,21 +654,21 @@ pub(crate) async fn handle_schedule(app: &App, cmd: &ScheduleCommand) -> Result<
     handle_sync(app, false, false, false).await
 }
 
-pub(crate) async fn handle_activate(app: &App, profiles: &[String], add: bool) -> Result<()> {
+pub async fn handle_activate(app: &App, profiles: &[String], add: bool) -> Result<()> {
     app.profile_manager()
         .activate(profiles, add)
         .await
         .map_err(|e| e.into())
 }
 
-pub(crate) async fn handle_deactivate(app: &App, profiles: &[String]) -> Result<()> {
+pub async fn handle_deactivate(app: &App, profiles: &[String]) -> Result<()> {
     app.profile_manager()
         .deactivate(profiles)
         .await
         .map_err(|e| e.into())
 }
 
-pub(crate) async fn handle_profile(app: &App, cmd: &ProfileCommand) -> Result<()> {
+pub async fn handle_profile(app: &App, cmd: &ProfileCommand) -> Result<()> {
     let pm = app.profile_manager();
     match cmd {
         ProfileCommand::List => {

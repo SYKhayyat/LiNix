@@ -220,19 +220,41 @@ fn list_operand(rest: &str, facts: &HostFacts) -> Result<Vec<Value>> {
 ///
 /// This is the parsing `remove` must use to match how `install` reads its arguments —
 /// passing the whole `backend:name` string to a backend's `info()`/`remove()` (which
-/// expect the *bare* name) silently makes `remove backend:pkg` a no-op. It consults the
-/// registry (unlike a blind `split_once(':')`), which is why it is not one of the parsers
-/// C13 retired.
+/// expect the *bare* name) silently makes `remove backend:pkg` a no-op.
+///
+/// **It is the grammar's answer, because there is one parser.** This used to split on `:` and
+/// then take `name_part.split('@').next()`, which had never heard of two rules the read side
+/// learned separately:
+///
+/// - **`Q23`** — an `@` that *opens* the name is part of the name. `split_removal_target(
+///   "npm:@angular/cli")` returned `(Some("npm"), "")`, so the seven call sites below —
+///   `rebuild`, `cleanup` three times, `packages`, `upgrade` — carried an empty package name
+///   into a removal. `Q23` was fixed on the read side and its sibling on the **remove** side
+///   stayed live.
+/// - **`V.113`** — a quoted name is opaque, spaces and `@` included. `winget:"Some App@2"`
+///   split inside the quotes and produced half a name.
+///
+/// Neither is fixable by adding a case here; both are already right in
+/// `grammar::statement::parse`, which is the only thing that knows where a name ends. A parse
+/// failure falls back to `(None, input)` — the same answer this gave for an unrecognised
+/// prefix — so the function stays infallible for a caller holding a raw CLI argument.
 pub fn split_removal_target(
     input: &str,
     is_known_backend: impl Fn(&str) -> bool,
 ) -> (Option<String>, String) {
-    let (backend, name_part) = match input.split_once(':') {
-        Some((b, n)) if is_known_backend(b) => (Some(b.to_string()), n),
-        _ => (None, input),
-    };
-    let bare = name_part.split('@').next().unwrap_or(name_part).to_string();
-    (backend, bare)
+    use crate::config::grammar::{statement, Origin, Selector, Statement};
+
+    let origin = Origin::new(std::path::PathBuf::from("<argument>"), 0);
+    match statement::parse(&origin, input, &is_known_backend) {
+        Ok(Statement::Package(decl)) | Ok(Statement::Absent(decl)) => match decl.selector {
+            Selector::Name(name) => (decl.backend, name),
+            // A pattern is not a removal target: it names a set, and the caller asked for one
+            // package. Handing back the pattern text keeps the old shape — nothing matches, and
+            // the caller says so — rather than inventing a name that was never written.
+            Selector::Regex(pattern) => (decl.backend, pattern),
+        },
+        _ => (None, input.to_string()),
+    }
 }
 
 #[cfg(test)]

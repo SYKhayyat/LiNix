@@ -46,16 +46,19 @@ else
   say "building and installing from $REPO (this can take a minute)..."
 fi
 
-# Prefer the reproducible, lockfile-pinned build; fall back if the lock is unavailable.
+# `--locked`, and no fallback. This was a `--locked` attempt with its stderr sent to
+# /dev/null and, on *any* non-zero exit, a second run without it — described in the comment as
+# "fall back if the lock is unavailable". `Cargo.lock` is tracked in this repository, so the
+# case the fallback named cannot happen; what it actually caught was a network blip or a
+# compile error, and its response was to resolve 452 dependencies fresh, with the reason
+# hidden. That is a supply-chain downgrade triggered by bad wifi, in the script a user pipes
+# from the web.
+#
 # `--tag` only when there is one: `cargo install --git X --tag ""` is not the same command.
 if [ -n "$REF" ]; then
-  if ! cargo install --git "$REPO" --tag "$REF" --locked 2>/dev/null; then
-    cargo install --git "$REPO" --tag "$REF"
-  fi
+  cargo install --git "$REPO" --tag "$REF" --locked
 else
-  if ! cargo install --git "$REPO" --locked 2>/dev/null; then
-    cargo install --git "$REPO"
-  fi
+  cargo install --git "$REPO" --locked
 fi
 
 # cargo installs into ~/.cargo/bin; make sure the user can find it.

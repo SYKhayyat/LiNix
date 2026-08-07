@@ -6,15 +6,15 @@ use crate::verbs::prelude::*;
 /// the same shape as `sync`: name every package first, put it through the guard, then ask.
 /// The old `clean` ran `apt autoremove -y` / `pacman -Rs --noconfirm` across every available
 /// backend with no preview and outside the guard.
-pub(crate) async fn handle_remove_orphans(app: &App) -> Result<()> {
-    use linix::app::sync::guard::{enforce, GuardScope};
+pub async fn handle_remove_orphans(app: &App) -> Result<()> {
+    use crate::app::sync::guard::{enforce, GuardScope};
 
     let mut listed: Vec<(String, Vec<String>)> = Vec::new();
     let mut cannot_say: Vec<String> = Vec::new();
 
     // Read-only and independent per manager; ordered so the report is stable.
     use futures::stream::StreamExt;
-    let answers: Vec<(String, linix::core::Result<Vec<String>>)> =
+    let answers: Vec<(String, crate::core::Result<Vec<String>>)> =
         futures::stream::iter(app.registry.available())
             .filter_map(|backend| async move {
                 let up = backend.as_upgradable()?.clone();
@@ -29,7 +29,7 @@ pub(crate) async fn handle_remove_orphans(app: &App) -> Result<()> {
         match answer {
             Ok(names) if names.is_empty() => {}
             Ok(names) => listed.push((name, names)),
-            Err(linix::core::Error::Unsupported(_)) => cannot_say.push(name),
+            Err(crate::core::Error::Unsupported(_)) => cannot_say.push(name),
             Err(e) => warn!("could not list orphans for {}: {}", name, e),
         }
     }
@@ -105,9 +105,9 @@ pub(crate) async fn handle_remove_orphans(app: &App) -> Result<()> {
             // One journal entry per name, not one per command: they go in one manager
             // invocation and so succeed or fail together, but a reader of an interrupted log
             // needs to know *which* packages a killed `remove-orphans` was part-way through.
-            linix::core::journalled(
+            crate::core::journalled(
                 &app.journal,
-                linix::core::journal::removals_of(backend_name, names),
+                crate::core::journal::removals_of(backend_name, names),
                 installable.remove(names, backend.sudo_for_write()),
             )
             .await
@@ -119,13 +119,13 @@ pub(crate) async fn handle_remove_orphans(app: &App) -> Result<()> {
     perform_maintenance(app).await
 }
 
-pub(crate) fn confirm_orphan_removal(app: &App) -> Result<bool> {
+pub fn confirm_orphan_removal(app: &App) -> Result<bool> {
     if app.config.yes {
         return Ok(true);
     }
     use std::io::IsTerminal;
     if !std::io::stdin().is_terminal() {
-        return Err(linix::core::Error::Refused(
+        return Err(crate::core::Error::Refused(
             "Refusing to remove orphans without confirmation in a non-interactive shell. Re-run with --yes to proceed, or --dry-run to preview."
         .to_string()).into());
     }
@@ -142,7 +142,7 @@ pub(crate) fn confirm_orphan_removal(app: &App) -> Result<bool> {
 /// `--all` additionally clears LiNix's own transient download area. It does NOT touch the
 /// installed artifact directories — those hold software that is on `PATH`, and deleting them
 /// is a removal (level 4), not a cache clean.
-pub(crate) async fn handle_clean_cache(app: &App, all: bool) -> Result<()> {
+pub async fn handle_clean_cache(app: &App, all: bool) -> Result<()> {
     if app.config.dry_run {
         println!("[DRY-RUN] Would clear the package cache for every backend that has one.");
         println!("[DRY-RUN] Would forget the installed listings LiNix has cached.");
@@ -156,7 +156,7 @@ pub(crate) async fn handle_clean_cache(app: &App, all: bool) -> Result<()> {
     // something outside LiNix changed the machine and they know it before `installed_cache_secs`
     // does — so it must work even on a machine where the cache is turned off, since the files
     // could have been written by a run that had it on.
-    match linix::core::installed::InstalledListings::forget_on_disk() {
+    match crate::core::installed::InstalledListings::forget_on_disk() {
         Ok(0) => {}
         Ok(n) => println!("Forgot {} cached installed listing(s).", n),
         Err(e) => warn!("could not clear the installed-listing cache: {}", e),
@@ -164,7 +164,7 @@ pub(crate) async fn handle_clean_cache(app: &App, all: bool) -> Result<()> {
     // Independent per manager — each clears its own cache directory and they contend for
     // nothing. `run_exclusive` still serialises anything that shares a manager lock.
     use futures::stream::StreamExt;
-    let cleanable: Vec<(String, bool, std::sync::Arc<dyn linix::core::Upgradable>)> = app
+    let cleanable: Vec<(String, bool, std::sync::Arc<dyn crate::core::Upgradable>)> = app
         .registry
         .available()
         .into_iter()
@@ -176,7 +176,7 @@ pub(crate) async fn handle_clean_cache(app: &App, all: bool) -> Result<()> {
             ))
         })
         .collect();
-    let outcomes: Vec<(String, linix::core::Result<()>)> = futures::stream::iter(cleanable)
+    let outcomes: Vec<(String, crate::core::Result<()>)> = futures::stream::iter(cleanable)
         .map(|(name, sudo, up)| async move { (name, up.clean_cache(sudo).await) })
         .buffered(app.config.max_parallel.max(1))
         .collect()
@@ -186,7 +186,7 @@ pub(crate) async fn handle_clean_cache(app: &App, all: bool) -> Result<()> {
     for (name, outcome) in outcomes {
         match outcome {
             Ok(()) => cleaned.push(name),
-            Err(linix::core::Error::Unsupported(_)) => {}
+            Err(crate::core::Error::Unsupported(_)) => {}
             Err(e) => warn!("cache clean failed for {}: {}", name, e),
         }
     }
@@ -220,13 +220,13 @@ pub(crate) async fn handle_clean_cache(app: &App, all: bool) -> Result<()> {
 /// removal scheduled all 14 — under any sane count limit, none protected, all things you
 /// would cry about. The count misses it on small machines. Manage a tenth of what you are
 /// about to delete and you have made a mistake, on every machine, at every scale (V.20).
-pub(crate) const PURGE_RATIO: f64 = 0.1;
+pub const PURGE_RATIO: f64 = 0.1;
 
 /// `purge-undeclared` (II.11): delete everything LiNix does not manage.
 ///
 /// The residual risk, stated plainly because the docs must state it: `adopt` is an estimate.
 /// If it missed something, this deletes it.
-pub(crate) async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Result<()> {
+pub async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Result<()> {
     let undeclared = app.installed_but_undeclared().await?;
     if undeclared.is_empty() {
         println!("Nothing to do: LiNix manages every installed package.");
@@ -255,7 +255,7 @@ pub(crate) async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -
     let ratio = managed as f64 / undeclared.len() as f64;
     if ratio < PURGE_RATIO && !allow_mass_purge {
         let sample: Vec<String> = undeclared.iter().take(3).map(|p| p.name.clone()).collect();
-        return Err(linix::core::Error::Refused(format!(
+        return Err(crate::core::Error::Refused(format!(
             "LiNix manages {} packages.\n\
              This will remove {}, including {}.\n\
              That looks like you haven't adopted this machine yet.\n\
@@ -269,11 +269,11 @@ pub(crate) async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -
 
     // `max_removals` does not apply: it catches accidents, and this is deliberate. Protection
     // and OS-essential still do — nothing overrides those (II.10, II.11).
-    linix::app::sync::guard::enforce_deliberate(
+    crate::app::sync::guard::enforce_deliberate(
         &app.config,
         &app.registry,
         &removals,
-        linix::app::sync::guard::GuardScope::PurgeUndeclared,
+        crate::app::sync::guard::GuardScope::PurgeUndeclared,
     )
     .await?;
 
@@ -286,7 +286,7 @@ pub(crate) async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -
     // this" is the most important sentence this command can print (II.11).
     let snapshot = match app
         .snapshot_manager
-        .auto_snapshot(linix::core::snapshot::SnapshotLabel::PurgeUndeclared)
+        .auto_snapshot(crate::core::snapshot::SnapshotLabel::PurgeUndeclared)
         .await
     {
         Ok(Some(snap)) => {
@@ -318,7 +318,7 @@ pub(crate) async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -
         // terminal`, so it did fail safe — and a scripted user got that sentence instead of
         // the one naming the flag that would have worked.
         if !std::io::stdin().is_terminal() {
-            return Err(linix::core::Error::Refused(
+            return Err(crate::core::Error::Refused(
                 "Refusing to purge undeclared packages without confirmation in a \
                  non-interactive shell. Re-run with --yes to proceed, or --dry-run to preview."
                     .to_string(),
@@ -358,9 +358,9 @@ pub(crate) async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -
         // that it had started. Journalled per package, because this loop removes one at a
         // time and a kill part-way through leaves a machine whose only account of what went
         // is the terminal scrollback.
-        match linix::core::journalled(
+        match crate::core::journalled(
             &app.journal,
-            vec![linix::core::JournalAction::Remove {
+            vec![crate::core::JournalAction::Remove {
                 name: name.clone(),
                 backend: backend_name.clone(),
             }],
@@ -393,7 +393,7 @@ pub(crate) async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -
 /// This is not a widening of `clean-cache`. Level 3 is a different command precisely because
 /// losing the registry loses the one distinction the removal model rests on — declared vs
 /// already-there — and after it every managed package looks unmanaged.
-pub(crate) async fn handle_reset(app: &App, force: bool) -> Result<()> {
+pub async fn handle_reset(app: &App, force: bool) -> Result<()> {
     let managed = app.state.lock().await.packages.len();
 
     // K5: forgetting the registry while the declarations remain leaves LiNix believing it
@@ -404,7 +404,7 @@ pub(crate) async fn handle_reset(app: &App, force: bool) -> Result<()> {
         || config_root.join("profiles").exists()
         || config_root.join("active").exists();
     if repo_exists && !force {
-        return Err(linix::core::Error::Refused(format!(
+        return Err(crate::core::Error::Refused(format!(
             "A config repo still exists at {}.\n\
              Resetting the registry while your files declare packages would leave LiNix \
              believing it manages nothing while the files say otherwise.\n\
@@ -425,7 +425,7 @@ pub(crate) async fn handle_reset(app: &App, force: bool) -> Result<()> {
     if !app.config.yes {
         use std::io::IsTerminal;
         if !std::io::stdin().is_terminal() {
-            return Err(linix::core::Error::Refused(
+            return Err(crate::core::Error::Refused(
                 "Refusing to reset without confirmation in a non-interactive shell. Re-run \
                  with --yes if you are certain."
                     .to_string(),
@@ -483,7 +483,7 @@ pub(crate) async fn handle_reset(app: &App, force: bool) -> Result<()> {
 /// It drops the package from managed state AND from any manifest that declares it. Doing
 /// only the first would be undone by the next `sync`, which would see the declaration and
 /// re-adopt it.
-pub(crate) async fn handle_unmanage(app: &App, packages: &[String], json: bool) -> Result<()> {
+pub async fn handle_unmanage(app: &App, packages: &[String], json: bool) -> Result<()> {
     // Q9: `unmanage nosuchbackend:foo` answered "not managed and not declared — nothing to
     // forget" at exit 0, which is what a correctly-spelled name that is genuinely unmanaged
     // also gets. `split_removal_target` below asks the registry about the prefix and falls back
@@ -493,7 +493,7 @@ pub(crate) async fn handle_unmanage(app: &App, packages: &[String], json: bool) 
 
     for spec in packages {
         let (backend, name) =
-            linix::config::parser::split_removal_target(spec, |b| app.registry.get(b).is_some());
+            crate::config::parser::split_removal_target(spec, |b| app.registry.get(b).is_some());
 
         // Forget every backend's copy when the target is unqualified, mirroring how
         // `remove` searches all backends for a bare name.
@@ -585,7 +585,7 @@ pub(crate) async fn handle_unmanage(app: &App, packages: &[String], json: bool) 
 /// rules are inspectable, so this reports the effective rules — and, given package names,
 /// answers the question people actually have ("will this be protected?") along with the
 /// rule that decides it.
-pub(crate) async fn handle_protected(app: &App, packages: &[String], json: bool) -> Result<()> {
+pub async fn handle_protected(app: &App, packages: &[String], json: bool) -> Result<()> {
     let cfg = &app.config;
 
     if !packages.is_empty() {
@@ -608,11 +608,11 @@ pub(crate) async fn handle_protected(app: &App, packages: &[String], json: bool)
         let named_backends: std::collections::HashSet<String> = packages
             .iter()
             .filter_map(|spec| {
-                linix::config::parser::split_removal_target(spec, |b| app.registry.get(b).is_some())
+                crate::config::parser::split_removal_target(spec, |b| app.registry.get(b).is_some())
                     .0
             })
             .collect();
-        let all_essential = linix::app::sync::guard::essential_names(
+        let all_essential = crate::app::sync::guard::essential_names(
             &app.registry,
             &named_backends,
             app.config.max_parallel,
@@ -621,7 +621,7 @@ pub(crate) async fn handle_protected(app: &App, packages: &[String], json: bool)
 
         let mut rows = Vec::new();
         for spec in packages {
-            let (backend, name) = linix::config::parser::split_removal_target(spec, |b| {
+            let (backend, name) = crate::config::parser::split_removal_target(spec, |b| {
                 app.registry.get(b).is_some()
             });
             // A bare name is checked against the config rules only: the OS's list is keyed by
@@ -634,7 +634,7 @@ pub(crate) async fn handle_protected(app: &App, packages: &[String], json: bool)
                     .collect(),
                 None => std::collections::HashSet::new(),
             };
-            let (protected, reason) = match linix::app::sync::guard::protection_of(
+            let (protected, reason) = match crate::app::sync::guard::protection_of(
                 cfg,
                 backend.as_deref(),
                 &name,

@@ -7270,3 +7270,84 @@ offers has an opener — the original bug — and self-tests the enumeration bef
 other builds a real one-file archive per suffix and asserts the file comes back. Mutation-tested
 both ways: deleting `.tar.zst` from the opener table (the original bug) fails both; mapping
 `.txz` to gzip — a *wrong* codec, which no table check can see — fails only the round trip.
+
+## 2026-08-06 — the six smaller families (lamdan F-9)
+
+Each of these is a family, not an instance, and two of them turned out to be the opposite of
+what the finding said.
+
+**`examples/groups/` — five files teaching a folder shape the program stopped having.**
+`bloatware.txt` told the reader to run `linix sync --remove-bloatware`, a flag on
+`target-state.md`'s deleted-config list, and the file is itself on the deleted-*files* list. A
+straight NO-LEGACY violation, read by nothing. Deleted — **and gated**, because F-9's own point
+is the argument: `examples/preferences.toml` is the one example with a test behind it and the
+one that did not rot.
+
+The first gate written for it **would not have caught the thing that motivated it**, which was
+worth finding out before shipping it: `bloatware.txt` is a hundred percent comments and parses
+as an empty manifest, and `base.txt` is bare package names that are still perfectly legal. What
+was wrong was the *directory* — `groups` is a **file** in `Layout` (the U18 backend groups),
+never a folder of manifests. So the gate asks `Layout` for its directory names and requires
+every `examples/` subdirectory to be one of them. Control-tested by putting the rotten directory
+back: the directory assertion goes red and the parse assertion still passes, which is why both
+are there.
+
+**The installers silently downgraded the supply chain.** `install.sh` ran `cargo install
+--locked` with stderr sent to `/dev/null` and, on *any* non-zero exit, re-ran without it —
+described in the comment as "fall back if the lock is unavailable". `Cargo.lock` is tracked in
+this repository, so **the case the fallback named cannot happen**; what it actually caught was a
+network blip or a compile error, answered by resolving 452 dependencies fresh with the reason
+hidden, in the script a user pipes from the web. Both fallbacks deleted. `install.ps1` gained an
+`exit 1` with them: `Err` there prints and returns, every other use of it is a warning the
+script carries on past, and carrying on would have run the health check against whatever `linix`
+was already on PATH and reported the old binary as the new one.
+
+**No `aarch64-apple-darwin` in the release matrix — every Mac sold since 2020.** The matrix
+crossed `os:` with an `include:` that mapped each OS to one target, which makes a second Mac
+target *unexpressible*. One row per target now, each building on the hardware it targets
+(`macos-13` is the last Intel image; `macos-latest` is arm64). Masked until now only because
+`scripts/install.*` builds from source, which means the three published binaries were installed
+by nothing.
+
+**The remove side of `backend:name` had never heard of two rules the read side learned.**
+`split_removal_target` did `name_part.split('@').next()`, so `npm:@angular/cli` came back as
+`(Some("npm"), "")` — `Q23`'s scoped-package rule, fixed on the read side, with its sibling live
+on the **remove** side and carried into `rebuild`, `cleanup` ×3, `packages` and `upgrade`. It
+also split inside quotes, which is `V.113`. Neither is fixable by adding a case: both are
+already right in `grammar::statement::parse`, which is the only thing that knows where a name
+ends, so the function delegates and falls back to `(None, input)` on a parse failure to stay
+infallible for a caller holding a raw CLI argument. It had **no test at all**, which is why it
+survived; it has one per call-site shape now.
+
+**`vars_embedded.rs`'s header asserted the opposite of the module.** *"Until that is decided,
+the only inputs a script has are the detected facts below"* — three lines above the
+unconditional `register_stdlib` that hands the script `sh`, `http_get`, `read_file` and `env`.
+The decision *had* been made: II.6b specifies the stdlib, always on, because `vars.linix` is
+"trusted the same as a hook". The paragraph describing the world before the ruling was left in
+place. Rewritten to say what is true, including the part that matters more here than for a hook:
+this file resolves at **step 0** of II.7, so `check`, `plan` and `plan --dry-run` have all
+already run it. *"I only previewed it"* is not a state in which this script has not run.
+
+Its twin: `hooks.rs`'s `setup_rhai_sandbox` claimed a boundary it does not provide — a `#!` hook
+in the same config runs any command on the machine, so withholding `sh` from the Rhai arm stops
+nobody. Renamed to `register_rhai_host_functions`, with the difference between the two engines
+recorded as **unruled rather than principled**.
+
+**`verbs/` was not reachable from any of the ninety-odd test binaries.** `main.rs` declared
+`mod verbs;` — private to the binary, absent from `lib.rs` — so ~8,500 lines of real logic could
+only be exercised by spawning the program, and four of the ten files had no `#[cfg(test)]`
+either. It is `pub mod verbs` in the library now: 165 `pub(crate)` promoted, 290 `linix::` paths
+rewritten to `crate::`, and `perform_maintenance` moved out of `main.rs` into `verbs/mod.rs`,
+where it belonged anyway — it is what a verb does after changing the machine, not part of
+reading argv. This also unblocks `F-3`'s preferred remedy, which `Y12` had to work around
+structurally: `app/profile.rs` could not call `verbs::sync::reconcile` because `app/` cannot
+reach a module private to the binary.
+
+One gate failed on the move and was right to be looked at rather than edited around:
+`phase_is_the_sync_order_tests` located the phase list by searching for
+`pub(crate) async fn apply_non_package_phases`, so promoting the visibility made it report
+*"the one phase list is gone"* about a function that had not moved a line. It matches without
+the visibility now — a gate that fails on a rename it does not care about is a gate people learn
+to edit rather than read.
+
+`pkgsrc.rs`/`bsd.rs`, F-9's remaining item, was already resolved by `Y11`.

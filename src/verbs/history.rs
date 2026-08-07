@@ -1,6 +1,6 @@
 use crate::verbs::prelude::*;
 
-pub(crate) async fn handle_snapshot(app: &App, cmd: &SnapshotCommand) -> Result<()> {
+pub async fn handle_snapshot(app: &App, cmd: &SnapshotCommand) -> Result<()> {
     match cmd {
         SnapshotCommand::List => {
             let list = app.snapshot_manager.list_snapshots().await?;
@@ -36,7 +36,7 @@ pub(crate) async fn handle_snapshot(app: &App, cmd: &SnapshotCommand) -> Result<
 /// history — git IS the history (II.1), so a rollback is "point the manifests at then, converge
 /// now". Whole-config by nature: git checkout is all-or-nothing, which is why the old
 /// per-package / with-config flags are gone.
-pub(crate) async fn handle_rollback(app: &App, reference: &str) -> Result<()> {
+pub async fn handle_rollback(app: &App, reference: &str) -> Result<()> {
     let git = app.git_manager();
     if !git.is_repo() {
         anyhow::bail!(
@@ -49,7 +49,7 @@ pub(crate) async fn handle_rollback(app: &App, reference: &str) -> Result<()> {
     // `require_signed_history` is set, because a fresh repo signs nothing.
     let signature = git.signature_of(reference)?;
     if app.config.guard.require_signed_history && !signature.is_verified() {
-        return Err(linix::core::Error::Refused(format!(
+        return Err(crate::core::Error::Refused(format!(
             "rollback: refusing to restore {}.\n  \
              - git says it is {}\n\n\
              `require_signed_history` is on, so every commit you roll back to must carry a \
@@ -67,7 +67,7 @@ pub(crate) async fn handle_rollback(app: &App, reference: &str) -> Result<()> {
     if !app.config.yes {
         use std::io::IsTerminal;
         if !std::io::stdin().is_terminal() {
-            return Err(linix::core::Error::Refused(
+            return Err(crate::core::Error::Refused(
                 "Refusing to roll back without confirmation in a non-interactive shell. \
                  Re-run with --yes to proceed, or --dry-run to preview."
                     .to_string(),
@@ -88,7 +88,7 @@ pub(crate) async fn handle_rollback(app: &App, reference: &str) -> Result<()> {
 /// `linix diff <from> [to]` — what changed between two commits, in packages (Phase 4). The
 /// manifests are package declarations, so a diff of the manifest files IS the package-level
 /// change; git already records it. Omitting `to` compares `from` against your working tree.
-pub(crate) async fn handle_diff(app: &App, from: &str, to: Option<&str>) -> Result<()> {
+pub async fn handle_diff(app: &App, from: &str, to: Option<&str>) -> Result<()> {
     let git = app.git_manager();
     if !git.is_repo() {
         anyhow::bail!(
@@ -118,11 +118,11 @@ pub(crate) async fn handle_diff(app: &App, from: &str, to: Option<&str>) -> Resu
     Ok(())
 }
 
-pub(crate) async fn handle_git(app: &App, cmd: &GitCommand) -> Result<()> {
+pub async fn handle_git(app: &App, cmd: &GitCommand) -> Result<()> {
     // Asked once, for every subcommand. Only `init` used to ask, so on a machine without
     // git the others answered from `.git`'s absence: `log` printed an empty history, and
     // `status` advised running `git init`, which could only refuse.
-    linix::core::GitManager::require()?;
+    crate::core::GitManager::require()?;
     let git = app.git_manager();
     match cmd {
         GitCommand::Init => {
@@ -166,7 +166,7 @@ pub(crate) async fn handle_git(app: &App, cmd: &GitCommand) -> Result<()> {
                 // The signature is named only when there is one: a repo nobody signs would
                 // otherwise carry "unsigned" on every row, which is noise, not a finding.
                 match &c.signature {
-                    linix::core::git::Signature::Unsigned => {
+                    crate::core::git::Signature::Unsigned => {
                         println!("{}  {}  {}", c.short, c.date, c.subject)
                     }
                     sig => println!(
@@ -201,11 +201,11 @@ pub(crate) async fn handle_git(app: &App, cmd: &GitCommand) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn handle_shell(app: &App, packages: &[String]) -> Result<()> {
+pub async fn handle_shell(app: &App, packages: &[String]) -> Result<()> {
     app.shell().enter(packages).await.map_err(|e| e.into())
 }
 
-pub(crate) async fn handle_run(app: &App, packages: &[String], command: &str) -> Result<()> {
+pub async fn handle_run(app: &App, packages: &[String], command: &str) -> Result<()> {
     let parts: Vec<&str> = command.split_whitespace().collect();
     let bin = parts.first().unwrap_or(&"");
     let args: Vec<String> = parts.iter().skip(1).map(|s| s.to_string()).collect();
@@ -215,11 +215,7 @@ pub(crate) async fn handle_run(app: &App, packages: &[String], command: &str) ->
         .map_err(|e| e.into())
 }
 
-pub(crate) async fn handle_adopt(
-    app: &App,
-    backends: Vec<String>,
-    enabled_only: bool,
-) -> Result<()> {
+pub async fn handle_adopt(app: &App, backends: Vec<String>, enabled_only: bool) -> Result<()> {
     // A name that reaches no backend is refused rather than silently adopting nothing: `linix
     // adopt srvice` answering "Adopted 0 declaration(s)" is byte-identical to a correct name
     // with nothing to take, so a typo cannot be told from a no-op (Q9).
@@ -229,7 +225,7 @@ pub(crate) async fn handle_adopt(
     for name in &backends {
         app.require_known_backend(Some(name))?;
     }
-    let scope = linix::app::adopt::AdoptScope {
+    let scope = crate::app::adopt::AdoptScope {
         backends,
         enabled_only,
     };
@@ -239,15 +235,15 @@ pub(crate) async fn handle_adopt(
         .map_err(|e| e.into())
 }
 
-pub(crate) async fn handle_snapshot_restore(app: &App) -> Result<()> {
+pub async fn handle_snapshot_restore(app: &App) -> Result<()> {
     app.snapshot_restore()
         .run_interactive()
         .await
         .map_err(|e| e.into())
 }
 
-pub(crate) async fn handle_history(app: &App) -> Result<()> {
-    use linix::app::ui::{CommitView, HistoryAction, HistoryBrowser};
+pub async fn handle_history(app: &App) -> Result<()> {
+    use crate::app::ui::{CommitView, HistoryAction, HistoryBrowser};
 
     let git = app.git_manager();
     if !git.is_repo() {
@@ -290,24 +286,24 @@ pub(crate) async fn handle_history(app: &App) -> Result<()> {
     }
 }
 
-pub(crate) async fn handle_audit(app: &App, json: bool) -> Result<()> {
-    let report = linix::app::insight::audit(app).await?;
-    linix::app::insight::print_audit(&report, json).map_err(|e| e.into())
+pub async fn handle_audit(app: &App, json: bool) -> Result<()> {
+    let report = crate::app::insight::audit(app).await?;
+    crate::app::insight::print_audit(&report, json).map_err(|e| e.into())
 }
 
-pub(crate) async fn handle_sbom(app: &App) -> Result<()> {
-    println!("{}", linix::app::insight::sbom(app).await?);
+pub async fn handle_sbom(app: &App) -> Result<()> {
+    println!("{}", crate::app::insight::sbom(app).await?);
     Ok(())
 }
 
-pub(crate) async fn handle_export(
+pub async fn handle_export(
     app: &App,
     format: Option<&str>,
     out: &str,
     stdout: bool,
     force: bool,
 ) -> Result<()> {
-    use linix::app::export::{export, Format, Outcome};
+    use crate::app::export::{export, Format, Outcome};
     let fmt = match format {
         Some(s) => Some(
             Format::parse(s)
@@ -339,19 +335,14 @@ pub(crate) async fn handle_export(
     Ok(())
 }
 
-pub(crate) async fn handle_bundle(
-    app: &App,
-    out: &str,
-    artifacts: bool,
-    archive: bool,
-) -> Result<()> {
+pub async fn handle_bundle(app: &App, out: &str, artifacts: bool, archive: bool) -> Result<()> {
     let out_path = std::path::PathBuf::from(out);
 
     // Freeze a plan so the target can review/apply it offline. Computed up front so it can be
     // written into the bundle (and captured inside the archive) by create_bundle.
     let plan_json = match compute_full_changes(app, None).await {
         Ok(full) => {
-            let mut plan = linix::app::sync::SavedPlan::from_changes(
+            let mut plan = crate::app::sync::SavedPlan::from_changes(
                 &full.changes,
                 &full.resources,
                 Some(chrono::Utc::now().timestamp()),
@@ -363,7 +354,7 @@ pub(crate) async fn handle_bundle(
     };
 
     let report =
-        linix::app::bundle::create_bundle(app, &out_path, artifacts, archive, plan_json.as_deref())
+        crate::app::bundle::create_bundle(app, &out_path, artifacts, archive, plan_json.as_deref())
             .await?;
 
     // The tense comes from the writer, not from asking the flag a second time (Q15/V.105).
@@ -435,13 +426,13 @@ pub(crate) async fn handle_bundle(
     Ok(())
 }
 
-pub(crate) async fn handle_restore(app: &App, dir: &str, force: bool) -> Result<()> {
+pub async fn handle_restore(app: &App, dir: &str, force: bool) -> Result<()> {
     let bundle_dir = std::path::PathBuf::from(dir);
     let config_root = app.config.config_root();
     let registry_path = { app.state.lock().await.path.clone() };
 
     let report =
-        linix::app::bundle::restore_bundle(&bundle_dir, &config_root, &registry_path, force)
+        crate::app::bundle::restore_bundle(&bundle_dir, &config_root, &registry_path, force)
             .await?;
 
     println!(
@@ -468,12 +459,12 @@ pub(crate) async fn handle_restore(app: &App, dir: &str, force: bool) -> Result<
     Ok(())
 }
 
-pub(crate) async fn handle_why(app: &App, package: &str, json: bool) -> Result<()> {
+pub async fn handle_why(app: &App, package: &str, json: bool) -> Result<()> {
     // Q9: `why nosuchbackend:foo` reported it "not under LiNix management" at exit 0 — true of
     // the string and useless, because the manager is the part that does not exist.
     app.require_known_spec_backends(std::slice::from_ref(&package.to_string()))
         .await?;
-    linix::app::insight::why(app, package, json)
+    crate::app::insight::why(app, package, json)
         .await
         .map_err(|e| e.into())
 }

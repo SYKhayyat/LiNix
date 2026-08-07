@@ -2,17 +2,17 @@ use crate::verbs::prelude::*;
 
 /// Everything `handle_upgrade` needs, bundled so the dispatch site stays readable and the
 /// handler doesn't grow an unwieldy positional signature.
-pub(crate) struct UpgradeRequest<'a> {
-    pub(crate) packages: &'a [String],
-    pub(crate) backend: Option<&'a str>,
-    pub(crate) all: bool,
-    pub(crate) security: bool,
-    pub(crate) except: &'a [String],
-    pub(crate) profile: &'a Option<String>,
-    pub(crate) module: &'a Option<String>,
-    pub(crate) json: bool,
-    pub(crate) canary: bool,
-    pub(crate) test: &'a Option<String>,
+pub struct UpgradeRequest<'a> {
+    pub packages: &'a [String],
+    pub backend: Option<&'a str>,
+    pub all: bool,
+    pub security: bool,
+    pub except: &'a [String],
+    pub profile: &'a Option<String>,
+    pub module: &'a Option<String>,
+    pub json: bool,
+    pub canary: bool,
+    pub test: &'a Option<String>,
 }
 
 impl UpgradeRequest<'_> {
@@ -28,7 +28,7 @@ impl UpgradeRequest<'_> {
 }
 
 /// True if `except` names this package, matching either the bare name or `backend:name`.
-pub(crate) fn upgrade_excluded(except: &[String], backend: &str, name: &str) -> bool {
+pub fn upgrade_excluded(except: &[String], backend: &str, name: &str) -> bool {
     let qualified = format!("{}:{}", backend, name);
     except
         .iter()
@@ -39,7 +39,7 @@ pub(crate) fn upgrade_excluded(except: &[String], backend: &str, name: &str) -> 
 /// `version` is `Some`, pin to exactly that version (`options["version"]`, which pin-capable
 /// backends honor) — used by `--security` to land on the fixed version rather than blindly
 /// jumping to latest. `None` means "newest the backend offers".
-pub(crate) async fn upgrade_one(
+pub async fn upgrade_one(
     app: &App,
     backend: &str,
     name: &str,
@@ -74,9 +74,9 @@ pub(crate) async fn upgrade_one(
             // declaration describing the version it was moving to. The `@version=` pin
             // `--security` sets is inside the spec, so the recorded action is the upgrade
             // rather than a reinstall of whatever is newest.
-            linix::core::journalled(
+            crate::core::journalled(
                 &app.journal,
-                vec![linix::core::JournalAction::Install(spec.clone())],
+                vec![crate::core::JournalAction::Install(spec.clone())],
                 inst.install(std::slice::from_ref(&spec), b.sudo_for_write()),
             )
             .await?;
@@ -87,7 +87,7 @@ pub(crate) async fn upgrade_one(
 }
 
 /// Upgrade an explicit set of managed packages (or one backend's worth) to latest.
-pub(crate) async fn upgrade_targeted(
+pub async fn upgrade_targeted(
     app: &App,
     packages: &[String],
     backend: Option<&str>,
@@ -107,7 +107,7 @@ pub(crate) async fn upgrade_targeted(
     if !packages.is_empty() {
         for req in packages {
             let (want_backend, want_name) =
-                linix::config::parser::split_removal_target(req, |b| app.registry.get(b).is_some());
+                crate::config::parser::split_removal_target(req, |b| app.registry.get(b).is_some());
             let hit = managed
                 .iter()
                 .find(|(b, n)| n == &want_name && want_backend.as_ref().is_none_or(|wb| wb == b));
@@ -214,8 +214,8 @@ pub(crate) async fn upgrade_targeted(
 
 /// Upgrade exactly the packages `audit` reports as vulnerable, to a non-vulnerable version.
 /// Honors `--except`. This is the `audit → upgrade` bridge.
-pub(crate) async fn upgrade_security(app: &App, except: &[String], json: bool) -> Result<()> {
-    let report = linix::app::insight::audit(app).await?;
+pub async fn upgrade_security(app: &App, except: &[String], json: bool) -> Result<()> {
+    let report = crate::app::insight::audit(app).await?;
     if report.findings.is_empty() {
         if json {
             println!("{}", serde_json::json!({ "upgraded": [], "vulnerable": 0 }));
@@ -355,7 +355,7 @@ pub(crate) async fn upgrade_security(app: &App, except: &[String], json: bool) -
 /// satisfies it, and plans the package straight back down. Every mode below moves versions, so
 /// every mode below is followed by this (Z2). Only packages that were already pinned are
 /// touched — an upgrade is not a `lock`.
-pub(crate) async fn handle_upgrade(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
+pub async fn handle_upgrade(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
     let json = req.json;
     upgrade_modes(app, req).await?;
     let moved = crate::verbs::plan::refresh_version_locks(app).await?;
@@ -414,7 +414,7 @@ async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
         // one. `deny_packages` is close to meaningless against "upgrade everything";
         // `require_snapshot` is not, and a gate honoured by some change paths is a gate on
         // nothing.
-        let resolver = linix::app::sync::resolver::StateResolver::new(
+        let resolver = crate::app::sync::resolver::StateResolver::new(
             &app.config,
             app.registry.clone(),
             false,
@@ -451,14 +451,14 @@ async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
     let json = req.json;
 
     let resolver =
-        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
     let desired = resolver.resolve_desired_state().await?;
     enforce_policy(app, &desired).await?;
 
     let changes = {
         let state_guard = app.state.lock().await;
-        let planner = linix::app::sync::planner::ChangePlanner::new(
+        let planner = crate::app::sync::planner::ChangePlanner::new(
             app.registry.clone(),
             &state_guard,
             &app.config,
@@ -486,13 +486,13 @@ async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
     if !changes.is_empty() {
         app.sync_engine()
             .await
-            .sync(changes, linix::app::sync::guard::GuardScope::Upgrade)
+            .sync(changes, crate::app::sync::guard::GuardScope::Upgrade)
             .await?;
         perform_maintenance(app).await?;
     }
     Ok(())
 }
 
-pub(crate) async fn handle_update(app: &App) -> Result<()> {
+pub async fn handle_update(app: &App) -> Result<()> {
     app.update().await.map_err(|e| e.into())
 }

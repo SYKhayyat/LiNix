@@ -9,11 +9,11 @@ use crate::verbs::prelude::*;
 /// Fetch → plan → refuse-or-copy → optionally approve. The safety story is not the fetch; it is
 /// that anything executable lands unapproved and II.12 holds it until `linix lock`. `--trust`
 /// runs that lock in the same step; without it, the vendored code sits inert and reviewable.
-pub(crate) async fn handle_add(app: &App, source: &str, trust: bool, force: bool) -> Result<()> {
-    use linix::model::vendor::{self, Source, Vendored};
+pub async fn handle_add(app: &App, source: &str, trust: bool, force: bool) -> Result<()> {
+    use crate::model::vendor::{self, Source, Vendored};
 
     let Some(src) = Source::classify(source) else {
-        return Err(linix::core::Error::Validation(format!(
+        return Err(crate::core::Error::Validation(format!(
             "`{}` is not a source `add` understands. Use `github:owner/repo`, a git or https \
              URL, a raw file URL, or a path to a module file or repo on this machine.",
             source
@@ -25,7 +25,7 @@ pub(crate) async fn handle_add(app: &App, source: &str, trust: bool, force: bool
     // downloaded; a local source is read in place. The temp dir is dropped (and deleted) when
     // this function returns, so nothing a fetch brought outlives the command except what was
     // deliberately copied into the repo.
-    let scratch = tempfile::tempdir().map_err(linix::core::Error::from)?;
+    let scratch = tempfile::tempdir().map_err(crate::core::Error::from)?;
     let fetched: std::path::PathBuf = match &src {
         Source::Github { .. } | Source::Git(_) => {
             let url = src.clone_url().expect("a git source has a clone url");
@@ -39,7 +39,7 @@ pub(crate) async fn handle_add(app: &App, source: &str, trust: bool, force: bool
                 )
                 .await
                 .map_err(|e| {
-                    linix::core::Error::Other(format!("could not clone {}: {}", src.label(), e))
+                    crate::core::Error::Other(format!("could not clone {}: {}", src.label(), e))
                 })?;
             dest
         }
@@ -57,21 +57,21 @@ pub(crate) async fn handle_add(app: &App, source: &str, trust: bool, force: bool
                 format!("{}.txt", name)
             };
             let dir = scratch.path().join("modules");
-            std::fs::create_dir_all(&dir).map_err(linix::core::Error::from)?;
+            std::fs::create_dir_all(&dir).map_err(crate::core::Error::from)?;
             info!("downloading {}...", url);
             let body = reqwest::get(url)
                 .await
                 .and_then(|r| r.error_for_status())
-                .map_err(|e| linix::core::Error::Other(format!("could not fetch {}: {}", url, e)))?
+                .map_err(|e| crate::core::Error::Other(format!("could not fetch {}: {}", url, e)))?
                 .text()
                 .await
-                .map_err(|e| linix::core::Error::Other(format!("reading {}: {}", url, e)))?;
-            std::fs::write(dir.join(name), body).map_err(linix::core::Error::from)?;
+                .map_err(|e| crate::core::Error::Other(format!("reading {}: {}", url, e)))?;
+            std::fs::write(dir.join(name), body).map_err(crate::core::Error::from)?;
             scratch.path().to_path_buf()
         }
         Source::Local(p) => {
             if !p.exists() {
-                return Err(linix::core::Error::Validation(format!(
+                return Err(crate::core::Error::Validation(format!(
                     "`{}` does not exist on this machine.",
                     p.display()
                 ))
@@ -102,7 +102,7 @@ pub(crate) async fn handle_add(app: &App, source: &str, trust: bool, force: bool
             .iter()
             .map(|p| p.display().to_string())
             .collect();
-        return Err(linix::core::Error::Refused(format!(
+        return Err(crate::core::Error::Refused(format!(
             "refusing to overwrite {} file(s) you already have: {}.\n  \
              Rename yours, or pass `--force` to replace them with {}'s.",
             names.len(),
@@ -119,10 +119,10 @@ pub(crate) async fn handle_add(app: &App, source: &str, trust: bool, force: bool
     for pl in &plan.placements {
         let to = root.join(&pl.to);
         if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent).map_err(linix::core::Error::from)?;
+            std::fs::create_dir_all(parent).map_err(crate::core::Error::from)?;
         }
         std::fs::copy(fetched.join(&pl.from), &to)
-            .map_err(|e| linix::core::Error::Io(format!("copying {}: {}", pl.to.display(), e)))?;
+            .map_err(|e| crate::core::Error::Io(format!("copying {}: {}", pl.to.display(), e)))?;
         if pl.kind == Vendored::Module {
             modules += 1;
         } else {
@@ -143,7 +143,7 @@ pub(crate) async fn handle_add(app: &App, source: &str, trust: bool, force: bool
     // the user has decided to trust.
     if code > 0 {
         if trust {
-            let events = linix::app::events::EventHooks::load(&app.config);
+            let events = crate::app::events::EventHooks::load(&app.config);
             let _ = events.approve_all();
             let approved = app.hooks.approve_all_hooks().unwrap_or(0);
             approve_adapters(app).ok();
@@ -169,7 +169,7 @@ pub(crate) async fn handle_add(app: &App, source: &str, trust: bool, force: bool
 /// Every file under `root`, as paths relative to `root`. Symlinks are not followed — a
 /// stranger's symlink is a path-traversal vector, and `safe_relative` would reject its target
 /// anyway, so not following it is the honest version of the same refusal.
-pub(crate) fn collect_relative_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+pub fn collect_relative_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -202,12 +202,12 @@ pub(crate) fn collect_relative_files(root: &std::path::Path) -> Vec<std::path::P
 /// data lives in the container, and nothing here is consulted except the config's path. It is
 /// therefore in `READ_ONLY_COMMANDS` and takes no data lock — a rehearsal has no business
 /// blocking a real sync.
-pub(crate) async fn handle_try(app: &App, image: Option<&str>) -> Result<()> {
-    use linix::model::rehearsal::{self, Verdict};
+pub async fn handle_try(app: &App, image: Option<&str>) -> Result<()> {
+    use crate::model::rehearsal::{self, Verdict};
 
     let present = |cmd: &str| app.executor.command_exists_sync(cmd);
     let Some(runtime) = rehearsal::pick_runtime(&present) else {
-        return Err(linix::core::Error::Refused(rehearsal::no_runtime_refusal()).into());
+        return Err(crate::core::Error::Refused(rehearsal::no_runtime_refusal()).into());
     };
 
     let image = image.unwrap_or(rehearsal::DEFAULT_IMAGE);
@@ -217,7 +217,7 @@ pub(crate) async fn handle_try(app: &App, image: Option<&str>) -> Result<()> {
     // the config has not been looked at yet.
     if !image_exists(app, runtime, image).await {
         return Err(
-            linix::core::Error::Refused(rehearsal::missing_image_refusal(runtime, image)).into(),
+            crate::core::Error::Refused(rehearsal::missing_image_refusal(runtime, image)).into(),
         );
     }
 
@@ -232,7 +232,7 @@ pub(crate) async fn handle_try(app: &App, image: Option<&str>) -> Result<()> {
         .args(args)
         .status()
         .await
-        .map_err(|e| linix::core::Error::Other(format!("could not run `{}`: {}", runtime, e)))?;
+        .map_err(|e| crate::core::Error::Other(format!("could not run `{}`: {}", runtime, e)))?;
 
     match rehearsal::verdict(status.code()) {
         Verdict::Valid => {
@@ -241,7 +241,7 @@ pub(crate) async fn handle_try(app: &App, image: Option<&str>) -> Result<()> {
         }
         // The container already printed why on its own stderr; repeating it here would be
         // two accounts of one failure.
-        Verdict::Rejected(_) => Err(linix::core::Error::Refused(format!(
+        Verdict::Rejected(_) => Err(crate::core::Error::Refused(format!(
             "this config did not survive a clean {} machine — the rehearsal's output above says \
              why. Nothing on this machine was touched.",
             image
@@ -255,14 +255,14 @@ pub(crate) async fn handle_try(app: &App, image: Option<&str>) -> Result<()> {
 /// `run`, not `run_output`: the latter tolerates a non-zero exit on purpose (an empty result
 /// is an answer for the reads it was built for), so it reports success for an image that does
 /// not exist — and `try` then blamed the config for what was a missing image.
-pub(crate) async fn image_exists(app: &App, runtime: &str, image: &str) -> bool {
+pub async fn image_exists(app: &App, runtime: &str, image: &str) -> bool {
     app.executor
         .run(runtime, &["image", "inspect", image], false)
         .await
         .is_ok()
 }
 
-pub(crate) const CONFIG_TEMPLATE: &str = r#"# LiNix refusals and behaviour (preferences.toml). Nothing writes to this but you.
+pub const CONFIG_TEMPLATE: &str = r#"# LiNix refusals and behaviour (preferences.toml). Nothing writes to this but you.
 # Every key is optional; omit a key to use its built-in default.
 #
 # Where your repo lives is NOT a key here — this file is inside it. Use `linix path --set`.
@@ -374,12 +374,8 @@ max_removals = 20
 # never_unattended = ["rebuild", "purge-undeclared"]
 "#;
 
-pub(crate) async fn handle_path(
-    cli: &Cli,
-    explain: bool,
-    set: Option<&std::path::Path>,
-) -> Result<()> {
-    use linix::app::locate;
+pub async fn handle_path(cli: &Cli, explain: bool, set: Option<&std::path::Path>) -> Result<()> {
+    use crate::app::locate;
 
     if let Some(dir) = set {
         let (settings_file, stored) = locate::set_root(dir)?;
@@ -398,15 +394,15 @@ pub(crate) async fn handle_path(
     Ok(())
 }
 
-pub(crate) async fn handle_edit(cli: &Cli, file: Option<&str>) -> Result<()> {
-    use linix::app::locate;
+pub async fn handle_edit(cli: &Cli, file: Option<&str>) -> Result<()> {
+    use crate::app::locate;
 
     let resolved = locate::locate(cli.config_dir.as_deref())?;
     let target = locate::resolve_target(&resolved.path, file)?;
     let editor = locate::editor_command();
 
     let is_preferences =
-        target.file_name().and_then(|n| n.to_str()) == Some(linix::config::PREFERENCES_FILE_NAME);
+        target.file_name().and_then(|n| n.to_str()) == Some(crate::config::PREFERENCES_FILE_NAME);
     if is_preferences && !target.exists() {
         if let Some(parent) = target.parent() {
             tokio::fs::create_dir_all(parent).await.ok();
@@ -429,20 +425,20 @@ pub(crate) async fn handle_edit(cli: &Cli, file: Option<&str>) -> Result<()> {
     // unrelated to the edit that broke it.
     if is_preferences {
         let p = target.clone();
-        match tokio::task::spawn_blocking(move || linix::config::Config::from_file(&p)).await? {
+        match tokio::task::spawn_blocking(move || crate::config::Config::from_file(&p)).await? {
             Ok(_) => println!("Saved. {} parses cleanly.", target.display()),
             Err(e) => anyhow::bail!(
                 "{} no longer parses ({}). Re-run `linix edit {}` to fix it.",
                 target.display(),
                 e,
-                linix::config::PREFERENCES_FILE_NAME
+                crate::config::PREFERENCES_FILE_NAME
             ),
         }
     }
     Ok(())
 }
 
-pub(crate) async fn handle_config(app: &App, cmd: &ConfigCommand) -> Result<()> {
+pub async fn handle_config(app: &App, cmd: &ConfigCommand) -> Result<()> {
     let path = app.config.preferences_file.clone();
     match cmd {
         ConfigCommand::Show => {
@@ -465,12 +461,12 @@ pub(crate) async fn handle_config(app: &App, cmd: &ConfigCommand) -> Result<()> 
                 );
                 return Ok(());
             }
-            if !linix::core::dry_run::active() {
+            if !crate::core::dry_run::active() {
                 if let Some(parent) = path.parent() {
                     tokio::fs::create_dir_all(parent).await.ok();
                 }
             }
-            if linix::utils::file::persist(&path, CONFIG_TEMPLATE)
+            if crate::utils::file::persist(&path, CONFIG_TEMPLATE)
                 .with_context(|| format!("Failed to write config to {}", path.display()))?
             {
                 println!("Wrote commented default preferences to {}", path.display());
@@ -485,7 +481,7 @@ pub(crate) async fn handle_config(app: &App, cmd: &ConfigCommand) -> Result<()> 
     Ok(())
 }
 
-pub(crate) async fn handle_heal(app: &App) -> Result<()> {
+pub async fn handle_heal(app: &App) -> Result<()> {
     app.sync_engine().await.heal().await?;
     // U9: `check` looks, `heal` acts. These three repairs used to be `doctor --fix`, which
     // made one command both the diagnosis and the treatment — and a command that changes
@@ -501,7 +497,7 @@ pub(crate) async fn handle_heal(app: &App) -> Result<()> {
 /// Put right what `check` can only report: the II.1 directories, the version lockfile, and a
 /// stale backend index. Each is best-effort and reported by name — a repair that failed must
 /// not stop the ones after it, and a repair nobody sees is the class of silence P3 forbids.
-pub(crate) async fn repair_environment(app: &App) -> Vec<String> {
+pub async fn repair_environment(app: &App) -> Vec<String> {
     let mut fixed = Vec::new();
 
     for dir in [
@@ -532,7 +528,7 @@ pub(crate) async fn repair_environment(app: &App) -> Vec<String> {
     // A backend reading as "degraded, stale index" recovers from a refresh. Under a preview the
     // executor runs no manager command, so the sentence has to say so.
     match app.update().await {
-        Ok(()) if linix::core::dry_run::active() => {
+        Ok(()) if crate::core::dry_run::active() => {
             fixed.push("would refresh backend metadata".into())
         }
         Ok(()) => fixed.push("refreshed backend metadata".into()),
@@ -544,7 +540,7 @@ pub(crate) async fn repair_environment(app: &App) -> Vec<String> {
 
 /// Health-gated upgrade: snapshot, upgrade, run the test, roll back automatically on
 /// failure so a bad upgrade never leaves the machine broken.
-pub(crate) async fn handle_canary(
+pub async fn handle_canary(
     app: &App,
     scope: Option<PlannerScope>,
     test: &Option<String>,
@@ -559,7 +555,7 @@ pub(crate) async fn handle_canary(
     }
 
     let resolver =
-        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
     let desired = resolver.resolve_desired_state().await?;
     enforce_policy(app, &desired).await?;
@@ -574,7 +570,7 @@ pub(crate) async fn handle_canary(
     let hosts = app.host_backends().await;
     let changes = {
         let state_guard = app.state.lock().await;
-        let planner = linix::app::sync::planner::ChangePlanner::new(
+        let planner = crate::app::sync::planner::ChangePlanner::new(
             app.registry.clone(),
             &state_guard,
             &app.config,
@@ -600,17 +596,17 @@ pub(crate) async fn handle_canary(
 
     let snap = app
         .snapshot_manager
-        .auto_snapshot(linix::core::snapshot::SnapshotLabel::PreCanary)
+        .auto_snapshot(crate::core::snapshot::SnapshotLabel::PreCanary)
         .await?
         .ok_or_else(|| anyhow::anyhow!("failed to create pre-canary snapshot"))?;
     info!("snapshot {} taken; applying upgrade...", snap.id);
     app.sync_engine()
         .await
-        .sync(changes, linix::app::sync::guard::GuardScope::Canary)
+        .sync(changes, crate::app::sync::guard::GuardScope::Canary)
         .await?;
 
     info!("running health check: {}", test);
-    if linix::app::bisect::run_test(&test).await {
+    if crate::app::bisect::run_test(&test).await {
         println!("Canary: health check passed — upgrade kept.");
         perform_maintenance(app).await
     } else {
@@ -628,19 +624,19 @@ pub(crate) async fn handle_canary(
 }
 
 /// `linix policy` — report whether the desired state complies with the `[guard]` rules.
-pub(crate) async fn handle_policy(app: &App) -> Result<()> {
+pub async fn handle_policy(app: &App) -> Result<()> {
     let guard = &app.config.guard;
     if guard.is_empty() {
         println!("No [guard] install/change rules are set — nothing to check.");
         return Ok(());
     }
     let resolver =
-        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
     let desired = resolver.resolve_desired_state().await?;
-    let mut violations: Vec<String> = linix::app::sync::guard::inspect_desired(guard, &desired)
+    let mut violations: Vec<String> = crate::app::sync::guard::inspect_desired(guard, &desired)
         .iter()
-        .map(linix::app::sync::guard::describe_objection)
+        .map(crate::app::sync::guard::describe_objection)
         .collect();
     if guard.require_snapshot && !app.snapshot_manager.has_provider() {
         violations.push("requires a snapshot provider but none is available".into());
@@ -661,7 +657,7 @@ pub(crate) async fn handle_policy(app: &App) -> Result<()> {
 
 /// Scaffold the on-disk layout LiNix expects and drop a starter manifest so a fresh
 /// machine (or a freshly-cloned checkout) is immediately usable.
-pub(crate) async fn handle_init(app: &App, force: bool, interactive: bool) -> Result<()> {
+pub async fn handle_init(app: &App, force: bool, interactive: bool) -> Result<()> {
     let cfg = &app.config;
     scaffold_dirs(cfg).await?;
 
@@ -676,7 +672,7 @@ pub(crate) async fn handle_init(app: &App, force: bool, interactive: bool) -> Re
 }
 
 /// Create every on-disk directory LiNix expects. Idempotent.
-pub(crate) async fn scaffold_dirs(cfg: &linix::config::Config) -> Result<()> {
+pub async fn scaffold_dirs(cfg: &crate::config::Config) -> Result<()> {
     let layout = cfg.layout();
     let modules = layout.modules_dir();
     let profiles = layout.profiles_dir();
@@ -710,16 +706,16 @@ pub(crate) async fn scaffold_dirs(cfg: &linix::config::Config) -> Result<()> {
 /// V.15). A question whose answer LiNix can work out, or which no longer means anything, is
 /// homework (V.41).
 #[derive(Debug, Clone, Default)]
-pub(crate) struct InitAnswers {
+pub struct InitAnswers {
     snapshot_count: Option<u32>,
     starter_packages: Vec<String>,
 }
 
 /// Pure: layer the interactive answers onto a base config. No I/O, so it can be tested.
-pub(crate) fn apply_init_answers(
-    mut base: linix::config::Config,
+pub fn apply_init_answers(
+    mut base: crate::config::Config,
     a: &InitAnswers,
-) -> linix::config::Config {
+) -> crate::config::Config {
     if let Some(n) = a.snapshot_count {
         // One dial, not two: `keep_last = 0` is how a user says "keep everything", so an
         // `auto_prune` switch beside it was a second way to answer the same question.
@@ -730,12 +726,12 @@ pub(crate) fn apply_init_answers(
 
 /// Guided setup: write the II.1 repo, then ask the few things LiNix genuinely cannot work
 /// out. Refuses to run without a TTY so CI falls back to `linix init` instead of hanging.
-pub(crate) async fn interactive_init(app: &App, force: bool) -> Result<()> {
+pub async fn interactive_init(app: &App, force: bool) -> Result<()> {
     use dialoguer::Input;
     use std::io::IsTerminal;
 
     if !std::io::stdin().is_terminal() {
-        return Err(linix::core::Error::Refused(
+        return Err(crate::core::Error::Refused(
             "`init -i` is interactive but stdin is not a terminal. \
              Run `linix init` (non-interactive) or `linix config init` instead."
                 .to_string(),
@@ -753,7 +749,7 @@ pub(crate) async fn interactive_init(app: &App, force: bool) -> Result<()> {
 
     println!("\nLet's set up LiNix. Press Enter to accept the [default].\n");
 
-    let defaults = linix::config::Config::default();
+    let defaults = crate::config::Config::default();
     let mut answers = InitAnswers::default();
 
     let keep: String = Input::new()
@@ -790,7 +786,7 @@ pub(crate) async fn interactive_init(app: &App, force: bool) -> Result<()> {
     // Starter packages go through the same door as `linix install`: one writer, so what a
     // wizard produces and what a command produces cannot be different shapes.
     for pkg in &answers.starter_packages {
-        app.declare(pkg, None, linix::model::Landing::Imperative)
+        app.declare(pkg, None, crate::model::Landing::Imperative)
             .await?;
     }
     if !answers.starter_packages.is_empty() {
@@ -808,7 +804,7 @@ pub(crate) async fn interactive_init(app: &App, force: bool) -> Result<()> {
 /// ask you to maintain a list by hand on every machine forever), ordered by the one rule
 /// that decides anything — a system manager beats a language manager (V.14). The file says
 /// why, because a default nobody can explain is a default nobody can safely change (P5).
-pub(crate) async fn scaffold_repo(app: &App, force: bool) -> Result<()> {
+pub async fn scaffold_repo(app: &App, force: bool) -> Result<()> {
     let layout = app.config.layout();
 
     let detected: Vec<String> = app
@@ -817,11 +813,11 @@ pub(crate) async fn scaffold_repo(app: &App, force: bool) -> Result<()> {
         .iter()
         .map(|b| b.name().to_string())
         .collect();
-    let ordered = linix::model::priority::starter_order(&detected);
+    let ordered = crate::model::priority::starter_order(&detected);
 
     let priority = layout.priority_file();
     if !priority.exists() || force {
-        tokio::fs::write(&priority, linix::model::priority::starter_file(&ordered))
+        tokio::fs::write(&priority, crate::model::priority::starter_file(&ordered))
             .await
             .with_context(|| format!("Failed to write {}", priority.display()))?;
         println!(
@@ -842,7 +838,7 @@ pub(crate) async fn scaffold_repo(app: &App, force: bool) -> Result<()> {
     // thing a new user was told to look at did not exist. It carries no package: P5 bans the
     // default nobody chose, and a machine that installs something because it was scaffolded is
     // exactly that. What it carries is the shape of a line, in the file where lines go.
-    let starter = layout.module_file(&linix::model::ModuleName::literal("starter"));
+    let starter = layout.module_file(&crate::model::ModuleName::literal("starter"));
     if !starter.exists() || force {
         tokio::fs::write(
             &starter,
@@ -925,7 +921,7 @@ mod init_tests {
 
     #[test]
     fn answers_layer_onto_config() {
-        let base = linix::config::Config::default();
+        let base = crate::config::Config::default();
         let answers = InitAnswers {
             snapshot_count: Some(42),
             starter_packages: vec![],
@@ -936,7 +932,7 @@ mod init_tests {
 
     #[test]
     fn omitted_snapshot_count_keeps_base_default() {
-        let base = linix::config::Config::default();
+        let base = crate::config::Config::default();
         let base_count = base.retention.snapshots.keep_last;
         let answers = InitAnswers {
             snapshot_count: None,
@@ -954,9 +950,9 @@ mod init_tests {
             snapshot_count: Some(7),
             starter_packages: vec![],
         };
-        let cfg = apply_init_answers(linix::config::Config::default(), &answers);
+        let cfg = apply_init_answers(crate::config::Config::default(), &answers);
         let toml_str = toml::to_string_pretty(&cfg).expect("serializes");
-        let back: linix::config::Config = toml::from_str(&toml_str).expect("parses back");
+        let back: crate::config::Config = toml::from_str(&toml_str).expect("parses back");
         assert_eq!(back.retention.snapshots.keep_last, 7);
     }
 
@@ -965,7 +961,7 @@ mod init_tests {
         // `linix config init` writes this file verbatim. A template that does not parse
         // hands every new user a broken config, and a template whose keys don't match the
         // struct silently documents settings that do nothing (as `cache_ttl` did).
-        let cfg: linix::config::Config = toml::from_str(CONFIG_TEMPLATE)
+        let cfg: crate::config::Config = toml::from_str(CONFIG_TEMPLATE)
             .expect("CONFIG_TEMPLATE must be valid preferences.toml");
         assert_eq!(cfg.guard.max_removals, 20);
     }
@@ -978,7 +974,7 @@ mod init_tests {
         // generation format was deleted, and both were silently ignored — a documented
         // setting that does nothing is worse than an undocumented one.
         let text = include_str!("../../examples/preferences.toml");
-        let cfg: linix::config::Config =
+        let cfg: crate::config::Config =
             toml::from_str(text).expect("examples/preferences.toml must parse");
         assert_eq!(
             cfg.rate_limit_max_wait_secs, 30,

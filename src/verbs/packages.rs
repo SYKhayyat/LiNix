@@ -1,8 +1,8 @@
+use crate::model::Edit;
 use crate::verbs::prelude::*;
-use linix::model::Edit;
 
 /// `teleport PKG BACKEND` — move a declared package to another manager, then sync (II.8).
-pub(crate) async fn handle_teleport(app: &App, package: &str, backend: &str) -> Result<()> {
+pub async fn handle_teleport(app: &App, package: &str, backend: &str) -> Result<()> {
     if app.registry.get(backend).is_none() {
         anyhow::bail!(
             "`{}` is not a package manager on this machine. `linix check` lists the ones that are.",
@@ -36,7 +36,7 @@ pub(crate) async fn handle_teleport(app: &App, package: &str, backend: &str) -> 
     handle_sync(app, false, false, false).await
 }
 
-pub(crate) async fn handle_install(
+pub async fn handle_install(
     app: &App,
     packages: &[String],
     json: bool,
@@ -55,7 +55,7 @@ pub(crate) async fn handle_install(
             // the file gets the moment it runs out (V.38). Nothing sweeps it up later —
             // the line simply stops counting, and sync removes what nothing declares.
             Some(dur) => {
-                let at = linix::model::dated::absolute_after(chrono::Utc::now(), dur)
+                let at = crate::model::dated::absolute_after(chrono::Utc::now(), dur)
                     .with_context(|| {
                         format!(
                             "Invalid --temp duration '{}'. Use forms like 2h, 30m, 7d.",
@@ -97,7 +97,7 @@ pub(crate) async fn handle_install(
     let mut edits: Vec<Edit> = Vec::with_capacity(lines.len());
     for line in &lines {
         edits.push(
-            app.declare(line, into, linix::model::Landing::Imperative)
+            app.declare(line, into, crate::model::Landing::Imperative)
                 .await?,
         );
     }
@@ -163,7 +163,7 @@ async fn say_if_the_failure_was_not_yours(app: &App, e: &anyhow::Error, lines: &
 /// did not. The backends decide this now — from their own declared phrasings, or by saying so
 /// directly — and this reads their answer.
 fn says_a_name_is_absent(e: &anyhow::Error) -> bool {
-    e.downcast_ref::<linix::core::Error>()
+    e.downcast_ref::<crate::core::Error>()
         .is_some_and(|err| err.says_a_name_is_absent())
 }
 
@@ -173,8 +173,8 @@ fn says_a_name_is_absent(e: &anyhow::Error) -> bool {
 /// read only to pick which of the lines this command wrote the manager was talking about,
 /// which is a question the fact cannot answer and the edits can.
 fn absent_command_message(e: &anyhow::Error) -> Option<&str> {
-    match e.downcast_ref::<linix::core::Error>() {
-        Some(linix::core::Error::CommandFailed {
+    match e.downcast_ref::<crate::core::Error>() {
+        Some(crate::core::Error::CommandFailed {
             message,
             absent_name: true,
             ..
@@ -186,8 +186,8 @@ fn absent_command_message(e: &anyhow::Error) -> Option<&str> {
 /// The name a name-resolving backend says is not there — a git host, an index, an API. Those
 /// backends looked one name up and know which, so nothing has to be inferred from their text.
 fn backend_absent_name(e: &anyhow::Error) -> Option<&str> {
-    match e.downcast_ref::<linix::core::Error>() {
-        Some(err @ linix::core::Error::NoSuchPackage { .. }) => err.absent_name(),
+    match e.downcast_ref::<crate::core::Error>() {
+        Some(err @ crate::core::Error::NoSuchPackage { .. }) => err.absent_name(),
         _ => None,
     }
 }
@@ -209,8 +209,8 @@ fn mentions_package(message: &str, name: &str) -> bool {
 
 /// The name a failed sync says can never be installed, if it says one.
 fn unresolvable_name(e: &anyhow::Error) -> Option<&str> {
-    match e.downcast_ref::<linix::core::Error>() {
-        Some(linix::core::Error::Unresolvable { name, .. }) => Some(name.as_str()),
+    match e.downcast_ref::<crate::core::Error>() {
+        Some(crate::core::Error::Unresolvable { name, .. }) => Some(name.as_str()),
         _ => None,
     }
 }
@@ -317,21 +317,21 @@ enum WhyKept {
 }
 
 fn why_kept(e: &anyhow::Error) -> WhyKept {
-    let Some(err) = e.downcast_ref::<linix::core::Error>() else {
+    let Some(err) = e.downcast_ref::<crate::core::Error>() else {
         return WhyKept::Unclassified;
     };
-    if matches!(err, linix::core::Error::Refused(_)) {
+    if matches!(err, crate::core::Error::Refused(_)) {
         return WhyKept::Refused;
     }
     match err.retryability() {
-        linix::core::Retryability::Exhausted => return WhyKept::Exhausted,
+        crate::core::Retryability::Exhausted => return WhyKept::Exhausted,
         // Ahead of the name check on purpose: `says_a_name_is_absent` reads the failure's
         // text, and a passing HTTP failure whose body happens to contain "not found" would
         // otherwise be reported as a package name that does not exist — sending the user to
         // edit a line that is correct. The classification is structured; the text match is a
         // guess, so the classification wins where they disagree.
-        linix::core::Retryability::Transient => return WhyKept::Transient,
-        linix::core::Retryability::Permanent | linix::core::Retryability::Unknown => {}
+        crate::core::Retryability::Transient => return WhyKept::Transient,
+        crate::core::Retryability::Permanent | crate::core::Retryability::Unknown => {}
     }
     if err.says_a_name_is_absent() {
         return WhyKept::NameAbsentElsewhere;
@@ -395,7 +395,7 @@ fn kept_line_advice(why: WhyKept, line: &str, file: &std::path::Path) -> String 
 /// P1, like `install`: the file edit IS the command, and convergence carries it out. So the
 /// removal goes through the guard, the plan and the counts, exactly as any other removal
 /// does — rather than reaching for the backend directly and asking the guard afterwards.
-pub(crate) async fn handle_uninstall(
+pub async fn handle_uninstall(
     app: &App,
     packages: &[String],
     json: bool,
@@ -428,14 +428,14 @@ pub(crate) async fn handle_uninstall(
 
     let vocab = app.vocabulary().await?;
     let layout = app.config.layout();
-    let facts = linix::config::parser::HostFacts::current();
+    let facts = crate::config::parser::HostFacts::current();
 
     let mut never_declared: Vec<&str> = Vec::new();
 
     for pkg in packages {
         // II.8: a `--temp` uninstall of something undeclared has nothing to come back to.
         if let Some(Some(dur)) = temp {
-            let declared = !linix::model::active_module_files(&layout, &vocab, &facts).is_empty()
+            let declared = !crate::model::active_module_files(&layout, &vocab, &facts).is_empty()
                 && app.declares(pkg).await?;
             if !declared {
                 anyhow::bail!(
@@ -449,7 +449,7 @@ pub(crate) async fn handle_uninstall(
             // date beats the module that wants it (II.7 rule 6) until the date passes —
             // then the module wins again and it comes back. No timer, no sweep: the same
             // dated-line machinery `install --temp` uses, pointed the other way.
-            let at = linix::model::dated::absolute_after(chrono::Utc::now(), dur).with_context(
+            let at = crate::model::dated::absolute_after(chrono::Utc::now(), dur).with_context(
                 || {
                     format!(
                         "Invalid --temp duration '{}'. Use forms like 2h, 30m, 7d.",
@@ -466,7 +466,7 @@ pub(crate) async fn handle_uninstall(
             app.declare(
                 &format!("absent:{}:{}@until={}", spec.backend, spec.name, at),
                 None,
-                linix::model::Landing::Imperative,
+                crate::model::Landing::Imperative,
             )
             .await?;
             continue;
@@ -474,7 +474,7 @@ pub(crate) async fn handle_uninstall(
 
         // A line you can see deleted, while an identical line waits in a module you forgot
         // about, is a package that returns the next time you switch profiles (II.8).
-        for module in linix::model::inactive_declarations(&layout, &vocab, &facts, pkg) {
+        for module in crate::model::inactive_declarations(&layout, &vocab, &facts, pkg) {
             warn!(
                 "{} is still declared in module `{}`, which isn't active. It will come back \
                  if a profile you activate uses it.",
@@ -510,7 +510,7 @@ pub(crate) async fn handle_uninstall(
 
 /// What `uninstall` would do, without doing any of it.
 ///
-/// The editor is in [`Writes::Planned`](linix::model::Writes) for the whole run, so the calls
+/// The editor is in [`Writes::Planned`](crate::model::Writes) for the whole run, so the calls
 /// below report their edits and write nothing — the same code path a real uninstall takes,
 /// which is what keeps the preview and the act from drifting apart.
 async fn preview_uninstall(
@@ -523,7 +523,7 @@ async fn preview_uninstall(
 
     for pkg in packages {
         if let Some(Some(dur)) = temp {
-            let at = linix::model::dated::absolute_after(chrono::Utc::now(), dur).with_context(
+            let at = crate::model::dated::absolute_after(chrono::Utc::now(), dur).with_context(
                 || {
                     format!(
                         "Invalid --temp duration '{}'. Use forms like 2h, 30m, 7d.",
@@ -584,10 +584,10 @@ async fn preview_uninstall(
 ///
 /// Outside the model on purpose (II.8) — a shell session is not a declaration, and writing
 /// a file for something that ends when the shell does would leave the file behind.
-pub(crate) async fn suspend_for_session(app: &App, packages: &[String]) -> Result<()> {
+pub async fn suspend_for_session(app: &App, packages: &[String]) -> Result<()> {
     for pkg_str in packages {
         let (scoped_backend, bare_name) =
-            linix::config::parser::split_removal_target(pkg_str, |b| app.registry.get(b).is_some());
+            crate::config::parser::split_removal_target(pkg_str, |b| app.registry.get(b).is_some());
 
         let mut done = false;
         for b in app.registry.available() {
@@ -609,11 +609,11 @@ pub(crate) async fn suspend_for_session(app: &App, packages: &[String]) -> Resul
             }
 
             // Every removal path calls the guard (II.10), this one included.
-            linix::app::sync::guard::enforce(
+            crate::app::sync::guard::enforce(
                 &app.config,
                 &app.registry,
                 &[(b.name().to_string(), bare_name.clone())],
-                linix::app::sync::guard::GuardScope::Remove,
+                crate::app::sync::guard::GuardScope::Remove,
             )
             .await?;
 
@@ -627,9 +627,9 @@ pub(crate) async fn suspend_for_session(app: &App, packages: &[String]) -> Resul
             // comes back when the shell exits is a row in the registry, not something dpkg
             // knows. Killed here, the package is half-removed and the restore has nothing to
             // act on — so the removal is recorded before it runs, like every other.
-            linix::core::journalled(
+            crate::core::journalled(
                 &app.journal,
-                vec![linix::core::JournalAction::Remove {
+                vec![crate::core::JournalAction::Remove {
                     name: bare_name.clone(),
                     backend: b.name().to_string(),
                 }],
@@ -656,7 +656,7 @@ pub(crate) async fn suspend_for_session(app: &App, packages: &[String]) -> Resul
     Ok(())
 }
 
-pub(crate) async fn handle_hold(app: &App, packages: &[String]) -> Result<()> {
+pub async fn handle_hold(app: &App, packages: &[String]) -> Result<()> {
     // Q9, before a hold is recorded: `hold nosuchbackend:foo` wrote the hold and answered
     // `Held 1 package(s).` at exit 0, against a manager that does not exist.
     app.require_known_spec_backends(packages).await?;
@@ -697,7 +697,7 @@ pub(crate) async fn handle_hold(app: &App, packages: &[String]) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn handle_unhold(app: &App, packages: &[String]) -> Result<()> {
+pub async fn handle_unhold(app: &App, packages: &[String]) -> Result<()> {
     app.require_known_spec_backends(packages).await?;
     let mut n = 0usize;
     let recorded = {
@@ -721,7 +721,7 @@ pub(crate) async fn handle_unhold(app: &App, packages: &[String]) -> Result<()> 
 }
 
 /// Render a package as one aligned row: backend, name, version.
-pub(crate) fn print_package_row(p: &linix::core::Package) {
+pub fn print_package_row(p: &crate::core::Package) {
     println!(
         "{:<12} {:<32} {}",
         p.backend,
@@ -730,12 +730,7 @@ pub(crate) fn print_package_row(p: &linix::core::Package) {
     );
 }
 
-pub(crate) async fn handle_search(
-    app: &App,
-    query: &str,
-    json: bool,
-    installed: bool,
-) -> Result<()> {
+pub async fn handle_search(app: &App, query: &str, json: bool, installed: bool) -> Result<()> {
     let mut results = app.search(query).await?;
     if installed {
         // Keep only results LiNix already manages, so `search --installed foo` answers
@@ -765,7 +760,7 @@ pub(crate) async fn handle_search(
 
 /// One outdated package: what's installed now vs the newest the backend offers.
 #[derive(serde::Serialize)]
-pub(crate) struct Outdated {
+pub struct Outdated {
     backend: String,
     name: String,
     installed: String,
@@ -774,7 +769,7 @@ pub(crate) struct Outdated {
 
 /// Find managed packages whose backend reports a newer version than what's installed. Backends
 /// without a `Searchable` capability (no "latest" source) are honestly skipped, not guessed at.
-pub(crate) async fn compute_outdated(app: &App, list: &[linix::core::Package]) -> Vec<Outdated> {
+pub async fn compute_outdated(app: &App, list: &[crate::core::Package]) -> Vec<Outdated> {
     use futures::stream::{self, StreamExt};
     use std::collections::HashMap;
 
@@ -782,7 +777,7 @@ pub(crate) async fn compute_outdated(app: &App, list: &[linix::core::Package]) -
     // `Searchable::lookup` defaults to a whole `search` for one name, so this ran one registry
     // search per installed package: measured 771.4s, against 2.9s for the `list` that fed it.
     // Nearly every manager answers the whole question in one command (Q44).
-    let mut by_backend: HashMap<String, Vec<&linix::core::Package>> = HashMap::new();
+    let mut by_backend: HashMap<String, Vec<&crate::core::Package>> = HashMap::new();
     for p in list {
         if p.version.is_some() {
             by_backend.entry(p.backend.clone()).or_default().push(p);
@@ -859,7 +854,7 @@ pub(crate) async fn compute_outdated(app: &App, list: &[linix::core::Package]) -
     out
 }
 
-pub(crate) async fn handle_list(
+pub async fn handle_list(
     app: &App,
     backend: Option<&str>,
     json: bool,
@@ -900,7 +895,7 @@ pub(crate) async fn handle_list(
     Ok(())
 }
 
-pub(crate) async fn handle_info(app: &App, package: &str) -> Result<()> {
+pub async fn handle_info(app: &App, package: &str) -> Result<()> {
     let Some(p) = app.get_info(package).await? else {
         // `info` reports on what is INSTALLED. "not found in any available backend" reads as
         // "no such package", which is a different and usually false claim — `linix search
@@ -986,8 +981,8 @@ pub(crate) async fn handle_info(app: &App, package: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use linix::core::exit_policy;
-    use linix::core::{Error, Retryability};
+    use crate::core::exit_policy;
+    use crate::core::{Error, Retryability};
 
     fn boxed(e: Error) -> anyhow::Error {
         anyhow::Error::new(e)
@@ -1109,12 +1104,12 @@ mod tests {
         ];
         for (output, policy) in cases {
             assert_eq!(
-                policy.retryability(&linix::core::ExitPolicy::haystack(output.as_bytes(), b"")),
+                policy.retryability(&crate::core::ExitPolicy::haystack(output.as_bytes(), b"")),
                 Retryability::Permanent,
                 "not permanent, so this case does not test the distinction: {output}"
             );
             assert!(
-                !policy.names_an_absent_package(&linix::core::ExitPolicy::haystack(
+                !policy.names_an_absent_package(&crate::core::ExitPolicy::haystack(
                     output.as_bytes(),
                     b""
                 )),

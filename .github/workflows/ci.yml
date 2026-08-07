@@ -18,18 +18,27 @@ env:
 
 jobs:
   build:
-    name: Build on ${{ matrix.os }}
+    name: Build for ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
+      # One row per *target*, not per runner. It was `os: [...]` crossed with an `include:`
+      # that mapped each OS to a single target, which made `aarch64-apple-darwin`
+      # unexpressible — so the Mac leg built only x86_64 and **every Mac sold since 2020 had
+      # no published binary**. Masked because `scripts/install.*` builds from source, which
+      # means the three published binaries were installed by nothing.
+      #
+      # Named by target because two rows now share `macos`, and each builds on the hardware
+      # it targets: `macos-latest` is arm64 and `macos-13` is the last Intel image.
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
         rust: [stable]
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - os: macos-latest
+          - os: macos-13
             target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
 

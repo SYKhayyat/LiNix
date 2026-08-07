@@ -6,7 +6,7 @@ use crate::verbs::prelude::*;
 /// is `undeclared`, and `purge-undeclared` is what acts on it (II.11, `Q31`). One word per
 /// question: while both wore this one, the two answers differed by a factor of four and the
 /// number printed here was not the number the delete command would act on.
-pub(crate) async fn handle_unmanaged(app: &App) -> Result<()> {
+pub async fn handle_unmanaged(app: &App) -> Result<()> {
     let found = app.adopter().discover().await?;
 
     if found.adopt.is_empty() {
@@ -31,7 +31,7 @@ pub(crate) async fn handle_unmanaged(app: &App) -> Result<()> {
     // of its inputs. Printed from the reasons themselves, as `adopt` prints them.
     if !found.skipped.is_empty() {
         println!();
-        linix::app::adopt::print_left_alone(&found.skipped);
+        crate::app::adopt::print_left_alone(&found.skipped);
     }
     Ok(())
 }
@@ -45,8 +45,8 @@ pub(crate) async fn handle_unmanaged(app: &App) -> Result<()> {
 /// With no section it runs every question and prints a line each: the verdict, and the command
 /// that acts on it. With a section it prints that section's detail. It never changes anything;
 /// `linix heal` is what repairs.
-pub(crate) async fn handle_check(app: &App, section: Option<&str>, json: bool) -> Result<()> {
-    use linix::app::check::Section;
+pub async fn handle_check(app: &App, section: Option<&str>, json: bool) -> Result<()> {
+    use crate::app::check::Section;
 
     let Some(name) = section else {
         return check_summary(app, json).await;
@@ -76,8 +76,8 @@ pub(crate) async fn handle_check(app: &App, section: Option<&str>, json: bool) -
 /// silently. The others (`exec:`, adapters, the `vars` provider, package hooks) block a sync
 /// loudly, so a user meets those the moment they run `sync` — this is for the ones nobody meets
 /// until the machine drifts and the hook that should have told them does nothing.
-pub(crate) async fn check_approvals(app: &App, json: bool) -> Result<()> {
-    let hooks = linix::app::events::EventHooks::load(&app.config);
+pub async fn check_approvals(app: &App, json: bool) -> Result<()> {
+    let hooks = crate::app::events::EventHooks::load(&app.config);
     let unapproved = hooks.unapproved();
 
     if json {
@@ -104,7 +104,7 @@ pub(crate) async fn check_approvals(app: &App, json: bool) -> Result<()> {
         println!("  {} at {}", h.event, h.origin);
     }
     // A read-only command that found work exits 2 (U21), like every other `check` section.
-    Err(linix::core::Error::Differences(String::new()).into())
+    Err(crate::core::Error::Differences(String::new()).into())
 }
 
 /// Every section's verdict, one line each. The summary is deliberately cheap to read: a reader
@@ -116,14 +116,14 @@ pub(crate) async fn check_approvals(app: &App, json: bool) -> Result<()> {
 /// `check health` detail view each did their own serial pass, so a machine paid it twice. They
 /// share this one now, which is also what keeps the two views from disagreeing about the same
 /// machine.
-async fn probe_all_health(app: &App) -> Vec<(String, linix::core::HealthReport)> {
+async fn probe_all_health(app: &App) -> Vec<(String, crate::core::HealthReport)> {
     use futures::stream::StreamExt;
     futures::stream::iter(app.registry.all())
         .map(|b| async move {
             let report = match b.core().check_health().await {
                 Ok(r) => r,
-                Err(e) => linix::core::HealthReport {
-                    status: linix::core::HealthStatus::Critical,
+                Err(e) => crate::core::HealthReport {
+                    status: crate::core::HealthStatus::Critical,
                     message: Some(format!("health probe errored: {}", e)),
                 },
             };
@@ -134,8 +134,8 @@ async fn probe_all_health(app: &App) -> Vec<(String, linix::core::HealthReport)>
         .await
 }
 
-pub(crate) async fn check_summary(app: &App, json: bool) -> Result<()> {
-    use linix::app::check::{Finding, Section};
+pub async fn check_summary(app: &App, json: bool) -> Result<()> {
+    use crate::app::check::{Finding, Section};
 
     // The unmanaged section crawls every manager, so this run asks all of them whatever
     // happens; asking them together is what keeps the ones only that section wants from
@@ -146,7 +146,7 @@ pub(crate) async fn check_summary(app: &App, json: bool) -> Result<()> {
 
     // config — does everything the active profiles reach resolve?
     let resolver =
-        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
     let state = match resolver.resolve_model().await {
         Ok(state) => {
@@ -176,7 +176,7 @@ pub(crate) async fn check_summary(app: &App, json: bool) -> Result<()> {
         let hosts = app.host_backends().await;
         let changes = {
             let guard = app.state.lock().await;
-            linix::app::sync::planner::ChangePlanner::new(app.registry.clone(), &guard, &app.config)
+            crate::app::sync::planner::ChangePlanner::new(app.registry.clone(), &guard, &app.config)
                 .plan(&state.packages, PlanScope::Whole(hosts))
                 .await
         };
@@ -276,9 +276,9 @@ pub(crate) async fn check_summary(app: &App, json: bool) -> Result<()> {
         );
 
         // conflicts — the same package declared two ways.
-        let specs: Vec<linix::core::PackageSpec> =
+        let specs: Vec<crate::core::PackageSpec> =
             state.packages.values().flatten().cloned().collect();
-        let conflicts = linix::app::conflicts::detect_conflicts(&specs);
+        let conflicts = crate::app::conflicts::detect_conflicts(&specs);
         findings.push(
             if conflicts.is_empty() {
                 Finding::ok(Section::Conflicts, "none")
@@ -330,10 +330,10 @@ pub(crate) async fn check_summary(app: &App, json: bool) -> Result<()> {
     // of them with nothing to say to one another.
     for r in probe_all_health(app).await {
         match r.1.status {
-            linix::core::HealthStatus::Ok => ok += 1,
-            linix::core::HealthStatus::Degraded => degraded += 1,
-            linix::core::HealthStatus::Critical => critical += 1,
-            linix::core::HealthStatus::Absent => {}
+            crate::core::HealthStatus::Ok => ok += 1,
+            crate::core::HealthStatus::Degraded => degraded += 1,
+            crate::core::HealthStatus::Critical => critical += 1,
+            crate::core::HealthStatus::Absent => {}
         }
     }
     findings.push(
@@ -360,7 +360,7 @@ pub(crate) async fn check_summary(app: &App, json: bool) -> Result<()> {
     );
 
     // security — anything managed with a known advisory.
-    match linix::app::insight::audit(app).await {
+    match crate::app::insight::audit(app).await {
         Ok(report) if report.findings.is_empty() => findings.push(
             Finding::ok(Section::Security, "no known advisories").counting([("advisories", 0)]),
         ),
@@ -382,7 +382,7 @@ pub(crate) async fn check_summary(app: &App, json: bool) -> Result<()> {
     }
 
     // approvals — event hooks that are unapproved and so will silently not run (II.12).
-    let unapproved = linix::app::events::EventHooks::load(&app.config)
+    let unapproved = crate::app::events::EventHooks::load(&app.config)
         .unapproved()
         .len();
     findings.push(
@@ -433,20 +433,20 @@ Nothing needs you."
     // U21: a read-only command that looked and found work exits 2, not 0 — a script asking
     // "is this machine converged?" needs an answer it can branch on. The message is empty
     // because the findings are already on stdout; `finish` prints nothing further.
-    Err(linix::core::Error::Differences(String::new()).into())
+    Err(crate::core::Error::Differences(String::new()).into())
 }
 
 /// The `config` section: does every file the active profiles reach parse and resolve?
-pub(crate) async fn check_config(app: &App) -> Result<()> {
+pub async fn check_config(app: &App) -> Result<()> {
     let resolver =
-        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
     let state = resolver.resolve_model().await?;
     // `check` claims to parse everything the active profiles reach, and a `schedule:` line is
     // only validated where it is provisioned — so a missing `cron`, or a `run` a timer may not
     // run, surfaced at sync time on a file `check` had already called clean.
     for (name, opts, origin) in state.schedules() {
-        linix::model::schedule::schedule_config(
+        crate::model::schedule::schedule_config(
             name,
             opts,
             origin,
@@ -531,7 +531,7 @@ pub(crate) async fn check_config(app: &App) -> Result<()> {
 /// Every variable name a `$name` references anywhere in the repo's model files — for the `check`
 /// unused-variable note (W5). Read statically across all files, so a name used only in another
 /// host's `when` block still counts as used and is not flagged.
-pub(crate) fn referenced_variable_names(
+pub fn referenced_variable_names(
     config_root: &std::path::Path,
 ) -> std::collections::HashSet<String> {
     let mut files: Vec<std::path::PathBuf> = ["active", "priority", "schedules", "vars"]
@@ -551,7 +551,7 @@ pub(crate) fn referenced_variable_names(
     let mut refs = std::collections::HashSet::new();
     for f in files {
         if let Ok(body) = std::fs::read_to_string(&f) {
-            refs.extend(linix::model::vars::referenced_names(&body));
+            refs.extend(crate::model::vars::referenced_names(&body));
         }
     }
     refs
@@ -563,19 +563,19 @@ pub(crate) fn referenced_variable_names(
 /// backend is asked what is installed, nothing is written. It answers what the configuration
 /// says, which is the half of `plan`'s question that does not depend on the machine — and the
 /// half a script can act on.
-pub(crate) async fn handle_eval(app: &App) -> Result<()> {
+pub async fn handle_eval(app: &App) -> Result<()> {
     let resolver =
-        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
     let state = resolver.resolve_model().await?;
-    let doc = linix::app::eval::Evaluation::of(&state, &app.config.config_root());
+    let doc = crate::app::eval::Evaluation::of(&state, &app.config.config_root());
     print!("{}", doc.render()?);
     Ok(())
 }
 
-pub(crate) async fn handle_vars(app: &App) -> Result<()> {
+pub async fn handle_vars(app: &App) -> Result<()> {
     let resolver =
-        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
     let Some(selected) = resolver.vars_provider()? else {
         println!(
@@ -590,9 +590,9 @@ pub(crate) async fn handle_vars(app: &App) -> Result<()> {
         .and_then(|s| s.to_str())
         .unwrap_or("vars");
     let kind = match selected.kind {
-        linix::model::vars_provider::Kind::LineFile => "line file",
-        linix::model::vars_provider::Kind::External => "external program",
-        linix::model::vars_provider::Kind::Embedded => "embedded script",
+        crate::model::vars_provider::Kind::LineFile => "line file",
+        crate::model::vars_provider::Kind::External => "external program",
+        crate::model::vars_provider::Kind::Embedded => "embedded script",
     };
     let (vars, origins) = resolver.resolve_vars_with_origins().await?;
     if vars.is_empty() {
@@ -617,7 +617,7 @@ pub(crate) async fn handle_vars(app: &App) -> Result<()> {
 
 /// An origin as `linix vars`/`why` show it: the filename and, when it is a real line rather than
 /// a whole-provider attribution, the line number — `vars:6`, or `vars.linix` for a script.
-pub(crate) fn short_origin(origin: &linix::config::grammar::Origin) -> String {
+pub fn short_origin(origin: &crate::config::grammar::Origin) -> String {
     let file = origin
         .file
         .file_name()
@@ -630,9 +630,9 @@ pub(crate) fn short_origin(origin: &linix::config::grammar::Origin) -> String {
     }
 }
 
-pub(crate) async fn handle_absent(app: &App) -> Result<()> {
+pub async fn handle_absent(app: &App) -> Result<()> {
     let resolver =
-        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
     let state = resolver.resolve_model().await?;
     let mut absent: Vec<_> = state.absent().collect();
@@ -657,15 +657,15 @@ pub(crate) async fn handle_absent(app: &App) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn handle_conflicts(app: &App, json: bool) -> Result<()> {
-    use linix::app::conflicts::{detect_conflicts, ConflictKind};
+pub async fn handle_conflicts(app: &App, json: bool) -> Result<()> {
+    use crate::app::conflicts::{detect_conflicts, ConflictKind};
 
     // Resolve the full desired state (all manifests/modules/groups), flatten to specs.
     let resolver =
-        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
     let desired = resolver.resolve_desired_state().await?;
-    let specs: Vec<linix::core::PackageSpec> = desired.into_values().flatten().collect();
+    let specs: Vec<crate::core::PackageSpec> = desired.into_values().flatten().collect();
     let conflicts = detect_conflicts(&specs);
 
     if json {
@@ -706,8 +706,8 @@ pub(crate) async fn handle_conflicts(app: &App, json: bool) -> Result<()> {
 }
 
 /// Short label for a health status (human output).
-pub(crate) fn status_label(s: linix::core::HealthStatus) -> &'static str {
-    use linix::core::HealthStatus::*;
+pub fn status_label(s: crate::core::HealthStatus) -> &'static str {
+    use crate::core::HealthStatus::*;
     match s {
         Ok => "OK",
         Degraded => "WARN",
@@ -718,9 +718,9 @@ pub(crate) fn status_label(s: linix::core::HealthStatus) -> &'static str {
 
 /// The status label, colored for a terminal (green/yellow/red) and plain otherwise / under
 /// NO_COLOR. Centralizing color here keeps the doctor output readable without a color crate.
-pub(crate) fn status_label_colored(s: linix::core::HealthStatus) -> String {
-    use linix::core::HealthStatus::*;
-    use linix::utils::style::{color_enabled, paint, DIM, GREEN, RED, YELLOW};
+pub fn status_label_colored(s: crate::core::HealthStatus) -> String {
+    use crate::core::HealthStatus::*;
+    use crate::utils::style::{color_enabled, paint, DIM, GREEN, RED, YELLOW};
     let code = match s {
         Ok => GREEN,
         Degraded => YELLOW,
@@ -733,10 +733,10 @@ pub(crate) fn status_label_colored(s: linix::core::HealthStatus) -> String {
 }
 
 /// Count backends by status. Pure — unit tested.
-pub(crate) fn doctor_tally(
-    reports: &[(String, linix::core::HealthReport)],
+pub fn doctor_tally(
+    reports: &[(String, crate::core::HealthReport)],
 ) -> (usize, usize, usize, usize) {
-    use linix::core::HealthStatus::*;
+    use crate::core::HealthStatus::*;
     let mut ok = 0;
     let mut degraded = 0;
     let mut critical = 0;
@@ -755,8 +755,8 @@ pub(crate) fn doctor_tally(
 /// The `health` section of `check`: can each backend actually run, and is the repo intact?
 ///
 /// Reports only. What it used to repair under `--fix` is `heal`'s now (U9).
-pub(crate) async fn check_health(app: &App, json: bool) -> Result<()> {
-    use linix::core::{HealthReport, HealthStatus};
+pub async fn check_health(app: &App, json: bool) -> Result<()> {
+    use crate::core::{HealthReport, HealthStatus};
 
     // ---- Per-backend health, via each backend's own probe (not a shallow is_available). ----
     // See `probe_all_health` for why it is concurrent.
@@ -860,7 +860,7 @@ pub(crate) async fn check_health(app: &App, json: bool) -> Result<()> {
             if report.status != HealthStatus::Ok {
                 continue;
             }
-            for row in linix::model::prereq::for_manager(&rows, name, os) {
+            for row in crate::model::prereq::for_manager(&rows, name, os) {
                 if row.is_per_package() {
                     continue;
                 }
@@ -953,7 +953,7 @@ pub(crate) async fn check_health(app: &App, json: bool) -> Result<()> {
     // K8 says the standing notice lives — not on `sync`, which runs unattended.
     {
         let git = app.git_manager();
-        if !linix::core::GitManager::git_available() {
+        if !crate::core::GitManager::git_available() {
             system.push((
                 "git".into(),
                 HealthStatus::Degraded,
@@ -1066,7 +1066,7 @@ pub(crate) async fn check_health(app: &App, json: bool) -> Result<()> {
 #[cfg(test)]
 mod doctor_tests {
     use super::*;
-    use linix::core::{HealthReport, HealthStatus};
+    use crate::core::{HealthReport, HealthStatus};
 
     fn rep(status: HealthStatus) -> HealthReport {
         HealthReport {
@@ -1118,7 +1118,7 @@ mod doctor_tests {
     /// `lvs`. Both implementations are now one function, and it is told what was probed.
     #[test]
     fn a_missing_program_is_named_by_the_program_that_was_probed() {
-        use linix::core::missing_program;
+        use crate::core::missing_program;
 
         let r = missing_program("lvm", &["lvs".to_string()]);
         assert_eq!(r.status, HealthStatus::Absent);

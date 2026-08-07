@@ -21,7 +21,7 @@ pub struct LuaHooks {
 impl LuaHooks {
     pub fn new(config: &Config) -> Result<Self> {
         let mut rhai_engine = Engine::new();
-        Self::setup_rhai_sandbox(&mut rhai_engine);
+        Self::register_rhai_host_functions(&mut rhai_engine);
 
         Ok(Self {
             rhai_engine,
@@ -213,7 +213,21 @@ impl LuaHooks {
         Ok(())
     }
 
-    fn setup_rhai_sandbox(engine: &mut Engine) {
+    /// A `#rhai` hook gets `print` and nothing else — **and that is not a security boundary.**
+    ///
+    /// It was called `setup_rhai_sandbox`, which claims one. A hook two lines away in the same
+    /// config can open `#!` and run any command on the machine, so withholding `sh` from the
+    /// Rhai arm stops nobody: what actually gates a hook is II.12's ledger, which hashes every
+    /// one of them and refuses an unapproved or changed script. The bareness is a smaller
+    /// surface, not a wall, and a reader who believes the old name would draw the wall in the
+    /// wrong place.
+    ///
+    /// It is also the narrower of two postures this binary ships — `model/vars_embedded.rs`
+    /// builds a Rhai engine with the shell, the network and the filesystem on it, under the
+    /// same ledger, because II.6b ruled that one *"trusted the same as a hook"*. Widening this
+    /// arm to match is a behaviour change nobody has asked for; recording that the difference
+    /// is unruled rather than principled is the part that was missing.
+    fn register_rhai_host_functions(engine: &mut Engine) {
         engine.register_fn("print", |msg: &str| info!("[Rhai] {}", msg));
     }
 

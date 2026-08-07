@@ -10,7 +10,7 @@ const UNVERIFIED_HEADING: &str = "! installed with `@unverified` — nothing che
 
 /// Every managed package whose install skipped a verification. Reads the recorded option and
 /// never the backend, so a backend that gains the flag is listed without editing this.
-pub(crate) fn unverified_packages(state: &linix::core::StateRegistry) -> Vec<(String, String)> {
+pub fn unverified_packages(state: &crate::core::StateRegistry) -> Vec<(String, String)> {
     state
         .packages
         .iter()
@@ -19,13 +19,13 @@ pub(crate) fn unverified_packages(state: &linix::core::StateRegistry) -> Vec<(St
         .collect()
 }
 
-pub(crate) async fn handle_status(app: &App, json: bool) -> Result<()> {
+pub async fn handle_status(app: &App, json: bool) -> Result<()> {
     // This report ends with a crawl of every manager on the machine, so every manager is asked
     // either way — asked here they answer at once instead of in the order the sections below
     // happen to need them (`App::warm_installed`).
     app.warm_installed().await;
     let resolver =
-        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
     let state = resolver.resolve_model().await?;
     let desired = state.packages.clone();
@@ -41,7 +41,7 @@ pub(crate) async fn handle_status(app: &App, json: bool) -> Result<()> {
     let hosts = app.host_backends().await;
     let changes = {
         let state_guard = app.state.lock().await;
-        let planner = linix::app::sync::planner::ChangePlanner::new(
+        let planner = crate::app::sync::planner::ChangePlanner::new(
             app.registry.clone(),
             &state_guard,
             &app.config,
@@ -172,22 +172,22 @@ pub(crate) async fn handle_status(app: &App, json: bool) -> Result<()> {
 /// not read differently at apply time than it did when the plan was captured (IX.6).
 /// Everything one resolution produces, so `plan` and `apply` read the same model rather than
 /// resolving it twice and comparing the halves they each happened to compute.
-pub(crate) struct FullChanges {
-    pub changes: linix::app::sync::SyncChanges,
+pub struct FullChanges {
+    pub changes: crate::app::sync::SyncChanges,
     /// The resource half (N-2). `plan` froze only the package half, so a plan over three
     /// unapplied `link:` lines was an empty file and `apply` of it did nothing.
-    pub resources: linix::app::apply::ResourceChanges,
+    pub resources: crate::app::apply::ResourceChanges,
     /// The resolved model itself — `apply` needs it to run the non-package phases, and its
     /// `vars` are what a plan freezes.
-    pub state: linix::model::DesiredState,
+    pub state: crate::model::DesiredState,
 }
 
-pub(crate) async fn compute_full_changes(
+pub async fn compute_full_changes(
     app: &App,
-    frozen_vars: Option<linix::model::vars::Vars>,
+    frozen_vars: Option<crate::model::vars::Vars>,
 ) -> Result<FullChanges> {
     let resolver =
-        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
     let resolver = match frozen_vars {
         Some(v) => resolver.with_vars(v),
@@ -204,7 +204,7 @@ pub(crate) async fn compute_full_changes(
     let hosts = app.host_backends().await;
     let changes = {
         let state_guard = app.state.lock().await;
-        let planner = linix::app::sync::planner::ChangePlanner::new(
+        let planner = crate::app::sync::planner::ChangePlanner::new(
             app.registry.clone(),
             &state_guard,
             &app.config,
@@ -220,7 +220,7 @@ pub(crate) async fn compute_full_changes(
     })
 }
 
-pub(crate) async fn handle_plan(app: &App, out: &str) -> Result<()> {
+pub async fn handle_plan(app: &App, out: &str) -> Result<()> {
     let full = compute_full_changes(app, None).await?;
     // XIII.3's exit condition names `plan`: a script's hash, its run count and the decision
     // that follows are printed here, before anything happens. Read off the resolution
@@ -229,7 +229,7 @@ pub(crate) async fn handle_plan(app: &App, out: &str) -> Result<()> {
     app.execs().print_plan(&full.state);
     let created_at = chrono::Utc::now().timestamp();
     let mut plan =
-        linix::app::sync::SavedPlan::from_changes(&full.changes, &full.resources, Some(created_at));
+        crate::app::sync::SavedPlan::from_changes(&full.changes, &full.resources, Some(created_at));
     // Freeze the resolved variables so `apply` reproduces this exact resolution (IX.6).
     plan.vars = full.state.vars.clone();
     tokio::fs::write(out, serde_json::to_string_pretty(&plan)?).await?;
@@ -305,22 +305,22 @@ pub(crate) async fn handle_plan(app: &App, out: &str) -> Result<()> {
             .iter()
             .map(|r| (r.backend.clone(), r.name.clone()))
             .collect();
-        let extra_pairs = linix::app::sync::guard::extra_removal_pairs(&plan.resources.undo);
-        let scope = linix::app::sync::guard::GuardScope::Apply;
+        let extra_pairs = crate::app::sync::guard::extra_removal_pairs(&plan.resources.undo);
+        let scope = crate::app::sync::guard::GuardScope::Apply;
         let mut refusals = Vec::new();
         for (pairs, kind, also) in [
             (
                 &package_pairs,
-                linix::app::sync::guard::RemovalKind::Package,
+                crate::app::sync::guard::RemovalKind::Package,
                 0,
             ),
             (
                 &extra_pairs,
-                linix::app::sync::guard::RemovalKind::Extra,
+                crate::app::sync::guard::RemovalKind::Extra,
                 package_pairs.len(),
             ),
         ] {
-            let report = linix::app::sync::guard::inspect_removals(
+            let report = crate::app::sync::guard::inspect_removals(
                 &app.config,
                 &app.registry,
                 pairs,
@@ -351,11 +351,11 @@ pub(crate) async fn handle_plan(app: &App, out: &str) -> Result<()> {
 /// inspect is the plan you apply. `add_installs` wires the edges from the specs' own
 /// `requires`, which the plan file carries — they were always in the JSON, and nothing read
 /// them back.
-pub(crate) fn saved_plan_to_changes(
-    installs: &[linix::core::PackageSpec],
-    removals: &[linix::app::sync::saved_plan::PlanRemoval],
-) -> linix::app::sync::planner::SyncChanges {
-    let mut changes = linix::app::sync::planner::SyncChanges::default();
+pub fn saved_plan_to_changes(
+    installs: &[crate::core::PackageSpec],
+    removals: &[crate::app::sync::saved_plan::PlanRemoval],
+) -> crate::app::sync::planner::SyncChanges {
+    let mut changes = crate::app::sync::planner::SyncChanges::default();
     changes.add_installs(installs);
     for r in removals {
         changes.add_removal(&r.backend, &r.name);
@@ -363,18 +363,18 @@ pub(crate) fn saved_plan_to_changes(
     changes
 }
 
-pub(crate) async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Result<()> {
+pub async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Result<()> {
     let raw = tokio::fs::read_to_string(plan_path)
         .await
         .with_context(|| format!("reading plan file {}", plan_path))?;
-    let plan: linix::app::sync::SavedPlan =
+    let plan: crate::app::sync::SavedPlan =
         serde_json::from_str(&raw).context("parsing plan file")?;
 
-    if plan.schema != linix::app::sync::PLAN_SCHEMA {
+    if plan.schema != crate::app::sync::PLAN_SCHEMA {
         anyhow::bail!(
             "plan schema {} is unsupported (this linix speaks schema {})",
             plan.schema,
-            linix::app::sync::PLAN_SCHEMA
+            crate::app::sync::PLAN_SCHEMA
         );
     }
     // Integrity: refuse a hand-edited plan unless forced.
@@ -399,7 +399,7 @@ pub(crate) async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Resul
     // the same model it just checked rather than resolving a third one.
     let now = compute_full_changes(app, Some(plan.vars.clone())).await?;
     {
-        let current = linix::app::sync::SavedPlan::from_changes(&now.changes, &now.resources, None);
+        let current = crate::app::sync::SavedPlan::from_changes(&now.changes, &now.resources, None);
         if current.desired_hash != plan.desired_hash {
             if yes {
                 warn!("apply: system has drifted from the captured plan; applying anyway (--yes).");
@@ -412,7 +412,7 @@ pub(crate) async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Resul
                 // only "Aborted" — naming neither the reason nor `--yes`. Found by the test
                 // that enumerates prompts from the source; no review had reported it.
                 if !std::io::stdin().is_terminal() {
-                    return Err(linix::core::Error::Refused(
+                    return Err(crate::core::Error::Refused(
                         "The captured plan no longer matches this machine, and there is no \
                          terminal to confirm on. Re-run with --yes to apply it anyway, or \
                          `linix plan` to capture a fresh one."
@@ -501,7 +501,7 @@ pub(crate) async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Resul
     let removed = changes.total_remove();
     let engine = app.sync_engine().await;
     engine
-        .sync(changes, linix::app::sync::guard::GuardScope::Apply)
+        .sync(changes, crate::app::sync::guard::GuardScope::Apply)
         .await?;
 
     // The resource half, through the same phase list `sync` runs (N-2). Not a second
@@ -515,7 +515,7 @@ pub(crate) async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Resul
         crate::verbs::sync::apply_non_package_phases(
             app,
             &now.state,
-            linix::app::sync::guard::GuardScope::Apply,
+            crate::app::sync::guard::GuardScope::Apply,
             removed,
         )
         .await?
@@ -531,13 +531,13 @@ pub(crate) async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Resul
 
 /// Where the version pins live (II.6): in the `locks/` directory beside the hook and extras
 /// ledgers, never a stray `locks.json` beside that directory.
-pub(crate) fn version_lock_path(app: &App) -> std::path::PathBuf {
+pub fn version_lock_path(app: &App) -> std::path::PathBuf {
     app.config.config_root().join("locks").join("versions.json")
 }
 
 /// The pins on disk. A missing or unreadable file is an empty set of pins — the ordinary state
 /// of a machine that has never run `linix lock`, never an error.
-pub(crate) fn load_version_locks(path: &std::path::Path) -> serde_json::Map<String, Value> {
+pub fn load_version_locks(path: &std::path::Path) -> serde_json::Map<String, Value> {
     let Ok(body) = std::fs::read_to_string(path) else {
         return serde_json::Map::new();
     };
@@ -548,17 +548,17 @@ pub(crate) fn load_version_locks(path: &std::path::Path) -> serde_json::Map<Stri
 }
 
 /// Write the pins back. Returns whether the bytes reached the disk — a preview pins nothing.
-pub(crate) async fn write_version_locks(
+pub async fn write_version_locks(
     path: &std::path::Path,
     locks: &serde_json::Map<String, Value>,
 ) -> Result<bool> {
-    if !linix::core::dry_run::active() {
+    if !crate::core::dry_run::active() {
         if let Some(dir) = path.parent() {
             tokio::fs::create_dir_all(dir).await.ok();
         }
     }
     let doc = serde_json::json!({ "locks": locks });
-    linix::utils::file::persist(path, &serde_json::to_string_pretty(&doc)?)
+    crate::utils::file::persist(path, &serde_json::to_string_pretty(&doc)?)
         .with_context(|| format!("Failed to write {}", path.display()))
 }
 
@@ -594,7 +594,7 @@ async fn scan_installed_versions(app: &App) -> serde_json::Map<String, Value> {
 /// Build and write `locks/versions.json` from the current managed state. Returns the number of
 /// versions pinned. Shared by `linix lock versions` and by `linix heal` (which reconciles the
 /// lockfile).
-pub(crate) async fn build_and_write_locks(app: &App) -> Result<(usize, bool)> {
+pub async fn build_and_write_locks(app: &App) -> Result<(usize, bool)> {
     let locks = scan_installed_versions(app).await;
     let count = locks.len();
     let written = write_version_locks(&version_lock_path(app), &locks).await?;
@@ -610,10 +610,10 @@ pub(crate) async fn build_and_write_locks(app: &App) -> Result<(usize, bool)> {
 ///
 /// **Only entries that are already pinned are refreshed.** A package nobody pinned gains no pin
 /// here: it has no stale record to fight, and pinning it would turn every upgrade into a `lock`.
-pub(crate) async fn refresh_version_locks(app: &App) -> Result<usize> {
+pub async fn refresh_version_locks(app: &App) -> Result<usize> {
     // A preview moved no version, so there is nothing to re-record — and reporting a count it
     // could not write is the "would" that reads as "did".
-    if linix::core::dry_run::active() {
+    if crate::core::dry_run::active() {
         return Ok(0);
     }
     let path = version_lock_path(app);
@@ -655,7 +655,7 @@ fn move_pins_to(
 /// A key is `KIND:REST` — `apt:curl`, `after_install:nginx`, `adapters:backends.toml` — and both
 /// halves are things a person would type: the whole key when two kinds carry the same tail, the
 /// tail alone when they do not. No names at all means every key.
-pub(crate) fn scoped_by(key: &str, names: &[String]) -> bool {
+pub fn scoped_by(key: &str, names: &[String]) -> bool {
     if names.is_empty() {
         return true;
     }
@@ -667,7 +667,7 @@ pub(crate) fn scoped_by(key: &str, names: &[String]) -> bool {
 /// `utils::file::persist`, so the answer about one of them is the answer about all: a preview
 /// pins nothing, approves nothing and forgets nothing.
 fn tense(label: &str, done: &'static str, would: &'static str) -> (String, &'static str) {
-    if linix::core::dry_run::active() {
+    if crate::core::dry_run::active() {
         (format!("[DRY-RUN] {}:", label), would)
     } else {
         (format!("{}:", label), done)
@@ -684,12 +684,7 @@ fn quoted(names: &[String]) -> String {
 }
 
 /// `linix lock [AXIS] [NAME…]` — freeze what a sync would otherwise decide again (Z2).
-pub(crate) async fn handle_lock(
-    app: &App,
-    axis: LockAxis,
-    names: &[String],
-    list: bool,
-) -> Result<()> {
+pub async fn handle_lock(app: &App, axis: LockAxis, names: &[String], list: bool) -> Result<()> {
     if list {
         return list_locks(app, axis);
     }
@@ -751,12 +746,12 @@ async fn lock_versions(app: &App, names: &[String]) -> Result<()> {
 /// afterwards: the resolver settles the whole model or none of it, and "resolve these three
 /// names only" is not a question it can be asked.
 async fn lock_backends(app: &App, names: &[String]) -> Result<()> {
-    use linix::core::BareLock;
+    use crate::core::BareLock;
 
     let path = BareLock::path_in(&app.config.layout().locks_dir());
     let before = BareLock::load(&path)?;
     let resolver =
-        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await
             .recording_locks();
     resolver.resolve_model().await?;
@@ -816,7 +811,7 @@ async fn lock_backends(app: &App, names: &[String]) -> Result<()> {
 /// not pick out. The seven approvers each read the files they own; a filter threaded through all
 /// seven would be seven places for a scope to be forgotten, and the ledger is one place.
 async fn lock_scripts(app: &App, names: &[String]) -> Result<()> {
-    use linix::core::hook_lock::HookLedger;
+    use crate::core::hook_lock::HookLedger;
 
     let ledger_path = HookLedger::path_in(&app.config.layout().locks_dir());
     let before = HookLedger::load(&ledger_path)?;
@@ -851,7 +846,7 @@ async fn lock_scripts(app: &App, names: &[String]) -> Result<()> {
     // A hook on one of LiNix's own events (XIII.13) is the same surface: a script the repo
     // carries, run without anyone watching. Both of U15's locations are approved here, and
     // separately — the shared policy's approval must not cover this machine's local file.
-    let events = linix::app::events::EventHooks::load(&app.config);
+    let events = crate::app::events::EventHooks::load(&app.config);
     let approved_events = events.approve_all()?;
     if approved_events > 0 && !scoped {
         println!(
@@ -913,7 +908,7 @@ async fn lock_scripts(app: &App, names: &[String]) -> Result<()> {
 
     // Put back everything the names did not pick out. A preview wrote nothing, so there is
     // nothing on disk to put back and nothing to count — it says what it would do and stops.
-    if linix::core::dry_run::active() {
+    if crate::core::dry_run::active() {
         println!(
             "{} {} the entries matching {}",
             tag,
@@ -959,8 +954,8 @@ async fn lock_scripts(app: &App, names: &[String]) -> Result<()> {
 
 /// `linix lock --list` / `linix unlock --list` — what is locked on this axis, changing nothing.
 fn list_locks(app: &App, axis: LockAxis) -> Result<()> {
-    use linix::core::hook_lock::HookLedger;
-    use linix::core::BareLock;
+    use crate::core::hook_lock::HookLedger;
+    use crate::core::BareLock;
 
     let locks_dir = app.config.layout().locks_dir();
     if axis.covers(LockAxis::Versions) {
@@ -1006,9 +1001,9 @@ fn list_locks(app: &App, axis: LockAxis) -> Result<()> {
 /// directly rather than the resolved model — because resolving the model *runs* generators, and
 /// a generator cannot be approved by a command that must resolve past it first. Reads
 /// `modules/` and `profiles/`, ungated, so a generator behind a `when` is still approvable.
-pub(crate) fn approve_generate_commands(app: &App) -> Result<usize> {
-    use linix::config::grammar::{parse_document, Statement};
-    use linix::core::hook_lock::{generate_id, hash_script, HookLedger};
+pub fn approve_generate_commands(app: &App) -> Result<usize> {
+    use crate::config::grammar::{parse_document, Statement};
+    use crate::core::hook_lock::{generate_id, hash_script, HookLedger};
 
     let layout = app.config.layout();
     let known = |name: &str| app.registry.get(name).is_some();
@@ -1066,19 +1061,16 @@ pub(crate) fn approve_generate_commands(app: &App) -> Result<usize> {
 
 /// The one resolution the approvers read. `exec:` scripts and `@health=` commands are two
 /// questions about the same model, and asking it twice is asking every manager twice.
-pub(crate) async fn resolve_for_approval(app: &App) -> Result<linix::model::DesiredState> {
-    linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+pub async fn resolve_for_approval(app: &App) -> Result<crate::model::DesiredState> {
+    crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
         .await
         .resolve_model()
         .await
         .map_err(Into::into)
 }
 
-pub(crate) async fn approve_exec_scripts(
-    app: &App,
-    state: &linix::model::DesiredState,
-) -> Result<usize> {
-    use linix::core::hook_lock::{exec_id, hash_script, HookLedger};
+pub async fn approve_exec_scripts(app: &App, state: &crate::model::DesiredState) -> Result<usize> {
+    use crate::core::hook_lock::{exec_id, hash_script, HookLedger};
 
     if !state.has_execs() {
         return Ok(0);
@@ -1115,12 +1107,9 @@ pub(crate) async fn approve_exec_scripts(
 ///
 /// Reads the resolved model (every `@health=` line the active profiles reach) plus the
 /// machine-wide `health` list, so it approves exactly the commands a sync would run.
-pub(crate) async fn approve_health_checks(
-    app: &App,
-    state: &linix::model::DesiredState,
-) -> Result<usize> {
-    use linix::core::hook_lock::{hash_script, health_id, HookLedger};
-    use linix::model::health::Probe;
+pub async fn approve_health_checks(app: &App, state: &crate::model::DesiredState) -> Result<usize> {
+    use crate::core::hook_lock::{hash_script, health_id, HookLedger};
+    use crate::model::health::Probe;
 
     let mut commands: Vec<String> = Vec::new();
     for specs in state.packages.values() {
@@ -1156,8 +1145,8 @@ pub(crate) async fn approve_health_checks(
 /// One entry per file, not per definition: an edit that *adds* a `[[backend]]` must invalidate
 /// the approval, and a per-definition identity would let exactly that slip through.
 /// A file the repo does not carry is the ordinary case, never an error.
-pub(crate) fn approve_adapters(app: &App) -> Result<Vec<String>> {
-    use linix::core::hook_lock::{adapter_id, hash_script, HookLedger};
+pub fn approve_adapters(app: &App) -> Result<Vec<String>> {
+    use crate::core::hook_lock::{adapter_id, hash_script, HookLedger};
 
     let layout = app.config.layout();
     // Every `*.toml` in the adapters folder, not a hardcoded list. The list was the bug: it
@@ -1203,9 +1192,9 @@ pub(crate) fn approve_adapters(app: &App) -> Result<Vec<String>> {
 /// filename if one was approved, `None` if the repo has no provider or a non-executing line
 /// file. The single source of which provider is active is `vars_provider::select`, shared
 /// with resolution so `lock` and the gate can never disagree about what runs.
-pub(crate) fn approve_vars_provider(app: &App) -> Result<Option<String>> {
-    use linix::core::hook_lock::{hash_script, vars_id, HookLedger};
-    use linix::model::vars_provider::{self, Kind};
+pub fn approve_vars_provider(app: &App) -> Result<Option<String>> {
+    use crate::core::hook_lock::{hash_script, vars_id, HookLedger};
+    use crate::model::vars_provider::{self, Kind};
 
     let root = app.config.config_root();
     let Some(selected) = vars_provider::select(&root, &app.config.vars.source)? else {
@@ -1230,12 +1219,7 @@ pub(crate) fn approve_vars_provider(app: &App) -> Result<Option<String>> {
 }
 
 /// `linix unlock [AXIS] [NAME…]` — release a lock, so the next sync decides it again (Z2).
-pub(crate) async fn handle_unlock(
-    app: &App,
-    axis: LockAxis,
-    names: &[String],
-    list: bool,
-) -> Result<()> {
+pub async fn handle_unlock(app: &App, axis: LockAxis, names: &[String], list: bool) -> Result<()> {
     if list {
         return list_locks(app, axis);
     }
@@ -1266,8 +1250,8 @@ pub(crate) async fn handle_unlock(
 
 /// Forget which manager an unpinned name resolved to, so the next sync asks again (II.6).
 async fn unlock_backends(app: &App, names: &[String]) -> Result<()> {
-    let path = linix::core::BareLock::path_in(&app.config.layout().locks_dir());
-    let mut lock = linix::core::BareLock::load(&path)?;
+    let path = crate::core::BareLock::path_in(&app.config.layout().locks_dir());
+    let mut lock = crate::core::BareLock::load(&path)?;
     if lock.is_empty() {
         println!("backends: nothing is frozen on this host.");
         return Ok(());
@@ -1347,7 +1331,7 @@ async fn unlock_versions(app: &App, names: &[String]) -> Result<()> {
 /// Withdraw script approvals, so a sync that reaches one refuses to run it until `lock scripts`
 /// approves it again (II.12).
 fn unlock_scripts(app: &App, names: &[String]) -> Result<()> {
-    use linix::core::hook_lock::HookLedger;
+    use crate::core::hook_lock::HookLedger;
 
     let path = HookLedger::path_in(&app.config.layout().locks_dir());
     let mut ledger = HookLedger::load(&path)?;
@@ -1488,8 +1472,8 @@ mod lock_axis_tests {
 #[cfg(test)]
 mod frozen_plan_tests {
     use super::*;
-    use linix::app::sync::saved_plan::PlanRemoval;
-    use linix::core::{GraphAction, PackageSpec};
+    use crate::app::sync::saved_plan::PlanRemoval;
+    use crate::core::{GraphAction, PackageSpec};
 
     fn spec(backend: &str, name: &str, requires: &[&str]) -> PackageSpec {
         PackageSpec {
@@ -1582,7 +1566,7 @@ mod frozen_plan_tests {
             },
         ];
         let changes = saved_plan_to_changes(&[spec("apt", "htop", &[])], &removals);
-        let mut pairs = linix::app::sync::guard::removal_pairs(&changes);
+        let mut pairs = crate::app::sync::guard::removal_pairs(&changes);
         pairs.sort();
         assert_eq!(
             pairs,
@@ -1598,7 +1582,7 @@ mod frozen_plan_tests {
 #[cfg(test)]
 mod unverified_tests {
     use super::*;
-    use linix::core::state::ManagedPackage;
+    use crate::core::state::ManagedPackage;
 
     fn pkg(backend: &str, name: &str, unverified: bool) -> ManagedPackage {
         ManagedPackage {
@@ -1624,7 +1608,7 @@ mod unverified_tests {
     /// and, since Q5, the manager that verifies a signature itself.
     #[test]
     fn what_skipped_a_check_is_listed_whichever_backend_skipped_it() {
-        let state = linix::core::StateRegistry {
+        let state = crate::core::StateRegistry {
             packages: vec![
                 pkg("helm", "diff", true),
                 pkg("github", "sharkdp/fd", true),

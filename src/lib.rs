@@ -11,6 +11,13 @@ pub mod core;
 pub mod model;
 pub mod parsers;
 pub mod utils;
+/// The command implementations.
+///
+/// In the library rather than the binary so the suite can reach them. `main.rs` declared
+/// `mod verbs;`, which put ~8,500 lines of real logic — the lock/unlock ledger, `check_health`,
+/// the failure-attribution classifier, `reconcile` itself — where no test binary could link to
+/// it, so it could only be exercised by spawning the program.
+pub mod verbs;
 
 // Primary entry points for library consumers
 pub use app::App;

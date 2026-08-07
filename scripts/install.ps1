@@ -29,14 +29,23 @@ if (-not $ref) {
     if (-not $ref) { Say "no release tag published yet - installing from the default branch instead." }
 }
 
+# `--locked`, and no fallback. The retry without it was described as covering an unavailable
+# lockfile; `Cargo.lock` is tracked in this repository, so what it actually covered was a
+# network blip or a compile error, answered by resolving 452 dependencies fresh. Twin of the
+# same three lines in install.sh - change one, change the other.
 if ($ref) {
     Say "building and installing $ref from $repo (this can take a minute)..."
     cargo install --git $repo --tag $ref --locked
-    if ($LASTEXITCODE -ne 0) { cargo install --git $repo --tag $ref }
 } else {
     Say "building and installing from $repo (this can take a minute)..."
     cargo install --git $repo --locked
-    if ($LASTEXITCODE -ne 0) { cargo install --git $repo }
+}
+# `Err` prints and returns - every other use of it here is a warning the script carries on
+# past. A failed build is not one of those, so this exits: continuing would run the health
+# check against whatever `linix` was already on PATH and report the old binary as the new one.
+if ($LASTEXITCODE -ne 0) {
+    Err "the build failed - see the cargo output above."
+    exit 1
 }
 
 $cargoBin = if ($env:CARGO_HOME) { Join-Path $env:CARGO_HOME 'bin' } else { Join-Path $HOME '.cargo\bin' }

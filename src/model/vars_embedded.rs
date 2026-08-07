@@ -3,10 +3,22 @@
 //! install. Rhai is the engine, behind the neutral `vars.linix` extension so it can be replaced
 //! without renaming anyone's files.
 //!
-//! The engine is pure by construction: a stock Rhai `Engine` has no file, shell, clock or network
-//! access at all. The host powers IX.6 rules the provider *may* have — reading the clock, running
-//! a shell, reaching the network — are a separate, owner-decided standard library, registered on
-//! top of this; until that is decided, the only inputs a script has are the detected facts below.
+//! **The engine is not sandboxed, and that is the ruling.** A stock Rhai `Engine` has no file,
+//! shell, clock or network access; `register_stdlib` puts all four back, always on, because
+//! II.6b decided `vars.linix` is *"trusted the same as a hook — a script in your own repo"* and
+//! gave it every power an external `vars.py` already had.
+//!
+//! **What makes that safe is the ledger, not the engine.** The file is hashed into `locks/` and
+//! goes through II.12: first sight asks, a changed hash stops, and under `-y` or with no
+//! terminal an unapproved provider is a refusal rather than a skipped prompt. That matters more
+//! here than for a hook, because this file resolves at **step 0** of II.7 — before a plan
+//! exists — so `check`, `plan` and even `plan --dry-run` have already run it by the time they
+//! print anything. *"I only previewed it"* is not a state in which this script has not run.
+//!
+//! (This header used to say the opposite — *"until that is decided, the only inputs a script
+//! has are the detected facts below"* — three lines above the unconditional `register_stdlib`
+//! call that gave it a shell. The decision had been made and the paragraph describing the world
+//! before it was left in place.)
 
 use crate::config::grammar::{GrammarError, Origin, Result};
 use crate::config::parser::HostFacts;

@@ -159,8 +159,13 @@ fn dispatches(body: &str, phase: Phase) -> bool {
 
 /// The dispatch loop's body, from the `for phase in` to the end of its `match`.
 fn dispatch_body(source: &str) -> String {
+    // Matched without its visibility, because visibility is not what this test is about and
+    // pinning it made the scan fail the day `verbs` moved into the library and `pub(crate)`
+    // became `pub` — reporting "the one phase list is gone" about a function that had not
+    // moved a line. A gate that fails on a rename it does not care about is a gate people
+    // learn to edit rather than read.
     let start = source
-        .find("pub(crate) async fn apply_non_package_phases")
+        .find("async fn apply_non_package_phases")
         .expect("`apply_non_package_phases` must still exist — it is the one phase list");
     let rest = &source[start..];
     let end = rest

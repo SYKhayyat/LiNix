@@ -7,7 +7,7 @@ use crate::verbs::prelude::*;
 /// How one reconcile pass should behave. The pass itself is identical for `sync` and
 /// `watch` — II.7's ordering phases, the guard, the same planner — and these are the only
 /// things that legitimately differ between an attended run and an unattended one.
-pub(crate) struct Reconcile {
+pub struct Reconcile {
     /// Strict version matching against the lockfile: a package that is not in it is an error.
     locked: bool,
     /// Take what the managers offer now instead of what the lock recorded. Off by default —
@@ -16,7 +16,7 @@ pub(crate) struct Reconcile {
     /// Emit the change report as JSON instead of a planned-changes list.
     json: bool,
     /// Which scope the guard reports refusals under.
-    scope: linix::app::sync::guard::GuardScope,
+    scope: crate::app::sync::guard::GuardScope,
     /// Whether to ask before applying. `watch` is unattended by definition and never asks;
     /// `sync` asks unless `--yes`.
     confirm: bool,
@@ -28,7 +28,7 @@ pub(crate) struct Reconcile {
 /// to mean "the machine already matches", and its caller printed exactly that; it also meant
 /// "there was a removal and LiNix declined it", which is the opposite claim about the same
 /// machine (AU1).
-pub(crate) struct Reconciled {
+pub struct Reconciled {
     /// Package and resource changes actually carried out.
     pub applied: usize,
     /// Removals the planner declined, each already named on the way past.
@@ -37,9 +37,9 @@ pub(crate) struct Reconciled {
 
 /// What to call this run in a refusal a user reads — the difference that matters is whether
 /// anybody was there, because an unattended tick is the dangerous one (N7).
-pub(crate) fn scope_label(scope: linix::app::sync::guard::GuardScope) -> &'static str {
+pub fn scope_label(scope: crate::app::sync::guard::GuardScope) -> &'static str {
     match scope {
-        linix::app::sync::guard::GuardScope::Watch => "an unattended watch tick",
+        crate::app::sync::guard::GuardScope::Watch => "an unattended watch tick",
         _ => "sync",
     }
 }
@@ -50,10 +50,10 @@ pub(crate) fn scope_label(scope: linix::app::sync::guard::GuardScope) -> &'stati
 /// Returns what the pass did, and what it declined to do. `sync` and `watch` both call this;
 /// the copy `watch` used to carry drifted from this body every time sync's ordering changed,
 /// which is why it is one function now.
-pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
+pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
     // A reconcile pass is one invocation for IX.6's purposes, and `watch` runs many of them in
     // one process. Without this a `when $hour` would freeze at whatever hour the daemon started.
-    linix::app::sync::resolver::new_resolution();
+    crate::app::sync::resolver::new_resolution();
     let engine = app.sync_engine().await;
     if app.journal.lock().await.needs_recovery() {
         warn!("the transaction journal records an interrupted run; healing first.");
@@ -66,7 +66,7 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> 
         }
     }
 
-    let mut resolver = linix::app::sync::resolver::StateResolver::new(
+    let mut resolver = crate::app::sync::resolver::StateResolver::new(
         &app.config,
         app.registry.clone(),
         opts.locked,
@@ -107,7 +107,7 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> 
     let hosts = app.host_backends().await;
     let mut changes = {
         let state_guard = app.state.lock().await;
-        let planner = linix::app::sync::planner::ChangePlanner::new(
+        let planner = crate::app::sync::planner::ChangePlanner::new(
             app.registry.clone(),
             &state_guard,
             &app.config,
@@ -196,7 +196,7 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> 
         if opts.confirm && !app.config.yes && !opts.json {
             use std::io::IsTerminal;
             if !std::io::stdin().is_terminal() {
-                return Err(linix::core::Error::Refused(
+                return Err(crate::core::Error::Refused(
                     "Refusing to apply changes without confirmation in a non-interactive shell. Re-run with --yes to proceed, or --dry-run to preview."
                 .to_string()).into());
             }
@@ -229,7 +229,7 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> 
 }
 
 /// Which managers this plan installs through, each named once.
-fn backends_that_installed(changes: &linix::app::sync::planner::SyncChanges) -> Vec<String> {
+fn backends_that_installed(changes: &crate::app::sync::planner::SyncChanges) -> Vec<String> {
     let mut out: Vec<String> = changes
         .generate_report()
         .install
@@ -252,7 +252,7 @@ async fn warn_about_unreachable_binaries(app: &App, backends: &[String]) {
     // informational. Ordered, so the warnings print in the order the backends were named.
     use futures::stream::StreamExt;
     let messages: Vec<Option<String>> = futures::stream::iter(backends.iter())
-        .map(|be| linix::app::reachable::unreachable_warning(be, &app.config, &app.executor))
+        .map(|be| crate::app::reachable::unreachable_warning(be, &app.config, &app.executor))
         .buffered(app.config.max_parallel.max(1))
         .collect()
         .await;
@@ -273,13 +273,13 @@ async fn warn_about_unreachable_binaries(app: &App, backends: &[String]) {
 ///
 /// Each phase honours `dry_run` internally and previews rather than acting, which is what
 /// makes one list correct for the preview and the real run alike.
-pub(crate) async fn apply_non_package_phases(
+pub async fn apply_non_package_phases(
     app: &App,
-    state: &linix::model::DesiredState,
-    scope: linix::app::sync::guard::GuardScope,
+    state: &crate::model::DesiredState,
+    scope: crate::app::sync::guard::GuardScope,
     packages_being_removed: usize,
 ) -> Result<usize> {
-    use linix::config::grammar::Phase;
+    use crate::config::grammar::Phase;
 
     // Asked before the first phase runs, because afterwards the answer is zero: the resources
     // are in effect, `changes()` correctly reports nothing to do, and a summary reading that
@@ -325,14 +325,14 @@ pub(crate) async fn apply_non_package_phases(
 }
 
 /// `linix rebuild` — remove and reinstall what is declared, one backend at a time (X.1, K1).
-pub(crate) async fn handle_rebuild(
+pub async fn handle_rebuild(
     app: &App,
     packages: &[String],
     backend: Option<&str>,
     all: bool,
 ) -> Result<()> {
-    use linix::app::rebuild::{self, Scope};
-    use linix::app::sync::guard::{self, GuardScope};
+    use crate::app::rebuild::{self, Scope};
+    use crate::app::sync::guard::{self, GuardScope};
 
     // Before the warning about rebuilding everything: `rebuild --backend aptt` scoped to a
     // manager that does not exist, found nothing to rebuild, and said it had succeeded (Q9).
@@ -369,14 +369,14 @@ pub(crate) async fn handle_rebuild(
     };
 
     let resolver =
-        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
     let desired = resolver.resolve_desired_state().await?;
     // A rebuild reinstalls, so it is a change path and the `[guard]` gate applies. Checked
     // against the declared set before anything is removed — a `deny_packages` hit must stop
     // the removal, not be discovered between the removal and the reinstall.
     enforce_policy(app, &desired).await?;
-    let declared: Vec<linix::core::PackageSpec> = desired.into_values().flatten().collect();
+    let declared: Vec<crate::core::PackageSpec> = desired.into_values().flatten().collect();
 
     let priority = app.priority_backends().await;
     let registry = app.registry.clone();
@@ -442,7 +442,7 @@ pub(crate) async fn handle_rebuild(
     if !app.config.yes {
         use std::io::IsTerminal;
         if !std::io::stdin().is_terminal() {
-            return Err(linix::core::Error::Refused(
+            return Err(crate::core::Error::Refused(
                 "Refusing to rebuild without confirmation in a non-interactive shell. Re-run with --yes, or --dry-run to preview."
             .to_string()).into());
         }
@@ -461,7 +461,7 @@ pub(crate) async fn handle_rebuild(
     // earlier batch may already have been rebuilt on top of it.
     let snapshot = match app
         .snapshot_manager
-        .auto_snapshot(linix::core::snapshot::SnapshotLabel::PreRebuild)
+        .auto_snapshot(crate::core::snapshot::SnapshotLabel::PreRebuild)
         .await
     {
         Ok(s) => s,
@@ -492,7 +492,7 @@ pub(crate) async fn handle_rebuild(
         // Removal and reinstall are two transactions, not one graph. The transaction engine
         // runs independent nodes concurrently, and a Remove and an Install of the same package
         // have no edge between them — in one graph they would race.
-        let mut down = linix::app::sync::planner::SyncChanges::default();
+        let mut down = crate::app::sync::planner::SyncChanges::default();
         for spec in &batch.specs {
             down.add_removal(&batch.backend, &spec.name);
         }
@@ -502,7 +502,7 @@ pub(crate) async fn handle_rebuild(
         // same backend is exactly what a rebuild has to honour, and this loop keyed its map by
         // the bare name — so the lookup `requires` does, which is `backend:name`, could never
         // hit it and the graph came out edgeless.
-        let mut up = linix::app::sync::planner::SyncChanges::default();
+        let mut up = crate::app::sync::planner::SyncChanges::default();
         up.add_installs(&batch.specs);
         // The removal has already happened, so a failure here means the batch's software is
         // gone. Roll the whole rebuild back rather than leaving a half-rebuilt machine.
@@ -557,14 +557,14 @@ pub(crate) async fn handle_rebuild(
     Ok(())
 }
 
-pub(crate) async fn handle_sync(app: &App, locked: bool, upgrade: bool, json: bool) -> Result<()> {
+pub async fn handle_sync(app: &App, locked: bool, upgrade: bool, json: bool) -> Result<()> {
     let done = reconcile(
         app,
         Reconcile {
             locked,
             upgrade,
             json,
-            scope: linix::app::sync::guard::GuardScope::Sync,
+            scope: crate::app::sync::guard::GuardScope::Sync,
             confirm: true,
         },
     )
@@ -594,7 +594,7 @@ pub(crate) async fn handle_sync(app: &App, locked: bool, upgrade: bool, json: bo
 /// changes between ticks, a manifest was edited. Best-effort — errors just yield an empty sig.
 /// A fingerprint of every wish-list manifest, so `watch` notices an edit.
 ///
-pub(crate) async fn manifest_signature(dir: &std::path::Path) -> Vec<(String, u64, i64)> {
+pub async fn manifest_signature(dir: &std::path::Path) -> Vec<(String, u64, i64)> {
     let mut sig = Vec::new();
     {
         let Ok(mut rd) = tokio::fs::read_dir(dir).await else {
@@ -622,7 +622,7 @@ pub(crate) async fn manifest_signature(dir: &std::path::Path) -> Vec<(String, u6
 /// One unattended reconcile pass. `watch` is unattended by definition, so it never asks —
 /// that flag is the only thing separating it from `sync`, which is why both go through the
 /// same [`reconcile`].
-pub(crate) async fn watch_reconcile(app: &App) -> Result<Reconciled> {
+pub async fn watch_reconcile(app: &App) -> Result<Reconciled> {
     reconcile(
         app,
         Reconcile {
@@ -632,14 +632,14 @@ pub(crate) async fn watch_reconcile(app: &App) -> Result<Reconciled> {
             // time to make one nobody asked for (owner ruling, 2026-07-24).
             upgrade: false,
             json: false,
-            scope: linix::app::sync::guard::GuardScope::Watch,
+            scope: crate::app::sync::guard::GuardScope::Watch,
             confirm: false,
         },
     )
     .await
 }
 
-pub(crate) async fn handle_watch(
+pub async fn handle_watch(
     app: &App,
     interval: u64,
     on_change: bool,
@@ -719,24 +719,24 @@ pub(crate) async fn handle_watch(
 /// guard; the two that need runtime state (`require_snapshot`, `deny_vulnerable`) are checked
 /// here, where the snapshot provider and the audit report are in hand. All ten refusals now
 /// share one decision surface — this replaces the old parallel `policy.toml` gate (II.17).
-pub(crate) async fn enforce_policy(
+pub async fn enforce_policy(
     app: &App,
-    desired: &HashMap<String, Vec<linix::core::PackageSpec>>,
+    desired: &HashMap<String, Vec<crate::core::PackageSpec>>,
 ) -> Result<()> {
     let guard = &app.config.guard;
     if guard.is_empty() {
         return Ok(());
     }
-    let mut violations: Vec<String> = linix::app::sync::guard::inspect_desired(guard, desired)
+    let mut violations: Vec<String> = crate::app::sync::guard::inspect_desired(guard, desired)
         .iter()
-        .map(linix::app::sync::guard::describe_objection)
+        .map(crate::app::sync::guard::describe_objection)
         .collect();
     if guard.require_snapshot && !app.snapshot_manager.has_provider() {
         violations
             .push("requires a snapshot provider but none is available (require_snapshot)".into());
     }
     if guard.deny_vulnerable {
-        match linix::app::insight::audit(app).await {
+        match crate::app::insight::audit(app).await {
             Ok(report) => {
                 for f in report.findings {
                     violations.push(format!(
@@ -762,7 +762,7 @@ pub(crate) async fn enforce_policy(
 
 /// A concise pre-flight summary of what a sync/upgrade is about to do. Real download-size
 /// and time estimates are backend-specific and deliberately not faked.
-pub(crate) fn print_flight_plan(app: &App, changes: &linix::app::sync::planner::SyncChanges) {
+pub fn print_flight_plan(app: &App, changes: &crate::app::sync::planner::SyncChanges) {
     if app.config.quiet {
         return;
     }
@@ -821,7 +821,7 @@ const MAX_LISTED_SKIPS: usize = 10;
 /// Free-standing so that every surface showing a plan shows the same lines — `sync`, its
 /// preview and `prune` all reach it, and a fourth caller added later gets it by calling this
 /// rather than by remembering the rule.
-pub(crate) fn print_skipped(skipped: &[linix::app::sync::planner::Skipped]) {
+pub fn print_skipped(skipped: &[crate::app::sync::planner::Skipped]) {
     if skipped.is_empty() {
         return;
     }
@@ -844,16 +844,16 @@ pub(crate) fn print_skipped(skipped: &[linix::app::sync::planner::Skipped]) {
 /// removal driven by a `vars` edit is explained rather than presented as a bare count. Compares
 /// this run's resolved variables to the committed baseline; silent when nothing changed or there
 /// is no baseline (a fresh repo, or a script/program provider whose values do not commit).
-pub(crate) async fn print_vars_changed(app: &App, current: &linix::model::vars::Vars) {
+pub async fn print_vars_changed(app: &App, current: &crate::model::vars::Vars) {
     let resolver =
-        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
     let git = app.git_manager();
     let prev = match resolver.vars_at_last_sync(&git).await {
         Ok(Some(p)) => p,
         _ => return,
     };
-    let changes = linix::model::vars::diff(&prev, current);
+    let changes = crate::model::vars::diff(&prev, current);
     if changes.is_empty() {
         return;
     }
