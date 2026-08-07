@@ -8167,3 +8167,56 @@ its `git ls-remote` failure is swallowed by the pipeline's exit status and the b
 takes over. The twin that diverged, again. A `Get-Command git` check plus a `try`/`catch` puts the
 rule in both files, and a `git` that is present but cannot reach the remote gets the same answer as
 one that is absent — both are "we could not ask".
+
+## Session 2026-08-07 — where this corpus is checked it is true, and where it is prose it is not (`LX-6`)
+
+`LX-6` measures the documentation: **429,405 words across `docs/`, ~570k tokens — more than half a
+1M context before a line of the 119,388 lines of Rust.** Its proposal is a 90% cut. That is
+registered as **`Y19`, OPEN**, and it is the owner's: it deletes the reasoning this project has
+accumulated, and whether *reasoning* is a capability is a question about what this repository is
+for. A builder who answers it by deleting has answered it permanently.
+
+What is not the owner's is the evidence, which is not an opinion.
+
+### `SPEC.md` said macOS had never run, for eleven days after it ran
+
+`:73` — *"macOS is compiled and unit-tested and has never been **run**; a nightly `macos-native`
+job now exists and has not yet gone green."* `history.md`'s 2026-07-27 entry, in the same
+repository: *"every job passed, including `macos-native`, which had never once completed… `pass=263
+fail=0 soft=6`."* **228 commits stale, in the file every reader opens first, four lines under a
+sentence that says "build state is not readiness, and this file should stop implying it is".**
+
+The `62` beside it was right the whole time, because
+`tests/backend_count_matches_the_spec_tests.rs` asserts it against the code and the macOS
+paragraph had nothing. Corrected, with the run named, and the count of backends that have ever run
+against a real manager moves from 22 to 23 — `brew`, which is what `release-check.sh`'s Darwin
+branch sweeps. The correction carries its own warning: `23` is the weaker kind of claim, sourced
+from the harness's Darwin canary rather than from a gate.
+
+### Half of a mandatory gate was rationale for nothing
+
+`CLAUDE.md` makes reading a rule's `why.md` entry **mandatory** before changing the rule, which
+makes `why.md` the only document here a contributor is required to read. Measured:
+**155 `V.n` entries, 77 cited by a Part II rule, 46 quoted from `src/` or `tests/`, and 53 cited by
+nothing at all.**
+
+`tests/why_entries_are_attached_to_something_tests.rs` asks the two questions separately, because
+they are not the same question:
+
+- **Does every citation resolve?** A hard assertion, both directions, at zero failures today. A
+  rule ending `**V.141.**` promises an entry to read before changing it; without the entry the
+  mandatory read is a dead link and the rule can be changed with its reason unread. It costs
+  nothing until someone renumbers.
+- **Is every entry attached to something?** A ratchet at 53, may only go down, with the resolution
+  named in the failure: cite it from the rule it explains, move it into the doc comment of the test
+  that enforces it — **a rationale attached to a check cannot go stale**, which is the best pattern
+  in this corpus and `LX-6`'s own proposal — or the owner retires it.
+
+The ratchet is two-sided, like `NOWHERE_CEILING`: it fails if the count *rises*, and it fails if
+the count falls and the ceiling is not lowered with it. That second half earned its keep
+immediately — the ceiling went in at 55 from a Python measurement and the test's own parser said
+53, because the Rust one is stricter about word boundaries. **The gate corrected the number the
+gate was written from**, on its first run.
+
+Nothing is deleted here. `Y19` records the cut as the owner's to rule; this is the half that needs
+no ruling, because a check that a citation resolves takes nothing away.

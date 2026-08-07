@@ -13,7 +13,7 @@ which point nobody could find a decision in it and 84 of them had no recorded an
 | [`spec/why.md`](spec/why.md) | V | The reason behind every Part II rule — each one the scar of a real bug. | **Before changing any Part II rule.** |
 | [`spec/plan.md`](spec/plan.md) | III + IV | The work in dependency order, each phase with its exit condition; then the proofs. | When picking up work. |
 | [`spec/bugs.md`](spec/bugs.md) | VI | Bugs killed by this design, and bugs carried forward. | Before building anything. |
-| [`spec/decisions.md`](spec/decisions.md) | — | **All 179 decisions. 170 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 3 BUILT NEVER RULED, 2 OPEN.** Counted, not typed — `scripts/decision-count.sh --check`. | Before proposing anything. |
+| [`spec/decisions.md`](spec/decisions.md) | — | **All 180 decisions. 170 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 3 BUILT NEVER RULED, 3 OPEN.** Counted, not typed — `scripts/decision-count.sh --check`. | Before proposing anything. |
 | [`spec/history.md`](spec/history.md) | VII | How far the work got, session by session. **The living truth** — every frozen status line drifts behind the tree. | After Part II, before touching anything. |
 | [`INEFFICIENCIES.md`](INEFFICIENCIES.md) | — | Every place in the tree slower than it has to be, and the disposition of all 47 — fixed, fixed by something else, or not done with the reason. | Before adding a fan-out, a cache, or a concurrency cap. |
 | [`spec/proposals/`](spec/proposals/) | VIII–XIII | Six features, all designed and all now ruled. Kept for the reasoning, not the questions. | When building one of them. |
@@ -57,9 +57,9 @@ the binary where S33 lived.
 
 **Build state is not readiness, and this file should stop implying it is.** The register is at
 zero unbuilt items; the *validation* surface is far narrower than the build surface. **62 backends
-exist across all platforms** and exactly 22 have ever been run against a real package manager — 7
-per distro image, 18 in the `tools` image, `scoop` on the native Windows sweep, **45 plan-smoked**
-on any one image.
+exist across all platforms** and 23 have ever been run against a real package manager — 7 per
+distro image, 18 in the `tools` image, `scoop` on the native Windows sweep, `brew` on the macOS
+one, **45 plan-smoked** on any one image.
 
 *"Registered" meant two things and three documents counted two different ones.* This file said 52
 while the grades said 48 (Windows) and 56 (Ubuntu), and no two agreed because the word did not
@@ -69,12 +69,24 @@ host-dependent**, because `create_default_registry` gates the OS-native ones beh
 question. The 62 is asserted against the code by
 `tests/backend_count_matches_the_spec_tests.rs` — a number in prose is a copy, and this one had
 been wrong long enough that nobody could say which of the three was stale. Since 2026-07-26 `tools` and `gentoo` run nightly rather than on manual dispatch and
-`fedora` joined the per-push matrix, so the widest run happens without anyone pressing a button —
-**but the count of backends that have ever run for real is unchanged.** macOS is compiled and
-unit-tested and has never been *run*; a nightly `macos-native` job now exists and has not yet gone
-green. The destructive effectors — btrfs/zfs/lvm restore, D5's `dpkg -i`/`rpm -U` handoff, U30
-storage removal — are argv-tested and unrun. The full assessment,
-with the numbers and the order to fix them in, is the first entry in
+`fedora` joined the per-push matrix, so the widest run happens without anyone pressing a button.
+
+**macOS has run.** `macos-native` went green on 2026-07-27 (run `30237464029`, `pass=263 fail=0
+soft=6`), which is what `brew` — the one manager `release-check.sh`'s Darwin branch sweeps for
+real — moves from *compiled* to *exercised*, and takes the count of backends that have ever run
+against a real package manager from 22 to **23**. The destructive effectors — btrfs/zfs/lvm
+restore, D5's `dpkg -i`/`rpm -U` handoff, U30 storage removal — are argv-tested and unrun.
+
+> **This paragraph was false for eleven days and 228 commits, and it sits four lines under a
+> sentence about exactly this.** It said macOS *"has never been run"* and that its job *"has not
+> yet gone green"*, while [`spec/history.md`](spec/history.md)'s 2026-07-27 entry recorded the
+> green run in the same repository. The `62` beside it was right the whole time, because
+> `tests/backend_count_matches_the_spec_tests.rs` asserts it against the code and this had
+> nothing. **Where this file is checked it is true, and where it is prose it is not** — so read
+> `23` as the weaker kind of claim, sourced from the harness's own Darwin canary rather than from
+> a gate, and go to the run before you quote it.
+
+The full assessment, with the numbers and the order to fix them in, is the first entry in
 [`spec/history.md`](spec/history.md).
 
 **For what remains to build and in what order, read the ordered list at the top of

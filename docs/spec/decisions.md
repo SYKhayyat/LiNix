@@ -1,4 +1,4 @@
-# The decision register — all 179, two of them open
+# The decision register — all 180, three of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -15,7 +15,7 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **2** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **3** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **3** |
 | **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **170** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
@@ -73,9 +73,10 @@ status loses that, so it is kept here:
 
 ## Index
 
-**Two are open — `Z1`, raised 2026-08-03, a licence choice; and `Y18`, raised 2026-08-07, three
-findings against Part II.** All 179 are accounted
-for: **170 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 3 BUILT NEVER RULED, 2 OPEN** — and this line
+**Three are open — `Z1`, raised 2026-08-03, a licence choice; `Y18`, raised 2026-08-07, three
+findings against Part II; and `Y19`, raised the same day, whether 2.5 MB of specification gets
+cut.** All 180 are accounted
+for: **170 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 3 BUILT NEVER RULED, 3 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -312,7 +313,7 @@ without asking. Two are not mine: one is a legal choice and one changes a publis
 | **Z1** | There is no `LICENSE` file and no `license` key in `Cargo.toml`, for a tool with an install script and a `self-upgrade` verb. Which licence? | **OPEN** |
 | **Z2** | `lock` and `unlock` touch unrelated files and are not inverses; `unlock` can cause package churn. Rename it, or give `lock` a real inverse? | **ANSWERED** — both verbs name their axis (`versions`/`backends`/`scripts`/`all`), and every path that moves a version re-records it |
 
-### Y — the efficiency pass — 21
+### Y — the efficiency pass — 22
 
 *Not a proposal part. `docs/INEFFICIENCIES.md` audited every place in the tree slower than it has
 to be and marked the findings a user would notice as needing a ruling; the owner ruled the lot on
@@ -7045,3 +7046,57 @@ refuses.** That may be exactly right — 39 ports closing at once is the shape `
 to interrupt — or it may make the feature unusable on any real server. `N7` says drift is
 corrected; it does not say at what count a person should be asked first. **Ruling wanted; the
 count is trivially separable if the answer is no.**
+
+---
+
+## Y19
+
+**Status: OPEN — raised 2026-08-07 by `LX-6`.** Not blocking anything that builds. Blocking every
+future read of this repository, which is a slower and larger cost.
+
+**Y19 — 2.5 MB of specification was written under documentation economics and is read under
+context economics. Does the corpus get cut, and if so where?**
+
+429,405 words across `docs/`. ~570k tokens — more than half a 1M context before a line of the
+119,388 lines of Rust. And it is written *for an agent*: `BUILDER.md:1` is `# YOU ARE THE BUILDER`,
+and `history.md`'s organising unit is the **Session** (94 headings against 36 commit dates). A
+human maintainer does not have sessions. A context window does.
+
+**The economics genuinely differ.** Documentation is written once and read forever, so its cost is
+bounded by the writer. Context is re-paid on every read, by every agent, forever. Nobody did that
+multiplication, and the finding is right that nobody did.
+
+**The evidence is inside the corpus and is not an opinion.** `SPEC.md`'s readiness paragraph said
+macOS *"has never been run"* and its job *"has not yet gone green"* for **eleven days and 228
+commits** after `history.md` recorded the green run — four lines under a sentence about exactly
+that failure. The `62` beside it was right the whole time, because a test asserts it. *Where this
+corpus is checked it is true, and where it is prose it is not.* (That paragraph is corrected as of
+this entry; the pattern it demonstrates is what `Y19` is about.)
+
+**What was built rather than proposed**, because it needs no ruling and deletes nothing:
+
+- `tests/why_entries_are_attached_to_something_tests.rs`. `CLAUDE.md` makes reading a rule's
+  `why.md` entry **mandatory** before changing the rule, and 53 of 155 entries were cited by no
+  Part II rule and quoted by no test — a third of a mandatory gate explaining nothing. The gate
+  asserts every citation resolves (zero failures, both directions) and ratchets the unattached
+  count down from 53.
+- `named_commands_exist_tests` now scans `docs/` (`Y18`), which is the other half of the same
+  problem: 2,538 KB of spec that no gate had ever read.
+
+**What is the owner's, and is not built:** the cut itself. `LX-6` proposes four files and ~5,200
+lines — `readme.md`, `target-state.md`, `principles.md` unchanged, `decisions.md` rewritten to
+status + ruling + date + who ruled, `archive/` and `proposals/` deleted, `BUILDER.md`/`GRADER.md`
+moved to `.claude/agents/`. Its argument that nothing is lost is that 98% of `history.md`'s
+content-word tokens already appear in commit messages, and that the one artifact git cannot
+reconstruct — **a ruling, an event outside the tree with a person's name and a date on it** — is
+exactly the file the cut keeps at full fidelity.
+
+**That argument is strong and it is still not the builder's to act on.** It deletes the reasoning
+this project has accumulated, and the standing ruling on this repo is that no capability is lost;
+whether *reasoning* is a capability is the question, and it is a question about what the owner
+wants this repository to be. A builder who answers it by deleting has answered it permanently.
+
+**What an answer has to say:** whether the cut happens; if so, whether `history.md` goes entirely
+or is thinned to the entries whose commit message does not already carry them; and where the 53
+unattached `why.md` entries land — cited from the rule they explain, moved into the doc comment of
+the test that enforces them, or retired.
