@@ -1,4 +1,4 @@
-# The decision register — all 176, one of them open
+# The decision register — all 177, two of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -15,7 +15,7 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **2** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **2** |
 | **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **170** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
@@ -73,8 +73,9 @@ status loses that, so it is kept here:
 
 ## Index
 
-**One is open — `Z1`, raised 2026-08-03, a licence choice.** All 176 are accounted
-for: **170 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 1 OPEN** — and this line
+**Two are open — `Z1`, raised 2026-08-03, a licence choice; and `Y18`, raised 2026-08-07, three
+findings against Part II.** All 177 are accounted
+for: **170 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 2 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -311,7 +312,7 @@ without asking. Two are not mine: one is a legal choice and one changes a publis
 | **Z1** | There is no `LICENSE` file and no `license` key in `Cargo.toml`, for a tool with an install script and a `self-upgrade` verb. Which licence? | **OPEN** |
 | **Z2** | `lock` and `unlock` touch unrelated files and are not inverses; `unlock` can cause package churn. Rename it, or give `lock` a real inverse? | **ANSWERED** — both verbs name their axis (`versions`/`backends`/`scripts`/`all`), and every path that moves a version re-records it |
 
-### Y — the efficiency pass — 18
+### Y — the efficiency pass — 19
 
 *Not a proposal part. `docs/INEFFICIENCIES.md` audited every place in the tree slower than it has
 to be and marked the findings a user would notice as needing a ruling; the owner ruled the lot on
@@ -339,6 +340,7 @@ II.19 and the reasons in V.115–V.118.*
 | **Y15** | A line pinned to a manager this machine does not have failed the whole run: `spec_is_missing` raised `BackendNotFound` from inside the planner's fan-out, so one `apt:` line dropped the twenty `winget:` lines beside it and `sync` planned nothing. RULED: **that is a portable config, not a broken one** — skipped, reported in `skipped`, and the command succeeds; a package that genuinely fails still fails, with `--keep-going` as the per-run opt-in. Reverses `Y14` item 2. | 2026-08-06 |
 | **Y16** | An audit proposed deleting `linix repl`, the two ratatui screens, and the Lua hook arm — the last on the grounds that `mlua` vendors 28,687 lines of C rebuilt ten times per CI push to serve one branch of one `if`. RULED: **keep all three and make them work** — *"it not working is not cause for deletion but fixing"*. The `#rhai` arm had never executed anything (the marker line reached the engine, and `#` is reserved in Rhai), and the one shipped example called an `exec()` nothing registers. The marker is now stripped, all three dialects get the same four facts, and `#rhai` gets the standard library `vars.linix` has. | 2026-08-07 |
 | **Y17** | The dialect `Y16` kept was dead on Windows: `CreateProcess` answers *"not a valid application for this OS platform"* for any script file, because Windows has no shebang mechanism — so a `#!` hook that worked on the author's Linux box failed on a teammate's machine with a message blaming the script. Refuse there, or make it work? — RULED: **read the shebang ourselves**, on every platform. `python3` finds a Windows `python` (then `py`); an absolute interpreter that exists is used as written, so Unix launches what the kernel would have; a missing one is named. `exec:` and event hooks read it too — they had been ignoring it on *both* platforms. | 2026-08-07 |
+| **Y18** | `named_commands_exist_tests` was built around the property rather than the artifact, and then its roots were drawn around `src/`-and-friends — so 2.5 MB of specification went unscanned, and a **CLOSED** owner ruling (`bugs.md` F4) rested its whole justification on `linix doctor`, a command `S38` folded into `check <section>`. Pointed at `docs/` under the weaker property a record can satisfy — *a dead command named here is one II.17 says is dead* — 62 raw hits reduce to three, and all three are Part II: the sync nudge says `linix clean` where the verb is `remove-orphans`; the `adopt` header says `linix forget` where the code already writes `linix unmanage`; and II.17's register never recorded `shim`, which leaves a **verified open bug against a command that does not exist**. **OPEN** — `CLAUDE.md` says a spec that looks wrong is reported, not edited. | — |
 
 ---
 
@@ -6846,3 +6848,67 @@ a shebang names treats it as a comment, so the file runs unmodified — the whol
   dispatch there would be the disease, not the cure.
 
 **Rule in II.12, reasons in V.150.**
+
+## Y18
+
+**Status: OPEN — three findings against Part II, raised 2026-08-07 by `LX-7`.** Raised by
+pointing `named_commands_exist_tests` at `docs/` for the first time. All three are recorded in
+`PART_II_LOOKS_WRONG` in that file, which is asserted exact and shrink-only, so none can be lost
+and none can be quietly added. **`CLAUDE.md` says a spec that looks wrong is reported, not
+edited** — so the gate carries them and the code was left alone.
+
+**Y18 — Part II names three commands the program does not have. Which of them is the spec wrong
+about, and which is the program?**
+
+The gate's rule for `docs/` is weaker than the one for `src/` and `readme.md`, and deliberately:
+a record has to stay free to name a command on the day it was deleted. So the property is *a dead
+command named in `docs/` is a command the spec says is dead*, with `target-state.md` II.17 read as
+the register rather than restated. That reduced 62 raw hits to 10 and left these three.
+
+1. **`target-state.md:1316` — the sync nudge.** Prescribed as *"3 packages are now orphaned; run
+   `linix clean`."* There is no `clean` verb; the live one is `remove-orphans`. (`run=clean` on the
+   same line is a schedule action and is correct — `model/schedule.rs:6` and `resolve.rs:1403`
+   both carry it.)
+2. **`target-state.md:1533` — the `adopt` output header.** Prescribed as *"`linix forget` is the
+   way out."* `app/adopt.rs:498` already writes `linix unmanage <backend>:<name>`, and
+   `adopt.rs:979` asserts it. **The code is right and the rule is stale**, which is the direction
+   worth naming: the checked artifact held and the prose did not.
+3. **`target-state.md:2216` — II.17's register is incomplete.** II.16's own table records
+   `linix shim jq --source cargo:jq` becoming the line `shim:jq@source=cargo:jq`, so the command
+   was deleted; II.17 never gained the entry. **The gap has a live cost.** `bugs.md:76` still
+   carries *"`linix shim --source` is required, documented, and thrown away. **(verified)**"* as
+   an open, verified defect against a command that does not exist. Whether that is *fixed by
+   deletion* or *an option lost in the move* is the ruling; the entry has been annotated, not
+   closed.
+
+**A fourth finding, and it is against the rule this change alters.** `target-state.md:2503` reads
+***"`docs/` is out of scope, deliberately"***, and gives the record argument for it. That argument
+is kept — it is why the `docs/` property is the weaker one — but the sentence is now false as
+written: `docs/` is scanned, against II.17 rather than against the surface. **Part II was left
+alone and this is the report.** The rule wants one clause, roughly: *`docs/` is checked against the
+Deleted register, not against the live surface, so a record stays free to name what it is recording
+the death of.* Until that lands, `target-state.md` and `tests/named_commands_exist_tests.rs`
+disagree about the scope of the same gate — which is, precisely, the class of drift the gate was
+extended to find.
+
+**What shipped in the same change, because none of it needed a ruling:**
+
+- **`bugs.md`'s F4 justification was re-pointed.** A **CLOSED** owner ruling (2026-07-26, do not
+  wire `--help` to the registry) rested on *"`doctor` already carries the live count"*. `S38`
+  folded `doctor` into `check <section>`; the code was swept and the ruling was not, because
+  nothing read `docs/`. The live count is `verbs/check.rs:1012` — `check health`. **The ruling
+  stands**: its second reason, that help must not read config from disk, never depended on the
+  first. Only the false clause moved.
+- **`why.md:708`** paraphrased a test's name with the binary at command position, where the repo's
+  convention is that prose spells the product `LiNix`. It now reads *"the linix binary survives an
+  uninstall attempt"* — the same fact, one word further from the start of a command. (This bullet
+  was itself caught by the gate on the run that wrote it, which is the shortest proof available
+  that the scan reaches `docs/`.)
+- **`docs/archive/` stays out of scope.** Its own README says *"Nothing here is current"*, and a
+  register of what was deleted owes no account of a directory that has already said it is stale.
+
+**Why this is a gate and not a sweep.** `F-2` built `named_commands_exist_tests` around the
+property rather than the artifact and then drew the roots around `src/`-and-friends, which is the
+same mistake one level up: the gate was drawn around the code that was under review. The six
+defects in its header were shipped product; these three are shipped specification, and the
+mechanism that hid them was identical — one fact, several copies, a gate around one copy.

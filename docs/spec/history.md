@@ -7554,3 +7554,71 @@ world-readable in a shared temp directory, for as long as the hook ran.
 
 **Proved by running it, not by argument:** a `#!/usr/bin/env python3` hook now executes on this
 Windows host and its `LINIX_PKG_NAME` reaches the Python process.
+
+## Session 2026-08-07 — the gate reaches the specification (`LX-7`)
+
+**Lamdan `LX-7`, scoped and built.** The finding was *"four characters"* — add `"docs"` to
+`named_commands_exist_tests`' `ROOTS` and the check named *every command this repo names is a
+command this repo has* stops guarding 49 KB of README while skipping 2,538 KB of spec.
+
+**The four characters were wrong, and the file said why before I ran anything.** Its own header
+argues `docs/` out of scope with a real reason: it is a record — a changelog, a bug tracker, a
+decision register — and *a record has to be free to name a command on the day that command was
+deleted.* Forcing those lines live would make the history lie. Adding the root anyway produced
+**62 failures**, of which 17 were `history.md` correctly recording deletions.
+
+**So the property changed instead of the roots.** `docs/` is checked against the weaker rule a
+record can actually satisfy:
+
+> **A dead command named in `docs/` is a command the spec says is dead.**
+
+The register is `target-state.md` II.17 *Deleted*, **read as data, not restated** — the same
+argument `grammar_table_matches_the_spec_tests.rs` makes for reading `KEYWORDS` through the
+parser's accessors: a second copy of the list would be free to be wrong in the direction that
+hides a defect, letting a command be deleted from the program, forgotten by II.17, and named all
+over `docs/` with nothing to notice. 62 → 10 → 3, and the last three are Part II.
+
+**What it found, which is the argument for having run it:**
+
+- **A CLOSED owner ruling resting on a command that does not exist.** `bugs.md` F4 declines to
+  wire `--help` to the registry, and one of its two stated reasons is *"`doctor` already carries
+  the live count"*. `S38` folded `doctor` into `check <section>` on 2026-07-27. The code was
+  swept; the ruling was not, **because nothing read `docs/`**. The live count is
+  `verbs/check.rs:1012`. The ruling stands — its other reason, that help must not read config from
+  disk, never depended on the first — and only the false clause moved.
+- **A verified open bug against a deleted verb.** `bugs.md:76` carries *"`linix shim --source` is
+  required, documented, and thrown away. **(verified)**"*. There is no `shim` verb: II.16's own
+  table records it becoming the line `shim:jq@source=cargo:jq`, and **II.17's register never
+  gained the entry**. Annotated as subject-gone/status-unruled rather than closed, because
+  *"fixed by deletion"* and *"the option was lost in the move"* are different answers and only one
+  of them is the owner's to give.
+- **Two live Part II rules naming dead verbs** — the sync nudge says `linix clean` where the verb
+  is `remove-orphans`, and the `adopt` header says `linix forget` where `app/adopt.rs:498` already
+  writes `linix unmanage` and `adopt.rs:979` asserts it. **The code is right and the rule is
+  stale**, which is the direction worth naming.
+
+**Part II was not edited.** All three are `Y18`, OPEN, and they are also `PART_II_LOOKS_WRONG` in
+the test — a list asserted exact, shrink-only, and re-verified every run against the scan, so an
+entry whose line gets fixed without the entry being deleted fails the build. That is the shape
+`help_map_tests.rs` got wrong when it went on exempting `undo` after `undo` was deleted.
+
+**The instrument was tested before it was trusted.** `accounted_for` is proved to excuse `doctor`,
+refuse `nosuchcommand`, refuse the live `config`, resolve `config path` as a path rather than a
+first word, and refuse `config elsewhere` — without which every other assertion here would hold
+for a function that answers `true` to everything and reports nothing across 2.5 MB. The register
+parse is proved to contain II.17's entries, to *not* contain `sync`, and to stop at the section
+boundary. End to end: an invented verb planted in `plan.md` fails the gate, named by file and
+line. (Which verb is not written here — the gate reads this file too, and a demonstration that
+had to be exempted would be a demonstration of nothing.)
+
+**Two ledgers, both exact.** `NOT_AN_INVOCATION` holds `nosuchcommand` (the repo's own name for a
+command that does not exist — the *subject* of every exit-code test) and `refresh` (proposed,
+declined, never built, so never deleted). `RECORDED_AS_ABSENT` holds three `history.md` lines
+whose own sentence is the report that the command is gone. `docs/archive/` stays out: its README
+says *"Nothing here is current."*
+
+**The generalisation, which is `F-2`'s own lesson one level up.** `F-2` built this gate around the
+property rather than the artifact — and then drew its roots around the code that was under review.
+Six shipped defects were inside the roots; three shipped specification defects were outside them.
+**One fact, several copies, a gate around one copy** — the mechanism the file's header names,
+found in the file's header's own scope line.

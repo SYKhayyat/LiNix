@@ -705,7 +705,7 @@ cannot fail is worse than no check."* The audit found three more still live, one
 direct twin of a fixed one: the Windows script greps `linix` against `git log` where the
 container greps `linix:`, and the config directory is named `linix-it-win-config`, so it matches
 on every run forever. Another asserts that the build artifact is still on disk and calls it
-*"linix survives an uninstall attempt."* One fixed, siblings live, in the sibling file — the
+*"the linix binary survives an uninstall attempt."* One fixed, siblings live, in the sibling file — the
 exact pattern `CLAUDE.md` names.
 
 The larger version of the same fault is an image that claims coverage it does not have.

@@ -40,10 +40,31 @@
 //! Covered: everything a user reads or a machine runs — `src/`, `tests/`, `scripts/`, `docker/`,
 //! `examples/`, `.github/`, and `readme.md`.
 //!
-//! Not covered: `docs/`. It is a record — a changelog, a bug tracker and a decision register —
-//! and a record must be free to say `linix doctor` when it is describing the day `linix doctor`
-//! was deleted. Forcing those lines live would make the history lie. `readme.md` is in, because
-//! it is the one document a user reads as instructions rather than as a record.
+//! ## `docs/`, and the weaker property that fits it
+//!
+//! `docs/` was out of scope, on the argument that it is a record — a changelog, a bug tracker and
+//! a decision register — and a record has to be free to name a command on the day that command
+//! was deleted. Forcing those lines live would make the history lie.
+//!
+//! That argument is right about *this* rule and was mistaken for a reason to check nothing. It
+//! left 2.5 MB of specification unscanned, and inside it a **CLOSED owner ruling whose entire
+//! stated justification was a command the program does not have** — `bugs.md`'s F4, which
+//! declines to wire `--help` to the registry because "`doctor` already carries the live count".
+//! `doctor` was folded into `check <section>` in S38. The code was swept; the ruling that rests
+//! on it was not, because nothing read it.
+//!
+//! So `docs/` is checked against the property a record can actually satisfy:
+//!
+//! > **A dead command named in `docs/` is a command the spec says is dead.**
+//!
+//! The register is `target-state.md` II.17 *Deleted*, read as data rather than restated here —
+//! the same reason `grammar_table_matches_the_spec_tests.rs` reads `KEYWORDS` through the
+//! parser's accessors. A record keeps its freedom: `history.md` may write `linix doctor` as often
+//! as it likes, because II.17 says `doctor` is gone. What it may no longer do is name a command
+//! that is neither live nor recorded as dead — which is what a stale instruction looks like.
+//!
+//! `docs/archive/` is out: its own README says *"Nothing here is current"*, so it is a record of
+//! records and II.17 is under no obligation to explain it.
 //!
 //! Also not covered: an argv built from `Command::new(env!("CARGO_BIN_EXE_linix"))`, which is
 //! argument-vector shaped rather than text shaped. Those run in the suite, so clap answers them
@@ -293,11 +314,172 @@ fn covered_files() -> Vec<PathBuf> {
     out
 }
 
+/// Every file under `docs/` that carries prose, except the archive.
+///
+/// `docs/archive/README` states that nothing inside it is current. A register of what is deleted
+/// cannot be expected to account for a directory that has already declared itself out of date.
+fn documentation_files() -> Vec<PathBuf> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+        paths.sort();
+        for p in paths {
+            if p.file_name().and_then(|n| n.to_str()) == Some("archive") {
+                continue;
+            }
+            if p.is_dir() {
+                walk(&p, out);
+            } else if matches!(p.extension().and_then(|e| e.to_str()), Some("md" | "org")) {
+                out.push(p);
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    walk(&Path::new(env!("CARGO_MANIFEST_DIR")).join("docs"), &mut out);
+    out
+}
+
+/// The command paths `target-state.md` II.17 records as deleted.
+///
+/// Read from the spec rather than restated here. A second copy of this list would be free to be
+/// wrong in the direction that hides a defect — it would let a command be deleted from the
+/// program, forgotten by II.17, and still named all over `docs/` without anything noticing, which
+/// is the exact failure this gate exists to close.
+///
+/// II.17 writes each entry as a backticked path, sometimes with the replacement beside it
+/// (`` `migrate` (→ `adopt`) ``). The parenthetical names a *live* command by construction, so
+/// taking every backticked path in the section is safe: a live name in this set changes nothing,
+/// because the surface answers for it first.
+fn deleted_register() -> BTreeMap<String, Vec<String>> {
+    let text =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/spec/target-state.md"))
+            .expect("docs/spec/target-state.md should be readable");
+
+    let mut out = BTreeMap::new();
+    let mut inside = false;
+    for line in text.lines() {
+        let t = line.trim();
+        if t.starts_with("## II.17") {
+            inside = true;
+            continue;
+        }
+        // The section runs to the next heading. `**Commands:**` and `**Flags:**` are inside it.
+        if inside && t.starts_with("## ") {
+            break;
+        }
+        if !inside {
+            continue;
+        }
+        for chunk in t.split('`').skip(1).step_by(2) {
+            let words: Vec<String> = chunk.split_whitespace().map(str::to_string).collect();
+            // A flag, a config key, or prose that happened to be backticked. Only a path of bare
+            // words can name a command.
+            if !words.is_empty() && words.iter().all(|w| is_bare_word(w)) {
+                out.insert(words.join(" "), words);
+            }
+        }
+    }
+    out
+}
+
+/// Words that appear at command position in `docs/` and are not commands at all — neither live
+/// nor deleted. Each is a deliberate non-invocation, and each carries the reason it is one.
+///
+/// This is a ledger, not a filter: it is asserted to be exactly this size, so a new entry cannot
+/// arrive by accident, and an entry that stops occurring cannot linger.
+const NOT_AN_INVOCATION: &[(&str, &str)] = &[
+    (
+        "nosuchcommand",
+        "the repo's canonical name for a command that does not exist — it is the *subject* of \
+         every exit-code test, so a gate that demanded it be real would be demanding the opposite \
+         of what the tests prove",
+    ),
+    (
+        "refresh",
+        "a verb proposed and declined (`proposals/next-round.md`: \"a named composition of \
+         existing verbs — `linix refresh` = `sync`\"). Never built, so never deleted; II.17 \
+         records what was removed, not what was turned down",
+    ),
+];
+
+/// A record naming a command that never existed here, where the sentence itself is the report
+/// that it never existed.
+///
+/// These are not deletions and II.17 is right not to carry them: `backends` was a pre-v7 verb in
+/// a script this repo deleted, `config path` and `config edit` are sub-verbs, and `setup` is this
+/// gate's own catch quoted back in the session that fixed it. Every one is pinned to its line, so
+/// an exemption cannot drift onto a sentence that stopped being a record.
+const RECORDED_AS_ABSENT: &[(&str, usize, &str)] = &[
+    (
+        "docs/spec/history.md",
+        3371,
+        "\"they call the nonexistent `linix backends`\" — the sentence is the report",
+    ),
+    (
+        "docs/spec/history.md",
+        4769,
+        "\"**`linix config path` and `linix config edit` are deleted**, not deprecated\"",
+    ),
+    (
+        "docs/spec/history.md",
+        7464,
+        "this gate catching `linix setup` in a comment, quoted in the session that fixed it",
+    ),
+];
+
+/// Part II naming a command the program does not have.
+///
+/// **These are findings, not exemptions**, and they are the owner's to resolve: `CLAUDE.md` says
+/// a spec that looks wrong is reported rather than edited. Each entry names the site and what the
+/// live answer appears to be, so the ruling is a one-line edit rather than an investigation.
+///
+/// Every one of these was found by this gate on the run that introduced it — which is the whole
+/// argument for pointing it at `docs/`. The list is asserted exact and shrink-only: closing one
+/// means deleting a line here, and nothing can be added without a build failure to argue about
+/// first.
+const PART_II_LOOKS_WRONG: &[(&str, &str, &str)] = &[
+    (
+        "clean",
+        "docs/spec/target-state.md:1316",
+        "the sync nudge prescribed as \"3 packages are now orphaned; run `linix clean`\". The \
+         live verb is `remove-orphans`. (`run=clean` on the same line is a schedule action, not a \
+         command, and is correct.)",
+    ),
+    (
+        "forget",
+        "docs/spec/target-state.md:1533",
+        "the header `adopt` is told to write into `modules/adopted.txt`. `app/adopt.rs:498` \
+         already writes `linix unmanage <backend>:<name>`, so the code is right and the rule is \
+         stale",
+    ),
+    (
+        "shim",
+        "docs/spec/target-state.md:2216",
+        "II.16's own table records `linix shim jq --source cargo:jq` becoming the line \
+         `shim:jq@source=cargo:jq` — so the command was deleted, and II.17's register does not \
+         say so. The gap has a live cost: `bugs.md:76` still carries \"`linix shim --source` is \
+         required, documented, and thrown away. **(verified)**\" as an open bug against a command \
+         that does not exist, which is F4's failure a second time",
+    ),
+];
+
 fn scan() -> Vec<Invocation> {
+    scan_files(covered_files())
+}
+
+/// Every `linix …` invocation in `docs/`, outside the archive.
+fn scan_documentation() -> Vec<Invocation> {
+    scan_files(documentation_files())
+}
+
+fn scan_files(files: Vec<PathBuf>) -> Vec<Invocation> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut out = Vec::new();
 
-    for path in covered_files() {
+    for path in files {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
@@ -363,6 +545,182 @@ fn every_command_this_repo_names_is_a_command_this_repo_has() {
         problems.len(),
         problems.join("\n\n")
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The same property one notch weaker, where the text is a record: `docs/`.
+// ---------------------------------------------------------------------------------------------
+
+/// Is this invocation accounted for — live, or recorded as deleted?
+///
+/// The register holds command *paths*, so `config path` and `config` are both answerable. The
+/// walk is the same one the surface gets: leading flags skipped, first bare word onwards.
+fn accounted_for(register: &BTreeMap<String, Vec<String>>, words: &[String]) -> bool {
+    let live: Vec<&String> = words.iter().filter(|w| !w.starts_with('-')).collect();
+    // Longest path first: `config path` must win over `config`, or a deleted sub-verb would be
+    // excused by its live parent.
+    (1..=live.len()).rev().any(|n| {
+        let path = live[..n]
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        register.contains_key(&path)
+    })
+}
+
+#[test]
+fn a_dead_command_named_in_the_docs_is_a_command_the_spec_says_is_dead() {
+    let surface = Surface::live();
+    let register = deleted_register();
+    let mut problems = Vec::new();
+
+    for inv in scan_documentation() {
+        let Some(unknown) = first_unknown(&surface, &inv.words) else {
+            continue;
+        };
+        if accounted_for(&register, &inv.words) {
+            continue;
+        }
+        if NOT_AN_INVOCATION.iter().any(|(w, _)| *w == unknown) {
+            continue;
+        }
+        if PART_II_LOOKS_WRONG.iter().any(|(w, _, _)| *w == unknown) {
+            continue;
+        }
+        if RECORDED_AS_ABSENT
+            .iter()
+            .any(|(f, l, _)| *f == inv.file && *l == inv.line)
+        {
+            continue;
+        }
+        problems.push(format!(
+            "{}:{}  `{}`\n    `{}` is neither a command this program has nor one II.17 records \
+             as deleted.",
+            inv.file, inv.line, inv.quoted, unknown
+        ));
+    }
+
+    assert!(
+        problems.is_empty(),
+        "{} invocation(s) in `docs/` name a command that is neither live nor recorded as \
+         dead:\n\n{}\n\nThree things this can be, and they want opposite fixes. If the command \
+         was deleted, `target-state.md` II.17 is the register and it is missing an entry — the \
+         record stays as written and II.17 gains a line. If the command is live under another \
+         name, the sentence is a stale instruction and should name the live verb. If the line is \
+         prose about the product rather than an invocation, write `LiNix`, which is what tells \
+         this gate the two apart.",
+        problems.len(),
+        problems.join("\n\n")
+    );
+}
+
+/// The register must be the spec's, and it must be whole.
+///
+/// A `deleted_register` that parsed nothing would excuse no invocation and redden the gate
+/// honestly — but one that parsed *everything backticked in the file* would excuse all of them
+/// in silence, which is the failure worth a test.
+#[test]
+fn the_deleted_register_is_the_specs_and_is_bounded() {
+    let register = deleted_register();
+
+    for expected in ["status", "doctor", "undo", "audit", "migrate", "prune"] {
+        assert!(
+            register.contains_key(expected),
+            "II.17 records `{expected}` as deleted; the parse did not find it. Entries read: {:?}",
+            register.keys().collect::<Vec<_>>()
+        );
+    }
+    assert!(
+        !register.contains_key("sync"),
+        "the parse reached beyond II.17 and swallowed `sync`, which would excuse every \
+         invocation in `docs/`. Entries read: {:?}",
+        register.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        register.len() < 40,
+        "II.17 lists a bounded set of deleted commands and the parse read {} entries, which \
+         means it ran past the section",
+        register.len()
+    );
+
+    // The excuse must excuse exactly what it claims to. Without these, every assertion above
+    // holds for an `accounted_for` that answers `true` to everything — which would turn the
+    // `docs/` gate into a scan that reads 2.5 MB and reports nothing, the failure this whole
+    // file is about.
+    let words = |s: &str| -> Vec<String> { s.split(' ').map(str::to_string).collect() };
+    assert!(
+        accounted_for(&register, &words("doctor --json")),
+        "II.17 says `doctor` is deleted, and a record naming it must be excused"
+    );
+    assert!(
+        !accounted_for(&register, &words("nosuchcommand")),
+        "a word in neither the surface nor the register must not be excused, or the gate reports \
+         nothing"
+    );
+    assert!(
+        !accounted_for(&register, &words("config")),
+        "`config` is live and is not in the register; excusing it here would mean the register \
+         had swallowed the live surface"
+    );
+    // Depth: a deleted sub-verb must not be excused by a live parent, nor a live parent by the
+    // presence of its deleted child.
+    let mut nested = register.clone();
+    nested.insert("config path".into(), words("config path"));
+    assert!(
+        accounted_for(&nested, &words("config path")),
+        "the register holds paths, not just first words"
+    );
+    assert!(
+        !accounted_for(&nested, &words("config elsewhere")),
+        "a deleted sibling must not excuse a name nobody recorded"
+    );
+
+    // The two ledgers are exact, so neither can grow by accident nor rot after it empties.
+    assert_eq!(
+        NOT_AN_INVOCATION.len(),
+        2,
+        "a deliberate non-invocation was added or removed; each one is a claim that a word at \
+         command position is not a command at all, and it should be argued rather than appended"
+    );
+    assert_eq!(
+        PART_II_LOOKS_WRONG.len(),
+        3,
+        "this list is findings against the canonical spec, and it shrinks. If an owner ruled on \
+         one, delete its line. If a new one appeared, the spec grew a stale instruction and that \
+         is the thing to report — not the thing to record."
+    );
+    assert_eq!(
+        RECORDED_AS_ABSENT.len(),
+        3,
+        "each entry claims a specific line is a record of a command's absence rather than an \
+         instruction to run it; that claim is read, not appended to"
+    );
+
+    // Every finding must still be findable. An entry whose line was fixed without the entry being
+    // deleted would sit here excusing nothing and claiming a defect that is gone — which is the
+    // exact shape of `help_map_tests.rs` still exempting `undo` years after `undo` was deleted.
+    let surface = Surface::live();
+    let found = scan_documentation();
+    for (word, whence, _) in PART_II_LOOKS_WRONG {
+        assert!(
+            found.iter().any(|inv| {
+                first_unknown(&surface, &inv.words).as_deref() == Some(word)
+                    && whence.starts_with(inv.file.as_str())
+            }),
+            "`{word}` is recorded as Part II naming a dead command, at {whence}, and the scan no \
+             longer finds it there — so either it was fixed and this line should go, or the scan \
+             stopped seeing it"
+        );
+    }
+    for (file, line, claim) in RECORDED_AS_ABSENT {
+        assert!(
+            found
+                .iter()
+                .any(|inv| inv.file == *file && inv.line == *line),
+            "{file}:{line} is exempted as a record ({claim}) and carries no invocation at all now"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
