@@ -2,6 +2,25 @@
 
 use std::fmt;
 
+/// What actually opens an archive, once its name has been recognised.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Opener {
+    Tar(Codec),
+    Zip,
+}
+
+/// How a tar's bytes are wrapped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Codec {
+    Gzip,
+    Xz,
+    Bzip2,
+    Zstd,
+    /// A `.tar` with nothing around it. `web.rs` has called this an archive since it was
+    /// written, and nothing could open one.
+    Plain,
+}
+
 /// A downloadable artifact shape. The vocabulary is closed: an unrecognised name is an error
 /// that names the legal set, never a passthrough string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -81,13 +100,50 @@ impl Format {
         matches!(self, Format::Tarball | Format::Zip)
     }
 
+    /// How to open the file this name denotes — **the same table that chose it**.
+    ///
+    /// These were two lists of one fact. `suffixes()` above offered `.tar.zst` and `.txz` as
+    /// tarballs, and `utils::archive::extract_archive` was an `if`-chain over `.tar.gz`,
+    /// `.tar.xz`, `.tar.bz2` and `.zip` that fell through to `fs::copy` for anything else — so
+    /// a `.tar.zst` release asset was selected, downloaded, copied verbatim into the
+    /// destination, found to contain no executable, and **reported as a successful install
+    /// having deployed nothing.** `.txz` had it too, and `web.rs` called a bare `.tar` an
+    /// archive that nothing could open.
+    ///
+    /// `None` is not "give up" — it is *this is not an archive*, which is the honest answer for
+    /// a `.deb`, an `.exe` or a bare binary, and the case `github.rs` relies on to place a file
+    /// it must not unpack. What must never happen again is `None` for something `is_archive`
+    /// said yes to, and `an_offered_archive_has_an_opener` is drawn around exactly that.
+    pub fn opener_for(filename: &str) -> Option<Opener> {
+        let lower = filename.to_lowercase();
+        [
+            (".tar.gz", Opener::Tar(Codec::Gzip)),
+            (".tgz", Opener::Tar(Codec::Gzip)),
+            (".tar.xz", Opener::Tar(Codec::Xz)),
+            (".txz", Opener::Tar(Codec::Xz)),
+            (".tar.bz2", Opener::Tar(Codec::Bzip2)),
+            (".tbz2", Opener::Tar(Codec::Bzip2)),
+            (".tar.zst", Opener::Tar(Codec::Zstd)),
+            (".tar", Opener::Tar(Codec::Plain)),
+            (".zip", Opener::Zip),
+        ]
+        .into_iter()
+        // Longest wins, for the same reason `of_filename` sorts that way: `.tar.gz` is a
+        // gzipped tar and not a plain `.tar` that happens to end in one.
+        .filter(|(suffix, _)| lower.ends_with(suffix))
+        .max_by_key(|(suffix, _)| suffix.len())
+        .map(|(_, opener)| opener)
+    }
+
     /// Longest suffix wins, so `.tar.gz` is a tarball rather than an unknown `.gz`.
-    fn suffixes(self) -> &'static [&'static str] {
+    pub fn suffixes(self) -> &'static [&'static str] {
         match self {
             Format::Deb => &[".deb"],
             Format::Rpm => &[".rpm"],
             Format::AppImage => &[".appimage"],
-            Format::Tarball => &[".tar.gz", ".tar.xz", ".tar.bz2", ".tar.zst", ".tgz", ".txz"],
+            Format::Tarball => &[
+                ".tar.gz", ".tar.xz", ".tar.bz2", ".tar.zst", ".tgz", ".txz", ".tbz2", ".tar",
+            ],
             Format::Zip => &[".zip"],
             Format::Exe => &[".exe"],
             Format::Msi => &[".msi"],

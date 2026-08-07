@@ -246,9 +246,13 @@ impl Installable for WebInstallable {
                 .map_err(Error::from)?;
 
             let filename = spec.name.split('/').next_back().unwrap_or("resource");
-            let is_archive = [".zip", ".gz", ".tar", ".xz", ".bz2", ".tgz"]
-                .iter()
-                .any(|ext| filename.contains(ext));
+            // The vocabulary, not a fifth hand-written list. This one was matched with
+            // `.contains()` rather than `ends_with`, so `notes.gz.txt` was an archive and
+            // `report.tar.summary` was one too — and three of its six entries (`.tar`, `.gz`,
+            // `.xz`, `.bz2` bare) named things `extract_archive` could not open, which meant a
+            // silent `fs::copy` reported as a successful deploy.
+            let is_archive = crate::backends::artifact::format::Format::of_filename(filename)
+                .is_some_and(|f| f.is_archive());
 
             if is_archive {
                 let dl_path_archive = dl_path.clone();

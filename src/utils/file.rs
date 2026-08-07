@@ -134,24 +134,31 @@ pub fn force_remove(path: &Path) -> Result<()> {
 ///
 /// `confined` is the `[guard] confine_bin` key: off restores the unchecked join. The opening is
 /// the user's to make, and it is the whole file's worth of blast radius.
-/// Archive and package extensions, longest-tail first so `.tar.gz` comes off as a unit.
-const ARCHIVE_SUFFIXES: &[&str] = &[
-    ".tar.gz",
-    ".tar.bz2",
-    ".tar.xz",
-    ".tar.zst",
-    ".tgz",
-    ".tbz2",
-    ".txz",
-    ".zip",
-    ".gz",
-    ".bz2",
-    ".xz",
-    ".zst",
-    ".7z",
-    ".exe",
-    ".appimage",
-];
+/// Every suffix that comes off a downloaded file's name.
+///
+/// **The archive half is `Format`'s own table**, not a fourth hand-written copy of it — this
+/// list carried `.tar.zst` for as long as `extract_archive` could not open one, which is how
+/// four lists of one fact stay wrong in four different ways. What is spelled out here is only
+/// what `Format` does not know about: the bare codec tails, which name a compressed file rather
+/// than an artifact LiNix would ever select, and `.7z`, which nothing opens and everything
+/// should still strip.
+///
+/// **Sorted longest-first, rather than written that way.** The lookup below takes the first
+/// match, so `.gz` sitting above `.tar.gz` would silently cut `ripgrep.tar.gz` down to
+/// `ripgrep.tar`. That was a hand-maintained ordering with a comment asking future editors to
+/// preserve it; it is a property of the list now.
+static ARCHIVE_SUFFIXES: once_cell::sync::Lazy<Vec<&'static str>> =
+    once_cell::sync::Lazy::new(|| {
+        use crate::backends::artifact::format::Format;
+        let mut all: Vec<&'static str> = Format::ALL
+            .into_iter()
+            .filter(|f| f.is_archive())
+            .flat_map(|f| f.suffixes().iter().copied())
+            .chain([".gz", ".bz2", ".xz", ".zst", ".7z", ".exe", ".appimage"])
+            .collect();
+        all.sort_by_key(|s| std::cmp::Reverse(s.len()));
+        all
+    });
 
 /// The name a downloaded file installs under.
 ///

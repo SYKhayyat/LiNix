@@ -7232,3 +7232,41 @@ Both mutation-tested. `spec_is_missing` forced to `Ok(true)` turns both fixed-po
 red. Drift recomputed from the installed listing instead of the registry is caught by the
 ownership test **and not by the forward-backward one** — which is what that test's own comment
 claims, and the reason it is a separate test rather than another assertion.
+
+## 2026-08-06 — one archive vocabulary, and `.tar.zst` opens (lamdan F-7)
+
+`Format::suffixes` offered `.tar.zst` and `.txz` as tarballs. `utils::archive::extract_archive`
+was an `if`-chain over `.tar.gz`, `.tar.xz`, `.tar.bz2` and `.zip` with `fs::copy` underneath.
+So a `.tar.zst` release asset was **selected, downloaded, copied whole into the destination,
+searched for an executable, found to have none — and the install reported success having
+deployed nothing.** `format.rs`'s own test pinned the selection.
+
+**The reported case was one of five.** `.txz` had it identically. `web.rs` decided whether to
+unpack from a sixth hand-written list matched with `.contains()` rather than `ends_with`, so
+`notes.gz.txt` was an archive; three of its entries — bare `.tar`, `.gz`, `.xz`, `.bz2` — named
+things nothing could open, each one a silent `fs::copy` reported as a deploy. And
+`utils::archive::is_archive` was a fifth copy of the list with **zero callers**, already five
+entries behind `Format`'s six.
+
+**The fix is that the list which chose the file is the list that opens it.** `Format::opener_for`
+carries the codec beside the suffix, `extract_archive` matches on it, and `web.rs` asks
+`Format::of_filename(..).is_archive()`. `zstd` is a direct dependency now — the version already
+in `Cargo.lock` through `zip`, so nothing new compiles. `.tbz2` and bare `.tar` joined the
+tarball table, because both were already being called archives somewhere.
+
+**`None` still means place-the-file, and must.** `github.rs` hands *every* artifact to
+`extract_archive`, a bare binary and a `.deb` included; unpacking is not the job for those. What
+must never happen is `None` for something `is_archive` said yes to, and that is what the gate is
+drawn around.
+
+`utils/file.rs`'s `ARCHIVE_SUFFIXES` was the fourth copy. Its archive half is derived from
+`Format` now, leaving only what `Format` does not know: the bare codec tails and `.7z`. It is
+**sorted longest-first rather than written that way** — the lookup takes the first match, so
+`.gz` above `.tar.gz` would quietly cut `ripgrep.tar.gz` to `ripgrep.tar`, and that ordering was
+a hand-maintained convention with a comment asking editors to preserve it.
+
+**Two gates, and each catches what the other cannot.** One asserts every suffix the selector
+offers has an opener — the original bug — and self-tests the enumeration before trusting it. The
+other builds a real one-file archive per suffix and asserts the file comes back. Mutation-tested
+both ways: deleting `.tar.zst` from the opener table (the original bug) fails both; mapping
+`.txz` to gzip — a *wrong* codec, which no table check can see — fails only the round trip.

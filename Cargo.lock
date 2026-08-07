@@ -1681,6 +1681,7 @@ dependencies = [
  "winapi",
  "xz2",
  "zip",
+ "zstd",
 ]
 
 [[package]]
