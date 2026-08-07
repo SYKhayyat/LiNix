@@ -720,13 +720,24 @@ pub async fn handle_watch(
 /// guard; the two that need runtime state (`require_snapshot`, `deny_vulnerable`) are checked
 /// here, where the snapshot provider and the audit report are in hand. All ten refusals now
 /// share one decision surface — this replaces the old parallel `policy.toml` gate (II.17).
-pub async fn enforce_policy(
+/// Every `[guard]` install/change rule this desired state violates.
+///
+/// **Split out so `linix policy` can preview exactly what `sync` will enforce.**
+/// `verbs/setup.rs:637` used to re-implement this — the same `inspect_desired` call, the same
+/// `require_snapshot` check, and **no `deny_vulnerable`** — and then printed a footnote at `:646`
+/// admitting the gap: *"(deny_vulnerable is also enforced at sync time via `linix check
+/// security`.)"*
+///
+/// So `linix policy` could report **compliant** for a config `sync` would refuse. That is not an
+/// argument for deleting a preview; it is an argument that the preview was not calling the thing
+/// it previews. One implementation, two callers, and the footnote deletes itself.
+pub async fn policy_violations(
     app: &App,
     desired: &HashMap<String, Vec<crate::core::PackageSpec>>,
-) -> Result<()> {
+) -> Vec<String> {
     let guard = &app.config.guard;
     if guard.is_empty() {
-        return Ok(());
+        return Vec::new();
     }
     let mut violations: Vec<String> = crate::app::sync::guard::inspect_desired(guard, desired)
         .iter()
@@ -749,6 +760,14 @@ pub async fn enforce_policy(
             Err(e) => warn!("vulnerability check skipped ({}).", e),
         }
     }
+    violations
+}
+
+pub async fn enforce_policy(
+    app: &App,
+    desired: &HashMap<String, Vec<crate::core::PackageSpec>>,
+) -> Result<()> {
+    let violations = policy_violations(app, desired).await;
     if violations.is_empty() {
         return Ok(());
     }

@@ -193,13 +193,23 @@ impl<'a> SyncEngine<'a> {
             // Before any package is touched: refuse a removal set that is oversized or takes
             // something the system needs. `on_guard_refusal` fires inside the guard, not here,
             // so every command that removes gets it — see `guard::refuse`.
-            let reaped = guard::enforce(
-                self.config,
-                &self.registry,
-                &guard::removal_pairs(&changes),
-                scope,
-            )
-            .await?;
+            // **Which guard, by scope.** `II.11` rules that `max_removals` is not the question
+            // for `purge-undeclared`: that command is the opposite of an accident — you typed
+            // its name, you read the list, you confirmed it — and the ratio check is what asks
+            // whether you meant it. `protected_packages` and OS-essential still apply, because
+            // those are refusals rather than "are you sure".
+            //
+            // The dispatch lives here rather than in each caller because this is the one place
+            // that knows which command is executing, and a caller that guarded itself and then
+            // handed the engine a graph would be asking the same question twice with two
+            // different answers — which is exactly the shape `LX-5`'s four private engines have.
+            let removals = guard::removal_pairs(&changes);
+            let reaped = match scope {
+                guard::GuardScope::PurgeUndeclared => {
+                    guard::enforce_deliberate(self.config, &self.registry, &removals, scope).await?
+                }
+                _ => guard::enforce(self.config, &self.registry, &removals, scope).await?,
+            };
 
             // The install-side ceiling (II.10): a mis-globbed manifest schedules a flood of
             // installs, and the count is the fact that explains it. Off by default; when set,

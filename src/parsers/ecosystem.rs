@@ -415,7 +415,6 @@ mod tests {
         assert_eq!(pkgs[0].backend, "helm");
     }
 
-    #[test]
     /// **Synthetic, and labelled as such — this is the test the rule 250 lines below condemns.**
     ///
     /// Its input was typed by hand and labelled `"spack"`, and `names_only` is the *installed*

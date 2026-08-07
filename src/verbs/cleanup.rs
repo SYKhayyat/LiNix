@@ -1,3 +1,4 @@
+use crate::app::sync::guard;
 use crate::verbs::perform_maintenance;
 use crate::verbs::prelude::*;
 
@@ -65,7 +66,10 @@ pub async fn handle_remove_orphans(app: &App) -> Result<()> {
 
     // The guard sees the whole set at once, so the removal count and the protected list are
     // judged against the total rather than per backend.
-    let reaped = enforce(
+    // Asked here so the preview and the refusal happen before the confirmation prompt — the
+    // engine asks the same question again over the same pairs, which is cheap and cannot
+    // disagree with itself.
+    enforce(
         &app.config,
         &app.registry,
         &removals,
@@ -86,38 +90,61 @@ pub async fn handle_remove_orphans(app: &App) -> Result<()> {
         return Ok(());
     }
 
+    // **Executed by the one engine, not by a loop of this command's own.** This used to be a
+    // per-backend `installable.remove` here, with its own journalling and no transaction — so
+    // `remove-orphans` had no write-ahead recovery, no rollback, and no batching, and a kill
+    // part-way through left a machine whose only account of what went was the terminal
+    // scrollback. `plan.rs:483-499` records what that shape cost `apply`, which stopped keeping
+    // its own loop for the same reasons; this is the same fix on the next command along.
+    //
+    // The guard already ran above, over the whole set at once. The engine asks again — through
+    // `GuardScope::RemoveOrphans`, the same scope, over the same pairs — and asking a settled
+    // question twice with the same inputs is cheap and cannot disagree with itself.
+    execute_removals_through_the_engine(app, &removals, guard::GuardScope::RemoveOrphans).await?;
     for (backend_name, names) in &listed {
-        // II.7c. Unreachable in practice — `listed` was built by asking the backends
-        // themselves, so one that is not here contributed no names — but written as a reported
-        // skip rather than a bare `continue` because that is the shape the rule takes
-        // everywhere else, and a defensive branch that stays silent is how the reachable ones
-        // came to be silent too.
-        let Some(backend) = app.registry.get(backend_name).filter(|b| b.is_available()) else {
-            warn!(
-                "`{}` is not on this machine, so its orphans were left alone.",
-                backend_name
-            );
-            continue;
-        };
-        if let Some(installable) = backend.as_installable() {
-            // Remove exactly the names that were shown and guarded — not the backend's own
-            // autoremove, whose set can have moved since the preview.
-            //
-            // One journal entry per name, not one per command: they go in one manager
-            // invocation and so succeed or fail together, but a reader of an interrupted log
-            // needs to know *which* packages a killed `remove-orphans` was part-way through.
-            crate::core::journalled(
-                &app.journal,
-                crate::core::journal::removals_of(backend_name, names),
-                installable.remove(names, backend.sudo_for_write(), reaped),
-            )
-            .await
-            .with_context(|| format!("removing orphans from {}", backend_name))?;
-            println!("  {}: removed {} package(s)", backend_name, names.len());
-        }
+        println!("  {}: removed {} package(s)", backend_name, names.len());
     }
 
     perform_maintenance(app).await
+}
+
+/// Hand a set of `(backend, name)` removals to `SyncEngine` rather than removing them here.
+///
+/// **`LX-5`: four commands removed or installed outside the planner.** Sugar that routes through
+/// `sync` is the model working, and `install`/`uninstall`/`teleport`/`rollback`/`activate` all do
+/// — `packages.rs:46` states the rule outright. `remove-orphans` and `purge-undeclared` did not:
+/// each had its own preview, its own confirm, its own journalling loop, and neither ever saw
+/// `ChangePlanner` or `SyncEngine`. What they lost by that is not abstract — no transaction, no
+/// write-ahead recovery, no rollback, and one manager invocation per package where `Y1` measured
+/// batching at 12,465 ms against 3,161 ms.
+///
+/// The graph is built here rather than by `ChangePlanner` because these removals are not
+/// `desired − present`: the orphan set comes from each manager's own answer, and the undeclared
+/// set from LiNix's registry. The planner's job is deciding *what* to remove and both commands
+/// have already decided; what they were missing is the engine that carries it out.
+async fn execute_removals_through_the_engine(
+    app: &App,
+    removals: &[(String, String)],
+    scope: guard::GuardScope,
+) -> Result<()> {
+    use petgraph::stable_graph::StableDiGraph;
+    let mut graph: StableDiGraph<crate::core::GraphAction, ()> = StableDiGraph::new();
+    for (backend, name) in removals {
+        graph.add_node(crate::core::GraphAction::Remove {
+            name: name.clone(),
+            backend: backend.clone(),
+        });
+    }
+    let changes = crate::app::sync::planner::SyncChanges {
+        graph,
+        install_map: Default::default(),
+        removal_tracker: removals
+            .iter()
+            .map(|(b, n)| format!("{}:{}", b, n))
+            .collect(),
+        skipped: Vec::new(),
+    };
+    Ok(app.sync_engine().await.sync(changes, scope).await?)
 }
 
 pub fn confirm_orphan_removal(app: &App) -> Result<bool> {
@@ -270,7 +297,12 @@ pub async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Resul
 
     // `max_removals` does not apply: it catches accidents, and this is deliberate. Protection
     // and OS-essential still do — nothing overrides those (II.10, II.11).
-    let reaped = crate::app::sync::guard::enforce_deliberate(
+    //
+    // Asked here so a refusal lands before the confirmation prompt, and asked again by the
+    // engine that carries the removal out. Two asks, one rule: `SyncEngine::sync` dispatches
+    // `GuardScope::PurgeUndeclared` to this same `enforce_deliberate`, so the second ask cannot
+    // answer differently from the first.
+    crate::app::sync::guard::enforce_deliberate(
         &app.config,
         &app.registry,
         &removals,
@@ -339,43 +371,29 @@ pub async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Resul
         }
     }
 
-    let (mut gone, mut failed) = (0usize, 0usize);
-    for (backend_name, name) in &removals {
-        // II.7c, and this one is reachable: `removals` comes from what LiNix has recorded, so
-        // a package whose manager has since been uninstalled is exactly the case. It was a
-        // bare `continue`, which left `purge-undeclared` printing a count that did not
-        // include it and no line saying why.
-        let Some(b) = app.registry.get(backend_name).filter(|b| b.is_available()) else {
-            warn!(
-                "`{}` is not on this machine, so {}:{} was left alone.",
-                backend_name, backend_name, name
-            );
-            continue;
-        };
-        let Some(inst) = b.as_installable() else {
-            continue;
-        };
-        // The most destructive command in the program, and until now the one with no record
-        // that it had started. Journalled per package, because this loop removes one at a
-        // time and a kill part-way through leaves a machine whose only account of what went
-        // is the terminal scrollback.
-        match crate::core::journalled(
-            &app.journal,
-            vec![crate::core::JournalAction::Remove {
-                name: name.clone(),
-                backend: backend_name.clone(),
-            }],
-            inst.remove(std::slice::from_ref(name), b.sudo_for_write(), reaped),
-        )
-        .await
-        {
-            Ok(_) => gone += 1,
-            Err(e) => {
-                failed += 1;
-                warn!("purge-undeclared: {}:{} — {}", backend_name, name, e);
-            }
+    // **Executed by the one engine.** This was a `for` loop calling `inst.remove` one package
+    // at a time — no transaction, no batching, no rollback — in the most destructive command in
+    // the program. `plan.rs:483-499` is the best paragraph in `src/verbs/` on exactly what that
+    // shape cost `apply`, and nobody applied it here.
+    //
+    // The guard's scope carries `II.11` with it: `SyncEngine::sync` dispatches
+    // `GuardScope::PurgeUndeclared` to `enforce_deliberate`, so the count check stays off for
+    // this command while `protected_packages` and OS-essential stay on. That ruling now lives in
+    // one place instead of being the reason this loop could not use the engine.
+    let planned = removals.len();
+    let (gone, failed) = match execute_removals_through_the_engine(
+        app,
+        &removals,
+        guard::GuardScope::PurgeUndeclared,
+    )
+    .await
+    {
+        Ok(()) => (planned, 0usize),
+        Err(e) => {
+            warn!("purge-undeclared: {}", e);
+            (0usize, planned)
         }
-    }
+    };
 
     println!("\nRemoved {} package(s); {} failed.", gone, failed);
     if let Some(id) = &snapshot {

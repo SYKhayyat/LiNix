@@ -7,7 +7,6 @@ use std::env;
 use tracing::warn;
 use tracing_subscriber::EnvFilter;
 
-use linix::verbs::prelude::*;
 // The dispatcher does reference every handler, so it globs the nine modules — and that is a
 // different relationship from the one `LX-11` was about. What was deleted is `verbs::prelude`
 // re-exporting all nine into *each other*, which left no module boundary inside `verbs/` at

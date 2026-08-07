@@ -637,18 +637,13 @@ pub async fn handle_policy(app: &App) -> Result<()> {
         crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
     let desired = resolver.resolve_desired_state().await?;
-    let mut violations: Vec<String> = crate::app::sync::guard::inspect_desired(guard, &desired)
-        .iter()
-        .map(crate::app::sync::guard::describe_objection)
-        .collect();
-    if guard.require_snapshot && !app.snapshot_manager.has_provider() {
-        violations.push("requires a snapshot provider but none is available".into());
-    }
+    // **The preview calls the thing it previews.** This used to re-implement `enforce_policy`
+    // minus `deny_vulnerable`, then print a footnote admitting the gap — so `linix policy` could
+    // report "compliant" for a config `sync` would refuse, which is the one thing a preview must
+    // never do. The footnote is gone because the gap is.
+    let violations = crate::verbs::sync::policy_violations(app, &desired).await;
     if violations.is_empty() {
         println!("[guard] check passed — the desired state is compliant.");
-        if guard.deny_vulnerable {
-            println!("(deny_vulnerable is also enforced at sync time via `linix check security`.)");
-        }
     } else {
         println!("[guard] violations ({}):", violations.len());
         for v in &violations {

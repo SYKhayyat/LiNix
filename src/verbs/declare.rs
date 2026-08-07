@@ -229,19 +229,28 @@ pub async fn handle_service(app: &App, cmd: &ServiceCommand) -> Result<()> {
     }
     match cmd {
         ServiceCommand::Enable { name } => {
-            service_apply(app, name, "enabled=true,status=running").await?;
-            // Persist so `sync` keeps the service enabled going forward.
+            // **The write comes first, and this used to be the other way round.** `S15` and the
+            // comment at `packages.rs:46` state the rule for exactly this shape: *"Backwards,
+            // every refusal on the write (nothing active, several profiles active, an unwritable
+            // file) landed after the package was already installed: on the machine, in no file,
+            // and drift by the next sync."* A service is the same sentence with a different noun
+            // — enabled on the box, declared nowhere, and turned off again by the next `sync`.
             app.declare(
                 &format!("service:{}@enabled=true", name),
                 None,
                 crate::model::Landing::Imperative,
             )
             .await?;
+            service_apply(app, name, "enabled=true,status=running").await?;
             println!("Service '{}' enabled and started.", name);
         }
         ServiceCommand::Disable { name } => {
-            service_apply(app, name, "enabled=false,status=stopped").await?;
+            // Same order for the same reason, mirrored: the declaration is what `sync` reads, so
+            // it goes first. An `undeclare` that failed after the service was already stopped
+            // would leave a machine whose state no file explains, and the next `sync` would
+            // start it again.
             app.undeclare(&format!("service:{}", name)).await?;
+            service_apply(app, name, "enabled=false,status=stopped").await?;
             println!("Service '{}' disabled and stopped.", name);
         }
         ServiceCommand::Start { name } => {

@@ -1381,7 +1381,16 @@ mod batching_tests {
             Arc::new(diagnostics),
             Arc::new(config),
             tx_config,
-        );
+        )
+        // These tests hand the executor a graph directly, which is precisely the case the
+        // `reaped` refusal exists to catch in production — a plan that reached the engine
+        // without passing the guard. What they are measuring is how the executor *batches*,
+        // and threading a real `Config` and `BackendRegistry` through a guard to measure that
+        // would prove nothing about either.
+        .guarded_by(crate::app::sync::guard::Reaped::for_reason(
+            crate::app::sync::guard::GuardScope::Sync,
+            "a unit test measuring how the executor batches, not whether the guard ran",
+        ));
         Harness {
             tx,
             counters,

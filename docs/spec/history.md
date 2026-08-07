@@ -7907,3 +7907,71 @@ malformed or truncated export yields no packages rather than an error: the calle
 established the file exists."* `LX-1` reversed that this morning and the prose was left behind.
 Corrected in place — the file existing says nothing about whether winget wrote a shape the reader
 understands, which is the whole of `LX-1` in one sentence.
+
+## Session 2026-08-07 — the private engines route through the one engine (`LX-5`)
+
+Sugar that routes through `sync` is the model working, and `install`/`uninstall`/`teleport`/
+`rollback`/`activate` all do — `packages.rs:46` states the rule outright. Four commands did not.
+
+### `remove-orphans` and `purge-undeclared` execute through `SyncEngine` now
+
+Each had its own preview, its own confirm, its own journalling loop, and **neither ever saw
+`ChangePlanner` or `SyncEngine`.** What they lost by that is not abstract: no transaction, no
+write-ahead recovery, no rollback, and one manager invocation per package where `Y1` measured
+batching at 12,465 ms against 3,161 ms. `purge-undeclared` is the most destructive command in the
+program and it removed one package at a time. `plan.rs:483-499` is the best paragraph in
+`src/verbs/` on exactly what that shape cost `apply`, which stopped keeping its own loop for the
+same reasons; nobody applied it here.
+
+**Routing them hit a conflict the finding did not account for, and it is a real one.**
+`SyncEngine::sync` calls `guard::enforce`, which checks `max_removals` — and **II.11 rules that
+the count is explicitly not the question for `purge-undeclared`**: that command is the opposite of
+an accident, you typed its name and confirmed the list, and the ratio check is what asks whether
+you meant it. Routing it through the engine as it stood would have imposed a ceiling Part II says
+must not apply.
+
+So the engine dispatches its guard by scope: `GuardScope::PurgeUndeclared` goes to
+`enforce_deliberate`, everything else to `enforce`. **The dispatch belongs there** — it is the one
+place that knows which command is executing, and a caller that guarded itself and then handed the
+engine a graph would be asking the same question twice with two different answers, which is the
+shape these four commands already had.
+
+Both commands still ask the guard themselves before their confirmation prompt, so a refusal lands
+before the user is asked to agree to something. The engine asks again, over the same pairs, under
+the same scope — cheap, and it cannot disagree with itself.
+
+The graph is built at the call site rather than by `ChangePlanner`, and that is deliberate: these
+removals are not `desired − present`. The orphan set is each manager's own answer and the
+undeclared set is LiNix's registry. **The planner decides *what* to remove and both commands had
+already decided; what they were missing was the engine that carries it out.**
+
+### `service enable`/`disable` write before they act
+
+`declare.rs:230` called `service_apply` and *then* `app.declare`. That is the exact ordering
+`packages.rs:46-49` is commented to forbid, in the same repo, in the same week: *"Backwards, every
+refusal on the write (nothing active, several profiles active, an unwritable file) landed after
+the package was already installed: on the machine, in no file, and drift by the next sync."* A
+service is the same sentence with a different noun — enabled on the box, declared nowhere, turned
+off again by the next `sync`. Both halves now write first, and `disable` for the mirrored reason.
+
+### `linix policy` calls the thing it previews
+
+`setup.rs:637` re-implemented `enforce_policy` — the same `inspect_desired`, the same
+`require_snapshot` check, and **no `deny_vulnerable`** — then printed a footnote at `:646`
+admitting the gap. So `linix policy` could report **compliant** for a config `sync` would refuse,
+which is the one thing a preview must never do. `policy_violations` is now the single
+implementation; `enforce_policy` refuses on it and `handle_policy` prints it. The footnote deleted
+itself.
+
+### The `regex_cache` bound `watch` needs
+
+`regex_cache.rs`'s `DashMap` was never evicted, and that was free while every process was one
+command: a command reads a bounded set of configuration, so "never evicted" and "bounded" were the
+same thing. **`watch` is the only caller that makes the process long-lived** — reconciling on a
+tick, forever, re-reading configuration a `--pull` may have just changed — and there the two come
+apart. Bounded at 1024 patterns, cleared rather than evicted one-by-one: an LRU needs a recency
+order, which means a write on every *read*, and reads are the hot path this cache exists for. The
+test proves both halves — that it stops growing, and that past the ceiling it is still a cache.
+
+**`watch` and `policy` both keep their verbs**, which was the owner's standing constraint. What
+`LX-5` proposed deleting, this fixes and wires in.

@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 ///
 /// The reason is not decoration: a site whose reason cannot be written down is a site nobody
 /// has checked. Nine of these were verified by reading the call, not by trusting a list.
+#[allow(dead_code)] // `guarded_by` is prose for a reader, and that is its whole job.
 struct Accounted {
     file: &'static str,
     /// **No longer a count.** It was `calls: usize`, and the doc comment above still explains
