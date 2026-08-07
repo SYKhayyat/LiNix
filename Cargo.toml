@@ -53,7 +53,7 @@ anyhow = "1.0"
 thiserror = "1.0"
 
 # Scripting & Templating
-mlua = { version = "0.9", features = ["lua54", "vendored", "async"] }
+mlua = { version = "0.12", features = ["lua54", "vendored", "async"] }
 rhai = { version = "1.15", features = ["sync"] }
 tera = "1.19" 
 
