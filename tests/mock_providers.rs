@@ -123,6 +123,32 @@ impl TestKernel {
         }
     }
 
+    /// A **second run** over this same sandbox: a fresh `App`, a fresh executor, the same
+    /// files, the same state registry, and the same mock machine underneath.
+    ///
+    /// The executor is rebuilt rather than duplicated because `CommandExecutor::duplicate` is
+    /// `clone`, and the installed-listing memo is an `Arc` inside it — so a second sync taken
+    /// from a duplicate answers "is it installed?" from the first sync's answer, which is the
+    /// one question a convergence test exists to ask twice. The `vfs` and `lock_map` are
+    /// shared, because those are the machine.
+    #[allow(dead_code)]
+    pub async fn second_run(&self) -> App {
+        let executor = CommandExecutor::with_layer(
+            true,
+            false,
+            self.mock_executor.clone(),
+            self.vfs.clone(),
+            self.lock_map.clone(),
+        );
+        App::new_with_executor_and_state_path(
+            (*self.app.config).clone(),
+            executor,
+            Some(self.tmp.path().join("registry.json")),
+        )
+        .await
+        .expect("a second run bootstraps over the same files")
+    }
+
     /// The same sandbox, previewed: an `App` over these exact files with `--dry-run` set.
     ///
     /// A second `App` rather than a mutated one, because `config` is shared by `Arc` and

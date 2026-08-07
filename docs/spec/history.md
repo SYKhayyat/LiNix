@@ -7195,3 +7195,40 @@ The `Declined` enum's gate did its job on the way through: adding `BackendNotOnT
 not compile until `every_reason_a_removal_is_declined_says_whether_the_user_hears_about_it` gained
 an arm saying whether the user hears about it. `runs_here` was mutation-tested to `true` and five
 of the seven new tests went red.
+
+## 2026-08-06 — the machine is proved to converge, forward and backward
+
+The one gap `lamdan/whole-repo-2026-08-05.md` said to close before any of its findings:
+**nothing in this repository tested that a machine converges.** `e2e_tests.rs` wrote one
+`brew:neovim`, ran resolver → planner → engine once, and asserted `is_managed`. One package,
+install-only, no second run. No test deleted a line and asserted the package left; no test
+synced twice and asserted the second run was empty. `src/app/sync/mod.rs` — 1,102 lines holding
+the whole apply loop — has no `#[cfg(test)]` at all.
+
+So `install = desired − present` was proved once, `remove = (present ∩ owned) − desired` was
+proved nowhere end to end, and the fixed point was proved for dotfiles only, while seventy-odd
+binaries guarded the loop from every other angle.
+
+`tests/a_machine_converges_tests.rs` runs it forward, backward and forward again: declare →
+sync → installed and recorded; sync again → **empty**; delete the line → sync → removed and the
+registry row dropped; sync again → **empty**. A second test holds the other half — a package on
+the machine that LiNix never installed is never reaped, which is II.7's *"what it manages and
+you stopped declaring. Nothing else, ever."*
+
+**Two things the fixture had to get right, and both were bugs waiting.** Each sync is a fresh
+`App`, because `CommandExecutor::duplicate` is `clone` and the installed-listing memo is an
+`Arc` inside it — two syncs from one `App` answer the second question with the first question's
+answer, which is the one thing a convergence test must not do. And `TestKernel::state` is one
+process's copy of the registry, so the assertions read a freshly loaded one: the file is the
+state, not the handle.
+
+**The mock is the machine, through every question LiNix asks it.** `brew` overrides
+`Queryable::info` to run `brew info --json=v1`, so the planner's *is it installed?* never
+touches the listing, while removal planning's `installed_sets` reads only `brew list
+--versions`. Setting one and not the other builds a machine that is holding a package and does
+not have it. `machine_holds` sets both, and `brew leaves` with them.
+
+Both mutation-tested. `spec_is_missing` forced to `Ok(true)` turns both fixed-point assertions
+red. Drift recomputed from the installed listing instead of the registry is caught by the
+ownership test **and not by the forward-backward one** — which is what that test's own comment
+claims, and the reason it is a separate test rather than another assertion.

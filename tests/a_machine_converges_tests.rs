@@ -1,0 +1,201 @@
+//! **Nothing in this repository tested that a machine converges.**
+//!
+//! `lamdan/whole-repo-2026-08-05.md` closes with this as the one gap to shut before any of its
+//! findings: `e2e_tests.rs` wrote one `brew:neovim`, ran resolver → planner → engine once, and
+//! asserted `is_managed`. One package, install-only, no second run. **No test deleted a line and
+//! asserted the package left. No test synced twice and asserted the second run was empty.**
+//! `src/app/sync/mod.rs` — 1,102 lines holding the entire apply loop — contains zero
+//! `#[cfg(test)]`.
+//!
+//! So `install = desired − present` was proved once and `remove = (present ∩ owned) − desired`
+//! was proved nowhere end to end, while seventy-odd binaries guarded the loop from every other
+//! angle. This runs it forward, backward, and forward again.
+//!
+//! **Each sync is a fresh `App` over the same files and the same state registry**, because that
+//! is what two runs of `linix sync` are. One `App` memoises each manager's installed listing for
+//! the run (`CommandExecutor::installed`), so re-planning inside one would answer the second
+//! question from the first question's answer and prove nothing about convergence.
+//!
+//! **The mock is the machine.** After LiNix installs, the test makes brew report the package —
+//! which is what the real brew would do — through every question LiNix asks it; the assertion
+//! that the install command actually ran is what keeps that from being fiction.
+
+use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
+use linix::app::sync::resolver::StateResolver;
+use linix::core::executor::{DryRunOutput, MockExecutor};
+use tokio::fs;
+
+mod mock_providers;
+use mock_providers::TestKernel;
+
+fn answer(mock: &MockExecutor, cmd: &str, stdout: &str) {
+    mock.set_response(
+        cmd,
+        Ok(DryRunOutput {
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: vec![],
+        }
+        .into()),
+    );
+}
+
+/// Put the machine in a state, through **both** questions LiNix asks about brew.
+///
+/// `brew` overrides `Queryable::info` to run `brew info --json=v1`, so the planner's
+/// *is it installed?* never touches the listing — while removal planning's `installed_sets`
+/// only ever reads `brew list --versions`. Setting one and not the other produces a machine
+/// that is holding a package and does not have it, which is not a state any real host is in
+/// and not a thing worth asserting about.
+async fn machine_holds(mock: &MockExecutor, names: &[&str]) {
+    let listing: String = names.iter().map(|n| format!("{} 1.0.0\n", n)).collect();
+    answer(mock, "brew list --versions", &listing);
+    answer(mock, "brew leaves", &names.join("\n"));
+    for n in ["neovim", "fd"] {
+        let json = if names.contains(&n) {
+            format!(
+                r#"[{{"name":"{}","versions":{{"stable":"1.0.0"}},"installed":[{{"prefix":"/opt/homebrew/Cellar/{}/1.0.0"}}]}}]"#,
+                n, n
+            )
+        } else {
+            "[]".to_string()
+        };
+        answer(mock, &format!("brew info --json=v1 -- {}", n), &json);
+    }
+}
+
+/// Whether the on-disk registry — the file, not one process's copy of it — records this.
+async fn recorded(kernel: &TestKernel, name: &str) -> bool {
+    let app = kernel.second_run().await;
+    let state = app.state.lock().await;
+    state.is_managed("brew", name)
+}
+
+/// One run of `linix sync`, in its own process's worth of state.
+///
+/// Returns `(installs, removals)` from the plan, after executing it.
+async fn sync_run(kernel: &TestKernel) -> (usize, usize) {
+    let app = kernel.second_run().await;
+
+    let resolver = StateResolver::new(&app.config, app.registry.clone(), false).await;
+    let desired = resolver.resolve_desired_state().await.expect("resolves");
+
+    let changes = {
+        let state = app.state.lock().await;
+        ChangePlanner::new(app.registry.clone(), &state, &app.config)
+            .plan(&desired, PlanScope::Whole(HostBackends::default()))
+            .await
+            .expect("plans")
+    };
+    let counts = (changes.total_install(), changes.total_remove());
+
+    let engine = app.sync_engine().await;
+    engine
+        .sync(changes, linix::app::sync::guard::GuardScope::Sync)
+        .await
+        .expect("the plan applies");
+    counts
+}
+
+async fn declare(kernel: &TestKernel, body: &str) {
+    let root = kernel.app.config.config_root();
+    fs::write(root.join("modules/tools.txt"), body)
+        .await
+        .unwrap();
+    fs::write(root.join("profiles/Main"), "use tools\n")
+        .await
+        .unwrap();
+    fs::write(root.join("active"), "Main\n").await.unwrap();
+}
+
+#[tokio::test]
+async fn a_machine_converges_forward_backward_and_forward_again() {
+    let kernel = TestKernel::new().await;
+    kernel
+        .mock_executor
+        .set_response("brew install -- neovim", Ok(DryRunOutput::default().into()));
+    kernel.mock_executor.set_response(
+        "brew uninstall -- neovim",
+        Ok(DryRunOutput::default().into()),
+    );
+    machine_holds(&kernel.mock_executor, &[]).await;
+
+    // ---- forward: the line is declared and the machine does not have it -------------------
+    declare(&kernel, "brew:neovim\n").await;
+    let (installs, removals) = sync_run(&kernel).await;
+    assert_eq!(
+        (installs, removals),
+        (1, 0),
+        "`install = desired - present`: one declared, none present"
+    );
+    kernel.assert_called("brew install -- neovim").await;
+    assert!(
+        recorded(&kernel, "neovim").await,
+        "the run that installed it must be the run that records owning it"
+    );
+
+    // ---- the fixed point: the same files, the same machine, nothing to do -----------------
+    machine_holds(&kernel.mock_executor, &["neovim"]).await;
+    assert_eq!(
+        sync_run(&kernel).await,
+        (0, 0),
+        "a second sync over an unchanged config must be empty — convergence is a fixed \
+         point, and a sync that reinstalls what it just installed is not one"
+    );
+
+    // ---- backward: the declaration goes, and so does the package --------------------------
+    declare(&kernel, "").await;
+    let (installs, removals) = sync_run(&kernel).await;
+    assert_eq!(
+        (installs, removals),
+        (0, 1),
+        "`remove = (present n owned) - desired`: nothing declares it and LiNix owns it"
+    );
+    kernel.assert_called("brew uninstall -- neovim").await;
+    assert!(
+        !recorded(&kernel, "neovim").await,
+        "the removal is what drops the registry row; leaving it makes LiNix claim to manage \
+         something it has just deleted"
+    );
+
+    // ---- and forward again: converged in the other direction ------------------------------
+    machine_holds(&kernel.mock_executor, &[]).await;
+    assert_eq!(
+        sync_run(&kernel).await,
+        (0, 0),
+        "the empty config over the emptied machine is the fixed point too"
+    );
+}
+
+#[tokio::test]
+async fn convergence_never_reaches_for_what_linix_did_not_install() {
+    // II.7: *"What LiNix may remove: what it manages and you stopped declaring. Plus `absent:`.
+    // Nothing else, ever."* The forward-backward test above would pass just as well if drift
+    // were computed from the machine instead of from the registry — and that version deletes
+    // software the user installed by hand. This is the half that tells them apart.
+    let kernel = TestKernel::new().await;
+    kernel
+        .mock_executor
+        .set_response("brew install -- neovim", Ok(DryRunOutput::default().into()));
+    // A machine with something on it that LiNix has never heard of.
+    machine_holds(&kernel.mock_executor, &["fd"]).await;
+
+    declare(&kernel, "brew:neovim\n").await;
+    assert_eq!(sync_run(&kernel).await, (1, 0));
+
+    machine_holds(&kernel.mock_executor, &["fd", "neovim"]).await;
+    assert_eq!(
+        sync_run(&kernel).await,
+        (0, 0),
+        "`fd` is on the machine, is declared nowhere, and is not LiNix's to remove — a plan \
+         that reaps it is `purge-undeclared`, which is a command you type"
+    );
+
+    let calls = kernel.mock_executor.get_calls().await;
+    assert!(
+        !calls
+            .iter()
+            .any(|c| c.contains("uninstall") && c.contains("fd")),
+        "an undeclared package the user installed was scheduled for removal: {:?}",
+        calls
+    );
+}
