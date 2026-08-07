@@ -1531,7 +1531,6 @@ mod tests {
         use crate::core::executor::{DryRunOutput, MockExecutor};
         use crate::core::{BackendCapabilities, CommandExecutor, Package};
         use dashmap::DashMap;
-        use std::collections::HashMap as Map;
         use std::path::PathBuf;
         use std::process::Output as StdOutput;
 
@@ -1577,7 +1576,6 @@ mod tests {
                 machine_list: None,
                 outdated: None,
                 search_source: SearchSource::Command,
-                flag_map: Map::new(),
             };
             let core = Arc::new(GenericBackendCore {
                 name: name.into(),

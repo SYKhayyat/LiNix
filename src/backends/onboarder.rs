@@ -53,7 +53,6 @@ use crate::parsers::OutputParser;
 use crate::utils::text::sanitize;
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use tracing::{error, warn};
@@ -776,7 +775,6 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
         machine_list,
         outdated,
         search_source: SearchSource::Command,
-        flag_map: HashMap::new(),
     };
 
     let core = Arc::new(GenericBackendCore {
@@ -823,6 +821,7 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
 mod tests {
     use super::*;
     use crate::core::LockFile;
+    use std::collections::HashMap;
 
     #[test]
     fn a_name_the_prefix_grammar_already_spends_is_refused() {

@@ -1,14 +1,8 @@
-use crate::app::sync::resolver::StateResolver;
-use crate::backends::BackendRegistry;
 use crate::config::Config;
-use crate::core::{Error, Result, StateRegistry};
-use dialoguer::{theme::ColorfulTheme, Confirm};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use tracing::{debug, info, instrument, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiagnosticRule {
@@ -137,132 +131,17 @@ impl FailureDiagnosticEngine {
         suggestions
     }
 
-    #[allow(clippy::too_many_arguments)]
-    #[instrument(skip(self, registry, state, config, journal))]
-    pub async fn handle_failure(
-        &self,
-        stderr: &str,
-        current_backend: &str,
-        registry: Arc<BackendRegistry>,
-        state: Arc<Mutex<StateRegistry>>,
-        config: &Config,
-        journal: Arc<Mutex<crate::core::Journal>>,
-        auto_install: bool,
-    ) -> Result<()> {
-        let suggestions = self.diagnose(stderr, current_backend);
-        if suggestions.is_empty() {
-            return Ok(());
-        }
+    // `handle_failure` and `remediate` lived here: 115 lines that prompted with dialoguer and
+    // then **installed packages**, writing them into the state registry with
+    // `source: "diagnostics"`. Nothing called either of them, on any path, ever.
+    //
+    // Dead code that installs software is the worst kind — it looks maintained, it is held to
+    // every rule the live paths are (`Y14` gave it a write-ahead record while it was already
+    // unreachable), and it is exercised by nothing. `suggestions_for` above is the live half:
+    // a failure's advice is *printed*, and what to do about it is the user's.
 
-        println!("\nmissing dependency.");
-        println!(
-            "Identified Issue: {}",
-            self.get_description(stderr)
-                .unwrap_or_else(|| "Conflict".into())
-        );
-
-        println!("\nRemediation Suggestion:");
-        for s in &suggestions {
-            println!("  - install {}", s);
-        }
-
-        if auto_install {
-            self.remediate(&suggestions, registry, state, config, journal)
-                .await?;
-        } else {
-            use std::io::IsTerminal;
-            // This prompt installs software. Without the check, a scripted run got dialoguer's
-            // `IO error: not a terminal` — safe, but it names neither what stopped nor the
-            // flag that gets past it, which is the whole of the difference.
-            if !std::io::stdin().is_terminal() {
-                return Err(Error::Refused(
-                    "Refusing to install remediation packages without confirmation in a \
-                     non-interactive shell. Re-run with --yes to proceed."
-                        .to_string(),
-                ));
-            }
-            let res = tokio::task::spawn_blocking(move || {
-                Confirm::with_theme(&ColorfulTheme::default())
-                    .with_prompt("Would you like to execute remediation now?")
-                    .default(false)
-                    .interact()
-            })
-            .await
-            .map_err(|e| Error::Other(format!("Join error: {}", e)))??;
-
-            if res {
-                self.remediate(&suggestions, registry, state, config, journal)
-                    .await?;
-            }
-        }
-        Ok(())
-    }
-
-    async fn remediate(
-        &self,
-        suggestions: &[String],
-        registry: Arc<BackendRegistry>,
-        state: Arc<Mutex<StateRegistry>>,
-        config: &Config,
-        journal: Arc<Mutex<crate::core::Journal>>,
-    ) -> Result<()> {
-        let resolver = StateResolver::new(config, registry.clone(), false).await;
-
-        for suggestion in suggestions {
-            info!("installing {} to fix the failure", suggestion);
-            let spec = resolver.parse_and_probe_spec(suggestion).await?;
-
-            if let Some(b_cap) = registry.get(&spec.backend) {
-                if let Some(installer) = b_cap.as_installable() {
-                    // Dead code that installs software is the worst kind — it looks
-                    // maintained and is never exercised — so it is held to the same rule as
-                    // the live paths rather than exempted for being unreachable.
-                    match crate::core::journalled(
-                        &journal,
-                        vec![crate::core::JournalAction::Install(spec.clone())],
-                        installer.install(std::slice::from_ref(&spec), b_cap.sudo_for_write()),
-                    )
-                    .await
-                    {
-                        Ok(_) => {
-                            // The save runs on a blocking thread and so needs an owned,
-                            // 'static value: clone under the lock and drop it before the
-                            // spawn, rather than holding the guard across an await.
-                            let state_snapshot = {
-                                let mut state_guard = state.lock().await;
-                                state_guard.add(
-                                    &spec.backend,
-                                    &spec.name,
-                                    None,
-                                    HashMap::new(),
-                                    "diagnostics",
-                                    false,
-                                );
-                                state_guard.clone()
-                            };
-
-                            tokio::task::spawn_blocking(move || state_snapshot.save())
-                                .await
-                                .map_err(|e| Error::Other(format!("Task panic: {}", e)))??;
-                        }
-                        Err(e) => {
-                            warn!("Remediation FAILED for {}: {}", suggestion, e)
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn get_description(&self, stderr: &str) -> Option<String> {
-        for rule in &self.db.rules {
-            if rule.matches(stderr) {
-                return Some(rule.description.clone());
-            }
-        }
-        None
-    }
+    // `get_description` went with them, and the compiler is what found it: it had exactly one
+    // caller, and that caller was `handle_failure`. Dead code hides dead code.
 
     pub fn print_suggestions(&self, stderr: &str, current_backend: &str) {
         let suggestions = self.diagnose(stderr, current_backend);

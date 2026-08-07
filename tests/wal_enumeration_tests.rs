@@ -85,12 +85,12 @@ const LEDGER: &[Accounted] = &[
         recovery: Recovery::Journalled,
         how: "journalled() around the ephemeral-shell install",
     },
-    Accounted {
-        file: "src/app/diagnostics.rs",
-        calls: 1,
-        recovery: Recovery::Journalled,
-        how: "journalled() around the remediation install",
-    },
+    // `src/app/diagnostics.rs` was here, accounted `Journalled` for "the remediation
+    // install". `Y14` wrapped that install in a write-ahead record while the function holding
+    // it — `handle_failure`/`remediate`, 115 lines that prompted and then installed packages —
+    // already had **zero callers**, and F-6 deleted it. The file mutates nothing now, so it is
+    // out of the ledger rather than accounted for a call it no longer makes. This entry going
+    // is the deletion landing, not the scan breaking.
     Accounted {
         file: "src/verbs/cleanup.rs",
         calls: 2,

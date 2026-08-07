@@ -5,8 +5,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::debug;
 
-pub mod notify;
-
 /// Delete a unit file LiNix generated. A file that is already gone is the wanted end state;
 /// any other failure leaves a schedule armed that LiNix is about to report as removed.
 fn remove_generated(path: &Path) -> Result<()> {

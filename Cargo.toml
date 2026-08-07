@@ -48,7 +48,7 @@ tera = "1.19"
 
 # Networking & API Integration
 # rustls (not native-tls) so we don't drag in OpenSSL — that made static musl/Alpine
-# builds fail to link and required openssl-dev on every distro. lettre already uses rustls.
+# builds fail to link and required openssl-dev on every distro.
 reqwest = { version = "0.11", default-features = false, features = ["json", "stream", "rustls-tls"] }
 # Rate limiting. Without `quanta`: its clock calibrates the TSC on first construction, which
 # measured 200ms, once, on whichever thread got there first — a fifth of a second on `linix path`
@@ -103,8 +103,6 @@ cron = "0.12"      # Cron expression parsing for schedules
 itertools = "0.12" # Advanced iteration for planning filtering
 
 # Feature 5: Notifications
-notify-rust = "4.10" # Desktop notifications (Linux/macOS/Windows)
-lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder", "hostname", "tracing"] }
 # Platform-Specific Dependencies
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = [

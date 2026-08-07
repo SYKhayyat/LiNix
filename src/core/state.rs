@@ -8,15 +8,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, trace};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GhostMetadata {
-    pub backend: String,
-    pub options: HashMap<String, String>,
-    pub properties: HashMap<String, String>,
-    pub requires: Vec<String>,
-    pub removed_at: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManagedPackage {
     pub name: String,
     pub backend: String,
@@ -65,7 +56,6 @@ pub struct StateRegistry {
     pub path: PathBuf,
     pub packages: Vec<ManagedPackage>,
     /// Removed packages, kept as a record after uninstall.
-    pub ghosts: HashMap<String, GhostMetadata>,
     pub active_session_id: Option<String>,
     /// Packages temporarily uninstalled that are awaiting restoration.
     pub suspensions: Vec<Suspension>,
@@ -79,7 +69,6 @@ impl StateRegistry {
         Self {
             path,
             packages: Vec::new(),
-            ghosts: HashMap::new(),
             active_session_id: None,
             suspensions: Vec::new(),
             held: Vec::new(),
@@ -153,9 +142,8 @@ impl StateRegistry {
         registry.path = path.to_path_buf();
 
         debug!(
-            "Successfully loaded {} managed packages and {} ghosts.",
-            registry.packages.len(),
-            registry.ghosts.len()
+            "Successfully loaded {} managed packages.",
+            registry.packages.len()
         );
         Ok(registry)
     }
@@ -257,8 +245,6 @@ impl StateRegistry {
 
         self.packages
             .retain(|p| !(p.backend == backend && p.name == name));
-        let ghost_key = format!("{}:{}", backend, name);
-        self.ghosts.remove(&ghost_key);
 
         let new_pkg = ManagedPackage {
             name: name.to_string(),
@@ -284,52 +270,31 @@ impl StateRegistry {
         debug!("Package {}:{} is now under management.", backend, name);
     }
 
-    pub fn remove(&mut self, backend: &str, name: &str) {
-        if let Some(pos) = self
-            .packages
-            .iter()
-            .position(|p| p.backend == backend && p.name == name)
-        {
-            let pkg = self.packages.remove(pos);
-
-            let ghost_key = format!("{}:{}", backend, name);
-            self.ghosts.insert(
-                ghost_key,
-                GhostMetadata {
-                    backend: backend.to_string(),
-                    options: pkg.options,
-                    properties: HashMap::new(),
-                    requires: Vec::new(),
-                    removed_at: Self::now(),
-                },
-            );
-            debug!("Package {}:{} archived as Ghost.", backend, name);
-        } else {
-            trace!(
-                "Requested removal of {}:{} but it was not managed.",
-                backend,
-                name
-            );
-        }
-    }
-
-    /// Drops a package from management WITHOUT recording a removal. Returns true if it was
-    /// managed.
+    /// Drop a package from management. `true` if it was managed.
     ///
-    /// Distinct from `remove`, which archives a Ghost stamped `removed_at` — that is the
-    /// right record when a package was actually uninstalled, and a false one here: after
-    /// `linix unmanage` the package is still installed and LiNix has merely stopped
-    /// claiming it. Writing a ghost would tell every later reader it was deleted.
-    pub fn forget(&mut self, backend: &str, name: &str) -> bool {
+    /// **This was two functions until the ghosts went.** `remove` archived a `GhostMetadata`
+    /// stamped `removed_at` and `forget` did not, and the doc comment on `forget` explained the
+    /// difference at length: after `linix unmanage` the package is still installed, so calling
+    /// it removed would tell every later reader it was deleted. That distinction was expressed
+    /// *only* by the ghost record — which nothing ever read — so with the ghosts deleted the two
+    /// bodies were the same six lines under two names, one of them carrying a comment about a
+    /// record that no longer existed. Whether a package was uninstalled or merely unmanaged is
+    /// not a thing LiNix stores, and there is now one function saying so.
+    pub fn remove(&mut self, backend: &str, name: &str) -> bool {
         if let Some(pos) = self
             .packages
             .iter()
             .position(|p| p.backend == backend && p.name == name)
         {
             self.packages.remove(pos);
-            debug!("Package {}:{} forgotten (left installed).", backend, name);
+            debug!("Package {}:{} is no longer managed.", backend, name);
             true
         } else {
+            trace!(
+                "Requested removal of {}:{} but it was not managed.",
+                backend,
+                name
+            );
             false
         }
     }
@@ -641,7 +606,7 @@ mod tests {
         // There is no old-format reader. A registry with no `suspensions` key is one this
         // build did not write, and the honest answer is to say so — filling it with an empty
         // list says "nothing is suspended", which is a claim about the machine nobody checked.
-        let missing = r#"{"packages":[],"ghosts":{},"active_session_id":null}"#;
+        let missing = r#"{"packages":[],"active_session_id":null}"#;
         assert!(serde_json::from_str::<StateRegistry>(missing).is_err());
     }
 

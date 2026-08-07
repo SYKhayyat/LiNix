@@ -61,7 +61,6 @@ impl Sandbox {
                     "is_transient": false,
                     "session_id": null
                 }],
-                "ghosts": {},
                 "active_session_id": null,
                 "suspensions": [],
                 "held": []

@@ -68,7 +68,7 @@ pub use exit::Exit;
 pub use extras_lock::{extra_key, ExtrasLedger};
 pub use regex_lock::RegexLock;
 
-pub use state::{GhostMetadata, ManagedPackage, StateRegistry};
+pub use state::{ManagedPackage, StateRegistry};
 
 pub use validator::Validator;
 

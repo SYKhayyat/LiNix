@@ -2,7 +2,6 @@ use crate::app::adopt::Adopter;
 use crate::app::diagnostics::FailureDiagnosticEngine;
 use crate::app::profile::ProfileManager;
 use crate::app::run::Runner;
-use crate::app::scheduler::notify::NotificationManager;
 use crate::app::scheduler::SchedulerManager;
 use crate::app::shell::EphemeralShell;
 use crate::app::shim_manager::ShimManager;
@@ -35,7 +34,6 @@ pub struct App {
     pub journal: Arc<Mutex<Journal>>,
     pub diagnostics: Arc<FailureDiagnosticEngine>,
     pub scheduler: Arc<SchedulerManager>,
-    pub notifications: Arc<NotificationManager>,
 }
 
 impl App {
@@ -112,7 +110,6 @@ impl App {
 
         let scheduler = Arc::new(SchedulerManager::new()?);
         let config_arc = Arc::new(config);
-        let notifications = Arc::new(NotificationManager::new(config_arc.clone()));
 
         let diagnostics = Arc::new(FailureDiagnosticEngine::init(&config_arc).await);
 
@@ -130,7 +127,6 @@ impl App {
             journal,
             diagnostics,
             scheduler,
-            notifications,
         })
     }
 

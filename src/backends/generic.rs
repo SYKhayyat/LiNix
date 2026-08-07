@@ -5,7 +5,6 @@ use crate::core::{
 };
 use crate::parsers::OutputParser;
 use async_trait::async_trait;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
@@ -437,7 +436,9 @@ pub struct ManagerConfig {
     /// `None` = the binary is the whole requirement, which is true of every manager that is a
     /// program rather than a plugin of one. See [`BackendCore::is_available`].
     pub extra_probes: Option<Vec<String>>,
-    pub flag_map: HashMap<String, String>,
+    // `flag_map` was here: declared once, assigned at twenty-five registration sites, and read
+    // at none. It was also absent from `CustomBackendDef`, so a user could not have set it even
+    // if something had read it — a field that could never carry a fact into the program.
 }
 
 pub struct GenericBackendCore {
@@ -1908,7 +1909,6 @@ mod tests {
                 machine_list: None,
                 outdated: None,
                 search_source: SearchSource::Command,
-                flag_map: HashMap::new(),
             },
             parser: Arc::new(LambdaParser {
                 installed_fn: |_| vec![],

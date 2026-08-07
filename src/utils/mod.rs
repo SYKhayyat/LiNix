@@ -41,17 +41,12 @@ pub fn safe_config_dir() -> PathBuf {
         .join("linix")
 }
 
-/// Backends that install a toolchain (mise, cargo) must call this before running hooks
-/// that invoke it: the freshly installed binary is not on the PATH this process inherited,
-/// and hooks are spawned from it.
-pub fn refresh_path(new_path: std::path::PathBuf) {
-    if let Some(path) = std::env::var_os("PATH") {
-        let mut paths = std::env::split_paths(&path).collect::<Vec<_>>();
-        if !paths.contains(&new_path) {
-            paths.insert(0, new_path);
-            if let Ok(merged) = std::env::join_paths(paths) {
-                std::env::set_var("PATH", merged);
-            }
-        }
-    }
-}
+// `refresh_path` was here, with a doc comment asserting that "backends that install a toolchain
+// (mise, cargo) must call this before running hooks that invoke it". **Nothing called it, and
+// there is no `cargo.rs`** — so either the bug it describes is live and this never guarded it,
+// or the requirement is fiction. Deleting it makes that an open question instead of a solved
+// one: a helper nobody calls, documented as mandatory, reads as coverage from every angle
+// except the only one that counts.
+//
+// The live PATH mechanism is `executor::forget_path_lookups`, which drops the memo after
+// LiNix installs a manager — a different problem, and one with callers.

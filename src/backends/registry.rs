@@ -15,7 +15,7 @@ use crate::config::Config;
 use crate::core::{BackendCapabilities, CommandExecutor};
 use crate::parsers::windows;
 use crate::parsers::LambdaParser;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tracing::trace;
 
@@ -292,7 +292,6 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
                 silence_is_none: false,
             }),
             search_source: SearchSource::Command,
-            flag_map: HashMap::new(),
         },
         parser: Arc::new(crate::parsers::apt::AptParser),
     });
@@ -696,7 +695,6 @@ fn register_aur_helper(
             machine_list: None,
             outdated: None,
             search_source: SearchSource::Command,
-            flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
             installed_fn,
@@ -793,7 +791,6 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
                 silence_is_none: false,
             }),
             search_source: SearchSource::Command,
-            flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
             // `apk info -v` emits `name-version-revision` as a single dash-joined token
@@ -881,7 +878,6 @@ fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecutor) {
                 silence_is_none: false,
             }),
             search_source: SearchSource::Command,
-            flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
             installed_fn: crate::parsers::dnf::parse_zypper_search,
@@ -988,7 +984,6 @@ fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
                 silence_is_none: false,
             }),
             search_source: SearchSource::Command,
-            flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
             installed_fn: |o| windows::parse_installed("winget", o),
@@ -1069,7 +1064,6 @@ fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
                 silence_is_none: false,
             }),
             search_source: SearchSource::Command,
-            flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
             installed_fn: |o| windows::parse_installed("scoop", o),
@@ -1160,7 +1154,6 @@ fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
                 silence_is_none: false,
             }),
             search_source: SearchSource::Command,
-            flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
             installed_fn: |o| windows::parse_installed("choco", o),
@@ -1226,7 +1219,6 @@ fn register_mas(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             machine_list: None,
             outdated: None,
             search_source: SearchSource::Command,
-            flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
             installed_fn: crate::parsers::macos::parse_mas_list,
@@ -1300,7 +1292,6 @@ fn register_pip(reg: &mut BackendRegistry, executor: &CommandExecutor) {
                 silence_is_none: false,
             }),
             search_source: SearchSource::Command,
-            flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::language::parse_installed("pip", o),
@@ -1366,7 +1357,6 @@ fn register_gem(reg: &mut BackendRegistry, executor: &CommandExecutor) {
                 silence_is_none: false,
             }),
             search_source: SearchSource::Command,
-            flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::language::parse_installed("gem", o),
@@ -1432,7 +1422,6 @@ fn register_bun(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             machine_list: None,
             outdated: None,
             search_source: SearchSource::Command,
-            flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::language::parse_installed("bun", o),
@@ -1500,7 +1489,6 @@ fn register_macports(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             machine_list: None,
             outdated: None,
             search_source: SearchSource::Command,
-            flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
             installed_fn: crate::parsers::macos::parse_macports_installed,
@@ -1568,7 +1556,6 @@ fn register_pkgin(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             machine_list: None,
             outdated: None,
             search_source: SearchSource::Command,
-            flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::pkgsrc::parse_pkgin(o),
@@ -1644,7 +1631,6 @@ fn register_pkg_freebsd(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             machine_list: None,
             outdated: None,
             search_source: SearchSource::Command,
-            flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::bsd::parse_pkg(o),
@@ -1716,7 +1702,6 @@ fn register_pkg_add_openbsd(reg: &mut BackendRegistry, executor: &CommandExecuto
             machine_list: None,
             outdated: None,
             search_source: SearchSource::Command,
-            flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::bsd::parse_pkg_add(o),
@@ -1810,7 +1795,6 @@ fn register_dotnet(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             }),
             outdated: None,
             search_source: SearchSource::Command,
-            flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
             installed_fn: crate::parsers::dotnet::parse_dotnet_list,
@@ -1880,7 +1864,6 @@ fn base_config(name: &str) -> ManagerConfig {
         machine_list: None,
         outdated: None,
         search_source: SearchSource::Command,
-        flag_map: HashMap::new(),
     }
 }
 

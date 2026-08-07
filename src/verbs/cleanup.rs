@@ -508,7 +508,7 @@ pub async fn handle_unmanage(app: &App, packages: &[String], json: bool) -> Resu
                 .map(|p| (p.backend.clone(), p.name.clone()))
                 .collect();
             for (b, n) in managed {
-                if state.forget(&b, &n) {
+                if state.remove(&b, &n) {
                     forgotten.push(format!("{}:{}", b, n));
                 }
             }

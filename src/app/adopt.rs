@@ -732,7 +732,6 @@ mod tests {
             machine_list: None,
             outdated: None,
             search_source: SearchSource::Command,
-            flag_map: HashMap::new(),
         };
         config.manual = manual;
 

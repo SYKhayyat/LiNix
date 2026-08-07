@@ -7406,3 +7406,67 @@ across the rounds, closed at the mechanism and the mechanism never run; `G-4` wa
 mutation test its author watched go red and reopened two days later, same ID, same defect; *"a
 check that cannot fail"* appears in all seven. **The finding was written down every time.
 Writing it down is not the mechanism.**
+
+## 2026-08-06 — the dead subsystems, and two dependencies they held hostage (lamdan F-6)
+
+**1,295 lines out, `lettre` and `notify-rust` gone, and nothing a user could reach changed.**
+
+**`app/scheduler/notify.rs` — 183 lines, and the only thing standing between the binary and two
+dependencies.** `NotificationManager` was constructed on **every run**, `linix path` included,
+and stored as an `App` field; `notify()` was called from nowhere in `src/` or `tests/`. It was
+the sole use site of `lettre` (a full async SMTP client with rustls) and `notify-rust` (D-Bus /
+WinRT). There was no way to switch it on either: `examples/preferences.toml` claims to document
+every key and holds no `smtp`, `notif` or `email`. A feature nobody can invoke is not a feature
+being removed. The want it was for is already served better by `events.rs` — `on_drift` plus a
+shell script is how you talk to Slack.
+
+**`StateRegistry::ghosts` — written on every removal, read by nothing.** An unbounded map in
+`registry.json` growing one entry per package ever removed, whose only constructor hardcoded two
+of its four fields empty. `ghosts.json` has been on `target-state.md`'s deleted-files list since
+the format changed; the file went and the field stayed, inside the registry, still growing.
+`StateRegistry` does not deny unknown fields, so a registry written by an older build still
+loads — the key is simply ignored.
+
+**And removing it collapsed two functions into one.** `remove` archived a ghost and `forget` did
+not, and `forget`'s doc comment explained the difference at length: after `linix unmanage` the
+package is still installed, so recording it as removed would tell every later reader it was
+deleted. That distinction was expressed *only* by the ghost record. With the ghosts gone the two
+bodies were the same six lines under two names, one carrying a comment about a record that no
+longer existed. There is one `remove`, returning whether it was managed.
+
+**`app/diagnostics.rs`'s `handle_failure`/`remediate` — 115 lines that prompted with dialoguer
+and then installed packages**, writing them into the state registry with `source: "diagnostics"`.
+Zero callers, on any path. Dead code that installs software is the worst kind: it looks
+maintained, and `Y14` gave it a write-ahead record two commits ago while it was already
+unreachable. **The compiler then found the next layer** — `get_description` had exactly one
+caller and it was `handle_failure`. Dead code hides dead code.
+
+**`ManagerConfig::flag_map` — declared once, assigned at twenty-one sites, read at none.** Also
+absent from `CustomBackendDef`, so no user could have set it even if something had read it: a
+field that could never carry a fact into the program.
+
+**`utils::refresh_path` — no callers, and a doc comment asserting that "backends that install a
+toolchain (mise, cargo) must call this".** Nothing does, and there is no `cargo.rs`. Either the
+bug it describes is live and this never guarded it, or the requirement is fiction; deleting it
+makes that an open question instead of a solved one, because a helper nobody calls, documented
+as mandatory, reads as coverage from every angle except the only one that counts. The live PATH
+mechanism is `executor::forget_path_lookups`, which has callers.
+
+**`utils/progress.rs` — two traits, eleven methods, two of them called.** `spinner()` and
+`finish()`, once, around `execute_with_telemetry`. `start()`, `println()`, `set_position()`,
+`inc()`, `set_message()` and `finish_with_message()` had no caller anywhere. The spinner itself
+stays: it covers the one wait long enough to look like a hang, and it has a config key and a CLI
+flag behind it.
+
+**Two gates went red on the removal, and both were right.** `wal_enumeration_tests` still
+accounted `diagnostics.rs` as `Journalled` for a call that had gone with the dead code — the
+entry is out of the ledger now, which is the deletion landing rather than the scan breaking. And
+`named_commands_exist_tests` caught a comment *this change wrote*, which said `` `linix setup` ``
+where the program has no `setup` verb: `F-2`'s gate refusing prose written four commits after it
+was built is the difference between a check and a checklist.
+
+**Held for the owner, and not touched.** `app/repl.rs`, `app/ui/`'s 641 lines of ratatui, and
+the Lua arm of `hooks.rs` (with `mlua`) are what `CLAUDE.md` rule 3 is about — each is reachable
+by a user today. F-6's *"`app/fleet.rs`, 265 lines, broken since `status` was deleted"* is void:
+`F-2`'s commit repaired `fleet` rather than deleting it, so the finding's own condition —
+*"if no, and it cannot currently have worked"* — no longer holds.
