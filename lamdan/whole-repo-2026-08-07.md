@@ -14,6 +14,23 @@ BUILDER, `E`/`G` are the grade rounds. `LX` collides with none of them. Rename f
 This argues about whether the code should exist and whether this is the way to build it. A
 correctness bug appears only where a design choice is the reason it is possible.
 
+## The standing constraint: no capability is lost
+
+**Owner ruling, 2026-08-07. Every recommendation in this document preserves every verb, every
+backend, every declared statement kind, and every behaviour a user could reach.** Where a finding
+says `delete`, it means *delete the second implementation of a thing that already works*, never the
+thing. `appimage:` keeps working; it stops being 325 lines that duplicate `web.rs`. `linix fleet`
+keeps working; it stops reaching into the internals and starts standing on `eval`. `linix watch`
+keeps running; it stops being a private loop.
+
+This is not a softening. It is a **harder** constraint than the one I drafted under, and it kills
+three of my recommendations outright — they are struck through below with the reason, because a
+recommendation that dies to a rule is more useful than one quietly rewritten. It also sharpens the
+rest: "delete the duplicate" is a claim you can check, where "delete the feature" is a claim
+somebody has to litigate. The 2026-07-17 lesson already said this and said it better — *"'Delete
+the second engine' is not 'delete the convenience'; the test is whether the command routes through
+`sync`."* Everything below applies that test and nothing else.
+
 ---
 
 ## Coverage
@@ -137,20 +154,100 @@ relitigating it. What the ruling does is make `LX-2` a defect in the **centre** 
 periphery, because `firewall:` is then a first-class declared object whose teardown is the one
 outside the guard.
 
-Where lens 1 does land, it lands on things that were built twice:
+### The concern I should have led with: every feedback signal here is internally generated
+
+**613 commits, one author, one branch, zero tags, a release job that has never fired, and an
+installer that compiles 380 crates from source because there is nothing to download.** 62
+backends, 22 ever run. Against that: 2.5 MB of specification, 176 numbered decisions, seven grade
+rounds, a BUILDER prompt, a GRADER prompt, and two lamdan reviews.
+
+Nothing in that second list is a user.
+
+That is a design finding, not a motivational one, and it explains the shape of everything else in
+this document. **When the only pressure on a program comes from its own review apparatus, the
+program optimises for what review can see.** Review can see a backend count, so there are 62.
+Review can see a decision register, so there are 176 entries and a script that counts them exactly.
+Review can see whether a paragraph matches a table, so there are 27 test binaries whose subject is
+markdown. Review cannot see whether `zypper list` parses on a real openSUSE box — so 46 of 62
+backends have never met their tool's output, and the type system was never asked to care
+(`LX-1`).
+
+The grade rounds measured backend count and documentation consistency with real rigour. **One
+`emerge install` on a real Gentoo box would have been worth more than all seven** — and the Gentoo
+image bakes `SMOKE_ONLY=1`, so it installs nothing, which is why `names_only` can be `emerge`'s
+installed lister with zero fixtures and nobody has ever noticed.
+
+**The change, under the no-capability-loss rule** — and note the rule bites here, because my first
+draft of this said *"ship at 12 backends,"* which is a capability cut and is therefore dead:
+
+1. **Tag `v0.1.0` and publish the binaries you already build.** `ci.yml:115` is
+   `if: startsWith(github.ref, 'refs/tags/v')` and has never run; four build-matrix jobs upload
+   artifacts that no user path consumes; `install.sh:37` resolves the newest `v*` tag, finds none,
+   and falls back to compiling HEAD. **One `git tag` turns a dead release pipeline into a live
+   one** and stops every installation being a 380-crate LTO build on a stranger's laptop.
+2. **Ship all 62 and label none of them.** Q4 already ruled against an "experimental" tag, and
+   that ruling was right — *"a label converts an unfinished job into a permanent disclaimer."*
+   Keep every backend. What changes is `LX-1`: with a `Result` on the parser, an unproven backend
+   that meets output it does not recognise **says so** instead of reporting an empty machine. That
+   is how you ship 62 honestly without cutting to 22.
+3. **Let other people's machines be the fixture source.** The forty unproven backends cannot be
+   validated from here — `docs/SPEC.md` says so in its own words. Five strangers running
+   `linix adopt` produce more parser truth in a week than the container matrix can, because the
+   matrix tests the managers you thought to install.
+
+### `eval` is the seam, and the commands were built beside it instead of on it
+
+`insight.rs` + `bundle.rs` + `fleet.rs` + `export.rs` + `sandbox.rs` + `bisect.rs` + `repl.rs` ≈
+**2,500 non-test lines.** `fleet.rs:67-70` is `ssh host "linix check --json"` and
+`ssh host "linix sync -y"` in a `for` loop with a table renderer. `export.rs` is four output
+templates over the managed set. `repl.rs:9-12` concedes the case in its own docstring: *"Every
+question this answers is one `linix eval | jq` can answer too."*
+
+And `eval.rs` is **right** — versioned schema from day one (`eval.rs:22`), sorted, repo-relative
+paths. It is the honest seam every one of those satellites should have been built against.
+
+**Under the constraint, this is not a deletion finding — it is a re-plumbing one.** Every verb
+stays. `linix fleet`, `linix export`, `linix sbom`, `linix repl` keep working and keep their names.
+What changes is that they consume `eval`'s versioned document instead of reaching into
+`StateResolver` and `Queryable` directly. Two things fall out that are worth more than the line
+count: the N+1 in `insight.rs:38` and `export.rs:29` disappears (they stop calling `info()` 298
+times because `eval` already answered), and **`eval`'s schema acquires four real consumers**, which
+is the only thing that will keep it honest.
+
+Where lens 1 lands on things that were built twice:
 
 - **`ParserSpec` exists, works, ships, and no built-in uses it** (`LX-4`). This is not a missing
   idea. It is an idea implemented, documented, offered to third parties, and declined internally.
 - **`docs/` was written under documentation economics and is consumed under context economics**
   (`LX-6`). 429,405 words. ~570k tokens — more than half a 1M context, before a line of Rust.
-- **Deletable outright**: `src/bin/shim.rs` (a second shim implementation, dead, whose invocation
-  cannot parse — `args.rs:230` takes one positional and it passes several); `parsers/utils.rs` (50
-  lines, zero callers, containing a proud performance comment about hoisting a regex out of a loop
-  in a function nobody calls); `parsers/pkgsrc.rs` (character-identical to `bsd.rs`, which says so
-  at `bsd.rs:90`); `itertools` and `nonzero_ext` (zero references, in the manifest `F-6` swept two
-  days ago); `docker/integration/measure-batching.sh` (a one-shot instrument that already reported
-  its number, living one directory outside the rule at `harness-logic-test.sh:551` written to
-  catch orphaned scripts).
+- **Deletable with no capability at risk — verified, each one:**
+  - `src/bin/shim.rs` — a second shim implementation that **has never worked**. The live mechanism
+    is `attempt_shim_hijack` (`main.rs:854`) deploying the `linix` binary under the target's name
+    (`shim_manager.rs:6-8`); this separate cargo-autodiscovered binary shells out to
+    `linix run --packages X -- X args…`, and `Run { command: String }` (`args.rs:230`) is one
+    positional. **The invocation cannot parse.** Deleting it removes no capability because it never
+    provided one.
+  - `parsers/utils.rs` — 50 lines, **zero callers** in `src/` or `tests/`, containing a proud
+    performance comment about hoisting a regex into a `Lazy` "rather than once per package line
+    parsed," in a function nobody calls.
+  - `parsers/pkgsrc.rs` — **the file goes, the backends stay.** `pkgsrc::split_name_version`
+    (`:13-24`) is character-identical to `bsd::split_name_version` (`bsd.rs:14-24`), and
+    `parse_pkgin` is `bsd::parse_with_backend(o, "pkgin")` with the label inlined. `bsd.rs:90-94`
+    says it out loud: *"a second copy of that rule is how `pkgsrc.rs` came to be `bsd.rs`
+    byte-for-byte."* `pkgin`, `pkg`, `pkg_add`, `apk` and `xbps` keep working, through the one
+    implementation.
+  - `itertools` and `nonzero_ext` — **zero references** in `src/` or `tests/`, verified by grep.
+    `nonzero_ext` is filed under `governor` at `Cargo.toml:57` as though required;
+    `ratelimiter.rs:32` uses `std::num::NonZeroU32`. Both sat in the manifest `F-6` swept two days
+    ago, which pulled `lettre` and `notify-rust` and left these.
+  - `md5` — **one call site**, `web.rs:237`, a cache key over a package name. `sha2` is already a
+    direct dependency. The capability is "hash a string for a filename"; it keeps working.
+
+  *Not on this list, deliberately:* `docker/integration/measure-batching.sh`. It is referenced by
+  nothing executable and `harness-logic-test.sh:551` iterates `scripts/*.sh` only, so the repo's
+  one orphaned script sits one directory outside the rule written to catch orphans. But it is a
+  **measuring instrument**, and this repo's whole problem is claims outrunning measurements.
+  Widen the orphan rule to cover `docker/integration/` and keep the script.
 
 **Where lens 1 holds and the alternative loses** — and I went looking for these:
 
@@ -217,6 +314,51 @@ call `engine.sync` directly, and `app/run.rs:84` installs with no planner at all
 (`profile.rs:458`) records that they already fixed *one* asymmetry between `activate` and `sync` —
 the reaping scope — and never asked the sibling question.
 
+**The third architectural finding, and it is the most expensive one that is not a safety claim:
+the grammar produces typed structure and the seam throws it away.**
+
+`Options` is `BTreeMap<String, Vec<String>>` (`options.rs:12`) — multi-valued *on purpose*, because
+II.2 makes a repeated key a list and `validate_setting` (`statement.rs:1669`) relies on
+`all("value").len() > 1` to refuse two values. Then `resolve.rs:1098-1101`:
+
+```rust
+for (k, vs) in options.iter() {
+    // `requires` is a list; the rest are single values. Joined with `;` because that is
+    // what the planner already splits on.
+    properties.insert(k.to_string(), vs.join(";"));
+}
+```
+
+`PackageSpec.options` is `HashMap<String, String>` (`core/package.rs:20`), assigned from that map
+at `resolve.rs:1131`. And `ArtifactOptions::read` **re-splits `"deb;tarball;binary"` back into a
+list** on `LIST_SEPARATOR: char = ';'` (`artifact/options.rs:12`, `:32`). One parser produced
+structure; the seam flattened it; a second parser rebuilt it from a delimiter nothing validates.
+A block-form value is verbatim to end of line (`options.rs:173`), so
+`after_install = ./a.sh; ./b.sh` is legal and indistinguishable from the same key written twice.
+
+The same seam carries `__source`, `__gated_by`, `__scopes`, `__formats_from` and `__from_regex` as
+magic string keys (`resolve.rs:1105-1128`, read back at `insight.rs:509`, `planner.rs:164`,
+`adopt.rs:363`), separated from a user's `@option` by an underscore — and `Origin` and `Gate` grew
+`FromStr` impls *specifically to survive that crossing* (`error.rs:30-47`, `mod.rs:207-217`), with
+docstrings saying so in both places. Four types round-tripping through strings because one struct
+field is `HashMap<String, String>`.
+
+This is expensive because `PackageSpec` is the type the resolver, planner, lock layer and every
+backend is written against. It is also, notably, **the one place where this codebase's discipline
+inverts**: everywhere else it reaches for a type (`PlanScope`, `Declined`, `Phase`, `Prior`,
+`Provenance` itself at `resolve.rs:1069` — a careful three-field struct with a comment explaining
+why the three must not be conflated) and then `to_spec` conflates them 17 lines later.
+
+**Fourth: there is no rule for where a command's logic lives, and the prelude makes the rule
+unenforceable.** Four homes — `verbs::handle_*` (58 of 63 dispatch arms), straight into `app::` (3:
+`Repl`, `Bisect`, `Fleet`), `main.rs` itself (2: `Completions` inline, `handle_self_upgrade`), and
+`app/` proper. Then `verbs/mod.rs:83-94` globs all nine `verbs::*` modules **plus `crate::*`** into
+a prelude every file opens with, so **there is no module boundary inside `verbs/` at all** — it is
+one 8,587-line namespace stored in nine files, and moving a function between them is a no-op. That
+is why `history.rs` holds `handle_export`, `handle_shell`, `handle_adopt`, `handle_bundle` and
+`handle_why`; why `plan.rs` holds `lock`/`unlock`; why `setup.rs` holds `handle_policy` and
+`handle_try`. **Nothing can enforce a name that costs nothing to violate.**
+
 **Other structural duplication, named:** `model/vendor.rs` ↔ `app/module_registry.rs` (two live
 `github:` parsers, two verbs); `insight.rs:27` ↔ `export.rs:19` (same function, one directory);
 five copies of strip-the-trailing-comment while `grammar::strip_comment` exists; three hand-rolled
@@ -262,6 +404,25 @@ What is still live, ranked:
    (`config.rs:870`), on the guard's path.
 7. `Origin { file: PathBuf }` allocates a fresh `PathBuf` per line, cloned twice more per statement
    (`grammar/mod.rs:368`, `:296`). `Arc<Path>` makes it one per file.
+
+None of those changes what the program is. **Lens 3 is thin in this review, and that is a fact
+about the codebase rather than about my attention.** `INEFFICIENCIES.md` disposes of 47 items —
+41 fixed, 10 declined with reasons. I went hunting the classic wins (regex in a loop, N+1, full
+listing for one name, allocation per line) and found them already swept, each with a citation and
+a measured number. Lens 3 is the cheapest lens to be right about and the least worth being right
+about, and here it has largely been paid.
+
+**A note on my own balance, since it is this skill's documented failure.** The gravity in a review
+pulls toward whatever is falsifiable fastest. The skill names lens 3 as that attractor; in *this*
+repo the attractor is **safety**, because a missing guard is provable in twenty minutes and
+"should this exist" is not. My first pass was six safety findings and a shrug at lens 1.
+
+So there are two answers to "what is the one thing," on two different axes, and I would rather name
+both than pretend they are the same. **The change worth making first is `LX-1`** — verified,
+bounded, and it closes the failure mode that threatens forty backends. **The claim worth believing
+first is the lens-1 one** — that every signal reaching this project is one it generated itself,
+which is *why* `LX-1` went unnoticed while a script counted 176 decisions to the digit. Fixing the
+parser without fixing where feedback comes from means the next `LX-1` also waits for a reviewer.
 
 ---
 
@@ -350,12 +511,33 @@ refuse at the default of 20. That is an owner ruling with an ID, and I am not an
 
 ### LX-3 · Rollback moves the machine away from the declaration, and `heal` proves you know — `rewrite` **[verified]**
 
-Argued above. **The change:** default `auto_rollback: false` and let the reconciler converge
-forward, which is what `heal` already does; or delete `Transaction::rollback` + `Prior` +
-`prior_state` + `reinstate` (~213 lines) and the per-package `info()` query at `:642` that exists
-only to feed it. **Before either**, extend `a_machine_converges_tests.rs` with a fourth act: fail
-mid-plan, then sync again, and assert the machine matches the file. That test is thirty lines and
-it fails today.
+Argued above. ~~**The change: default `auto_rollback: false`, or delete `Transaction::rollback` +
+`Prior` + `prior_state` + `reinstate` (~213 lines).**~~ **Both die to the constraint, and the
+constraint produces a better answer than either.**
+
+Rollback is a real capability and flipping its default is a behaviour change a user would notice —
+a "stop and ask" item, not mine to decide. But neither was ever the right fix, because **the defect
+is not that rollback exists. It is that rollback compensates work that succeeded and is still
+wanted.**
+
+`Prior::Absent` means *this package was not here before this run*. Rollback reads that as
+permission to remove it (`transaction.rs:1017`). But "was not here before" and "is not wanted now"
+are different facts, and the manifest already holds the second one. A package that installed
+cleanly and is still declared is not failed work — it is the goal, reached early.
+
+**The change: rollback consults the declaration before it compensates.** Undo the members of the
+failed batch; leave the succeeded, still-declared ones alone. `SyncChanges` is already in scope,
+so "is this still declared" is a set lookup, not a new query. That is a smaller diff than either
+thing I originally proposed, it keeps every capability, it removes the asymmetry with `heal`
+(`sync/mod.rs:973`) without touching `heal`, and it makes rollback do what its own comment at
+`:637` claims — *"Rollback compensates by putting this back"* — instead of removing something
+nothing asked it to remove.
+
+Two things stay exactly as they are: the guard call at `:993` (rollback checks `protection_of`
+before removing, and should), and `snapshot.rs`, which is the real undo and is load-bearing.
+
+**Before any of it**, extend `a_machine_converges_tests.rs` with a fourth act: fail mid-plan, then
+sync again, and assert the machine matches the file. That test is thirty lines and it fails today.
 
 The WAL half of this: `replay_of` (`sync/mod.rs:718`) emits only `Install` and `Remove` — the same
 two nodes the planner emits — and both are recomputable from (manifest, registry, machine), because
@@ -429,12 +611,22 @@ Sugar that routes through `sync` is the model working, and `install`/`uninstall`
 Keep every verb name. Rip out the four private paths and route them through `ChangePlanner` +
 `SyncEngine`, exactly as `apply` now is.
 
-Also here: **`watch`** (`sync.rs:642`) is `while :; do linix sync -y; sleep 30; done` with `--pull`
-as `git pull` — 74 lines of daemon to avoid a cron line, and the only caller that makes the process
-long-lived, which is what turns `regex_cache`'s never-evicted `DashMap` (`regex_cache.rs:17`) from
-free into a leak. **`policy`** (`setup.rs:637`) re-implements `enforce_policy` minus
-`deny_vulnerable` and then prints a footnote admitting the gap at `:646` — a preview that reports
-"compliant" for a config `sync` will refuse. It is `check guard`. Delete both.
+Two more, and **the constraint changes the verdict on both — I had written "delete" and that is
+now wrong:**
+
+- ~~**Delete `watch`.**~~ It is `while :; do linix sync -y; sleep 30; done` with `--pull` as
+  `git pull` (`sync.rs:642-701`), 74 lines of daemon to avoid a cron line — but a cron line is not
+  the same capability on Windows, and `watch` is the only supported way to get GitOps behaviour on
+  a box without systemd timers. **It stays.** What it exposes is real and is a one-line fix
+  elsewhere: `watch` is the only caller that makes the process long-lived, which turns
+  `regex_cache`'s never-evicted `DashMap` (`regex_cache.rs:17`) from free into a slow leak. Bound
+  the cache; keep the verb.
+- ~~**Delete `policy`.**~~ `setup.rs:637-647` re-implements `enforce_policy` (`sync.rs:730-750`)
+  **minus `deny_vulnerable`**, then prints a footnote at `:646` admitting the gap. So
+  `linix policy` can report "compliant" for a config that `sync` will refuse — which is not an
+  argument for deleting a preview, it is an argument that **the preview is not calling the thing
+  it previews.** Point `handle_policy` at `enforce_policy` in report-only mode. One implementation,
+  same verb, and the footnote deletes itself.
 
 ### LX-6 · 2.5 MB of prose written under documentation economics, read under context economics — `delete`
 
@@ -492,6 +684,14 @@ that artifact and it is the best thing in the corpus. `grammar_table_matches_the
 is a 22-line rationale bolted to an executable check that fails in both directions. **A rationale
 attached to a check cannot go stale.** You wrote the thesis at line 7 and then wrote 317 KB of the
 thing it indicts.
+
+**On the constraint:** prose is not a capability, but the *reasoning* in it is an asset, so nothing
+here is lost either. Every deletion above is recoverable — `git log`, `git show`, `git log -S` over
+613 commits and 18,187 lines of message, which is where 98% of `history.md`'s content-word tokens
+already live. The one artifact git genuinely **cannot** reconstruct is a ruling — an event outside
+the tree, with a person's name and a date on it — and that is exactly the file the cut keeps at
+full fidelity. The 105 orphaned `why.md` entries do not evaporate; they move to the test that
+enforces them, which is the only place a rationale can be that cannot go stale.
 
 *This document is subject to its own finding.* Per `F-8`'s ruling — *a finding ships as a diff plus
 a test, not a new dated document* — this file is a staging area. Land the diffs, delete it.
@@ -552,10 +752,16 @@ Each is a family, not an instance. Sweep the siblings.
   substitute variables into a dotfile. **`md5` is a whole crate — and a broken hash — for one
   cache-key line** (`web.rs:237`) while `sha2` is already a direct dependency.
 - **`web.rs` and `appimage.rs` have zero tests between them, and `web.rs:218`/`:360` run `dpkg -i`
-  and `rpm -U` as root.** `appimage.rs` is ~85% a specialisation of `web.rs` — identical
-  `load_state`/`save_state`, identical three `core::download` calls, identical `deploy_executable`,
-  identical `remove` down to the error-message noun. Meanwhile `btrfs.rs` spends 551 lines testing
-  fstab string manipulation.
+  and `rpm -U` as root.** That is the finding: **the two files in this tree that download arbitrary
+  bytes off the network and hand them to a root installer have no `mod tests` at all**, while
+  `btrfs.rs` spends 551 lines testing fstab string manipulation. Fix the coverage before anything
+  else here.
+  Separately, `appimage.rs` is ~85% a specialisation of `web.rs` — identical `load_state`/`save_state`,
+  identical three `core::download` calls (`appimage.rs:127-130` ≡ `web.rs:128-131`), identical
+  `deploy_executable`, identical `remove` down to the error-message noun. The real differences are
+  a `.AppImage` suffix strip and an unconditional chmod. **`appimage:` keeps working and keeps its
+  name** — it becomes a two-field specialisation of the `web` path rather than a second copy of it,
+  which is `LX-4`'s data-row argument applied to the one place where the duplicate is 85% literal.
 - **`apply/dependents.rs:87-146` is three byte-identical branches** for `service`/`link`/`setting`,
   differing in one string and one log verb. One `for kind in [...]` deletes forty lines. And each
   ends `let Some(inst) = … else { continue }` — a silent skip. `planner.rs:249-272` built the whole
@@ -597,6 +803,56 @@ Each is a family, not an instance. Sweep the siblings.
   (`"guard::enforce at leases.rs:51"`). Nothing validates them. They are comments shaped like
   assertions. And the `calls: 4` counts are grep totals, so adding a legitimate second removal to an
   already-guarded file reddens the build until someone increments an integer.
+
+### LX-10 · One struct field un-types the whole grammar — `rewrite`
+
+Argued under Lens 2. `PackageSpec.options: HashMap<String, String>` (`core/package.rs:20`) forces
+`to_spec` to `join(";")` every option value the grammar deliberately kept as a `Vec`
+(`resolve.rs:1094`, `:1100`), assign it (`:1131`, `options: properties`), and lets
+`ArtifactOptions::read` split it back on `LIST_SEPARATOR: char = ';'`
+(`artifact/options.rs:12`, `:32`). Five `__`-prefixed magic keys ride the same seam, and
+`Origin`/`Gate` grew `FromStr` impls to survive it.
+
+**The comment above the join is the whole finding in one sentence** (`resolve.rs:1096-1097`):
+
+> *"`requires` is a list; the rest are single values. Joined with `;` because that is what the
+> planner already splits on."*
+
+"The rest are single values" is not true — `Options` is `BTreeMap<String, Vec<String>>` precisely
+because II.2 makes a repeated key a list, and `validate_setting` (`statement.rs:1669`) refuses two
+values by checking `all("value").len() > 1`. And the proof is three lines below, at `:1129`:
+**`requires: options.all("requires").to_vec()` — the one field somebody remembered was a list got
+a real `Vec<String>` on the struct.** Every other list got flattened into a delimiter. The type
+was available, the author reached for it once, and the seam ate the rest.
+
+**The change:** `options: Options` — the type the grammar already produces. No capability moves;
+`@format=deb` and a repeated key behave exactly as documented, and start behaving that way *by
+construction* rather than by a delimiter nothing validates. Provenance stops being five string
+keys and becomes the `Provenance` struct that already exists at `resolve.rs:1069` with a comment
+explaining why its three fields must not be conflated — seventeen lines before `to_spec` conflates
+them.
+
+**Cost, honestly: this is the widest diff in the document.** `PackageSpec` is what the resolver,
+planner, lock layer and 62 backends are written against. It is also the one that stops getting
+cheaper — every backend added before it happens is another call site. Not urgent; increasingly
+expensive.
+
+### LX-11 · Delete the prelude glob, then a rule about file layout can exist — `rewrite`
+
+`verbs/mod.rs:83-94` globs all nine `verbs::*` modules plus `crate::*` into a prelude every file
+in the directory opens with. There is **no module boundary inside `verbs/` at all** — 8,587 lines
+in one namespace stored in nine files, where moving a function between them is a no-op. That is
+why `history.rs` holds `handle_export`, `handle_shell`, `handle_adopt`, `handle_bundle` and
+`handle_why`, and why nobody can state the rule for which file a new handler belongs in.
+
+**The change is ordered and the order is the point:** delete the glob first, let the compiler
+name every cross-file reference, and *then* decide where things live. Doing it the other way round
+is a naming argument with nothing to enforce the outcome. No behaviour changes; 63 dispatch arms
+keep working; the four homes for command logic become visible instead of free.
+
+This is also the cheapest structural item here, and it is the reason `LX-5`'s four second engines
+were easy to write: nothing in the layout made routing through `sync` the path of least
+resistance.
 
 ---
 
@@ -668,23 +924,44 @@ is only the naming: five different things are called "lock," and `datalock.rs` v
 3. **Who is `docs/` for?** If the honest answer is "the agent picking up the next session," then
    `LX-6` is not a documentation cut, it is a context-budget decision, and it should be made
    deliberately with the token count on the table rather than by accretion.
+4. **Is anyone meant to use this yet, or is it not finished?** Both are legitimate and they imply
+   opposite next moves. If it is meant to be used, the zero-tag state is the bug and step 1 fixes
+   it. If it is deliberately pre-release, then say so in `readme.md` — which currently opens with
+   a `curl | sh` installer, so it reads as shipped — and understand that until someone else runs
+   it, the forty unproven backends stay unproven no matter how many review rounds land. **This is
+   the only question in the document whose answer I cannot infer from the repo, and it reorders
+   everything above it.**
 
 ---
 
 ## Suggested order
 
-1. **The failure-injecting converge test** (30 lines, fails today) — before anything else, because
-   `LX-3` changes recovery behaviour and you want something that goes red if the change is wrong.
-   The 2026-08-05 run made the same argument about `F-1` and it was right.
-2. **`"docs"` into `ROOTS`** (`LX-7`) — four characters, and it immediately finds a closed ruling
-   resting on a deleted command.
-3. **`parse_installed -> Result`** (`LX-1`) — the trait, then `ws_name_version` and `names_only`,
-   then captured `installed` fixtures for apt/dnf/pacman/zypper. This is the highest-value change
-   in the document and it is bounded.
-4. **The `Reaped` token** (`LX-2`) — five signatures, and `readme.md:358` stops being a promise and
-   becomes a compile error.
-5. **The mock's unregistered default** (`LX-8`) — cheap, and it tells you which of the 26
-   mock-driven binaries were asserting nothing.
-6. **`auto_rollback`** (`LX-3`), once the test from step 1 exists.
-7. Then the large ones — `LX-4`'s data path and `LX-6`'s prose cut — which are the two that make
-   everything after them cheaper.
+Nothing here removes a capability. Steps 1–5 are all under a day each.
+
+1. **`git tag v0.1.0`.** Smallest action in this document and the only one that changes where
+   feedback comes from. `ci.yml:115`'s release job has never fired, four build-matrix jobs upload
+   artifacts nothing consumes, and `install.sh:37` falls back to compiling HEAD because it finds
+   no tag. One command turns a dead pipeline live. Everything else on this list is an argument
+   from inside the room; this is the one that lets someone else's machine argue back.
+2. **The failure-injecting converge test** (30 lines, fails today) — before `LX-3` touches
+   recovery, so something goes red if the change is wrong. The 2026-08-05 run made this argument
+   about `F-1` and was right.
+3. **`"docs"` into `ROOTS`** (`LX-7`) — four characters, and it immediately finds a CLOSED owner
+   ruling resting on a deleted command.
+4. **`parse_installed -> Result`** (`LX-1`) — the trait, then `ws_name_version` and `names_only`
+   (ten backends between them), then captured **installed** fixtures for apt/dnf/pacman/zypper.
+   Highest-value change in the document, and bounded: one trait, one fn-pointer type, two call
+   sites, 60 mechanical signatures. It is also what makes step 1 safe to do with all 62 backends
+   shipped — an unproven backend that meets output it does not recognise says so.
+5. **The mock's unregistered default** (`LX-8`) — tells you which of the 26 mock-driven binaries
+   were asserting nothing, and it will redden some of them.
+6. **The `Reaped` token** (`LX-2`) — five signatures, and `readme.md:358` stops being a promise
+   and becomes a compile error. Ask the `max_removals` question first; it is a ruling.
+7. **Rollback consults the declaration** (`LX-3`), once step 2 exists.
+8. Then the two large ones, which make everything after them cheaper: **`LX-4`'s data path**
+   (backend #63 becomes a TOML row plus a captured file, and the six settings-argv backends
+   collapse) and **`LX-6`'s prose cut**.
+9. The two architecture items with no deadline and a rising price: **`PackageSpec.options` as a
+   type rather than a `;`-joined string**, and **one home for a command's logic** — starting by
+   deleting the `verbs/mod.rs:83` prelude glob, because until that goes there is no boundary for a
+   rule to describe.
