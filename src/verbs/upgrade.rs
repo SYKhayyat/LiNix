@@ -52,27 +52,35 @@ pub(crate) async fn upgrade_one(
         if let Some(v) = version {
             spec.options.insert("version".to_string(), v.to_string());
         }
-        if let Some(b) = app.registry.get(&spec.backend) {
-            if let Some(inst) = b.as_installable() {
-                info!(
-                    "Upgrading {}:{} to {}...",
-                    spec.backend,
-                    spec.name,
-                    version.unwrap_or("latest")
-                );
-                // An upgrade is an install of a package that is already there, and an
-                // interrupted one leaves the manager holding a half-replaced package with no
-                // declaration describing the version it was moving to. The `@version=` pin
-                // `--security` sets is inside the spec, so the recorded action is the upgrade
-                // rather than a reinstall of whatever is newest.
-                linix::core::journalled(
-                    &app.journal,
-                    vec![linix::core::JournalAction::Install(spec.clone())],
-                    inst.install(std::slice::from_ref(&spec), b.sudo_for_write()),
-                )
-                .await?;
-                acted = true;
-            }
+        // II.7c: a manager this machine does not have upgrades nothing, and says so. It was a
+        // bare `if let` — so `upgrade` walked past every package on an absent manager without a
+        // word and reported the ones it did as the whole job.
+        let Some(b) = app.registry.get(&spec.backend).filter(|b| b.is_available()) else {
+            warn!(
+                "`{}` is not on this machine, so {}:{} cannot be upgraded here.",
+                spec.backend, spec.backend, spec.name
+            );
+            continue;
+        };
+        if let Some(inst) = b.as_installable() {
+            info!(
+                "Upgrading {}:{} to {}...",
+                spec.backend,
+                spec.name,
+                version.unwrap_or("latest")
+            );
+            // An upgrade is an install of a package that is already there, and an
+            // interrupted one leaves the manager holding a half-replaced package with no
+            // declaration describing the version it was moving to. The `@version=` pin
+            // `--security` sets is inside the spec, so the recorded action is the upgrade
+            // rather than a reinstall of whatever is newest.
+            linix::core::journalled(
+                &app.journal,
+                vec![linix::core::JournalAction::Install(spec.clone())],
+                inst.install(std::slice::from_ref(&spec), b.sudo_for_write()),
+            )
+            .await?;
+            acted = true;
         }
     }
     Ok(acted)

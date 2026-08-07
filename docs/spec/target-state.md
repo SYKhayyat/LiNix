@@ -1136,6 +1136,43 @@ depends on and does not order by the answer. **V.115a.**
 **What LiNix may remove: what it manages and you stopped declaring. Plus `absent:`. Nothing
 else, ever.**
 
+### II.7c A manager this machine does not have is skipped, not failed
+
+**One config, three machines** (owner ruling, 2026-08-06, `Y15`). A line pinned to a manager
+this host does not have is **not a broken config — it is the half of the config that belongs to
+a different machine.** `apt:ripgrep` beside `winget:ripgrep` beside `brew:ripgrep` is what a
+portable configuration looks like, and each machine does the part it can.
+
+So: **a declaration whose backend is not on this machine is skipped, named in the run's
+`skipped` list with the reason, and the command still succeeds.** That holds for an install, for
+a removal LiNix had recorded through that manager, and for `absent:`.
+
+**The two ways a manager can be missing are one answer to the user.** A backend this build never
+registered (`apt` on Windows) and one registered here whose program is not installed are
+different facts about the registry and the same fact about the machine: nothing to install
+through, nothing installed to remove. `BackendRegistry::runs_here` is the single spelling.
+
+**A name that is not a backend is still an error.** The typo check is the grammar's, against
+`Vocab` — `brwe:ripgrep` never reaches a plan. Skipping is for names LiNix knows; a config that
+silently skipped its own misspellings would describe a machine nobody has. **This is the same
+line `Q9` clause 3 drew** for a backend named in a command *argument* — a typo is the user's
+mistake, a missing manager is a fact about the machine — and II.7c is that rule reaching the
+declarations.
+
+**Not knowing is not the same as knowing there is nothing.** A manager that is *here* and whose
+listing failed is unanswered, and II.7b's "a manager that could not answer has not said no"
+governs it — its removals are still scheduled and left to report their own failure. This rule is
+only about a manager whose program is not on the machine at all.
+
+**A package that fails still fails the command.** Absence is a property of the machine; a failed
+install is a property of the run, and warning past it under a summary claiming success is what
+`AU1` bans. `--keep-going` is the per-run opt-in for a caller that would rather take what it can
+get; there is no file key for it, because a machine-wide setting that downgrades every future
+failure to a warning is the destructive default nobody typed.
+
+**An empty plan with a non-empty `skipped` is not `already up to date`.** A machine whose whole
+config is pinned to managers it does not have has converged nothing.
+
 ## II.8 Commands
 
 | command | does |

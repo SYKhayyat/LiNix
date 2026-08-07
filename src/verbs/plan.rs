@@ -454,6 +454,15 @@ pub(crate) async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Resul
     // through a vocabulary with no edges in it, so a deselection was also the only way to
     // lose an ordering that had survived everything else.
     let mut changes = saved_plan_to_changes(&plan.installs, &plan.removals);
+
+    // II.7c, and this is the command the rule exists for: a plan file is the one `SyncChanges`
+    // that routinely crosses machines, so it is the one that can name a manager the host
+    // running it does not have. Filtered here rather than left to the engine's backstop
+    // because the two counts below are read *before* the engine is called — a summary saying
+    // `4 installed` over a machine that got two is the same lie by a shorter route.
+    changes.withdraw_what_this_machine_cannot_run(&app.registry);
+    let skipped = std::mem::take(&mut changes.skipped);
+
     if !yes && !app.config.yes {
         use std::io::IsTerminal;
         if std::io::stdin().is_terminal() {
@@ -516,6 +525,7 @@ pub(crate) async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Resul
         "Applied plan: {} installed, {} removed, {} resource(s) reconciled.",
         installed, removed, resources
     );
+    crate::verbs::sync::print_skipped(&skipped);
     perform_maintenance(app).await
 }
 

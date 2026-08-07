@@ -1,4 +1,4 @@
-# The decision register — all 173, one of them open
+# The decision register — all 174, one of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -17,7 +17,7 @@ not in this paragraph.
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **2** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **166** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **168** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -73,8 +73,8 @@ status loses that, so it is kept here:
 
 ## Index
 
-**One is open — `Z1`, raised 2026-08-03, a licence choice.** All 173 are accounted
-for: **166 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 2 BUILT NEVER RULED, 1 OPEN** — and this line
+**One is open — `Z1`, raised 2026-08-03, a licence choice.** All 174 are accounted
+for: **168 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 1 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -311,7 +311,7 @@ without asking. Two are not mine: one is a legal choice and one changes a publis
 | **Z1** | There is no `LICENSE` file and no `license` key in `Cargo.toml`, for a tool with an install script and a `self-upgrade` verb. Which licence? | **OPEN** |
 | **Z2** | `lock` and `unlock` touch unrelated files and are not inverses; `unlock` can cause package churn. Rename it, or give `lock` a real inverse? | **ANSWERED** — both verbs name their axis (`versions`/`backends`/`scripts`/`all`), and every path that moves a version re-records it |
 
-### Y — the efficiency pass — 15
+### Y — the efficiency pass — 16
 
 *Not a proposal part. `docs/INEFFICIENCIES.md` audited every place in the tree slower than it has
 to be and marked the findings a user would notice as needing a ruling; the owner ruled the lot on
@@ -336,6 +336,7 @@ II.19 and the reasons in V.115–V.118.*
 | **Y12** | `ChangePlanner::plan` took `Option<Scope>`, where `None` meant both "do not filter the desired set" and "reap every backend on the box"; five of eight callers passed it and four wanted only the first — the transient shell, whose desired set is its own requests, planned a removal for every other package on the machine. RULED: **a plan says what it is computed over, and the case that reaps cannot be written without the list that bounds it.** | 2026-08-06 |
 | **Y13** | Which phase of a sync a statement belongs to was written down in four lists nothing compared, and each new kind was missed by one of them — four times, by the code's own count. K17's adapter table was ruled once and implemented seven times, and four of the five shared questions had already been answered differently, including one table with no `os` field at all. RULED: **a statement declares its phase and the order is a type; K17 has one mechanism, and writing it again is a build failure.** The `Installable` → `Converge` rename it was raised with is **refused** — the convergence decision is already shared, in two places, and neither is in the bodies the review read. | 2026-08-06 |
 | **Y14** | `apply` executed a frozen plan in two serial loops of its own — no write-ahead log, so `heal` could not recover the one command named after review and deliberation; no transaction, no snapshot, no health check; one manager invocation per package; and a failure was a warning under a summary reading `Applied plan`. Eight more commands reached a package manager with no record at all. BUILT, NEVER RULED: **the record belongs to the mutation, not to the verb**, and a frozen plan is executed by the engine that executes every other plan. | 2026-08-06 |
+| **Y15** | A line pinned to a manager this machine does not have failed the whole run: `spec_is_missing` raised `BackendNotFound` from inside the planner's fan-out, so one `apt:` line dropped the twenty `winget:` lines beside it and `sync` planned nothing. RULED: **that is a portable config, not a broken one** — skipped, reported in `skipped`, and the command succeeds; a package that genuinely fails still fails, with `--keep-going` as the per-run opt-in. Reverses `Y14` item 2. | 2026-08-06 |
 
 ---
 
@@ -6589,7 +6590,12 @@ Rules in II.1 and II.7; reasons in V.144, V.145 and V.146.
 
 ## Y14
 
-**Status: BUILT, NEVER RULED — built 2026-08-06.** Raised by
+**Status: ANSWERED — built 2026-08-06, ruled 2026-08-06.** The two behaviours filed for a
+ruling were ruled in opposite directions, which is why they were filed separately: **item 1
+stands** (a package that fails fails the command), and **item 2 is reversed** by `Y15` — a plan
+naming a manager this machine does not have is skipped, not failed. The reason given for filing
+item 2, *"the one case `sync` never meets, since a planner cannot schedule an absent backend"*,
+**was wrong**, and `Y15` records what the code actually did instead. Raised by
 `lamdan/whole-repo-2026-08-05.md` as **F-4**, ranked third on the accuracy axis. Accurate on the
 site it names and wrong about the size of it: *"`apply` is **the one** change path `heal` cannot
 recover"* — it was one of eight. The recommendation this implements is the review's own
@@ -6655,11 +6661,12 @@ detail:**
    for, and rolls the transaction back. This is `sync`'s behaviour, and a frozen plan is one
    change to one machine — but it is a real change to what a script wrapping `linix apply` sees,
    and reversing it is a one-line `continue_on_error`.
-2. **A plan naming a backend this machine does not have now fails the command.** It used to
-   `warn!` and skip, which is the only case `sync` never meets — the planner cannot schedule a
-   backend that is not there, and a plan file can be carried between machines. Failing is `AU1`'s
-   rule (work dropped in silence under a summary claiming success), but it is a real change for
-   anyone applying one plan across a fleet.
+2. ~~**A plan naming a backend this machine does not have now fails the command.**~~
+   **Reversed by `Y15`, 2026-08-06.** It is skipped, reported, and the command succeeds. The
+   argument written here for failing — *"the only case `sync` never meets, since the planner
+   cannot schedule a backend that is not there"* — was false in both halves: the planner
+   scheduled nothing because `spec_is_missing` raised `BackendNotFound` from inside the fan-out
+   and **failed the whole `sync`**, so `sync` met this case first and worse. See `Y15`.
 3. **`apply` now takes a pre-sync snapshot, runs the declared health checks, fires
    `before_sync`/`after_sync` and the `on_drift` event, and refuses on an unapproved hook
    (II.12).** More safety and more hooks firing than before; on Windows it also means the
@@ -6672,3 +6679,62 @@ detail:**
    during one of those is now followed by a recovery that was previously silent.
 
 Rules in II.7 and II.19; reasons in V.147 and V.148.
+
+---
+
+## Y15
+
+**Status: ANSWERED — ruled and built 2026-08-06.** Raised by the owner while reviewing `Y14`'s
+two filed-for-ruling behaviours, and it took one question to find that the premise under the
+second one was false.
+
+**Y15 — Is a manager this machine does not have a broken config, or a portable one?**
+
+**Portable.** *"I think for all these it should warn, but legitimately not fail. I think that
+should be the rule, so that configs are super portable."* A line pinned to a manager this host
+does not have is the half of the config that belongs to a different machine: it is skipped,
+reported in `skipped` with the reason, and the command still succeeds.
+
+**The question that found it.** `Y14` filed the absent-backend change for a ruling on the
+grounds that it was *"the one case `sync` never meets, since a planner cannot schedule an absent
+backend and a plan file can be carried between machines."* Asked why `sync` could not meet it if
+the manager is named in the config file, the answer was that it could, and worse:
+`ChangePlanner::spec_is_missing` turned `registry.get(&spec.backend) == None` into
+`Error::BackendNotFound` inside the install fan-out, so the `?` carried it out of `plan()`
+and **the whole sync failed having planned nothing** — twenty `winget:` lines dropped by one
+`apt:` line beside them. `apply` was not the odd one out; it was the one that had been merciful.
+
+**This is `Q9` clause 3 finishing its journey, not a new rule.** *"A real backend that cannot
+run here is a different answer... it is a fact about the machine — so it says that and exits
+0"*, ruled 2026-07-28 about a backend named in a command **argument**. `linix install brew:jq`
+on a machine without brew has warned and exited 0 ever since, while `brew:jq` written in a
+**file** failed the whole sync — one question with two answers in one program, because the
+ruling was applied to the surface under review when it was made. Nothing was added to `install`
+or `teleport` here: they were already right, and `Q9` is why.
+
+**RULED, and the rule is in II.7c.** Absence is skipped; failure still fails; `--keep-going` is
+the per-run opt-in for a caller that wants best-effort, with no file form. A name that is not a
+backend at all remains a grammar error — skipping is for names LiNix knows, and a config that
+silently skipped its own typos would describe a machine nobody has.
+
+**One predicate, because the first cut of this fixed half of it.** `apt` on Windows is absent
+from the registry; `brew` on a Linux box without brew is registered and unavailable. Two facts
+about LiNix, one about the machine. `BackendRegistry::runs_here` answers it once, and the test
+that pins the rule is written against a manager (`zypper`) that takes a *different* branch on
+Windows than on Linux, so a fix for one branch cannot pass while the other stays broken.
+
+**What it touched, and what it deliberately did not.** Skipping is applied at the planner (per
+declaration, before anything is asked), at `apply` (per graph node, before the summary counts
+it), and in `SyncEngine::sync` as the backstop every path shares — a graph can arrive from a
+plan file another machine wrote or from this machine's journal. The silent siblings went with
+it: `upgrade`, `remove-orphans`, `purge-undeclared` and the expired-lease sweep each walked past
+an absent manager with a bare `continue` and reported the rest as the whole job. **`linix install
+apt:jq` typed at a Windows prompt still errors** — that is not a config travelling between
+machines, it is an instruction about this one.
+
+**V.15 was checked and is untouched.** *"An explicit `snap:foo` failing when snap isn't listed is
+a feature"* looked like a collision until `priority` turned out to be one shared file rather than
+one per host: a portable setup lists every manager it uses anywhere, and each machine uses the
+subset it has. V.15 governs what you declared; this rule governs what you have.
+
+**Reasons in V.149. Rule in II.7c. `Y14` item 2 is reversed; `Y14` item 1 stands.**

@@ -71,6 +71,21 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub replace_existing: bool,
 
+    /// Finish the packages that still can when one of them fails, instead of stopping
+    ///
+    /// Off by default: a plan is one change to one machine, so a member that fails makes the
+    /// whole plan wrong and half-applying the rest is worse than stopping. This is the
+    /// per-run opt-in for a fleet rollout that would rather take what it can get.
+    ///
+    /// Global, and not a flag on `sync`, because `apply`, `upgrade` and `rebuild` execute
+    /// plans through the same engine — an opt-in on one command is an opt-in nobody can find
+    /// from the other three.
+    ///
+    /// It has nothing to do with a manager this machine does not have: that is not a failure
+    /// (II.7c), needs no flag, and is skipped whether or not this is set.
+    #[arg(long, global = true)]
+    pub keep_going: bool,
+
     /// Path to a preferences.toml, overriding the one in the config repo
     #[arg(short, long, global = true)]
     pub config: Option<PathBuf>,

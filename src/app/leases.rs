@@ -79,6 +79,18 @@ impl Leases<'_> {
         );
         let mut failed = Vec::new();
         for (backend, name) in expired {
+            // II.7c. A lease whose manager has left the machine cannot be reclaimed here, and
+            // the bare `if let` this replaces let the sweep pass over it in silence — on every
+            // run, for ever, while the registry went on claiming the package was managed and
+            // due to go.
+            if !self.registry.runs_here(&backend) {
+                warn!(
+                    "`{}` is not on this machine, so the expired lease on {}:{} cannot be \
+                     reclaimed here.",
+                    backend, backend, name
+                );
+                continue;
+            }
             if let Some(b) = self.registry.get(&backend) {
                 if let Some(inst) = b.as_installable() {
                     info!("Lease expired: removing {}:{}", backend, name);

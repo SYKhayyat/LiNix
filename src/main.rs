@@ -927,6 +927,10 @@ pub(crate) async fn load_and_merge_config(cli: &Cli) -> Result<linix::config::Co
     if let Commands::Uninstall { purge: true, .. } = cli.command {
         config.purge_this_run = true;
     }
+    // `--keep-going` is per-run by construction: there is no file key to read it from.
+    if cli.keep_going {
+        config.keep_going_this_run = true;
+    }
     // --no-progress is the real off-switch for the progress indicators (S5). A set flag wins
     // over the `show_progress` config default.
     if cli.no_progress {

@@ -411,6 +411,21 @@ pub struct Config {
     #[serde(skip)]
     pub purge_this_run: bool,
 
+    /// `--keep-going`: finish the packages that still can when one of them fails.
+    ///
+    /// **Per-run only, and deliberately has no file form.** A plan is one change to one
+    /// machine, so all-or-nothing is the right default and a machine-wide setting that
+    /// silently downgrades every future failure to a warning is the destructive default
+    /// nobody typed — the same argument `[remove] purge` states above, which is why that one
+    /// earned a file key and this one does not. Someone running a fleet rollout who wants
+    /// best-effort says so on the command line, where it is visible in the shell history that
+    /// produced the machine.
+    ///
+    /// This is not how a manager LiNix does not have is handled — that is not a failure at
+    /// all (II.7c) and needs no flag.
+    #[serde(skip)]
+    pub keep_going_this_run: bool,
+
     #[serde(default = "default_btrfs_path")]
     pub btrfs_path: String,
 
@@ -668,6 +683,7 @@ impl Default for Config {
             guard: GuardSettings::default(),
             remove: RemoveSettings::default(),
             purge_this_run: false,
+            keep_going_this_run: false,
             btrfs_path: default_btrfs_path(),
             zfs_dataset: None,
             snapshot_priority: Vec::new(),

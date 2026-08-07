@@ -86,9 +86,17 @@ pub(crate) async fn handle_remove_orphans(app: &App) -> Result<()> {
     }
 
     for (backend_name, names) in &listed {
-        let backend = match app.registry.get(backend_name) {
-            Some(b) => b,
-            None => continue,
+        // II.7c. Unreachable in practice — `listed` was built by asking the backends
+        // themselves, so one that is not here contributed no names — but written as a reported
+        // skip rather than a bare `continue` because that is the shape the rule takes
+        // everywhere else, and a defensive branch that stays silent is how the reachable ones
+        // came to be silent too.
+        let Some(backend) = app.registry.get(backend_name).filter(|b| b.is_available()) else {
+            warn!(
+                "`{}` is not on this machine, so its orphans were left alone.",
+                backend_name
+            );
+            continue;
         };
         if let Some(installable) = backend.as_installable() {
             // Remove exactly the names that were shown and guarded — not the backend's own
@@ -332,7 +340,15 @@ pub(crate) async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -
 
     let (mut gone, mut failed) = (0usize, 0usize);
     for (backend_name, name) in &removals {
-        let Some(b) = app.registry.get(backend_name) else {
+        // II.7c, and this one is reachable: `removals` comes from what LiNix has recorded, so
+        // a package whose manager has since been uninstalled is exactly the case. It was a
+        // bare `continue`, which left `purge-undeclared` printing a count that did not
+        // include it and no line saying why.
+        let Some(b) = app.registry.get(backend_name).filter(|b| b.is_available()) else {
+            warn!(
+                "`{}` is not on this machine, so {}:{} was left alone.",
+                backend_name, backend_name, name
+            );
             continue;
         };
         let Some(inst) = b.as_installable() else {

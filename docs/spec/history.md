@@ -7138,3 +7138,60 @@ keeping its own loop is now two notes.
 Built, never ruled — `Y14`. Four things a user could notice, and the first is the one worth a
 ruling: **`linix apply` now fails when a package fails**, where it used to warn, continue, and
 print `Applied plan` at exit 0. Rules in II.7 and II.19; reasons in V.147 and V.148.
+
+## 2026-08-06 — one config, three machines (`Y15`, and `Y14`'s second item reversed)
+
+`Y14` filed two behaviours for a ruling. The owner ruled them in opposite directions, and the
+question that got there took one sentence: *why can't `sync` hit a brew problem, if it is in the
+txt file?*
+
+It could, and the entry said it could not. `ChangePlanner::spec_is_missing` asked the registry
+for the spec's backend and turned `None` into `Error::BackendNotFound` — inside the fan-out, so
+the `?` carried it out of `plan()` and **the whole sync failed having planned nothing**. One
+`apt:` line in a shared module dropped the twenty `winget:` lines beside it on the Windows box.
+`apply`, which warned and skipped, had been the *merciful* path; the `Y14` note calling it the
+divergent one had the direction backwards.
+
+**The correct behaviour already existed one layer up and had been written down.** `app/vocab.rs`
+folds `priority` into the grammar's vocabulary precisely so a manager this OS does not build
+still parses, its header says so, and a test has pinned it since it was written. The grammar knew
+a config travels between machines. Nothing downstream did — the repo's signature defect, named
+as the headline by three grade rounds, in the exact words *the correct behaviour already exists
+at a different site*.
+
+**Ruled: a manager this machine does not have is skipped, reported, and the command succeeds**
+(II.7c, V.149). `apt:ripgrep` beside `winget:BurntSushi.ripgrep` beside `brew:ripgrep` is one
+file that works on three machines. **A package that genuinely fails still fails** — `Y14` item 1
+stands, absence is a property of the machine and failure is a property of the run — with
+`--keep-going` as the per-run opt-in and no file form, because a machine-wide "never fail" is the
+destructive default `[remove] purge`'s own comment warns against.
+
+**One predicate, because the first cut fixed half of it.** `apt` on Windows is unregistered;
+`brew` on a Linux box without brew is registered and unavailable. Two facts about LiNix, one
+about the machine, and a version that handled one raised `BackendNotFound` for it while planning
+an un-runnable install for the other. `BackendRegistry::runs_here` answers it once. The test that
+pins the rule uses `zypper`, which takes the *unregistered* branch on Windows and the
+*unavailable* branch on Linux, so neither CI leg can pass over a half-fixed rule.
+
+**Three enforcement points, one rule, because a `SyncChanges` does not have to come from here.**
+The planner filters declarations before anything is asked; `apply` filters graph nodes before its
+summary counts them, since a plan file is the one graph that routinely crosses machines and
+`Applied plan: 4 installed` over a machine that got two is the same lie by a shorter route; and
+`SyncEngine::sync` filters as the backstop every path shares, ahead of the guard's ceiling, the
+install ceiling, `is_empty` and the `on_drift` report — all of which read the graph.
+
+**The silent siblings went with it.** `upgrade`, `remove-orphans`, `purge-undeclared` and the
+expired-lease sweep each met an absent manager with a bare `continue` and reported the rest as
+the whole job; the lease sweep did it on every run for ever while the registry went on claiming
+the package was managed and due to go. `linix install apt:jq` typed at a Windows prompt still
+errors, deliberately: that is an instruction about this machine, not a config travelling between
+them.
+
+**V.15 was checked and is untouched.** *"An explicit `snap:foo` failing when snap isn't listed is
+a feature"* looked like a collision until `priority` turned out to be one shared file rather than
+one per host. V.15 governs what you declared; II.7c governs what you have.
+
+The `Declined` enum's gate did its job on the way through: adding `BackendNotOnThisMachine` did
+not compile until `every_reason_a_removal_is_declined_says_whether_the_user_hears_about_it` gained
+an arm saying whether the user hears about it. `runs_here` was mutation-tested to `true` and five
+of the seven new tests went red.

@@ -55,6 +55,22 @@ impl BackendRegistry {
         self.backends.get(name).cloned()
     }
 
+    /// Whether this host can actually run anything through that manager (II.7c).
+    ///
+    /// **The two ways to answer no are one answer to the user.** A name this build never
+    /// registered — `apt` on Windows, `winget` on Linux — and a name registered here whose
+    /// program is not installed are different facts about the registry and the same fact about
+    /// the machine: there is nothing to install through, and nothing installed to remove.
+    /// Written once so no call site can handle one and forget the other, which is how
+    /// `spec_is_missing` came to raise `BackendNotFound` for the first and plan an install that
+    /// could not run for the second.
+    ///
+    /// This does **not** answer "is that a real backend name" — a typo is caught in the
+    /// grammar, against `Vocab`, before anything gets here.
+    pub fn runs_here(&self, name: &str) -> bool {
+        self.get(name).is_some_and(|b| b.is_available())
+    }
+
     pub fn available(&self) -> Vec<Arc<BackendCapabilities>> {
         self.backends
             .values()

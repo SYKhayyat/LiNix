@@ -127,8 +127,15 @@ impl<'a> SyncEngine<'a> {
     /// at the one point every drift-removal path funnels through — rather than at each
     /// caller, where it only takes one forgotten site to purge a system.
     #[instrument(skip(self, changes))]
-    pub async fn sync(&self, changes: SyncChanges, scope: guard::GuardScope) -> Result<()> {
+    pub async fn sync(&self, mut changes: SyncChanges, scope: guard::GuardScope) -> Result<()> {
         let _heartbeat = self.executor.start_sudo_keepalive().await;
+
+        // II.7c, before anything counts the plan. A graph that arrived from a plan file another
+        // machine wrote, or from this machine's journal, can name a manager that is not here —
+        // and every measurement below reads the graph: the guard's removal ceiling, the install
+        // ceiling, `is_empty`, the report the `on_drift` event carries. Filtering after any of
+        // them would count work that is not going to happen.
+        changes.withdraw_what_this_machine_cannot_run(&self.registry);
 
         // The supply-chain gate (II.12), before any hook runs and before anything is touched:
         // a hook whose script is new or changed since you approved it stops the sync. Note the
@@ -138,7 +145,17 @@ impl<'a> SyncEngine<'a> {
         let _ = self.hooks.run_before_sync().await;
 
         if changes.is_empty() {
-            info!("already up to date");
+            // `SyncChanges::skipped`'s own header: an empty plan with a non-empty `skipped` is
+            // NOT `already up to date`. A machine whose whole config is pinned to managers it
+            // does not have has converged nothing, and saying it is up to date is the lie the
+            // list was added to stop.
+            if changes.skipped.is_empty() {
+                info!("already up to date");
+            } else {
+                for skip in &changes.skipped {
+                    warn!("{} — {}", skip.key, skip.reason);
+                }
+            }
             return Ok(());
         }
 
@@ -586,12 +603,7 @@ impl<'a> SyncEngine<'a> {
         changes: &SyncChanges,
         state: &mut StateRegistry,
     ) -> Result<()> {
-        // `max_parallel` is the user's knob for this engine, so it must be read here and
-        // not left at the `patient()` default — a hardcoded default silently narrows the
-        // setting's reach to `search` alone. Floor at 1: zero would stall the transaction.
-        let mut tx_config = TransactionConfig::patient();
-        tx_config.max_concurrent = self.config.max_parallel.max(1);
-        tx_config.purge = self.config.remove.purge || self.config.purge_this_run;
+        let tx_config = TransactionConfig::from_config(self.config);
 
         // The engine gets the configuration because its rollback removes, and a removal is
         // guarded wherever it is issued (V.64) — including here, where the plan-time gate

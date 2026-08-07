@@ -62,6 +62,21 @@ impl TransactionConfig {
             purge: false,
         }
     }
+
+    /// The settings a run's `Config` decides, in one place.
+    ///
+    /// These were three ad-hoc reads at the one call site, and the comment above the first of
+    /// them recorded what that costs: `max_concurrent` had been left at the `patient()`
+    /// default, which "silently narrows the setting's reach to `search` alone". A named
+    /// constructor is where the fourth one goes instead of becoming a fourth ad-hoc line.
+    pub fn from_config(config: &crate::config::Config) -> Self {
+        Self {
+            max_concurrent: config.max_parallel.max(1),
+            purge: config.remove.purge || config.purge_this_run,
+            continue_on_error: config.keep_going_this_run,
+            ..Self::patient()
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

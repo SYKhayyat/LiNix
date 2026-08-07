@@ -13,7 +13,7 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
-use tracing::{debug, info, instrument};
+use tracing::{debug, info, instrument, warn};
 use version_compare::{compare as loose_compare, Cmp};
 
 #[derive(Debug, Serialize, Clone, Default)]
@@ -262,6 +262,11 @@ pub enum Declined {
     /// Its backend is not in this host's `priority` file (II.6), so LiNix does not manage that
     /// manager here and will never reap through it.
     BackendNotInPriority(String),
+    /// Its backend is not on this machine (II.7c) — a different OS's manager, or one that is
+    /// simply not installed here. Distinct from [`BackendNotInPriority`](Self::BackendNotInPriority):
+    /// that one is a choice the user wrote down, this one is a fact about the host, and the
+    /// sentence a user needs is not the same.
+    BackendNotOnThisMachine(String),
     /// A `[guard] protected_packages` rule matched, carrying the rule that decided it.
     Protected(String),
 }
@@ -280,6 +285,10 @@ impl Declined {
             Self::BackendNotInPriority(backend) => Some(format!(
                 "`{}` is not in your `priority` file, so LiNix does not manage that backend on \
                  this host",
+                backend
+            )),
+            Self::BackendNotOnThisMachine(backend) => Some(format!(
+                "`{}` is not on this machine, so there is nothing for it to remove here",
                 backend
             )),
             Self::Protected(rule) => {
@@ -321,6 +330,47 @@ impl SyncChanges {
             .node_weights()
             .filter(|w| matches!(w, GraphAction::Remove { .. }))
             .count()
+    }
+
+    /// Take out the nodes this machine has no manager for, into `skipped` (II.7c).
+    ///
+    /// **The planner cannot be the only place this happens.** A `SyncChanges` does not have to
+    /// come from a plan made here: `apply` rebuilds one from a plan file that a *different*
+    /// machine wrote, which is the whole point of `plan`/`apply`, and `heal` rebuilds one from
+    /// a journal the same way. Filtering only in the planner would make a plan portable to
+    /// write and fatal to apply.
+    ///
+    /// Same predicate as the planner's declaration-level filter — `runs_here` — because these
+    /// are two shapes of one rule and not two rules. The shapes are genuinely different (a map
+    /// of declarations before anything has been asked, a graph of scheduled actions after), so
+    /// this is one predicate at two call sites rather than one function that could serve both.
+    pub fn withdraw_what_this_machine_cannot_run(
+        &mut self,
+        registry: &crate::backends::BackendRegistry,
+    ) {
+        let unrunnable: Vec<_> = self
+            .graph
+            .node_indices()
+            .filter_map(|idx| {
+                let (backend, name) = match &self.graph[idx] {
+                    GraphAction::Install(spec) => (spec.backend.clone(), spec.name.clone()),
+                    GraphAction::Remove { backend, name } => (backend.clone(), name.clone()),
+                };
+                (!registry.runs_here(&backend)).then_some((idx, backend, name))
+            })
+            .collect();
+
+        for (idx, backend, name) in unrunnable {
+            let key = format!("{}:{}", backend, name);
+            warn!("`{}` is not on this machine — skipping `{}`.", backend, key);
+            self.graph.remove_node(idx);
+            self.install_map.remove(&key);
+            self.removal_tracker.remove(&key);
+            self.skipped.push(Skipped {
+                reason: format!("`{}` is not on this machine", backend),
+                key,
+            });
+        }
     }
 
     /// Add an install node per spec, and wire an edge for every `@requires` naming another
@@ -475,6 +525,14 @@ impl<'a> ChangePlanner<'a> {
         if !hosts.allows(&pkg.backend) {
             return Some(Declined::BackendNotInPriority(pkg.backend.clone()));
         }
+        // II.7c. Not the same question as `installed_sets`' "could not be asked", and the two
+        // must not collapse into each other: a manager that is here and whose listing failed is
+        // *not knowing*, and the comment there is right that not knowing must never become "so
+        // skip it". A manager whose program is not on the machine is knowing — there is nothing
+        // installed through it, because there is nothing to have installed it.
+        if !self.registry.runs_here(&pkg.backend) {
+            return Some(Declined::BackendNotOnThisMachine(pkg.backend.clone()));
+        }
         // Protection applies to EVERY removal reason, not only drift. A lease expiring on
         // `apt:dpkg`, or a bloatware file naming it, is a mistake in the input — not a licence
         // to remove it. Checked once here rather than per-branch, which is how the lease and
@@ -562,7 +620,10 @@ impl<'a> ChangePlanner<'a> {
         let (wanted, unwanted) = partition_by_presence(desired);
 
         let filtered_desired = self.apply_scope_filtering(&wanted, scope.filter());
-        let declared = Self::declared_specs(&filtered_desired);
+        let declared = self.drop_what_this_machine_cannot_run(
+            Self::declared_specs(&filtered_desired),
+            &mut changes,
+        );
 
         // Precompute desired keys for O(1) lookup
         let desired_keys: HashSet<String> = declared.keys().cloned().collect();
@@ -604,6 +665,14 @@ impl<'a> ChangePlanner<'a> {
                 for spec in specs {
                     let key = format!("{}:{}", backend, spec.name);
                     if changes.removal_tracker.contains(&key) {
+                        continue;
+                    }
+                    // A manager that is not on this machine has nothing installed through it,
+                    // so `absent:` through it is already satisfied (II.7c). Checked before
+                    // `is_installed`, whose "could not ask, so assume it is there" would
+                    // otherwise schedule a removal command that cannot exist.
+                    if !self.registry.runs_here(backend) {
+                        debug!("'{}' is absent because `{}` is not here.", key, backend);
                         continue;
                     }
                     if !Self::is_installed(&installed, backend, &spec.name) {
@@ -689,6 +758,44 @@ impl<'a> ChangePlanner<'a> {
         }
 
         Ok(changes)
+    }
+
+    /// Declarations pinned to a manager this machine does not have, moved out of the plan and
+    /// into `skipped` (II.7c).
+    ///
+    /// **This is what makes one config file work on three machines.** `app/vocab.rs` already
+    /// folds `priority` into the grammar's vocabulary so that `apt:curl` *parses* on Windows —
+    /// its header says so, and names the alternative as "a baffling unrecognised line". Nothing
+    /// downstream was told: `spec_is_missing` turned the same line into `BackendNotFound` and
+    /// failed the entire plan, so the machine that could have installed the other half of the
+    /// file installed nothing.
+    ///
+    /// Skipped and not dropped. The user hears one line per declaration, `sync` cannot report
+    /// `already up to date` over them, and `--json` carries them — the whole point of the
+    /// `skipped` list is that work leaving the plan in silence is `AU1`.
+    fn drop_what_this_machine_cannot_run(
+        &self,
+        declared: HashMap<String, PackageSpec>,
+        changes: &mut SyncChanges,
+    ) -> HashMap<String, PackageSpec> {
+        let (runnable, elsewhere): (HashMap<_, _>, HashMap<_, _>) = declared
+            .into_iter()
+            .partition(|(_, spec)| self.registry.runs_here(&spec.backend));
+
+        for (key, spec) in elsewhere {
+            warn!(
+                "`{}` is declared for `{}`, which is not on this machine — skipping it.",
+                spec.name, spec.backend
+            );
+            changes.skipped.push(Skipped {
+                key,
+                reason: format!(
+                    "`{}` is not on this machine, so it cannot install `{}` here",
+                    spec.backend, spec.name
+                ),
+            });
+        }
+        runnable
     }
 
     fn apply_scope_filtering(
@@ -1017,7 +1124,7 @@ mod tests {
     // schedule removals for packages outside the scope. An unscoped sync still does.
     #[tokio::test]
     async fn scoped_plan_is_non_destructive() {
-        let registry = Arc::new(BackendRegistry::new());
+        let registry = registry_reporting("generic-test", &[]);
         let config = Config::default();
         let mut state = StateRegistry::new(PathBuf::from("test-state.json"));
         // A managed package that is NOT in the (empty) desired state == drift.
@@ -1097,7 +1204,10 @@ mod tests {
     /// because you named it. So it is scheduled even though the registry never owned it.
     #[tokio::test]
     async fn an_absent_declaration_is_scheduled_for_removal_even_if_unmanaged() {
-        let registry = Arc::new(BackendRegistry::new());
+        // The manager is on the machine and the package is on it: an empty registry here
+        // meant "no such manager", which II.7c now answers by skipping (see
+        // `a_backend_this_machine_does_not_have_plans_no_removal`).
+        let registry = registry_reporting("generic-test", &["libreoffice"]);
         let config = Config::default();
         let state = StateRegistry::new(PathBuf::from("test-state.json"));
         let desired: HashMap<String, Vec<PackageSpec>> = [(
@@ -1202,6 +1312,40 @@ mod tests {
         Arc::new(registry)
     }
 
+    /// A manager that is **on the machine and cannot be asked**: registered, available, and
+    /// with no `Queryable`, so `installed_sets` has no entry for it.
+    ///
+    /// This is the fixture II.7c made necessary. An empty registry used to stand in for it,
+    /// and the two are now different answers: an empty registry means *this machine does not
+    /// have that manager*, which skips, while this means *it is here and did not answer*,
+    /// which schedules and lets the removal report its own failure. `FakeInstalled`'s own
+    /// header already recorded the first half of this lesson — an empty registry "cannot
+    /// answer ... which is why this bug survived the tests above it".
+    fn registry_that_cannot_answer(backend: &str) -> Arc<BackendRegistry> {
+        struct Mute(String);
+        #[async_trait::async_trait]
+        impl crate::core::manager::BackendCore for Mute {
+            fn name(&self) -> &str {
+                &self.0
+            }
+            fn is_available(&self) -> bool {
+                true
+            }
+            fn probes(&self) -> Vec<String> {
+                Vec::new()
+            }
+            fn needs_root(&self) -> bool {
+                false
+            }
+        }
+        let mut registry = BackendRegistry::new();
+        registry.register(Arc::new(
+            crate::core::manager::BackendCapabilities::builder(Arc::new(Mute(backend.to_string())))
+                .build(),
+        ));
+        Arc::new(registry)
+    }
+
     async fn absent_removals(registry: Arc<BackendRegistry>, name: &str) -> usize {
         let config = Config::default();
         let state = StateRegistry::new(PathBuf::from("test-state.json"));
@@ -1294,9 +1438,24 @@ mod tests {
     /// backend having a bad day cannot quietly disable `absent:`.
     #[tokio::test]
     async fn a_backend_that_cannot_be_queried_still_plans_the_removal() {
-        // An empty registry: no backend, so no installed set, so no answer.
-        let changes = absent_removals(Arc::new(BackendRegistry::new()), "libreoffice").await;
+        // The manager is **here** and did not answer. This used to be an empty registry,
+        // which is a different machine entirely — see `registry_that_cannot_answer`.
+        let changes =
+            absent_removals(registry_that_cannot_answer("generic-test"), "libreoffice").await;
         assert_eq!(changes, 1, "not knowing must never mean not removing");
+    }
+
+    /// The other side of the line II.7c drew, and the reason the fixture above had to change:
+    /// a manager that is **not on this machine** removes nothing, because there is nothing
+    /// installed through it to remove. Before this, the plan scheduled the removal anyway and
+    /// the transaction failed it with `BackendNotFound` — a command that could never run.
+    #[tokio::test]
+    async fn a_backend_this_machine_does_not_have_plans_no_removal() {
+        let changes = absent_removals(Arc::new(BackendRegistry::new()), "libreoffice").await;
+        assert_eq!(
+            changes, 0,
+            "a manager that is not here cannot be asked to remove anything"
+        );
     }
 
     /// A scoped run is non-destructive, and that must hold for `absent:` too.
@@ -1326,7 +1485,7 @@ mod tests {
         // V.34: sync removes drift BY DEFINITION. `prune_on_sync` made that a setting, so
         // sync could be configured into something that is not sync — and `linix prune` was
         // sync with the install half amputated.
-        let registry = Arc::new(BackendRegistry::new());
+        let registry = registry_reporting("generic-test", &[]);
         let config = Config::default();
         let mut state = StateRegistry::new(PathBuf::from("test-state.json"));
         state
@@ -1351,7 +1510,7 @@ mod tests {
         // read as drift the moment it was recorded. It has a line now
         // (`modules/imperative.txt`), so it is declared like everything else — and if that
         // line is gone, so is the reason to keep the package (II.17).
-        let registry = Arc::new(BackendRegistry::new());
+        let registry = registry_reporting("generic-test", &[]);
         let config = Config::default();
         let mut state = StateRegistry::new(PathBuf::from("test-state.json"));
         let mut imp = managed("my-imperative-tool", "generic-test");

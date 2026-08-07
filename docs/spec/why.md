@@ -4279,3 +4279,64 @@ That is four hand-written copies of "add the nodes, wire the `requires` edges": 
 remove — the removal tracker is what `declined` consults to answer *is this already scheduled*, so
 a removal added to the graph and not to the tracker can be scheduled twice, and four call sites
 were maintaining that pair by hand.
+
+**V.149 — Why a manager this machine does not have is skipped rather than failed.**
+*(Owner ruling, 2026-08-06. Rule in II.7c, register entry `Y15`.)*
+
+The want that makes LiNix worth having is *rebuild a machine, or bring a second one into line,
+without a day of remembering* — and the second machine is usually not the same kind of machine.
+A configuration that cannot hold `apt:ripgrep` and `winget:ripgrep` at once is a configuration
+per machine, which is the pile of shell scripts this program exists to replace.
+
+**What actually happened before this.** `spec_is_missing` asked the registry for the backend and
+turned `None` into `Error::BackendNotFound`, from inside the planner's fan-out — so the `?`
+carried it out of `plan()` and **the entire sync failed, having planned nothing.** Not the one
+line: the whole file. A Windows machine reading a shared `modules/` file with one `apt:` line in
+it installed none of the twenty `winget:` lines beside it, and the message named a backend, not a
+line.
+
+**And it had already been ruled once, for the other half of the surface.** `Q9` clause 3,
+2026-07-28: *"A real backend that cannot run here is a different answer. `flatpak` on a machine
+without flatpak is not a typo — it is a fact about the machine — so it says that and exits 0."*
+That governs a backend named in a command *argument*, and it is word for word the rule below,
+decided nine days earlier. What `Y15` does is carry it from arguments to declarations. The
+distinction it draws — typo versus fact about the machine — is the same one, and `install
+brew:jq` on a machine without brew has been warning and exiting 0 the whole time that
+`brew:jq` in a *file* was failing the entire sync. Two answers to one question, in one program,
+because the ruling was applied to the surface that was under review when it was made.
+
+**The correct behaviour already existed, one layer up, and had been written down.** `app/vocab.rs`
+folds `priority` into the grammar's backend vocabulary *specifically* so that a manager this OS
+does not build still parses; its header says so and names the alternative — "a baffling
+unrecognised line" — and `priority_names_a_backend_this_os_does_not_build` has pinned it since it
+was written. The grammar had been taught that a config travels. Nothing downstream had. That is
+this repository's signature defect stated exactly: **the correct behaviour already exists at a
+different site**, named as the headline by three separate grade rounds.
+
+**Why the two kinds of missing are one rule.** `apt` on Windows is absent from the registry
+because `create_default_registry` never registered it; `brew` on a Linux box without brew is
+registered and answers `is_available() == false`. Two facts about LiNix's internals, one fact
+about the machine — and the first version of this fix handled one and not the other, which is
+how `spec_is_missing` came to raise `BackendNotFound` for one case while planning an install that
+could not run for the other. `runs_here` is one predicate so no call site can answer half of it.
+
+**Why the typo does not get the same mercy.** Skipping is only safe because something else is
+strict: `brwe:ripgrep` is refused by the grammar, against `Vocab`, before a plan exists. If
+skipping applied to unknown names too, a misspelled line would be quietly dropped on every
+machine and the config would describe a machine nobody has — a silence far worse than the
+failure this rule removes.
+
+**Why absence is skipped and failure is not.** They look alike from inside `sync` and are
+opposite from outside it. *This machine has no brew* is true before the run starts, will be true
+after it, and is not something the run can act on — reporting it as a failure asks the user to
+fix a machine that is not broken. *`apt install nginx` returned 100* is a fact this run produced,
+about work the user asked for that did not happen, and a summary that reports success over it is
+`AU1`. So absence leaves the plan and failure stops the command, and `--keep-going` exists for
+the one caller who genuinely wants best-effort — per-run only, because a machine-wide "never
+fail" setting is exactly the destructive default `[remove] purge`'s own comment warns against.
+
+**And a skip is louder than a drop.** Every skipped declaration lands in `SyncChanges::skipped`,
+which already carried the rule that made this cheap: *an empty plan with a non-empty `skipped` is
+NOT `already up to date`*. `apply` filters before it counts rather than leaving it to the
+engine's backstop, because its summary is computed from the graph before the engine runs — and
+`Applied plan: 4 installed` over a machine that got two is the same lie by a shorter route.

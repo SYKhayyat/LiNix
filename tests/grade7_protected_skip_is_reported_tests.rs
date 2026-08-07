@@ -232,6 +232,7 @@ fn every_reason_a_removal_is_declined_says_whether_the_user_hears_about_it() {
         Declined::AlreadyScheduled,
         Declined::StillDeclared,
         Declined::BackendNotInPriority("cargo".into()),
+        Declined::BackendNotOnThisMachine("zypper".into()),
         Declined::Protected("hello".into()),
     ] {
         let reported = declined.reported();
@@ -241,7 +242,16 @@ fn every_reason_a_removal_is_declined_says_whether_the_user_hears_about_it() {
             Declined::AlreadyScheduled | Declined::StillDeclared => false,
             // The machine keeps software nothing declares and no `sync` will ever take. That
             // is a standing disagreement and it must be said out loud.
-            Declined::BackendNotInPriority(_) | Declined::Protected(_) => true,
+            //
+            // `BackendNotOnThisMachine` is one of them and it is worth saying why, because the
+            // opposite reading is available: if the manager is gone, is the package not gone
+            // with it? No — the registry still carries the row, so LiNix still claims to
+            // manage something it can no longer see, and a machine that gets its manager back
+            // gets the package back with it. Silence there is `already up to date` over a
+            // disagreement that outlives the run (II.7c).
+            Declined::BackendNotInPriority(_)
+            | Declined::BackendNotOnThisMachine(_)
+            | Declined::Protected(_) => true,
         };
 
         assert_eq!(

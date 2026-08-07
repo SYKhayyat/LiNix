@@ -313,6 +313,28 @@ Keys: `os`, `arch`, `host`, `hostname`, `family`. Operators: `==`, `!=`, `in [a,
 `fedora`, `arch`, `suse`, `alpine` — so `when family == debian` also covers Ubuntu and Mint,
 which is usually what you meant when you asked.
 
+**And you do not have to write one.** A line naming a manager this machine does not have is
+skipped, not an error:
+
+```
+apt:ripgrep
+winget:BurntSushi.ripgrep
+brew:ripgrep
+```
+
+That file works on all three machines. Each one installs its own line and reports the other two
+as skipped, naming the manager it does not have — `sync` still succeeds. `when` is for when you
+want a *different* package on a different host; this is for the same package under three names,
+which is most of what a portable config is.
+
+Skipped, never silent: the skips are listed at the end of a run and are in `--json`, and a run
+whose every line was skipped does not claim to be up to date. A **misspelled** manager is still
+an error — `brwe:ripgrep` is caught when the file is read, because a config that quietly ignored
+its own typos would describe a machine nobody has.
+
+None of this applies to a package that genuinely fails to install: that stops the command, on
+every machine. Pass `--keep-going` if you would rather have the rest of the run.
+
 ## Profiles
 
 A profile is a named set of modules you can turn on and off live, with no reboot. Several can

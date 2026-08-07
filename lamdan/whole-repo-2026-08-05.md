@@ -521,6 +521,14 @@ not one; right now there is not, and the second one is unguarded on the dangerou
 > — but it is a real change to what a script wrapping `apply` sees, and the second case is
 > genuinely apply-only, since a planner cannot schedule a backend that is not there and a plan
 > file can be carried between machines. Filed BUILT, NEVER RULED for that reason.
+>
+> > **Corrected 2026-08-06 — `Y15`.** The second case was ruled the other way, and the sentence
+> > above is wrong twice. A planner *can* schedule an absent backend — nothing stopped it —
+> > and `sync` met the case first and harder: `spec_is_missing` raised `BackendNotFound` from
+> > inside the install fan-out, so one `apt:` line in a shared module failed the entire `sync`
+> > on a Windows box, having planned nothing at all. `apply` was the merciful path, not the
+> > divergent one. **A manager this machine does not have is skipped and reported, and the
+> > command succeeds** (II.7c, V.149); item 1 — a package that genuinely fails — stands.
 
 `plan`/`apply` is sold in the readme as the Terraform story: freeze what `sync` would do, review
 it, apply exactly that. `verbs/plan.rs` contains **zero** references to `Transaction`, `journal`,
