@@ -943,9 +943,17 @@ alive. Delete it, or keep only `split_command` if that has callers.
 | `tera` | 168 | a *third* template/expression engine |
 
 Three embedded languages is the "two of everything" rule with an extra everything. `rhai` and
-`mlua` both exist to run user hooks (`app/hooks.rs:146` dispatches on a `#rhai` marker vs Lua);
-that is a real feature decision and a **[RULING]**, not something to delete unilaterally. But
-`rayon` and `nonzero_ext` are free deletions today.
+`mlua` both exist to run user hooks; that is a real feature decision and a **[RULING]**, not
+something to delete unilaterally. But `rayon` and `nonzero_ext` are free deletions today.
+
+**RULED (`Y16`, 2026-08-07): all three stay, and the broken one gets fixed rather than dropped.**
+The build cost stands as measured — 28,687 lines of vendored C, rebuilt across four release
+targets and six integration images per push — and was not the deciding factor: Lua is the
+fall-through dialect, so every hook that does not say otherwise is one, including the two in the
+shipped example config. The audit's premise was also incomplete. `#rhai` was not merely the
+cheaper arm to keep; it had **never run** — the marker line went to the engine and `#` is
+reserved in Rhai — so "rhai already covers this" was true of a dialect that produced a syntax
+error on line 1 for every script ever written in it. Fixed under `Y16`; reasons in V.150.
 
 `tokio = { features = ["full"] }` pulls every tokio subsystem including ones this program never
 touches. Narrowing to the used feature set is a pure build-time and binary-size win.

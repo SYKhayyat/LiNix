@@ -4340,3 +4340,51 @@ which already carried the rule that made this cheap: *an empty plan with a non-e
 NOT `already up to date`*. `apply` filters before it counts rather than leaving it to the
 engine's backstop, because its summary is computed from the graph before the engine runs — and
 `Applied plan: 4 installed` over a machine that got two is the same lie by a shorter route.
+
+**V.150 — Why the three hook dialects are one language in three notations, and why a marker is
+not part of the script.** *(Owner ruling, 2026-08-07, confirming the 2026-07-20 ruling that all
+three dialects stay. Rule in II.12.)*
+
+A hook's first line picks how it runs: a shebang makes it a process, `#rhai` runs it in-process,
+anything else is Lua. Three arms, and every one of them was allowed to decide for itself what a
+hook is handed — so they had drifted into three different features wearing one name.
+
+**The `#rhai` arm had never executed a script.** The marker line was passed to the engine along
+with the body, and `#` is a reserved symbol in Rhai, so every `#rhai` hook ever written failed
+with a syntax error on line 1. It was not a rare path or a bad edge case; it was the whole arm,
+and the only `#rhai` example that ships — in `examples/preferences.toml` — was one of its
+casualties. **A dialect nothing tests is a dialect that does not run**, and this one had no test
+because it had no test: the same sentence twice, which is how it survived a rewrite.
+
+That example was wrong a second way. It called `exec("systemctl enable docker")`, and no engine
+in this binary has ever registered `exec` — the hook arm registered `print` and stopped. So the
+documentation described a function that did not exist, for an arm that could not have run it if
+it had. **Two independent faults pointing the same direction is what an untested feature looks
+like from outside**, and neither was found by reading, because reading is what produced them.
+
+The rule is therefore three properties, not one fix:
+
+- **The marker is consumed by whatever it selects.** `#rhai` is LiNix's word and is stripped
+  before the engine sees it; a shebang is the *script's* first instruction and is kept, because
+  removing it leaves the kernel with no interpreter to choose. The stripped line is blanked
+  rather than deleted, so a runtime error still names the line the author wrote — a one-line
+  offset in an error message is a bug that hides inside the fix for another bug.
+- **Every dialect is handed the same four facts** — `PKG_NAME`, `HOOK_TYPE`, `OS`, `ARCH`, and
+  `LINIX_`-prefixed for a process. Lua and the shebang arm had all four; Rhai had two, so a
+  hook that branched on the platform could not be written in one of the three dialects, for no
+  reason anybody had chosen.
+- **A `#rhai` hook gets the same standard library as `vars.linix`** (II.6b's clock, shell,
+  read-only files, environment, network and `parse_json`), from the same function. II.6b's own
+  wording is that `vars.linix` is *"trusted the same as a hook"* — a definition by reference to
+  hooks — so a hook having strictly less than the thing defined in its terms was backwards. The
+  narrower arm was never a security posture and V.55 already said why: a hook two lines away in
+  the same config can open `#!` and run anything, so withholding `sh` from one notation stopped
+  nobody. **What gates a hook is II.12's ledger**, which hashes every one of them and refuses an
+  unapproved or changed script under `-y` and with no terminal alike.
+
+Not deleted, fixed. The cheap reading of "the Rhai arm is broken and `mlua` costs 28,000 lines
+of vendored C per build" is that a dialect should go. But a broken feature is evidence about the
+tests, not about the feature: all three are reachable by a user, all three are ruled, and the
+defect was that nothing ever ran two of them. The fix is one engine builder, one fact list, one
+place that decides a dialect — and a test that executes each arm, which is the part that was
+actually missing.

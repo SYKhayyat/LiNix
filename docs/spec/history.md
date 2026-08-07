@@ -7470,3 +7470,58 @@ the Lua arm of `hooks.rs` (with `mlua`) are what `CLAUDE.md` rule 3 is about —
 by a user today. F-6's *"`app/fleet.rs`, 265 lines, broken since `status` was deleted"* is void:
 `F-2`'s commit repaired `fleet` rather than deleting it, so the finding's own condition —
 *"if no, and it cannot currently have worked"* — no longer holds.
+
+---
+
+## 2026-08-07 — the three that were kept, and the dialect that had never run (`Y16`)
+
+**The audit's next deletion list was `linix repl`, the two ratatui screens, and the Lua hook arm.
+The owner kept all three: *"everything must work and it not working is not cause for deletion but
+fixing."* Fixing them found a live bug bigger than the one reported.**
+
+**`#rhai` hooks had never executed.** `run_hook` matched on the marker and then handed the engine
+the *whole* script, marker included. `#` is a reserved symbol in Rhai, so every `#rhai` hook ever
+written failed with `Syntax error: '#' is a reserved symbol (line 1, position 1)` — not an edge
+case, the entire arm. It survived a rewrite because **nothing in the tree had ever run one**: the
+seven test files that construct `LuaHooks` construct it as a dependency of something else and
+never call `run_hook`. A dialect nothing tests is a dialect that does not run.
+
+The marker is now stripped by one classifier that returns the dialect *and* the body to run with
+it, so the two cannot disagree. A shebang is kept — it is the script's own instruction to the
+kernel — and `#rhai` is removed, **blanked rather than deleted** so a runtime error still names
+the line the author wrote.
+
+**The reported bug was the second one, and smaller.** `examples/preferences.toml` documents
+`exec("systemctl enable docker")`, and no engine in this binary registers `exec`: the hook arm
+registered `print` and stopped, while `model/vars_embedded.rs` built a Rhai engine with the
+clock, the shell, the filesystem, the environment and the network on it. The code comment on the
+narrow one said the difference was *"unruled rather than principled"*, which was accurate and is
+now ruled: **II.6b defines `vars.linix` as "trusted the same as a hook", so a hook cannot have
+less than the thing defined in its terms.** One builder, `core::rhai_stdlib::engine`, serves both;
+`vars_embedded` lost 178 lines to it and gained nothing it did not have.
+
+**Then the family.** All three arms decided independently what a hook is handed, and they had
+drifted: the shebang arm set four environment variables, Lua set four globals, Rhai pushed two.
+So a hook that branches on the platform was writable in two dialects out of three, for no reason
+anyone had chosen. One list now feeds all three (`hook_facts`), and the Rhai arm pushes them as
+constants, matching `vars`.
+
+**`linix history` had no terminal guard** — the one command that is *only* a TUI, while `sync`
+and `rollback` both refuse cleanly in a pipe. Piped or scheduled, it reached `enable_raw_mode`
+and failed with an OS error about a console handle. It now refuses in a sentence and points at
+`linix git log` — the command that exists, unlike the `linix doctor` two messages named before
+the 2026-07-27 pass.
+
+**Eleven tests, and the shape of them is the finding.** Each arm now *executes* in a test, the
+marker/no-marker property is pinned in both directions, the four facts are asserted per dialect,
+and the shipped example is checked for the function name it calls. The bug was never subtle; it
+was simply never run.
+
+**Not fixed, and filed for a ruling: a `#!` hook cannot run on Windows.**
+`run_external_polyglot` writes a `NamedTempFile` with no extension and executes it directly.
+Confirmed against the OS, not assumed: `CreateProcess` on an extensionless script returns *"The
+specified executable is not a valid application for this OS platform."* `model/script.rs` exists
+to answer exactly this and its header says it has **two** callers — the hook arm is the third and
+does not use it. Left alone deliberately: routing through `interpreter_for` would make Unix run
+every polyglot hook under `sh`, ignoring the shebang that chose `python3`, which is a
+user-visible behaviour change and the owner's call.

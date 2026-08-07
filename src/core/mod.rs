@@ -22,6 +22,7 @@ pub mod manager;
 pub mod package;
 pub mod ratelimiter;
 pub mod regex_lock;
+pub mod rhai_stdlib;
 pub mod retention;
 pub mod security;
 pub mod size;

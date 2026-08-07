@@ -245,6 +245,22 @@ pub async fn handle_snapshot_restore(app: &App) -> Result<()> {
 pub async fn handle_history(app: &App) -> Result<()> {
     use crate::app::ui::{CommitView, HistoryAction, HistoryBrowser};
 
+    // A TUI needs a terminal to draw on. Without this, a piped or scheduled `linix history`
+    // reached `enable_raw_mode` and failed with an OS error about a console handle — the same
+    // hole `sync` and `rollback` already close, on the one command that is only ever a TUI.
+    {
+        use std::io::IsTerminal;
+        if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+            return Err(crate::core::Error::Refused(
+                "`linix history` is an interactive browser and needs a terminal. \
+                 For the same timeline without one, use `linix git log`; to go back, \
+                 `linix rollback <ref> --yes`."
+                    .to_string(),
+            )
+            .into());
+        }
+    }
+
     let git = app.git_manager();
     if !git.is_repo() {
         println!(

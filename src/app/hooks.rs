@@ -1,3 +1,18 @@
+//! The three hook dialects (owner ruling, 2026-07-20: all three stay), chosen by a script's
+//! first line — a shebang runs it as a process, `#rhai` runs it in-process, anything else is
+//! Lua.
+//!
+//! **They are one feature in three notations, so they get the same things.** All three are
+//! handed the same four facts ([`LuaHooks::hook_facts`]), and the `#rhai` arm builds its engine
+//! from `core::rhai_stdlib` — the same one `vars.linix` uses, because II.6b already ruled that
+//! file *"trusted the same as a hook"* and a hook may not have less than the thing defined by
+//! reference to it. It previously had `print` and nothing else, which made the shipped example
+//! config's `exec("systemctl enable docker")` a call into an empty room.
+//!
+//! **None of the three is sandboxed, and none of them ever was.** `Lua::new` loads `os.execute`;
+//! a shebang is a process; Rhai now has `sh`. The gate is II.12's ledger — every script hashed,
+//! an unapproved or changed one stops the sync, and `-y` cannot skip it.
+
 use crate::config::Config;
 use crate::core::hook_lock::{hash_script, hook_id, refusal, HookLedger};
 use crate::core::LockFile;
@@ -11,6 +26,38 @@ use tempfile::NamedTempFile;
 use tokio::process::Command;
 use tracing::{debug, info};
 
+/// Which language a hook is written in. One place decides, and it hands back the body to run
+/// with it — because the marker that chose the dialect is not always part of the script.
+enum Dialect {
+    /// A shebang: written to a file and executed. The shebang line stays — it is what tells the
+    /// kernel which interpreter to use, so removing it would break the thing it selected.
+    Process,
+    Rhai,
+    Lua,
+}
+
+impl Dialect {
+    /// The dialect, and the script to hand the engine that runs it.
+    ///
+    /// **`#rhai` is not Rhai.** `#` is a reserved symbol there, so a marker left in place is a
+    /// syntax error on line 1 and the script never runs — which is what every `#rhai` hook got.
+    /// The marker's line is blanked rather than deleted so that a runtime error still names the
+    /// line the author wrote.
+    fn of(code: &str) -> (Dialect, String) {
+        let lead = code.len() - code.trim_start().len();
+        let trimmed = &code[lead..];
+
+        if trimmed.starts_with("#!") {
+            return (Dialect::Process, code.to_string());
+        }
+        if trimmed.starts_with("#rhai") {
+            let rest_of_script = trimmed.find('\n').map(|i| &trimmed[i..]).unwrap_or("");
+            return (Dialect::Rhai, format!("{}{}", &code[..lead], rest_of_script));
+        }
+        (Dialect::Lua, code.to_string())
+    }
+}
+
 pub struct LuaHooks {
     rhai_engine: Engine,
     pub hooks: HashMap<String, HashMap<String, String>>,
@@ -20,11 +67,8 @@ pub struct LuaHooks {
 
 impl LuaHooks {
     pub fn new(config: &Config) -> Result<Self> {
-        let mut rhai_engine = Engine::new();
-        Self::register_rhai_host_functions(&mut rhai_engine);
-
         Ok(Self {
-            rhai_engine,
+            rhai_engine: crate::core::rhai_stdlib::engine("hook"),
             hooks: config.hooks.clone(),
             locks_dir: config.config_root().join("locks"),
         })
@@ -110,10 +154,9 @@ impl LuaHooks {
         .map_err(|e| Error::Other(e.to_string()))??;
 
         let mut cmd = Command::new(tmp_script.path());
-        cmd.env("LINIX_PKG_NAME", pkg)
-            .env("LINIX_HOOK_TYPE", hook)
-            .env("LINIX_OS", std::env::consts::OS)
-            .env("LINIX_ARCH", std::env::consts::ARCH);
+        for (name, value) in Self::hook_facts(hook, pkg) {
+            cmd.env(format!("LINIX_{}", name), value);
+        }
 
         let status = cmd
             .status()
@@ -140,14 +183,13 @@ impl LuaHooks {
         };
 
         if let Some(code) = script {
-            let trimmed = code.trim_start();
-            if trimmed.starts_with("#!") {
-                self.run_external_polyglot(code, hook_name, package_name)
-                    .await?;
-            } else if trimmed.starts_with("#rhai") {
-                self.run_rhai(code, hook_name, package_name)?;
-            } else {
-                self.run_lua(code, hook_name, package_name).await?;
+            match Dialect::of(code) {
+                (Dialect::Process, body) => {
+                    self.run_external_polyglot(&body, hook_name, package_name)
+                        .await?
+                }
+                (Dialect::Rhai, body) => self.run_rhai(&body, hook_name, package_name)?,
+                (Dialect::Lua, body) => self.run_lua(&body, hook_name, package_name).await?,
             }
         }
 
@@ -156,13 +198,26 @@ impl LuaHooks {
 
     fn run_rhai(&self, code: &str, hook: &str, pkg: &str) -> Result<()> {
         let mut scope = Scope::new();
-        scope.push("PKG_NAME", pkg.to_string());
-        scope.push("HOOK_TYPE", hook.to_string());
+        for (name, value) in Self::hook_facts(hook, pkg) {
+            scope.push_constant(name, value);
+        }
 
         self.rhai_engine
             .run_with_scope(&mut scope, code)
             .map_err(|e| Error::LuaScript(format!("Rhai execution error: {}", e)))?;
         Ok(())
+    }
+
+    /// What every hook knows about why it is running, whatever dialect it is written in. One
+    /// list, because three dialects that each decide for themselves is how the Rhai arm ended up
+    /// unable to ask which OS it was on while the Lua and `#!` arms both could.
+    fn hook_facts(hook: &str, pkg: &str) -> [(&'static str, String); 4] {
+        [
+            ("PKG_NAME", pkg.to_string()),
+            ("HOOK_TYPE", hook.to_string()),
+            ("OS", std::env::consts::OS.to_string()),
+            ("ARCH", std::env::consts::ARCH.to_string()),
+        ]
     }
 
     /// The Lua interpreter must be constructed INSIDE the blocking closure: `mlua::Lua` is
@@ -174,14 +229,11 @@ impl LuaHooks {
 
         tokio::task::spawn_blocking(move || {
             let lua = Lua::new();
-            Self::setup_lua_sandbox(&lua)?;
+            Self::register_lua_host_functions(&lua)?;
 
-            lua.globals()
-                .set("PKG_NAME", pkg_owned)
-                .map_err(Error::from)?;
-            lua.globals()
-                .set("HOOK_TYPE", hook_owned)
-                .map_err(Error::from)?;
+            for (name, value) in Self::hook_facts(&hook_owned, &pkg_owned) {
+                lua.globals().set(name, value).map_err(Error::from)?;
+            }
 
             lua.load(&code_owned).exec().map_err(Error::from)?;
             Ok::<(), Error>(())
@@ -192,15 +244,12 @@ impl LuaHooks {
         Ok(())
     }
 
-    fn setup_lua_sandbox(lua: &Lua) -> Result<()> {
+    /// A Lua hook's `print` goes to the log rather than to a stdout the sync is already using.
+    /// It was called `setup_lua_sandbox`, which claimed a boundary this does not build: `Lua::new`
+    /// loads the standard library, so `os.execute` and `io` are live in every Lua hook. What gates
+    /// a hook is II.12's ledger, not the interpreter.
+    fn register_lua_host_functions(lua: &Lua) -> Result<()> {
         let globals = lua.globals();
-        globals
-            .set("OS", std::env::consts::OS)
-            .map_err(Error::from)?;
-        globals
-            .set("ARCH", std::env::consts::ARCH)
-            .map_err(Error::from)?;
-
         let print_proxy = lua
             .create_function(|_, args: mlua::MultiValue| {
                 let output: Vec<String> = args.iter().map(|v| format!("{:?}", v)).collect();
@@ -211,24 +260,6 @@ impl LuaHooks {
 
         globals.set("print", print_proxy).map_err(Error::from)?;
         Ok(())
-    }
-
-    /// A `#rhai` hook gets `print` and nothing else — **and that is not a security boundary.**
-    ///
-    /// It was called `setup_rhai_sandbox`, which claims one. A hook two lines away in the same
-    /// config can open `#!` and run any command on the machine, so withholding `sh` from the
-    /// Rhai arm stops nobody: what actually gates a hook is II.12's ledger, which hashes every
-    /// one of them and refuses an unapproved or changed script. The bareness is a smaller
-    /// surface, not a wall, and a reader who believes the old name would draw the wall in the
-    /// wrong place.
-    ///
-    /// It is also the narrower of two postures this binary ships — `model/vars_embedded.rs`
-    /// builds a Rhai engine with the shell, the network and the filesystem on it, under the
-    /// same ledger, because II.6b ruled that one *"trusted the same as a hook"*. Widening this
-    /// arm to match is a behaviour change nobody has asked for; recording that the difference
-    /// is unruled rather than principled is the part that was missing.
-    fn register_rhai_host_functions(engine: &mut Engine) {
-        engine.register_fn("print", |msg: &str| info!("[Rhai] {}", msg));
     }
 
     // SEC7: `render_template` (arbitrary `{{ … }}` evaluated as Lua, with `os`/`io`/`os.execute`
@@ -243,5 +274,172 @@ impl LuaHooks {
     }
     pub async fn run_after_sync(&self) -> Result<()> {
         self.run_hook("after_sync", "*").await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `LuaHooks` over one `after_install` script for `pkg`. No ledger involved: approval is
+    /// `verify_all_approved`'s job and is tested where it lives.
+    fn hooks_with(script: &str) -> LuaHooks {
+        let mut config = Config::default();
+        config.hooks.insert(
+            "after_install".to_string(),
+            HashMap::from([("pkg".to_string(), script.to_string())]),
+        );
+        LuaHooks::new(&config).expect("hooks")
+    }
+
+    /// A command that succeeds, and one that fails, in whichever shell `sh` reaches for.
+    fn commands() -> (&'static str, &'static str) {
+        if cfg!(windows) {
+            ("cmd /c exit 0", "cmd /c exit 3")
+        } else {
+            ("true", "exit 3")
+        }
+    }
+
+    #[tokio::test]
+    async fn a_rhai_hook_can_reach_the_shell() {
+        // The bug: this arm had `print` and nothing else, so the shipped example config's
+        // `exec("systemctl enable docker")` — and any `sh` — was a call to a function no engine
+        // in this binary had ever registered.
+        let (ok, _) = commands();
+        let hooks = hooks_with(&format!("#rhai\nlet ran = sh_ok(\"{}\");", ok));
+        hooks.run_hook("after_install", "pkg").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_rhai_hook_reaches_the_whole_standard_library_vars_has() {
+        // Not just the shell: II.6b's "trusted the same as a hook" is a two-way statement, so
+        // every provider `vars.linix` has, a hook has. One test per family, not one per member.
+        let hooks = hooks_with(
+            r#"#rhai
+            if weekday() == "" { throw "no clock" }
+            if !has_env("PATH") { throw "no environment" }
+            if path_exists("/definitely/not/here") { throw "no filesystem" }
+            if parse_json(`{"a": 1}`).a != 1 { throw "no json" }
+            "#,
+        );
+        hooks.run_hook("after_install", "pkg").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_failing_command_in_a_rhai_hook_fails_the_hook() {
+        // `sh` throws where `sh_ok` answers. A hook that swallowed a failed command would report
+        // an install as configured when it was not.
+        let (_, bad) = commands();
+        let hooks = hooks_with(&format!("#rhai\nsh(\"{}\");", bad));
+        let err = hooks.run_hook("after_install", "pkg").await.unwrap_err();
+        assert!(err.to_string().contains("sh:"), "{}", err);
+    }
+
+    #[test]
+    fn every_dialect_is_handed_the_same_four_facts() {
+        let facts = LuaHooks::hook_facts("after_install", "ripgrep");
+        let names: Vec<&str> = facts.iter().map(|(n, _)| *n).collect();
+        assert_eq!(names, ["PKG_NAME", "HOOK_TYPE", "OS", "ARCH"]);
+        assert_eq!(facts[0].1, "ripgrep");
+        assert_eq!(facts[1].1, "after_install");
+        for (name, value) in &facts {
+            assert!(!value.is_empty(), "{} is empty", name);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_rhai_hook_knows_all_four() {
+        // The sibling nobody reported: Lua and `#!` were handed OS and ARCH, Rhai was not, so a
+        // cross-platform hook could not branch in one of the three dialects.
+        let hooks = hooks_with(
+            r#"#rhai
+            if PKG_NAME != "pkg" { throw "no PKG_NAME" }
+            if HOOK_TYPE != "after_install" { throw "no HOOK_TYPE" }
+            if OS == "" { throw "no OS" }
+            if ARCH == "" { throw "no ARCH" }
+            "#,
+        );
+        hooks.run_hook("after_install", "pkg").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_lua_hook_knows_all_four() {
+        let hooks = hooks_with(
+            r#"
+            assert(PKG_NAME == "pkg", "no PKG_NAME")
+            assert(HOOK_TYPE == "after_install", "no HOOK_TYPE")
+            assert(OS ~= nil and OS ~= "", "no OS")
+            assert(ARCH ~= nil and ARCH ~= "", "no ARCH")
+            "#,
+        );
+        hooks.run_hook("after_install", "pkg").await.unwrap();
+    }
+
+    #[test]
+    fn the_rhai_marker_is_not_handed_to_the_engine_but_the_shebang_is() {
+        // `#rhai` is a LiNix marker; `#!` is the script's own first instruction. Confusing the
+        // two either way breaks a dialect: a kept `#rhai` is a syntax error on line 1, and a
+        // stripped `#!` leaves the kernel with no interpreter to run.
+        let (dialect, body) = Dialect::of("#rhai\nlet x = 1;\n");
+        assert!(matches!(dialect, Dialect::Rhai));
+        assert!(!body.contains("#rhai"), "the marker survived: {:?}", body);
+
+        let (dialect, body) = Dialect::of("#!/bin/sh\necho hi\n");
+        assert!(matches!(dialect, Dialect::Process));
+        assert!(body.starts_with("#!/bin/sh"), "the shebang was stripped");
+
+        let (dialect, body) = Dialect::of("print('hi')");
+        assert!(matches!(dialect, Dialect::Lua));
+        assert_eq!(body, "print('hi')");
+    }
+
+    #[test]
+    fn stripping_the_marker_does_not_move_the_lines_under_it() {
+        // An error that names the wrong line is how a one-line offset survives review.
+        let (_, body) = Dialect::of("#rhai\nlet a = 1;\nlet b = 2;\n");
+        let lines: Vec<&str> = body.lines().collect();
+        assert_eq!(lines[0], "", "line 1 should be blank, not gone");
+        assert_eq!(lines[1], "let a = 1;");
+        assert_eq!(lines[2], "let b = 2;");
+    }
+
+    #[tokio::test]
+    async fn a_rhai_hook_indented_in_a_toml_block_still_runs() {
+        // TOML multi-line strings routinely arrive with a leading newline and indentation, which
+        // is exactly how the example config writes them.
+        let (ok, _) = commands();
+        let hooks = hooks_with(&format!("\n  #rhai\n  let ran = sh_ok(\"{}\");\n", ok));
+        hooks.run_hook("after_install", "pkg").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_dialect_is_chosen_by_the_first_line() {
+        // `#rhai` is Rhai and everything else is Lua, so a script written in one dialect must not
+        // silently parse as the other. `..` concatenates in Lua and is a range in Rhai.
+        let lua = hooks_with(r#"local s = "a" .. "b""#);
+        lua.run_hook("after_install", "pkg").await.unwrap();
+
+        let rhai = hooks_with("#rhai\nlet s = \"a\" + \"b\";");
+        rhai.run_hook("after_install", "pkg").await.unwrap();
+    }
+
+    #[test]
+    fn the_shipped_example_config_calls_functions_that_exist() {
+        // The bug reached a user through `examples/preferences.toml`, which documented
+        // `exec(...)`. A doc that names a function nothing registers is the same defect one
+        // layer out, so the example is pinned to the shell's real name.
+        let example = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/preferences.toml"),
+        )
+        .expect("examples/preferences.toml");
+        assert!(
+            !example.contains("exec("),
+            "the example config calls `exec(`, which no engine registers; the shell is `sh(`"
+        );
+        assert!(
+            example.contains("sh(\"systemctl enable docker\")"),
+            "the example's Rhai hook should demonstrate the real shell function"
+        );
     }
 }

@@ -1,4 +1,4 @@
-# The decision register — all 174, one of them open
+# The decision register — all 175, one of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -17,7 +17,7 @@ not in this paragraph.
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **2** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **168** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **169** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -73,8 +73,8 @@ status loses that, so it is kept here:
 
 ## Index
 
-**One is open — `Z1`, raised 2026-08-03, a licence choice.** All 174 are accounted
-for: **168 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 1 OPEN** — and this line
+**One is open — `Z1`, raised 2026-08-03, a licence choice.** All 175 are accounted
+for: **169 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 1 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -311,7 +311,7 @@ without asking. Two are not mine: one is a legal choice and one changes a publis
 | **Z1** | There is no `LICENSE` file and no `license` key in `Cargo.toml`, for a tool with an install script and a `self-upgrade` verb. Which licence? | **OPEN** |
 | **Z2** | `lock` and `unlock` touch unrelated files and are not inverses; `unlock` can cause package churn. Rename it, or give `lock` a real inverse? | **ANSWERED** — both verbs name their axis (`versions`/`backends`/`scripts`/`all`), and every path that moves a version re-records it |
 
-### Y — the efficiency pass — 16
+### Y — the efficiency pass — 17
 
 *Not a proposal part. `docs/INEFFICIENCIES.md` audited every place in the tree slower than it has
 to be and marked the findings a user would notice as needing a ruling; the owner ruled the lot on
@@ -337,6 +337,7 @@ II.19 and the reasons in V.115–V.118.*
 | **Y13** | Which phase of a sync a statement belongs to was written down in four lists nothing compared, and each new kind was missed by one of them — four times, by the code's own count. K17's adapter table was ruled once and implemented seven times, and four of the five shared questions had already been answered differently, including one table with no `os` field at all. RULED: **a statement declares its phase and the order is a type; K17 has one mechanism, and writing it again is a build failure.** The `Installable` → `Converge` rename it was raised with is **refused** — the convergence decision is already shared, in two places, and neither is in the bodies the review read. | 2026-08-06 |
 | **Y14** | `apply` executed a frozen plan in two serial loops of its own — no write-ahead log, so `heal` could not recover the one command named after review and deliberation; no transaction, no snapshot, no health check; one manager invocation per package; and a failure was a warning under a summary reading `Applied plan`. Eight more commands reached a package manager with no record at all. BUILT, NEVER RULED: **the record belongs to the mutation, not to the verb**, and a frozen plan is executed by the engine that executes every other plan. | 2026-08-06 |
 | **Y15** | A line pinned to a manager this machine does not have failed the whole run: `spec_is_missing` raised `BackendNotFound` from inside the planner's fan-out, so one `apt:` line dropped the twenty `winget:` lines beside it and `sync` planned nothing. RULED: **that is a portable config, not a broken one** — skipped, reported in `skipped`, and the command succeeds; a package that genuinely fails still fails, with `--keep-going` as the per-run opt-in. Reverses `Y14` item 2. | 2026-08-06 |
+| **Y16** | An audit proposed deleting `linix repl`, the two ratatui screens, and the Lua hook arm — the last on the grounds that `mlua` vendors 28,687 lines of C rebuilt ten times per CI push to serve one branch of one `if`. RULED: **keep all three and make them work** — *"it not working is not cause for deletion but fixing"*. The `#rhai` arm had never executed anything (the marker line reached the engine, and `#` is reserved in Rhai), and the one shipped example called an `exec()` nothing registers. The marker is now stripped, all three dialects get the same four facts, and `#rhai` gets the standard library `vars.linix` has. | 2026-08-07 |
 
 ---
 
@@ -6738,3 +6739,50 @@ one per host: a portable setup lists every manager it uses anywhere, and each ma
 subset it has. V.15 governs what you declared; this rule governs what you have.
 
 **Reasons in V.149. Rule in II.7c. `Y14` item 2 is reversed; `Y14` item 1 stands.**
+
+---
+
+## Y16
+
+**Status: ANSWERED — ruled and built 2026-08-07.** Raised by the owner while reviewing three
+subsystems an audit had proposed deleting. All three were kept, and the third turned out to be
+broken in a way that reframed the whole question.
+
+**Y16 — `linix repl`, the ratatui screens, and the Lua hook arm: delete, or keep?**
+
+The case for deletion was cost. `linix repl` is a second entry point onto answers `eval | jq`
+already gives; the two ratatui screens are 641 lines; and `mlua` vendors **28,687 lines of Lua
+5.4 C source**, rebuilt from scratch on every clean build — ten times per CI push across four
+release targets and six integration images — to serve one branch of one `if`, when `#rhai`
+already provides in-process scripting and `rhai` is independently justified by `vars.linix`.
+
+**RULED (owner, 2026-08-07): keep all three, and make them work.** *"Everything must work and it
+not working is not cause for deletion but fixing."*
+
+- **`linix repl` stays**, which `U34` had already ruled on 2026-07-26 (*"build it — if it is
+  easy"*). Verified end to end rather than asserted: bare and prefixed names resolve, `when`
+  evaluates against this host, `:vars`/`:eval` answer, EOF leaves. It is 148 lines over the one
+  resolver and adds no dependency, which is the condition `U34` attached.
+- **Both ratatui screens stay.** The audit's framing — "641 lines of TUI" — described neither.
+  `preview.rs` is the confirmation screen `sync` and `plan apply` show on a real terminal, and
+  deselecting a package there is the only way to say *"these four, not that one"* without
+  editing a manifest; a y/n prompt cannot express it, so deleting it is a rewrite that loses a
+  feature. `history.rs` is `linix history`, which the 2026-07-27 removal-cluster ruling already
+  kept as the browsing half of an interface pair with `rollback <ref>`. **One real defect:** it
+  had no terminal guard, so in a pipe or a cron job it entered raw mode and failed with an OS
+  error rather than the sentence `sync` and `rollback` both print. Fixed, pointing at
+  `linix git log` — the command that actually exists.
+- **All three hook dialects stay** (as ruled 2026-07-20), **and the `#rhai` arm is fixed.** It
+  had never run: the marker line was handed to the engine, `#` is reserved in Rhai, and every
+  `#rhai` hook died with a syntax error on line 1. The one shipped example compounded it by
+  calling `exec(...)`, which no engine here registers. **A dialect nothing tests is a dialect
+  that does not run.** The marker is now stripped (blanked, so error line numbers still match),
+  all three arms are handed the same four facts, and `#rhai` gets the same standard library
+  `vars.linix` has, from the same builder — because II.6b defines that file's trust *as* a
+  hook's, so a hook cannot have less.
+
+**`mlua` stays too, and its cost stands as measured.** The vendored-C build time was not
+disputed and is not the reason to keep it: Lua is the *fall-through* dialect, so every hook that
+does not say otherwise is Lua, including the two in the shipped example config. Reversing that
+is a user-visible change to configs that already exist, and the owner declined it. **Rule in
+II.12, reasons in V.150.**

@@ -137,7 +137,13 @@ ext = "vscode"
 # keep_days = 30
 # keep = ["known-good-2026-07"]
 
-# Scripting Hooks (Phase 4.1)
+# Scripting hooks. The first line picks the language:
+#   `#!/bin/sh` (any shebang) — run as a process, like any other script
+#   `#rhai`                   — Rhai, in-process
+#   anything else             — Lua, in-process
+# All three are handed PKG_NAME, HOOK_TYPE, OS and ARCH (a shebang gets them as LINIX_*), and
+# every one of them is hashed into locks/ — `linix lock` approves, and a changed script stops
+# the next sync until you approve it again.
 [hooks.before_install]
 "*" = '''
 print("Starting installation of " .. PKG_NAME)
@@ -147,8 +153,8 @@ print("Starting installation of " .. PKG_NAME)
 docker = '''
 #rhai
 print("Enabling Docker system service via Rhai...");
-exec("systemctl enable docker");
-exec("systemctl start docker");
+sh("systemctl enable docker");
+sh("systemctl start docker");
 '''
 
 [hooks.before_sync]

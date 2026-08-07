@@ -886,6 +886,10 @@ for a value no fact can derive, e.g. `env("LINIX_ROLE")`), the network (`http_ge
 (`sh`, `read_file`, `http_get`) throws, because a fetch that silently returned nothing would
 resolve a variable to the wrong value with no sign it failed.
 
+**A `#rhai` hook gets this same library, from the same place (II.12, V.150).** "Trusted the same
+as a hook" is a definition by reference, so the two cannot be different sets — and when they
+were, the narrower one was the hook.
+
 **The ledger is what makes "trusted the same as a hook" true (V.55).** Every provider that
 executes — `vars.linix` and every external `vars.<ext>` — is hashed into `locks/` and goes
 through **II.12's ledger**: first sight asks, a changed hash stops. The powers listed above are
@@ -1809,6 +1813,24 @@ Run `linix lock fonts` to see the new script and approve it.
 hashed and approved here too (II.6b, V.55). They run earlier than any hook — before the plan
 exists, and on read-only commands — so for them the ledger is the only thing between a pulled
 config and a shell.
+
+**Three dialects, one language (V.150).** A hook's first line picks how it runs: a **shebang**
+writes it to a file and executes it as a process, **`#rhai`** runs it in-process, and anything
+else is **Lua**. All three stay (owner ruling 2026-07-20), and all three get the same things:
+
+- **The same four facts** — `PKG_NAME`, `HOOK_TYPE`, `OS`, `ARCH`; a process gets them
+  `LINIX_`-prefixed as environment variables.
+- **The same standard library, for the two in-process arms.** A `#rhai` hook gets exactly what
+  `vars.linix` gets (the clock, `sh`/`sh_ok`, `read_file`/`path_exists`, `env`/`has_env`,
+  `http_get`, `parse_json`), because II.6b defines that file's trust *as* a hook's and a hook
+  may not have less than the thing defined in its terms. Lua brings its own standard library.
+- **The marker is consumed by whatever it selects.** `#rhai` is LiNix's word and never reaches
+  the engine — it is not Rhai syntax, and leaving it in is a syntax error on line 1. A shebang
+  is the script's own first instruction and is kept.
+
+**None of the three is sandboxed, and the ledger is why that is not a hole.** Lua loads
+`os.execute`, a shebang is a process, Rhai has `sh`. Withholding a shell from one notation stops
+nobody while the one beside it opens `#!`; what gates every hook is the approval below.
 
 **Two kinds of hook, by when they run — both go through the ledger.** Whole-sync lifecycle
 hooks live in the `[hooks]` config block (`before_sync`/`after_sync`, target `*`, run once

@@ -793,6 +793,18 @@ named and skipped rather than rebuilt. It cannot be put in `schedules`.
 > no provider rather than run without a way back (see above), so this never fails silently.
 - **Hooks are locked.** `after_install` and friends are hashed; a changed hook must be
   re-approved with `linix lock`, so a pulled config cannot quietly start running new code.
+  - **A hook's first line picks its language.** A shebang runs it as a process in whatever it
+    names; `#rhai` runs it in-process with LiNix's own script library (`sh`, `read_file`, `env`,
+    `http_get`, `parse_json`, the clock); anything else is Lua. All three are handed `PKG_NAME`,
+    `HOOK_TYPE`, `OS` and `ARCH` — as `LINIX_`-prefixed environment variables for a process —
+    and all three go through the same approval.
+    ```toml
+    [hooks.after_install]
+    docker = '''
+    #rhai
+    sh("systemctl enable docker");
+    '''
+    ```
 - **Hooks on LiNix's own events.** Put a script at `hooks/after_sync`, `hooks/on_drift` or
   `hooks/on_guard_refusal` and it runs with the details on stdin as JSON — notify a channel,
   push the repo, open a ticket, without any of that having to become a LiNix feature. The same
