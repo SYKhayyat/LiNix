@@ -1,3 +1,5 @@
+use crate::verbs::plan::compute_full_changes;
+use crate::verbs::sync::handle_sync;
 use crate::verbs::prelude::*;
 
 pub async fn handle_snapshot(app: &App, cmd: &SnapshotCommand) -> Result<()> {

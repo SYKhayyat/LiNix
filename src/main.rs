@@ -8,6 +8,17 @@ use tracing::warn;
 use tracing_subscriber::EnvFilter;
 
 use linix::verbs::prelude::*;
+// The dispatcher does reference every handler, so it globs the nine modules — and that is a
+// different relationship from the one `LX-11` was about. What was deleted is `verbs::prelude`
+// re-exporting all nine into *each other*, which left no module boundary inside `verbs/` at
+// all: 8,587 lines in one namespace stored in nine files, where moving a function between them
+// was a no-op. The siblings now import each other by name (`grep "^use crate::verbs::"
+// src/verbs/*.rs` is the map, and it is short), which is what makes a rule about where a
+// handler belongs something a person can state and a compiler can check.
+//
+// This glob stays honest only while it is the dispatcher's. If a *tenth* consumer appears, it
+// is a sibling and it should import by name.
+use linix::verbs::{check::*, cleanup::*, declare::*, history::*, packages::*, plan::*, setup::*, sync::*, upgrade::*};
 
 #[tokio::main]
 async fn main() -> Result<()> {

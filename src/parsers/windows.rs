@@ -351,11 +351,14 @@ fn parse_scoop_search(output: &str) -> Vec<Package> {
 /// one can never converge. The export is winget's own answer to *what could I put back*, and
 /// that is the only set adoption may write.
 ///
-/// A malformed or truncated export yields no packages rather than an error: the caller has
-/// already established the file exists, and `Sources` being absent is how winget writes
-/// "nothing to export".
-
-/// The two `export` readers below are `MachineListing` parsers — the negotiated path (`Q43`),
+/// **That paragraph used to end here saying a malformed or truncated export "yields no packages
+/// rather than an error", on the grounds that the caller has already established the file
+/// exists.** It is no longer true and it was the wrong instinct: the file existing says nothing
+/// about whether winget wrote a shape this reads. `Sources: []` is winget writing "nothing to
+/// export"; a document with no `Sources` key at all is a document this does not understand, and
+/// the two arrived as the same answer.
+///
+/// The two `export` readers here are `MachineListing` parsers — the negotiated path (`Q43`),
 /// asked for on a tool that may be too old for the flag. That makes them the *most* exposed
 /// readers in this file, not the least: the usage message an older winget or scoop prints in
 /// answer to a flag it does not have was being read as a machine with nothing installed. Both

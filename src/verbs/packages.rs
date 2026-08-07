@@ -1,3 +1,4 @@
+use crate::verbs::sync::handle_sync;
 use crate::model::Edit;
 use crate::verbs::prelude::*;
 

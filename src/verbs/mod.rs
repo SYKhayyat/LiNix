@@ -80,16 +80,16 @@ pub mod prelude {
     pub use std::collections::HashMap;
     pub use tracing::{info, warn};
 
-    pub use crate::verbs::check::*;
-    pub use crate::verbs::cleanup::*;
-    pub use crate::verbs::declare::*;
-    pub use crate::verbs::history::*;
-    pub use crate::verbs::packages::*;
-    pub use crate::verbs::perform_maintenance;
-    pub use crate::verbs::plan::*;
-    pub use crate::verbs::setup::*;
-    pub use crate::verbs::sync::*;
-    pub use crate::verbs::upgrade::*;
-    #[allow(unused_imports)]
-    pub use crate::*;
+    // **The nine `verbs::*` globs and `crate::*` used to be here, and their absence is the
+    // point.** With them, there was no module boundary inside `verbs/` at all: 8,587 lines in
+    // one namespace stored in nine files, where moving a function between them was a no-op and
+    // no rule about where a handler belongs could be enforced — or even stated. That is why
+    // `history.rs` holds `handle_export`, `handle_shell`, `handle_adopt`, `handle_bundle` and
+    // `handle_why`; why `plan.rs` holds `lock`/`unlock`; why `setup.rs` holds `handle_policy`
+    // and `handle_try`. **Nothing can enforce a name that costs nothing to violate.**
+    //
+    // What is left is what a prelude is for: the handful of types every handler in this
+    // directory genuinely uses. A cross-file reference is now an import, which means the
+    // compiler can be asked where things are — and a rule about file layout has something to
+    // describe.
 }

@@ -7860,3 +7860,50 @@ and flushed BEFORE the interpreter starts, which is the whole point of a write-a
 entry made afterwards describes a mutation that already happened, and the case it exists for is
 the one where 'afterwards' never comes."* Recorded here rather than built twice — a second
 breadcrumb would be the two-of-everything this repo keeps getting caught by.
+
+## Session 2026-08-07 — the verbs directory gets a module boundary (`LX-11`)
+
+`verbs/mod.rs:83-94` globbed all nine `verbs::*` modules **plus `crate::*`** into a prelude every
+file in the directory opened with. **There was no module boundary inside `verbs/` at all** — 8,587
+lines in one namespace stored in nine files, where moving a function between them was a no-op and
+no rule about where a handler belongs could be enforced, or even stated.
+
+That is why `history.rs` holds `handle_export`, `handle_shell`, `handle_adopt`, `handle_bundle`
+and `handle_why`; why `plan.rs` holds `lock`/`unlock`; why `setup.rs` holds `handle_policy` and
+`handle_try`. **Nothing can enforce a name that costs nothing to violate.**
+
+**The order was the point and it held.** Delete the glob first, let the compiler name every
+cross-file reference, and *only then* decide where things live — because doing it the other way
+round is a naming argument with nothing to enforce the outcome.
+
+The compiler named **thirty**, across fourteen functions. The map is now four lines of `grep`:
+
+    check.rs    -> history::handle_audit, plan::handle_status
+    cleanup.rs  -> perform_maintenance
+    declare.rs  -> sync::handle_sync
+    history.rs  -> plan::compute_full_changes, sync::handle_sync
+    packages.rs -> sync::handle_sync
+    plan.rs     -> perform_maintenance, sync::{enforce_policy, print_vars_changed}
+    setup.rs    -> perform_maintenance, plan::{approve_adapters, approve_exec_scripts,
+                   approve_generate_commands, build_and_write_locks, resolve_for_approval},
+                   sync::{enforce_policy, print_flight_plan}
+    sync.rs     -> perform_maintenance
+    upgrade.rs  -> perform_maintenance, setup::handle_canary,
+                   sync::{enforce_policy, print_flight_plan}
+
+Thirty references over nine files is a small, legible graph — which is the finding: it was always
+small, and nothing could see it. Note `setup.rs -> plan::*` (five of them) and the three files
+that reach `sync::enforce_policy`, both of which are the shape `LX-5` is about.
+
+**No behaviour changed.** All 63 dispatch arms keep working. `main.rs` still globs the nine
+modules, and that is a different relationship — a dispatcher does reference every handler. Its
+comment says so, and says that a *tenth* consumer would be a sibling and should import by name.
+
+Nothing was moved. The point of this change is that moving it is now a decision somebody can
+state.
+
+**One thing fell out on the way:** `parsers/windows.rs` carried a paragraph promising that *"a
+malformed or truncated export yields no packages rather than an error: the caller has already
+established the file exists."* `LX-1` reversed that this morning and the prose was left behind.
+Corrected in place — the file existing says nothing about whether winget wrote a shape the reader
+understands, which is the whole of `LX-1` in one sentence.

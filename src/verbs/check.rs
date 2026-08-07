@@ -1,3 +1,5 @@
+use crate::verbs::history::handle_audit;
+use crate::verbs::plan::handle_status;
 use crate::verbs::prelude::*;
 
 /// `unmanaged` — **what `adopt` would adopt** (II.8), which is the definition E6 asks for.

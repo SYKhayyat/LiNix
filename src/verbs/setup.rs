@@ -1,3 +1,6 @@
+use crate::verbs::perform_maintenance;
+use crate::verbs::plan::{approve_adapters, approve_exec_scripts, approve_generate_commands, build_and_write_locks, resolve_for_approval};
+use crate::verbs::sync::{enforce_policy, print_flight_plan};
 use crate::verbs::prelude::*;
 
 /// `absent` (II.8): every `absent:` line in force, and the module it comes from — what LiNix

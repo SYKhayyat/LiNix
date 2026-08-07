@@ -1,3 +1,5 @@
+use crate::verbs::perform_maintenance;
+use crate::verbs::sync::{enforce_policy, print_vars_changed};
 use crate::verbs::prelude::*;
 
 /// SEC2: once an install finishes, a verified package and an unverified one are

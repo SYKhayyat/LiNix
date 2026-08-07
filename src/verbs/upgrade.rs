@@ -1,3 +1,6 @@
+use crate::verbs::perform_maintenance;
+use crate::verbs::setup::handle_canary;
+use crate::verbs::sync::{enforce_policy, print_flight_plan};
 use crate::verbs::prelude::*;
 
 /// Everything `handle_upgrade` needs, bundled so the dispatch site stays readable and the

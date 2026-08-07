@@ -1,3 +1,4 @@
+use crate::verbs::sync::handle_sync;
 use crate::verbs::prelude::*;
 
 pub async fn handle_repo(app: &App, cmd: &RepoCommand) -> Result<()> {
