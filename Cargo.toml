@@ -111,7 +111,7 @@ ratatui = "0.30"
 # --- NEW FOR 3.6.0 ---
 
 # Feature 5: Native Scheduling & Logic
-cron = "0.12"      # Cron expression parsing for schedules
+cron = "0.17"      # Cron expression parsing for schedules
 
 # Feature 5: Notifications
 # Platform-Specific Dependencies
