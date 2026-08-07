@@ -162,6 +162,18 @@ pub struct Transaction {
     /// contains a removal, which is a larger change than this finding earns. The five effectors
     /// **are** compile-enforced; this is the seam that hands them their token.
     reaped: Option<crate::app::sync::guard::Reaped>,
+    /// What the manifest still asks for, as `backend:name`, when this transaction is a sync.
+    ///
+    /// **Rollback needs this to avoid un-converging the machine.** `Prior::Absent` means *this
+    /// package was not here before this run*, and rollback read that as permission to remove it.
+    /// But "was not here before" and "is not wanted now" are different facts, and the manifest
+    /// holds the second one. A package that installed cleanly and is still declared is not
+    /// failed work — it is the goal, reached early. Removing it means the next `sync` installs
+    /// it again, which is the one mechanism in the program that provably un-converges.
+    ///
+    /// `None` for a transaction that is not reconciling against a manifest, where the old
+    /// behaviour is right: there is no declaration to consult.
+    declared: Option<Arc<std::collections::HashSet<String>>>,
 }
 
 impl Transaction {
@@ -198,6 +210,7 @@ impl Transaction {
             config,
             app_config,
             reaped: None,
+            declared: None,
             hooks: None,
             completed_indices: HashSet::new(),
             history: Vec::new(),
@@ -220,6 +233,18 @@ impl Transaction {
     /// removal authorisation it has no removals for.
     pub fn guarded_by(mut self, reaped: crate::app::sync::guard::Reaped) -> Self {
         self.reaped = Some(reaped);
+        self
+    }
+
+    /// Tell rollback what the manifest still asks for, as `backend:name`.
+    ///
+    /// See the `declared` field. Without it, rollback compensates work that succeeded and is
+    /// still wanted, and `auto_rollback: true` — the default at `transaction.rs:60` — becomes an
+    /// anti-convergent step. `heal`, whose entire job is the same failure shape, sets
+    /// `auto_rollback: false`; nothing explained the split, and this is what it was standing in
+    /// for.
+    pub fn reconciling(mut self, declared: Arc<std::collections::HashSet<String>>) -> Self {
+        self.declared = Some(declared);
         self
     }
 
@@ -1025,6 +1050,24 @@ impl Transaction {
                             }
                         }
                         Prior::Absent => {
+                            // **`Prior::Absent` is not permission to remove.** It says the
+                            // package was not here before this run; it does not say nobody wants
+                            // it. If the manifest still declares it, this install is the goal
+                            // reached early, and compensating it hands the next `sync` the same
+                            // work to do again — the transaction's own comment at `:637` claims
+                            // rollback "puts this back", and removing something nothing asked it
+                            // to remove is the opposite.
+                            if self
+                                .declared
+                                .as_ref()
+                                .is_some_and(|d| d.contains(&format!("{}:{}", spec.backend, spec.name)))
+                            {
+                                info!(
+                                    "rollback is leaving {}:{} installed — it succeeded and the                                      manifest still declares it, so removing it would only give                                      the next sync the same work to do again.",
+                                    spec.backend, spec.name
+                                );
+                                continue;
+                            }
                             if let Some(p) = crate::app::sync::guard::protection_of(
                                 &self.app_config,
                                 Some(&spec.backend),

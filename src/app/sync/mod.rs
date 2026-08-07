@@ -623,9 +623,31 @@ impl<'a> SyncEngine<'a> {
             Arc::new(self.config.clone()),
             tx_config,
         );
+        // What the manifest still asks for, for rollback (`Y21`). Every `Install` node in this
+        // graph is a declaration the planner computed as `desired − present`, so the install set
+        // *is* the still-declared set for exactly the packages rollback could compensate — a
+        // `Prior::Absent` package is one this run installed, which means it was an install node.
+        //
+        // Deliberately built from the graph rather than threaded in from the model: a set
+        // assembled somewhere else could disagree with the plan being executed, and a rollback
+        // deciding from a second copy of the desired state is how the two drift apart.
+        let declared: std::collections::HashSet<String> = changes
+            .graph
+            .node_weights()
+            .filter_map(|w| match w {
+                GraphAction::Install(spec) => {
+                    Some(format!("{}:{}", spec.backend, spec.name))
+                }
+                _ => None,
+            })
+            .collect();
+
         // Per-package `before_install`/`after_install` hooks fire inside the engine,
         // at the moment each package installs (see Transaction::with_hooks).
-        let mut tx = tx.with_hooks(self.hooks.clone()).guarded_by(reaped);
+        let mut tx = tx
+            .with_hooks(self.hooks.clone())
+            .guarded_by(reaped)
+            .reconciling(Arc::new(declared));
 
         let pb = self
             .progress

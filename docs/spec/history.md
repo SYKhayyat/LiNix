@@ -7805,3 +7805,58 @@ and it was checked by nothing.
 `tests/*.rs` as a target, so at the top level it was a 716 KB binary containing **zero tests**,
 linked under `lto = true, codegen-units = 1`, its 312 lines compiled nineteen times. A directory
 is not a target and `mod mock_providers;` resolves there unchanged, so no caller moved.
+
+## Session 2026-08-07 — rollback stops removing what the manifest still asks for (`LX-3`)
+
+**`auto_rollback: true` is the default (`transaction.rs:60`), and it was anti-convergent.** On the
+first failure it walks the completed nodes backwards, and for each whose `Prior` is `Absent` it
+calls `remove` — on packages this run installed *successfully*, which are still in the manifest,
+which the next `sync` therefore reinstalls. `heal`, whose entire job is the same failure shape,
+sets `auto_rollback: false` (`sync/mod.rs:973`), and nothing explained the split.
+
+**The defect is not that rollback exists.** It is that rollback compensated work that succeeded
+and is still wanted. `Prior::Absent` says *this package was not here before this run*; it does not
+say *nobody wants it*. Those are different facts and the manifest holds the second one. A package
+that installed cleanly and is still declared is not failed work — it is the goal, reached early.
+
+So rollback consults the declaration before it compensates. `Transaction::reconciling` carries the
+still-declared set, built **from the graph being executed** rather than threaded in from the model:
+every `Install` node is a declaration the planner computed as `desired − present`, so the install
+set *is* the still-declared set for exactly the packages rollback could touch, and a set assembled
+somewhere else could disagree with the plan it is deciding about. `None` for a transaction that is
+not reconciling against a manifest — `shell`, `run`, `try` — where the old behaviour is right
+because there is no declaration to consult.
+
+Two things stay exactly as they were, deliberately: the guard call at `:993` (rollback checks
+`protection_of` before removing, and should), and `snapshot.rs`, which is the real undo and is
+load-bearing.
+
+### The test came first, and it was watched failing
+
+`a_machine_converges_tests.rs` had three acts — forward, backward, forward again — **all on the
+happy path**, so the one mechanism that provably un-converges ran in none of them. The fourth act
+declares two packages, fails one, and asserts the one that worked is still there.
+
+**It took three attempts to make the scenario reachable, and the reason is a good one.** `Y1`
+ruled that a manager's installs are batched into one invocation per wave, so two `brew:` lines are
+a *single* `brew install` — both succeed or both fail together, and there is no "the part that
+worked" left to preserve. `@requires` did not split it either. Two different managers are two
+commands, which is the shape the finding is about.
+
+Watched red before it was watched green: without the fix the call log ends
+`"brew uninstall -- fd"` — a package that installed cleanly, is still declared, and would have
+been reinstalled by the next sync.
+
+### The WAL half of the finding was already built
+
+`LX-3` closes by arguing that the write-ahead log's only non-recomputable entries are
+`Exec`/`ExecUndo`, and that what it needed was *"a breadcrumb beside the script:
+`exec_lock.rs` already owns script lifecycle and has `record_run`; it wanted `record_start`.
+~30 lines."*
+
+**It has one.** `apply/execs.rs:147` calls `record_start` with an `Exec` action before the
+interpreter starts, and the comment above it makes the same argument the finding does: *"Written
+and flushed BEFORE the interpreter starts, which is the whole point of a write-ahead record: an
+entry made afterwards describes a mutation that already happened, and the case it exists for is
+the one where 'afterwards' never comes."* Recorded here rather than built twice — a second
+breadcrumb would be the two-of-everything this repo keeps getting caught by.

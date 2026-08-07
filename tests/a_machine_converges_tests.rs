@@ -47,6 +47,14 @@ fn answer(mock: &MockExecutor, cmd: &str, stdout: &str) {
 /// that is holding a package and does not have it, which is not a state any real host is in
 /// and not a thing worth asserting about.
 async fn machine_holds(mock: &MockExecutor, names: &[&str]) {
+    // **These stubs are a world, not an expectation.** The mock's unmatched-registration check
+    // exists because a stub the product never ran usually means the test was wrong about the
+    // product's argv — `e2e_tests.rs` registered `brew install {name}` against a product that
+    // emits `brew install -- neovim`, and stayed green. That reading does not apply here: this
+    // helper describes what the *machine* is holding, and a machine having a state does not mean
+    // LiNix asks about every part of it. `brew leaves` goes unasked whenever nothing is being
+    // adopted, and `brew info -- fd` whenever no line mentions `fd`.
+    mock.allow_unmatched_registrations();
     let listing: String = names.iter().map(|n| format!("{} 1.0.0\n", n)).collect();
     answer(mock, "brew list --versions", &listing);
     answer(mock, "brew leaves", &names.join("\n"));
@@ -196,6 +204,89 @@ async fn convergence_never_reaches_for_what_linix_did_not_install() {
             .iter()
             .any(|c| c.contains("uninstall") && c.contains("fd")),
         "an undeclared package the user installed was scheduled for removal: {:?}",
+        calls
+    );
+}
+
+/// **The fourth act: a plan that fails part-way, and the sync after it.**
+///
+/// The three acts above prove convergence forward, backward and forward again — all of them on
+/// the happy path. `lamdan/whole-repo-2026-08-07.md` names the gap: *"convergence is proved
+/// forward and backward on the happy path only, and the one mechanism that provably un-converges
+/// runs only when something fails."*
+///
+/// That mechanism is `auto_rollback`, on by default (`transaction.rs:60`). On the first failure
+/// it walks the completed nodes backwards, and for each one whose `Prior` is `Absent` it calls
+/// `remove` — **on packages this run installed successfully, which are still in the manifest,
+/// which the next `sync` therefore reinstalls.** `heal`, whose entire job is the same failure
+/// shape, sets `auto_rollback: false`, and nothing explained the split.
+///
+/// So: declare two packages, make one of them fail, and assert that the run afterwards leaves
+/// the machine matching the file. The interesting assertion is not that the failure is reported.
+/// It is that **the package that succeeded is still there** — because `Prior::Absent` means *was
+/// not here before this run*, and rollback was reading it as *nobody wants this*.
+#[tokio::test]
+async fn a_failed_plan_does_not_undo_the_part_that_worked_and_is_still_declared() {
+    let kernel = TestKernel::new().await;
+    // **Two managers, not two lines under one.** `Y1` ruled that a manager's installs are
+    // batched into one invocation per wave, so `brew:fd` and `brew:neovim` are a single
+    // `brew install` — both succeed or both fail, and there is no "the part that worked" left
+    // to preserve. Two backends are two commands, which is the shape this test is about.
+    kernel
+        .mock_executor
+        .set_response("brew install -- fd", Ok(DryRunOutput::default().into()));
+    kernel.mock_executor.set_response(
+        "cargo install -- ripgrep",
+        Err(linix::core::Error::command_failed(
+            "error: could not compile `ripgrep`",
+        )),
+    );
+    // Rollback's compensating removal, registered so that if it is ever issued this test can
+    // say so by name rather than by an absence.
+    kernel
+        .mock_executor
+        .set_response("brew uninstall -- fd", Ok(DryRunOutput::default().into()));
+    machine_holds(&kernel.mock_executor, &[]).await;
+
+    // **Two managers, not two lines under one.** `Y1` ruled that a manager's installs are
+    // batched into one invocation per wave, so `brew:fd` and `brew:neovim` would be a single
+    // `brew install` — both succeed or both fail together, and there is no "the part that
+    // worked" left to preserve. Two backends are two commands, which is the shape this is about.
+    declare(&kernel, "brew:fd\ncargo:ripgrep\n").await;
+
+    // The plan is two installs; one of them fails, so the sync as a whole fails. That is
+    // correct and is not what this test is about.
+    let app = kernel.second_run().await;
+    let resolver = StateResolver::new(&app.config, app.registry.clone(), false).await;
+    let desired = resolver.resolve_desired_state().await.expect("resolves");
+    let changes = {
+        let state = app.state.lock().await;
+        ChangePlanner::new(app.registry.clone(), &state, &app.config)
+            .plan(&desired, PlanScope::Whole(HostBackends::default()))
+            .await
+            .expect("plans")
+    };
+    assert_eq!(changes.total_install(), 2, "both lines are new to this machine");
+    let engine = app.sync_engine().await;
+    let outcome = engine
+        .sync(changes, linix::app::sync::guard::GuardScope::Sync)
+        .await;
+    assert!(
+        outcome.is_err(),
+        "a plan with a failing member is a failed plan — half-applying it silently is the \
+         thing `continue_on_error: false` exists to prevent"
+    );
+
+    // **The assertion this act exists for.** `fd` installed, and `fd` is still declared. It is
+    // not failed work; it is the goal, reached early. Rollback compensating it would hand the
+    // next sync the same install to do again — which is a machine that oscillates rather than
+    // converges, and it is the one mechanism in the program that provably un-converges.
+    let calls = kernel.mock_executor.get_calls().await;
+    assert!(
+        !calls.iter().any(|c| c.contains("uninstall") && c.contains("fd")),
+        "rollback removed `fd`, which installed cleanly and is still in the manifest. \
+         `Prior::Absent` says the package was not here before this run; it does not say \
+         nobody wants it, and the manifest holds that second fact. Calls: {:?}",
         calls
     );
 }
