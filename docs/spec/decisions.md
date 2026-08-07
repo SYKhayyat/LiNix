@@ -302,7 +302,7 @@ this file exists to prevent, found on 2026-07-30 by adding a row to it.*
 
 ### Z — the readiness audit — 2
 
-*`docs/GRADE-2026-08-03.md` drove a real binary against the five questions the audit was
+*`docs/archive/GRADE-2026-08-03.md` drove a real binary against the five questions the audit was
 commissioned to answer and found twelve defects. Ten were internal correctness and were built
 without asking. Two are not mine: one is a legal choice and one changes a published verb name.*
 
@@ -4678,7 +4678,7 @@ manager reports a name no package line can hold"*, which was true and was a wall
 `2c51968` had taught the grammar and the validator about them. On this machine the names LiNix
 could not write were **161: six winget names, every one of them a name with a space, and 155
 `service:` names that are not a package-line question at all** (see below). The 185-backslash
-figure in `GRADE-2026-07-31.md` §5 G-2 describes a defect that no longer exists.
+figure in `docs/archive/GRADE-2026-07-31.md` §5 G-2 describes a defect that no longer exists.
 
 **RULED: quote it.** `winget:"ARP\Machine\X64\Mozilla Firefox"`. Rule in **II.19**, reason in
 **V.121**. After it, **zero** names winget reports on this machine are undeclarable, and the
@@ -5115,7 +5115,7 @@ listed rather than guessed at.
 
 ## Q25
 
-**Status: ANSWERED — ruled 2026-08-03.** Raised in `DIRECTIONS-2026-08-03.md` as `Q-A`/`Q-B`/`Q-F`
+**Status: ANSWERED — ruled 2026-08-03.** Raised in `docs/archive/DIRECTIONS-2026-08-03.md` as `Q-A`/`Q-B`/`Q-F`
 before that file was rewritten; the letters are recorded here so the old references resolve.
 
 **Q25 — May ownership be derived from the config repo's git history?** `registry.json` records
@@ -5152,7 +5152,7 @@ and it does not care why the registry is wrong.**
 **What survives.** Git as *enrichment* where it happens to be present — the commit, the date, the
 message you wrote, in `linix why`. Nothing votes on ownership, nothing needs reconciling, and its
 absence costs a clause rather than a verb. That is the surviving half and it is tracked in
-`DIRECTIONS-2026-08-03.md` §4.
+`docs/archive/DIRECTIONS-2026-08-03.md` §4.
 
 `registry.json` remains the source of truth for ownership. No rule in Part II changes.
 
@@ -5286,7 +5286,7 @@ the single list (its comment records that three copies had drifted until
 `setting:HKCU\Software\Foo` was read as a set difference by the only one that had never heard of
 `setting:`). **A test asserting `KEYWORDS` matches Part II's statement table** makes the twelfth
 keyword impossible to ship undocumented, without closing anything. That is an afternoon and it is
-sequenced ahead of this ruling in `DIRECTIONS-2026-08-03.md` §6.
+sequenced ahead of this ruling in `docs/archive/DIRECTIONS-2026-08-03.md` §6.
 
 **Q30 — Is the `--` terminator a property of a label, and is the table keyed on the wrong thing?**
 **RULED 2026-08-04: read the terminator off the tokens; keep one key per binary.**
@@ -5585,7 +5585,7 @@ because `scoop`'s failure was classified `unknown`, and it was classified `unkno
 `register_scoop`, `register_winget` and `register_choco` never call `with_manager_policy` — the
 three main Windows backends run with `ExitPolicy::default()`. Q1 (2026-07-27) already rules that
 a permanent failure withdraws the line, so that half needs no ruling and is a straight fix; see
-`docs/FINDINGS-2026-08-05.md` §1a. What is left for this entry is only the message naming the
+`docs/archive/FINDINGS-2026-08-05.md` §1a. What is left for this entry is only the message naming the
 innocent package.
 
 ## Q35

@@ -5,7 +5,7 @@ and time. You are the adversary, not the author.
 
 You are working in the LiNix repo at the path given to you. Read, in this order:
 
-1. `docs/READINESS-2026-07-27.md` — the prior assessment. **§0** is the defect index (`E1`–`E34`,
+1. `docs/archive/READINESS-2026-07-27.md` — the prior assessment. **§0** is the defect index (`E1`–`E34`,
    each with a reproduction), **§5** the diagnosis, **§8.1** the rubric you will grade against.
 2. `CLAUDE.md` and `docs/SPEC.md` — the repo's binding rules.
 3. This document, in full.

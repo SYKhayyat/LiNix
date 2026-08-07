@@ -841,7 +841,7 @@ prices, not impossibilities, and they are written as prices.
 ## Session 2026-07-31 (third) — the round-6 grade, worked: eight findings and the blocker that came back
 
 **Nothing here was reported by a user and nothing was found by running the suite.** The
-independent grader graded `a510728` at **B−** and left `docs/GRADE-2026-07-31.md` plus four red
+independent grader graded `a510728` at **B−** and left `docs/archive/GRADE-2026-07-31.md` plus four red
 tests. All eight findings are closed, plus `E3`, which had *re-reproduced* — `cargo fmt --check`
 failed on 12 diffs across 4 files, every one of them a file that session's own commits touched.
 The gate was fixed in round 1 and rated HARD in both release scripts; it simply was not run. That
@@ -1152,7 +1152,7 @@ all in the commit that carries the code.
 
 ## Session 2026-07-30 (third) — the round-6 orders: a typo that installs software, and three checks that were wrong before the code was
 
-`docs/GRADE-2026-07-30-round-5.md` graded the tree **B−** for entirely different reasons than the
+`docs/archive/GRADE-2026-07-30-round-5.md` graded the tree **B−** for entirely different reasons than the
 round before it, and `docs/BUILDER.md` turned its findings into `W33`–`W43`. All eleven are
 built. Every one of the grader's red tests is green without an assertion being lowered, and each
 fix is at the mechanism rather than the instance — which is also why four of them found a second
@@ -1253,7 +1253,7 @@ round 5's adversarial pass intact.
 
 ## Session 2026-07-30 (second) — the round-4 grade: a preview that armed a removal, and four gates that examined the wrong thing
 
-`docs/GRADE-2026-07-30.md` graded the tree **B−** and named one blocker and four defects. All five
+`docs/archive/GRADE-2026-07-30.md` graded the tree **B−** and named one blocker and four defects. All five
 are closed, each at the mechanism rather than at the instance, and the round's own thirteen red
 tests — committed by the grader in five files — are green without their assertions being lowered.
 The one-line diagnosis of the round was **"every finding is a gate that examines the wrong thing
@@ -1429,7 +1429,7 @@ belongs.
 
 ## Session 2026-07-29 (later) — round 3's six findings, and two rulings that had been half-applied
 
-`docs/GRADE-2026-07-29.md` graded the tree **B** and left nine red tests for six findings. All six
+`docs/archive/GRADE-2026-07-29.md` graded the tree **B** and left nine red tests for six findings. All six
 are closed and every red test is green, at the mechanism rather than the instance. The two the
 grade said to do first (N-1, N-2) were both the same shape: **a fix had gone to the instance that
 had a reproduction attached, and the family was never enumerated from the code.**
@@ -1746,14 +1746,14 @@ One thing the flag does not get: the argv-drift gate scores subcommands, not opt
 
 ## Session 2026-07-27 (last) — working `docs/BUILDER.md`, and four owner rulings
 
-`docs/READINESS-2026-07-27.md` indexed 36 defects (`E1`-`E34`) and `docs/BUILDER.md` turned them
+`docs/archive/READINESS-2026-07-27.md` indexed 36 defects (`E1`-`E34`) and `docs/BUILDER.md` turned them
 into work orders. This session worked them in tier order. **23 commits, unpushed.** Verified on
 Windows only: `cargo build --all-targets`, `cargo test` (23 binaries, 0 failures), `cargo clippy
 --all-targets --all-features -- -D warnings`, `cargo fmt -- --check`, `harness-logic-test.sh`
 35/35. Linux and macOS have compiled none of it.
 
 **Four owner rulings, taken and recorded as `Q1`-`Q4`** (a new register namespace, chosen after
-checking every other prefix for collisions — `PRODUCTION-READINESS-REVIEW.md` had reused `U1`-`U3`,
+checking every other prefix for collisions — `docs/archive/PRODUCTION-READINESS-REVIEW.md` had reused `U1`-`U3`,
 which are real register IDs, and that document's labels are now `PR1`-`PR3`):
 
 - **Q1 — a failed install withdraws its line** when the failure can never succeed
@@ -1813,7 +1813,7 @@ a ruling. *(That last one was ruled the next day — Q5, at the top of this file
 ## Session 2026-07-27 (later) — a production-readiness review, and the blind spot every gate shared
 
 A full read of the tree (202 files, 72,824 lines, 1,324 tests) against the running binary on
-Linux produced `PRODUCTION-READINESS-REVIEW.md`. Its verdict was **not production ready**, on one
+Linux produced `docs/archive/PRODUCTION-READINESS-REVIEW.md`. Its verdict was **not production ready**, on one
 finding that mattered more than the rest: **nothing in CI, in the container harnesses, or in any
 test had ever run LiNix attached to a terminal**, and every blocker lived in that gap. A green
 suite was not evidence against the findings; it was the reason they survived. All of them are
@@ -6173,7 +6173,7 @@ answer together, from one list pinned to `Statement::listed_as` by a test in bot
 
 # 2026-08-03 — the readiness audit, and its twelve findings
 
-`docs/GRADE-2026-08-03.md` drove a real binary against five questions — reliable, fast,
+`docs/archive/GRADE-2026-08-03.md` drove a real binary against five questions — reliable, fast,
 intuitive, extensible, useful — and found twelve defects: three blockers, one high, three medium,
 five low. **Ten were built here. Two are the owner's** and went into the register as `Z1` (no
 LICENSE) and `Z2` (`lock`/`unlock` are not inverses). *`Z2` was ruled and built later the same
@@ -6257,7 +6257,7 @@ appending to it. It is asked of clap now, in a test.
 
 ## 2026-08-03 — the direction file is ruled, and two of its three shifts are dead
 
-`DIRECTIONS-2026-08-03.md` was written the same day as the grade, against `ee5adf3`, proposing
+`docs/archive/DIRECTIONS-2026-08-03.md` was written the same day as the grade, against `ee5adf3`, proposing
 three architecture shifts and two dreams. It opened by saying *"do not build from this file"* and
 listed six unregistered questions. The owner took them one at a time. The file has been rewritten
 from scratch to hold only what survived, and the questions are registered as **Q25–Q29**.
@@ -6315,7 +6315,7 @@ and it is recorded in the direction file rather than fixed on a hunch.
 
 ## 2026-08-04 — the untested half, and two instruments that lied
 
-The owner's instruction after `docs/GRADE-2026-08-04.md` (**B+**): *"it is crucial that we test —
+The owner's instruction after `docs/archive/GRADE-2026-08-04.md` (**B+**): *"it is crucial that we test —
 real live tests — as much as we can… build the tests that really test everything like a human."*
 The grade's §5 is the list, and it is not a list of bugs — it is a list of **things nothing has
 ever run**: no mid-transaction `SIGKILL` → `heal`, no real `sudo`, no concurrency, and every
@@ -6500,7 +6500,7 @@ kills it, which is the one thing four opportunities all threw away.
 
 **The stall was never one bug.** Three different things produce the same picture — an idle
 `linix`, a log that stopped, a run that resumes the moment it is killed — and all three are now
-named, measured and written up in `docs/FINDINGS-2026-08-05.md`.
+named, measured and written up in `docs/archive/FINDINGS-2026-08-05.md`.
 
 **The capture went in before the run, and that is the whole reason any of this is known.** Four
 earlier opportunities were spent killing the process; three explanations were written and later
@@ -7351,3 +7351,58 @@ the visibility now — a gate that fails on a rename it does not care about is a
 to edit rather than read.
 
 `pkgsrc.rs`/`bsd.rs`, F-9's remaining item, was already resolved by `Y11`.
+
+## 2026-08-06 — the ID collision, and the review apparatus (lamdan F-8)
+
+**Two of F-8's four recommendations were already void, and checking was the work.**
+`decision-count.sh`'s `unrecognised`-and-exit-0 hole is closed — `say_bad` fires on it, with the
+defect written above the line. And `readme.md`'s five verb tables are now **gated**:
+`named_commands_exist_tests` walks clap's command tree, identifies a verb table by what it
+contains rather than where it sits, and pins how many there are so one cannot rot past
+recognition. F-8's argument for cutting them — *"the readme itself says `--help` cannot go stale
+the way a README can, and then goes stale in the next table"* — was true when it was written and
+was answered by `F-2`'s fix four commits earlier. Cutting them now would delete a working,
+checked feature to solve a problem that no longer exists.
+
+**The ID collision was live and is the dangerous one.** `CLAUDE.md` reserves `D*`, `W*`, `K*`,
+`N*`, `T*`, `U*` for register entries — an ID with one of those prefixes is a question to
+**stop and ask** about. `BUILDER.md` numbered its own **work orders**, things to build without
+asking, `W1`–`W43`. The series were disjoint in subject and identical in spelling: the
+register's `W9` is *"interpolation outside `when`"*, BUILDER's was *"run the native sweep in
+CI"*. A builder handed "W9" could not tell from the ID whether to write code or stop.
+
+**It had already happened once and been caught by hand.**
+`PRODUCTION-READINESS-REVIEW.md` numbered its findings `U1`–`U3`, noticed, renumbered to `PR*`
+and wrote a note at the top explaining the danger. `BUILDER.md` did it anyway, in the same
+repository, after that note existed. BUILDER's series is `B*` now, with the same note.
+
+**The gate found a third one nobody had reported.** `SESSION-2026-08-05.md` numbered its
+test-instrument defects `T1`–`T3` while the register's `T1` is `link:`'s decrypt mode leaking a
+secret in plaintext — and its *harness* series, `H*`, was already correctly distinct, so the
+document knew to separate two of its own series and still collided with the register. Renumbered
+`TI*`.
+
+**Where the gate draws its line, and why that is a property rather than an exemption.**
+`docs/spec/` **is** the register and the documents that annotate it — `SPEC.md` says so — and
+`bugs.md`, `history.md` and `why.md` name register IDs in heading position constantly and
+correctly: `bugs.md`'s `T1` row *is* the register's `T1`. Everything outside that directory is a
+separate work product. The scan self-tests on four planted lines first — the two shapes it must
+catch, a citation it must not, and a `B`-prefixed work order it must not.
+
+**Twelve dated review documents moved to `docs/archive/`,** with a README saying nothing there
+is instructions. Two were deleted instead, because they described finished work:
+`backend-expansion-plan.md` was *"Status: in progress"* over nineteen backends that have all
+shipped and named a `migrate` command that does not exist, and `BEHAVIOR.org` described itself
+as *"the parts of the binary's behaviour this document still describes"*. `AUDIT-v6.org` was on
+F-8's delete list and is archived instead: it is still cited by `INEFFICIENCIES.md` for a
+measurement nothing else recorded, and deleting a document another document leans on is not
+tidying. Every citation in the tree was repointed at the new path.
+
+**And the rule that would have prevented the pile is in `SPEC.md`, applied to the wrong half.**
+It said a *ruling* ships in the same commit as the code. It now says the same of a *finding*: a
+round's output is a diff to `target-state.md` plus a test that fails without the fix, not a new
+dated file. F-8's own count is the argument — `cargo fmt --check` went 26 → 0 → 0 → 0 → 12 → 60
+across the rounds, closed at the mechanism and the mechanism never run; `G-4` was closed with a
+mutation test its author watched go red and reopened two days later, same ID, same defect; *"a
+check that cannot fail"* appears in all seven. **The finding was written down every time.
+Writing it down is not the mechanism.**

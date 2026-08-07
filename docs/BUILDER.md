@@ -1,16 +1,27 @@
 # YOU ARE THE BUILDER
 
+> **Note on IDs.** This document's work orders are numbered `B1`, `B2`, … They were once
+> `W1`–`W43`, which collided with the decision register head-on: `CLAUDE.md` reserves `W*` for
+> register IDs you must **stop and ask** about, while a work order here is something to
+> **build**. The two series were disjoint in subject and identical in spelling — the register's
+> `W9` is *"interpolation outside `when`"*, this document's was *"run the native sweep in CI"* —
+> so a builder handed "W9" could not tell from the ID whether to write code or stop.
+>
+> `docs/archive/PRODUCTION-READINESS-REVIEW.md` hit this first and renumbered itself to `PR*`, with a note
+> explaining why. This document did it anyway, forty-three times.
+> `tests/id_namespaces_do_not_collide_tests.rs` is now what stops the third one.
+
 **Your job: raise LiNix to an A by writing code.** Work through the numbered work orders in this
 document, in tier order. Everything you need is here or named here.
 
 **Where the grade stands: C+ when this document was written, B− after round 5** — the ledger of
 how it moved is one file per round, `docs/GRADE-*.md`, newest last. **Start from the newest**:
 its §2 says which older orders are closed (do not re-open those) and its §3 is the specification
-for the newest tier at the bottom of this document. Round 6's orders are `W33`–`W43`.
+for the newest tier at the bottom of this document. Round 6's orders are `B33`–`B43`.
 
 You are working in the LiNix repo at the path given to you. Start by reading, in this order:
 
-1. `docs/READINESS-2026-07-27.md` **§5** (why the bugs cluster where they do) and **§8.1** (the
+1. `docs/archive/READINESS-2026-07-27.md` **§5** (why the bugs cluster where they do) and **§8.1** (the
    rubric you are being graded against). Do not skip these — they are why the work orders are
    shaped the way they are.
 2. `CLAUDE.md` and `docs/SPEC.md` — the repo's binding rules.
@@ -52,20 +63,20 @@ user would notice, anything that removes a feature, anything where Part II looks
 
 Every order below whose heading carries ⚠️ is in this table, and every row names the heading it
 belongs to. *(Corrected round 6: three of the four original rows pointed at numbers that had since
-moved — "W12 (exit codes)" is `W17`, "W13 (check health severity)" is `W15`, "W16 (supported vs
-experimental)" is `W18`. A table of what to stop and ask about, naming the wrong thing, in the
+moved — "B12 (exit codes)" is `B17`, "B13 (check health severity)" is `B15`, "B16 (supported vs
+experimental)" is `B18`. A table of what to stop and ask about, naming the wrong thing, in the
 document about checks that name the wrong thing.)*
 
 | order | why it needs a ruling |
 |---|---|
-| **W1** (manifest withdrawal) | Changes what happens after a failed install. The two harnesses disagree *in writing* about the intent — see `READINESS` §3.1. **Get the ruling, write it into `decisions.md` in the same commit.** |
-| **W15** (`check health` severity) | Changes what every user sees on a healthy machine. |
-| **W17** (exit codes) | Changes a published contract (`readme.md:708`) that scripts branch on. |
-| ~~**W18** (supported vs experimental)~~ | 🚫 **RULED AND REJECTED as `Q4`, 2026-07-27** — three days before round 6 asked for the ruling again. No label exists; the coverage is the work and its absence is a release blocker. **Do not build it.** See the correction at W18. |
-| **W22** (refusal exit codes and the hook) | Same published contract as W17, on the security refusals. |
-| **W29** (coverage ratchet threshold) | Ruled as `Q12`; the threshold was delegated to the builder. |
-| **W31** (`--backend <typo>`) | Changes what a mistyped flag does, which scripts may depend on. |
-| **W33** (a bare keyword as a package) | ✅ **Ruled 2026-07-30 as `Q16`** — refuse the bare word; `list:NAME` still means the package. Build it. |
+| **B1** (manifest withdrawal) | Changes what happens after a failed install. The two harnesses disagree *in writing* about the intent — see `READINESS` §3.1. **Get the ruling, write it into `decisions.md` in the same commit.** |
+| **B15** (`check health` severity) | Changes what every user sees on a healthy machine. |
+| **B17** (exit codes) | Changes a published contract (`readme.md:708`) that scripts branch on. |
+| ~~**B18** (supported vs experimental)~~ | 🚫 **RULED AND REJECTED as `Q4`, 2026-07-27** — three days before round 6 asked for the ruling again. No label exists; the coverage is the work and its absence is a release blocker. **Do not build it.** See the correction at B18. |
+| **B22** (refusal exit codes and the hook) | Same published contract as B17, on the security refusals. |
+| **B29** (coverage ratchet threshold) | Ruled as `Q12`; the threshold was delegated to the builder. |
+| **B31** (`--backend <typo>`) | Changes what a mistyped flag does, which scripts may depend on. |
+| **B33** (a bare keyword as a package) | ✅ **Ruled 2026-07-30 as `Q16`** — refuse the bare word; `list:NAME` still means the package. Build it. |
 
 Everything else in this brief is internal correctness. **Build it without asking.**
 
@@ -92,7 +103,7 @@ A work order is done when **all** hold:
 
 These break `sync` itself. Do them first.
 
-### W1 · `E1` — a permanently-failed install wedges the config
+### B1 · `E1` — a permanently-failed install wedges the config
 
 **Symptom.** `linix install scoop:<typo>` fails, the line is written to
 `modules/imperative.txt` anyway, and every later command that parses the model then fails. The
@@ -130,7 +141,7 @@ correctly.
 **Acceptance.** From a clean config: `linix install scoop:definitely-not-real-xyz123 -y` then
 `linix check` — `check` must succeed.
 
-### W2 · `E6` — `go`'s `list` is blind to a package that is installed
+### B2 · `E6` — `go`'s `list` is blind to a package that is installed
 
 **Symptom.** `PASS go installed … for real` / `PASS go: hello is on PATH` / **`FAIL go: list shows
 hello`**. Verified against disk: `~/go/bin/hello.exe` exists and is on `PATH`.
@@ -153,7 +164,7 @@ assert the installed module is reported under the name `sync` will look for.
 
 **Acceptance.** `linix install go:golang.org/x/example/hello -y && linix list -b go | grep hello`.
 
-### W3 · `E6b` — `nimble` install produces no binary and `list` cannot see it
+### B3 · `E6b` — `nimble` install produces no binary and `list` cannot see it
 
 **Symptom.** Two hard failures: `list shows nimjson` and `nimjson is on PATH`.
 `~/.nimble/bin` **is** on `PATH` and was never created.
@@ -164,7 +175,7 @@ nimble on Windows places binaries elsewhere. **Report the diagnosis before the p
 
 **Acceptance.** Full round-trip green in the native sweep, asserted while installed.
 
-### W4 · `E6c` — a successful install the user cannot invoke
+### B4 · `E6c` — a successful install the user cannot invoke
 
 **Symptom.** `pub` installs correctly and `list` is correct, but the binary is unreachable:
 `~/.pub-cache/bin` is not on `PATH`. LiNix reports success and says nothing.
@@ -183,11 +194,11 @@ naming the directory and the shell line to add. One warning, not a refusal.
 
 Until these land, every later result is unreliable — including your own.
 
-### W5 · `E2` — the assertion that deletes its own evidence
+### B5 · `E2` — the assertion that deletes its own evidence
 
 `docker/integration/run-in-container.sh:261-267` and `scripts/integration-windows.sh:269-274`
 `grep -v` the line out of the manifest and then assert it is absent. **Delete the scrub. Let the
-assertion test the product.** It will go red until W1 lands — that is correct and is the point.
+assertion test the product.** It will go red until B1 lands — that is correct and is the point.
 
 **Siblings.** Audit both harnesses for any mutation (`mv`, `rm`, `sed`, `grep -v`, `unmanage`,
 `|| true`) within ~5 lines above an `ok`/`nok`. Then run the mutation experiment in
@@ -196,7 +207,7 @@ check that tests nothing.**
 
 **Acceptance.** With a do-nothing `linix` stub, both harnesses fail loudly instead of passing.
 
-### W6 · `E5` — the catch-all that launders real defects
+### B6 · `E5` — the catch-all that launders real defects
 
 Both harnesses soften *any* install failure to
 `soft "<backend>: install of <pkg> failed (ecosystem/network variance)"` and **skip that
@@ -215,20 +226,20 @@ variance: one was LiNix correctly refusing, two were real backend defects (`helm
 **Acceptance.** Point a backend at a package that cannot exist → the harness reports a failure,
 not a soft pass. Point it at something LiNix should refuse → reported as a refusal.
 
-### W7 · `E3`,`E4` — the ship gate is weaker than CI
+### B7 · `E3`,`E4` — the ship gate is weaker than CI
 
 `release-check.ps1` and `release-check.sh` rate `cargo fmt --check` *informational*;
 `.github/workflows/ci.yml:72` rates it fatal. Make both **hard**. Then run `cargo fmt` (26 diffs
 across 10 files today) and diff *every* local gate step against every CI step, reporting
 asymmetries in both directions.
 
-### W8 · `E26` — 10 commits CI has never seen
+### B8 · `E26` — 10 commits CI has never seen
 
 5,082 inserted lines including a 711-line executor rewrite, compiled and tested on Windows only.
-After W7, **push and get a verdict.** The last time this repo carried a large unpushed backlog,
+After B7, **push and get a verdict.** The last time this repo carried a large unpushed backlog,
 the first CI run that saw it failed on all three platforms on two distinct bugs.
 
-### W9 — run the native sweep in CI
+### B9 — run the native sweep in CI
 
 Every hard failure in this assessment came from `release-check.ps1`'s section 12, and **no
 automated gate runs it on any platform.** Add a Windows job. Keep it off the per-push path if it
@@ -238,7 +249,7 @@ is slow, but it must run nightly and be consulted.
 
 ## Tier 3 — Backend correctness
 
-### W10 · `E7`,`E8`,`E9` — scoop's exit code is always 0
+### B10 · `E7`,`E8`,`E9` — scoop's exit code is always 0
 
 **Root cause (verified).** Windows `PATHEXT` has no `.PS1`, so `which::which("scoop")` resolves
 `scoop.cmd`; `windows_effective_command` (`src/core/executor.rs:231`) takes the `"cmd"|"bat"`
@@ -262,7 +273,7 @@ than status, say so.
 
 **Acceptance.** `linix uninstall scoop:<not-installed>` reports failure, not success.
 
-### W11 · `E10` — `psresource` reports healthy and cannot run
+### B11 · `E10` — `psresource` reports healthy and cannot run
 
 `src/backends/psresource.rs:120` probes **PowerShell**, which always exists, not **PSResourceGet**,
 which supplies its cmdlets and does not ship with Windows PowerShell 5.1. Result: `[READY]`
@@ -280,7 +291,7 @@ claims health and cannot answer `list` is lying, whatever the reason. This would
 `psresource` (shell vs module), `setting` (adapter), `service` (init), `web`/`github`/`link`
 (always true — correct, they are built in), `appimage` (`cfg!(target_os)` only).
 
-### W12 · `E11`,`E12`,`E13` — three argv defects, and the gate that would have caught all three
+### B12 · `E11`,`E12`,`E13` — three argv defects, and the gate that would have caught all three
 
 | id | defect | fix |
 |---|---|---|
@@ -294,7 +305,7 @@ that manager's own help output. This is the single highest-leverage test in the 
 converts silent upstream drift into a named failure, and it is the difference between fixing
 `pixi` today and fixing its successor automatically.
 
-### W13 · `E16`,`E17` — two search parsers emit junk
+### B13 · `E16`,`E17` — two search parsers emit junk
 
 `pixi` is routed to `names_only` (`src/parsers/ecosystem.rs:60`), documented as "search prints
 bare identifiers". **Real `pixi search` output is a detail record** (`Name`/`Version`/`Build`/…
@@ -310,7 +321,7 @@ parses, and from no other tool.* Capture real `list`/`search`/`info` output per 
 `tests/fixtures/<backend>/<verb>.txt`, and include **the empty, single-result, not-found and
 error cases** — three of those four are where junk rows come from.
 
-### W19 · `E18`,`E19` — one condition, two message families, both naming the wrong program
+### B19 · `E18`,`E19` — one condition, two message families, both naming the wrong program
 
 Two implementations render "this backend's program is missing", and a user sees **both in one
 screen**:
@@ -342,7 +353,7 @@ shape, and each names the program it looked for.
 
 ## Tier 4 — The human path
 
-### W14 · `E14`,`E15` — `info` takes 98s to return a wrong answer
+### B14 · `E14`,`E15` — `info` takes 98s to return a wrong answer
 
 `linix info cargo:ripgrep` → `Package 'cargo:ripgrep' not found in any available backend.` in
 **1m37s**, while `linix search ripgrep` in the same tree returns `cargo ripgrep 15.2.0`. Two
@@ -352,14 +363,14 @@ commands in one program contradict each other and the wrong one is the slow one.
 **Then add latency budgets as a gate**: read-only commands under 2s, a qualified `info` under 5s.
 Nothing measures latency today, which is how a 98-second `info` shipped.
 
-### W15 · `E20`,`E21` — "23 critical" on a healthy machine ⚠️ needs a ruling (0.1)
+### B15 · `E20`,`E21` — "23 critical" on a healthy machine ⚠️ needs a ruling (0.1)
 
 `check health` opens with `Backends: 25 OK, 0 degraded, 23 critical (of 48 total)` on an ordinary
 Windows box. Nothing is wrong — those are managers the user has not installed. Meanwhile the
 `check` rollup says `ok health 25 backend(s) ready`. **The rollup and the detail view disagree
 about the same machine.** Propose: *absent* as its own state, distinct from *critical*.
 
-### W16 · `E27`,`E28`,`E30`,`E22`,`E23`,`E12` — the first hour
+### B16 · `E27`,`E28`,`E30`,`E22`,`E23`,`E12` — the first hour
 
 - First-run `linix sync` explains the `priority` format by hand and **never mentions `linix init`**
   (`E27`). It is the first command a new user runs.
@@ -375,7 +386,7 @@ about the same machine.** Propose: *absent* as its own state, distinct from *cri
 **The rule worth adopting:** every user-visible failure names (a) what failed in the user's words,
 (b) the file or command to act on, (c) exactly one place to look. Then test for it.
 
-### W17 · `E24`,`E25` — the published exit-code contract is violated ⚠️ needs a ruling (0.1)
+### B17 · `E24`,`E25` — the published exit-code contract is violated ⚠️ needs a ruling (0.1)
 
 `readme.md:708` publishes four codes and says *"a script can branch on them"*. Measured:
 `linix nosuchcommand`, `linix --nosuchflag` and `linix sync --badflag` all exit **2** — which the
@@ -387,7 +398,7 @@ Separately, a `purge-unmanaged` ratio refusal exits **1**, not the documented **
 with `anyhow::bail!` rather than `Error::Refused`. Audit every refusal for the same slip; the
 native harness asserts these with `nok`, which accepts any non-zero code and cannot tell 1 from 3.
 
-### W20 · `E29`,`E31`,`E32` — documentation that has drifted from the register
+### B20 · `E29`,`E31`,`E32` — documentation that has drifted from the register
 
 Small, but this repo's stated thesis is that undetected drift is what cost it 84 unanswerable
 decisions. Each of these is a one-line fix plus a check that stops it recurring.
@@ -396,7 +407,7 @@ decisions. Each of these is a one-line fix plus a check that stops it recurring.
   `docs/spec/decisions.md:64` says *"All 104 are ruled: 102 ANSWERED, 2 PARKED, 0 OPEN."* The
   register is the authority; the map is stale. **Then make the count generated, not typed** — two
   files that both track one number will disagree again.
-- **`E32`** — `PRODUCTION-READINESS-REVIEW.md` uses `U1`/`U2`/`U3` for its own findings, but
+- **`E32`** — `docs/archive/PRODUCTION-READINESS-REVIEW.md` uses `U1`/`U2`/`U3` for its own findings, but
   `CLAUDE.md` reserves `U*` for register IDs requiring an owner ruling, and the register's real
   `U1` is *"where does a custom backend definition live"* (ruled 2026-07-23). Rename that
   document's labels. It costs nothing and removes a live trap for exactly the agent reading these
@@ -410,7 +421,7 @@ decisions. Each of these is a one-line fix plus a check that stops it recurring.
 
 ## Tier 5 — The structural change (this is the one that matters)
 
-### W18 · `E33` and the whole of §5 — redefine "supported" 🚫 **RULED AND REJECTED — DO NOT BUILD**
+### B18 · `E33` and the whole of §5 — redefine "supported" 🚫 **RULED AND REJECTED — DO NOT BUILD**
 
 > **Corrected 2026-07-30 by the round-6 builder.** This order asks for a ruling it already had,
 > and the ruling was **no**. `Q4`, ruled by the owner on **2026-07-27**, three days before this
@@ -430,7 +441,7 @@ decisions. Each of these is a one-line fix plus a check that stops it recurring.
 > not a caption. No new backend until the current set passes.
 >
 > So items 1–4 below are superseded: **only item 4 survives**, and item 1's round-trip is the
-> work rather than the label. The three sentences elsewhere in this document calling W18 "the
+> work rather than the label. The three sentences elsewhere in this document calling B18 "the
 > highest-value change" and "still untouched" describe a change that must not be made. The
 > register is the authority and the map was stale — which is `E31`'s finding, on the document
 > that reported it.
@@ -464,7 +475,7 @@ item in this document that stops §5.1 from regenerating.
 Tiers 1–5 reach **A**. A+ needs test *kinds* this repo does not have. Specified in full in
 `docs/GRADER.md` §4–§6; summarised here so the bar is in one place:
 
-- **Argv-drift gate** (W12) running nightly against every installed manager.
+- **Argv-drift gate** (B12) running nightly against every installed manager.
 - **pty coverage on every read command**, not just `list`; all four stdin/stderr handle
   combinations for mutations; real `sudo` with a password in a container.
 - **Destructive effectors in disposable VMs** — btrfs/zfs/lvm restore on loopback filesystems,
@@ -481,14 +492,14 @@ Tiers 1–5 reach **A**. A+ needs test *kinds* this repo does not have. Specifie
   the manifest; `bundle`∘`restore` = identity; a reference model of desired state compared against
   `eval` after random command sequences.
 - **Grammar fuzzing** — nothing panics, everything is a named refusal.
-- **Latency budgets** enforced per command class (W14).
+- **Latency budgets** enforced per command class (B14).
 
 ---
 
 # ROUND 2 — added by the Grader, 2026-07-28
 
 Round 1 landed: **27 of the 34 defects are closed and independently reproduced**. The full
-disposition, the coverage ledger and the evidence are in `docs/GRADE-2026-07-28.md`. Read that
+disposition, the coverage ledger and the evidence are in `docs/archive/GRADE-2026-07-28.md`. Read that
 before starting; the numbered findings below are `G-n` in it.
 
 **Grade: B−**, up from C+. The rubric's **B** bar is not met on two of its four clauses.
@@ -514,7 +525,7 @@ paths and was never re-derived from the code:
 
 ## Tier 1 (round 2) — the safety model is incomplete
 
-### W21 · `G-1` — a removal path with no guard, no count, and no plan line
+### B21 · `G-1` — a removal path with no guard, no count, and no plan line
 
 **Symptom.** With `[guard] max_removals = 1` and `protected_packages = ["f3"]` — confirmed
 effective by `linix protected` — undeclaring five `link:` lines and running `linix sync -y`
@@ -554,7 +565,7 @@ trust me.
 or at minimum list the five removals and count them against `max_removals`, and must never delete
 a protected name.
 
-### W22 · `G-10` — the security refusals exit 1, and the refusal hook never fires ⚠️ needs a ruling (0.1)
+### B22 · `G-10` — the security refusals exit 1, and the refusal hook never fires ⚠️ needs a ruling (0.1)
 
 **Symptom.**
 
@@ -595,7 +606,7 @@ scored *"a defect, not ecosystem variance"*. `READINESS` §3.4 complained a corr
 laundered into a soft pass; it is now laundered into a **false hard failure**. Fixing this fixes
 the harness for free — do not patch `classify_install` instead.
 
-**⚠️ Needs a ruling (0.1)** — same reason W12/W17 did: it changes a published contract.
+**⚠️ Needs a ruling (0.1)** — same reason B12/B17 did: it changes a published contract.
 
 > `readme.md` promises exit 3 means "LiNix refused on purpose". Right now that is true when it
 > refuses to remove too many packages, and false when it refuses to download over plain HTTP or
@@ -617,7 +628,7 @@ which way it went.
 
 ## Tier 2 (round 2) — `--dry-run` still acts
 
-### W23 · `G-2` — five verbs perform their action during a preview
+### B23 · `G-2` — five verbs perform their action during a preview
 
 **Symptom.** Measured on a fresh config, each against a control that runs the same command without
 the flag:
@@ -653,7 +664,7 @@ again, assert byte-identical — and assert the control *did* change it.
 
 ## Tier 3 (round 2) — argv, and the gate that does not cover it
 
-### W24 · `E11` reopened + `G-8` — the argv-drift gate checks subcommands, not flags
+### B24 · `E11` reopened + `G-8` — the argv-drift gate checks subcommands, not flags
 
 **Symptom.** `E11` is **not closed**. On this Windows host it failed with `plugin already exists`
 (residue from an earlier run) which masked the real argv; in a **fresh** container:
@@ -675,7 +686,7 @@ rejects, and the gate was green throughout.
 **Fix.** Two parts, and the second is the one that matters. (a) Make the helm flag conditional on
 what the installed helm accepts. (b) **Extend the drift gate to flags and operands** — for each
 manager, assert every flag LiNix may pass appears in that manager's help. This is the highest-value
-item in Round 2 for the same reason W12's gate was in Round 1.
+item in Round 2 for the same reason B12's gate was in Round 1.
 
 **Test first.** A fixture from helm 3's `plugin install --help` (no `--verify`) and one from
 helm 4's (with it); assert LiNix builds a different argv against each.
@@ -684,7 +695,7 @@ helm 4's (with it); assert LiNix builds a different argv against each.
 
 **Acceptance.** `linix install 'helm:secrets@url=…,unverified'` succeeds in the `tools` container.
 
-### W25 · `G-9` — four backends fail a real install, found the first time anyone ran them
+### B25 · `G-9` — four backends fail a real install, found the first time anyone ran them
 
 From the `tools` image, which I built and ran (**324 pass, 16 fail**). Each failed **twice**, so
 the classifier correctly called them defects, not variance:
@@ -696,15 +707,15 @@ the classifier correctly called them defects, not variance:
 | `spack` | `Spec ~~zlib has no name` | the version-pin syntax is doubling a `~` |
 | `opam` | `No switch is currently set` (exit 50) | needs an initialised switch; nothing sets one or says so |
 
-Three of four are malformed argv — the same family as W24. `nimble` additionally installs and
-lists correctly while its binary never reaches `PATH` (W4's family, in the container).
+Three of four are malformed argv — the same family as B24. `nimble` additionally installs and
+lists correctly while its binary never reaches `PATH` (B4's family, in the container).
 
 **Acceptance.** The `tools` image reaches `fail=0`, or each remaining failure is named in
 `decisions.md` as an environment limitation with a reason.
 
-### W26 · `E7`,`E9` still open — scoop's exit code is still lost
+### B26 · `E7`,`E9` still open — scoop's exit code is still lost
 
-W10 did not land. Measured, same failing command down each branch on this host:
+B10 did not land. Measured, same failing command down each branch on this host:
 
 ```
 cmd /C …\scoop.cmd install <bad>   -> exit 0     # the branch LiNix takes
@@ -722,7 +733,7 @@ finding manufactured from a file suffix.
 **Test first.** Already red: `tests/grader_shim_exit_code_tests.rs` (2; the second *measures* both
 branches rather than inferring from the extension).
 
-### W27 · `E12` / `G-3` — `Transient` is a claim nothing tests
+### B27 · `E12` / `G-3` — `Transient` is a claim nothing tests
 
 `luarocks install luafilesystem` fails identically three times in a row while
 `curl https://luarocks.org/manifest-5.5` returns **200** — luarocks' own downloader is what fails,
@@ -742,7 +753,7 @@ repeat a defect. The product asserts the same thing from a string and never test
 
 ## Tier 4 (round 2) — checkers that examine the wrong thing
 
-### W28 · `G-4` — gate parity compares basenames, not gates
+### B28 · `G-4` — gate parity compares basenames, not gates
 
 `harness-logic-test.sh:291` greps `ci.yml` for `scripts/*.sh` and asserts each **basename** appears
 in both release scripts. CI runs `harness-mutation-test.sh` **twice** — once bare (Windows
@@ -756,7 +767,7 @@ invocation fails on a clean tree (90 survivors against a default of 86).
 
 **Test first.** Already red: `tests/grader_gate_parity_tests.rs` (2).
 
-### W29 · `G-11` — the coverage audit has a floor for an empty registry and none for collapsed coverage ⚠️ needs a ruling (0.1)
+### B29 · `G-11` — the coverage audit has a floor for an empty registry and none for collapsed coverage ⚠️ needs a ruling (0.1)
 
 The clean Windows sweep reports `backends: 4 real lifecycle, 12 install-attempted, 44 plan-smoked`
 and `PASS every registered backend got a lifecycle or a plan-smoke`. Four — not because anything
@@ -777,7 +788,7 @@ none for collapsed *lifecycles*.
 **No red test from me**, deliberately: picking the threshold is the owner's call, and a test that
 encodes my guess would be the wrong kind of check.
 
-### W30 · `G-5` — `scripts/grader-red-tests.sh` is a gate nobody runs that cannot go green
+### B30 · `G-5` — `scripts/grader-red-tests.sh` is a gate nobody runs that cannot go green
 
 131 lines, run by **no** CI job and **neither** release script. Two problems: almost every check is
 a **grep over source text** rather than a behaviour (`G6` passes if the word `is_terminal` appears
@@ -789,7 +800,7 @@ the ruling that superseded it.
 permanently-red, un-run file of source greps is worse than nothing: it is the shape of check this
 whole effort exists to remove.
 
-### W31 · `G-7` — `list --backend <typo>` succeeds silently ⚠️ needs a ruling (0.1)
+### B31 · `G-7` — `list --backend <typo>` succeeds silently ⚠️ needs a ruling (0.1)
 
 `install` refuses an unknown backend with an excellent message naming the file and the fix. `list`
 answers the same question with exit 0 and no output — for `nosuchbackend`, `aptt`, `APT`, and the
@@ -807,28 +818,28 @@ recorded 24/24 before testing my own oracle, and corrected it.
 
 **Test first.** Already red: `tests/grader_unknown_backend_tests.rs`.
 
-### W32 · `E26` — still 10 commits CI has never seen
+### B32 · `E26` — still 10 commits CI has never seen
 
 `origin/main` is at `213973a`; HEAD is 10 commits and 1,978 inserted lines ahead, including a
 350-line Windows-cron rewrite. I verified the tree **compiles** on Linux (the ubuntu image build
 runs `cargo build --release` and succeeded); `cargo test` on Linux and anything on macOS remain
-unverified. W8 asked for this in Round 1. Push it.
+unverified. B8 asked for this in Round 1. Push it.
 
 ---
 
 ## What Round 2 does *not* change
 
 `E15` (search at 145 s) and `E33` (psresource's truncated error, untestable without PSResourceGet
-installed) are unchanged and unaddressed; W14's latency budgets are still the item that would
-move the grade most. *(Corrected 2026-07-30: the other one named here, W18's
-supported/experimental split, was ruled and REJECTED as `Q4` on 2026-07-27 — see W18.)* Nothing above supersedes Tier 5 or
+installed) are unchanged and unaddressed; B14's latency budgets are still the item that would
+move the grade most. *(Corrected 2026-07-30: the other one named here, B18's
+supported/experimental split, was ruled and REJECTED as `Q4` on 2026-07-27 — see B18.)* Nothing above supersedes Tier 5 or
 Tier 6 — they remain the path from B to A.
 
 ---
 
 # Round 6 — the work orders from the round-5 grade
 
-Source: `docs/GRADE-2026-07-30-round-5.md`, graded at `0cdeca2`. **Every round-4 finding
+Source: `docs/archive/GRADE-2026-07-30-round-5.md`, graded at `0cdeca2`. **Every round-4 finding
 (`B-1`, `P-1`–`P-4`) is closed and verified by its original reproduction on two platforms — do
 not re-open them.** What follows is new, and the red tests for most of it are already committed
 and failing.
@@ -836,15 +847,15 @@ and failing.
 Read the grade document's §3 before starting: each order below is a summary of an entry there
 that carries the measured output, and the measurement is the specification.
 
-**Two of these are old orders, unfinished.** W35 is the half of `W27` that was never built, and
-W36 extends `W17`'s audit from refusals to failures. Neither is a regression; both are a family
+**Two of these are old orders, unfinished.** B35 is the half of `B27` that was never built, and
+B36 extends `B17`'s audit from refusals to failures. Neither is a regression; both are a family
 that was fixed at the reported instance and left live one layer over.
 
 ---
 
 ## Tier 1 (round 6) — a typo installs software
 
-### W33 · `R-1` / **`Q16`** — a bare grammar keyword is a package name ✅ **ruled 2026-07-30**
+### B33 · `R-1` / **`Q16`** — a bare grammar keyword is a package name ✅ **ruled 2026-07-30**
 
 A module containing the single word `link` — which is what a half-typed
 `link:SRC @target=DEST` line looks like — declares a package. `linix eval` reports
@@ -887,9 +898,9 @@ which is presumably fine and intended.
 **Also fix, and it needs no ruling:** resolving one of these costs **10–27 seconds**, because a
 bare name has no backend and the resolver asks every manager in priority order. The same fixture
 with `cargo:ripgrep` is 0.2s. Whatever `Q16` rules, a name that no backend claims should not cost
-half a minute to find that out. See W41.
+half a minute to find that out. See B41.
 
-### W34 · `R-2` — `adopt` re-declares what the manifest already names, and mislabels its own count
+### B34 · `R-2` — `adopt` re-declares what the manifest already names, and mislabels its own count
 
 One package declared and installed, and `adopt` writes a second declaration for it in
 `adopted.txt` — so *"Deleting a line UNINSTALLS that package on the next sync"*, printed two
@@ -920,8 +931,8 @@ inputs. One more is known: `--dry-run unhold` prints *"would release 1 hold(s)"*
 
 ## Tier 2 (round 6) — the classification is computed and then not consulted
 
-### W35 · `R-3` — a `Transient` failure is reported as "Nothing classified the failure above"
-#### *(this is the unbuilt half of `W27`)*
+### B35 · `R-3` — a `Transient` failure is reported as "Nothing classified the failure above"
+#### *(this is the unbuilt half of `B27`)*
 
 `error.rs:226` classifies a rate limit `Transient` and says why: *"The whole point of a rate limit
 is that the window moves."* `why_kept` (`verbs/packages.rs:274`) branches on `Refused`,
@@ -935,7 +946,7 @@ Error: API rate limit: … does not reset for 1236s, past the 30s ceiling. …
       passing one …
 ```
 
-The advice inverts the truth: a rate limit repeats unchanged *because* it is passing. W27 asked
+The advice inverts the truth: a rate limit repeats unchanged *because* it is passing. B27 asked
 you to *"stop telling the user a retry will help"* when it will not; the same sentence needs to
 stop telling them nothing looked, when something did.
 
@@ -959,11 +970,11 @@ macOS coverage down over a rate limit, permanently. It is the one edit `scripts/
 exists to make visible in a diff.
 
 **Siblings.** Both production consumers of `retryability()` were enumerated: `transaction.rs:551`
-(`give_up = … == Permanent`) is correct and needs nothing. W36 is the third place that has the
+(`give_up = … == Permanent`) is correct and needs nothing. B36 is the third place that has the
 classification and ignores it.
 
-### W36 · `R-6` — `heal` reports an unrecovered operation at rc=0, in Rust `Debug` syntax
-#### *(this extends `W17`'s audit from refusals to failures)*
+### B36 · `R-6` — `heal` reports an unrecovered operation at rc=0, in Rust `Debug` syntax
+#### *(this extends `B17`'s audit from refusals to failures)*
 
 **The behaviour underneath is right and must not change**: given an `InProgress` install for a
 package that does not exist, `heal` attempts the recovery, fails, and **leaves the entry
@@ -980,7 +991,7 @@ heal rc=0
 ```
 
 1. **rc=0** after *"1 operation(s) could NOT be recovered"*. `linix heal && echo ok` prints ok.
-   W17 audited *refusals* for the exit-code contract; failures were not in scope and are not
+   B17 audited *refusals* for the exit-code contract; failures were not in scope and are not
    covered.
 2. **`{:?}` on an `Option<Error>` printed at the user** — `Some(CommandFailed { … })`,
    `retry: Permanent`, `absent_name: true`. `absent_name` is an internal field the N-1 fix added
@@ -1005,7 +1016,7 @@ sweep, the shell-exit teardown. Check each for an exit code that ignores its own
 
 ## Tier 3 (round 6) — messages, and one platform defect
 
-### W37 · `R-4` — `linix list` and `linix info` contradict each other on macOS
+### B37 · `R-4` — `linix list` and `linix info` contradict each other on macOS
 
 `tests/grade2_info_tests.rs` is red on `macos-latest`: `list` reports
 `service:com.apple.SafariHistoryServiceAgent` and `info` about that exact name answers *"is not
@@ -1023,7 +1034,7 @@ reports and asks `info` about it. Do not narrow it to skip services.
 **Siblings.** Every backend whose `list` enumerates something its `info` resolves differently.
 `service` on Linux (systemd units) is the obvious twin and was not measured.
 
-### W38 · `R-5` — a refusal that names no file, about a character nobody can see, echoed raw
+### B38 · `R-5` — a refusal that names no file, about a character nobody can see, echoed raw
 
 Two error classes over one 60-line module with one bad line at 40:
 
@@ -1054,7 +1065,7 @@ location decoration", not this one message.
 
 ## Tier 4 (round 6) — gates, and the number nobody computes
 
-### W39 · `R-7` — the mutation gate has a ceiling and no floor
+### B39 · `R-7` — the mutation gate has a ceiling and no floor
 
 `scripts/harness-mutation-test.sh` fails when survivors exceed the budget (92 container / 86
 Windows) and asserts nothing about `CAUGHT`. Proven rather than argued — pointed at a harness with
@@ -1067,7 +1078,7 @@ exits 0. It cannot tell *"the checks got stronger"* from *"the checks were delet
 audit; an assertion-strength collapse — deleting the effect assertions while still invoking every
 subcommand — passes all three gates today. Check the other two for the same one-sidedness.
 
-### W40 · `R-8` — one orphan fixture
+### B40 · `R-8` — one orphan fixture
 
 `tests/fixtures/cargo/install-list.txt` was captured from the real tool and is read by no test —
 the only orphan of the 30. The cargo parser is correct, so this is a false signal of coverage
@@ -1075,7 +1086,7 @@ rather than a hidden bug, in the same commit that established the rule fixtures 
 Wire it up (assert the indented binary lines are not packages, which is `pixi:exposes`' family) or
 delete it. **Then add the check**: a test that every file under `tests/fixtures/` is referenced.
 
-### W41 · `R-9` / **`W14` reopened** — nothing measures latency
+### B41 · `R-9` / **`B14` reopened** — nothing measures latency
 
 Release binary, five samples, a machine with 24 ready backends:
 
@@ -1087,7 +1098,7 @@ linix policy / vars / eval / check config          ~0.25s
 ```
 
 The split is diagnostic: config-only commands are instant, anything that queries the managers is
-6–55 seconds **with a 6× spread on the same command**. W14 fixed one 98-second `info`; the budget
+6–55 seconds **with a 6× spread on the same command**. B14 fixed one 98-second `info`; the budget
 it asked for was never built, so nothing would notice the next one. §8.1's A+ bar names latency
 budgets per command class explicitly.
 
@@ -1095,7 +1106,7 @@ budgets per command class explicitly.
 exceeded. Start by measuring on a runner rather than trusting the figures above — that machine is
 an upper bound, not a norm.
 
-### W42 · make `cargo test` green on three platforms
+### B42 · make `cargo test` green on three platforms
 
 It is green on Windows (1542 tests, 49 targets) and red on Linux and macOS. Three targets, three
 causes, and they need three different things:
@@ -1107,13 +1118,13 @@ causes, and they need three different things:
   does not — which can go red on either helm version. Do not skip it.
 - `grade3_resource_idempotency_tests` — **already repaired** by the grader, in the commit before
   this document. Green on both platforms now.
-- `grade2_info_tests` — W37, a real defect.
+- `grade2_info_tests` — B37, a real defect.
 
 Not because green is the goal — this whole document's premise is that green is a floor — but
 because a suite red for three unrelated reasons teaches everyone to stop reading it, and one of
 those reasons is a live defect currently indistinguishable from the two that are not.
 
-### W43 · **`Q15`** — `bundle` and `export` honour `--dry-run`; `plan` does not ✅ **ruled 2026-07-30**
+### B43 · **`Q15`** — `bundle` and `export` honour `--dry-run`; `plan` does not ✅ **ruled 2026-07-30**
 
 `linix --dry-run bundle --out X` writes all nine files and prints *"Bundle written to X"* with no
 marker — a preview that manufactured the artifact it was asked to describe, and said so in the past
@@ -1152,27 +1163,27 @@ The rule is in **II.8b**; the reason is in **V.105**.
 The safety core is in good shape and was checked adversarially rather than assumed — every path
 to a backend `remove`/`purge` has a guard, enumerated from the sink; `SIGKILL` mid-sync leaves a
 reconcilable journal; `heal` verifies against the machine rather than closing entries. **Do not
-refactor any of it while fixing W36**, which is entirely about what `heal` prints and returns.
+refactor any of it while fixing B36**, which is entirely about what `heal` prints and returns.
 
 Still untouched and still the thing that would move the grade most: **real lifecycles for the
 24 of 56 backends that have never had one.**
 
 *(Corrected 2026-07-30 by the round-6 builder: this paragraph named two items, and the other —
-W18's supported/experimental split — had been ruled and **rejected** as `Q4` on 2026-07-27,
+B18's supported/experimental split — had been ruled and **rejected** as `Q4` on 2026-07-27,
 three days before this section was written. Under that ruling the missing coverage is a release
 blocker rather than something a label makes acceptable, so the remaining item is the coverage
 itself and there is no second one.)*
 
 **The register is at zero open.** `Q14`, `Q15` and `Q16` were all ruled on 2026-07-30 and are
-built into W33, W35/W42 and W43 above — so nothing in this document is waiting on the owner, and
+built into B33, B35/B42 and B43 above — so nothing in this document is waiting on the owner, and
 three of the ⚠️ rows in §0.1 that predate round 6 still are.
 
 ---
 
 ## What NOT to do
 
-- **Do not fix a harness by making it green.** If deleting the scrub in W5 turns a run red, that
-  is the fix working. Report red honestly; W1 makes it green legitimately.
+- **Do not fix a harness by making it green.** If deleting the scrub in B5 turns a run red, that
+  is the fix working. Report red honestly; B1 makes it green legitimately.
 - **Do not widen an exemption list to pass.** Both harnesses already exempt `undo`, a subcommand
   that no longer exists (`E29`); exemptions are unvalidated. Assert that every exempted name
   exists, and delete the stale one.
@@ -1451,7 +1462,7 @@ this whole round is about.
 
 # Round 8 — the round-6 grade, worked (2026-07-31)
 
-Source: `docs/GRADE-2026-07-31.md` (graded at `a510728`, **B−**). **All eight findings `G-1`–`G-8`
+Source: `docs/archive/GRADE-2026-07-31.md` (graded at `a510728`, **B−**). **All eight findings `G-1`–`G-8`
 are closed, plus `E3`**, which had re-reproduced. One commit per finding; each carries its own
 red-before / green-after evidence and an independent reproduction. The narrative is
 `spec/history.md`, session 2026-07-31 (third).
@@ -1466,7 +1477,7 @@ red-before / green-after evidence and an independent reproduction. The narrative
 | `G-5` | a failed command's output is picked by the manager's own vocabulary, capped, counted, and sanitised through `validator::printable` |
 | `G-6` | `linix-failure-class:` only on a pipe |
 | `G-7` | four captured `winget` fixtures; the parser's hand-built table retired; an empty fixture directory now fails the gate |
-| `G-8` | `refuses_with_3` beside `nok`; the fail-everything stub is part of the mutation gate with its own ratchet. Found and fixed a live `W22` sibling: `restore`'s refusal exited 1 |
+| `G-8` | `refuses_with_3` beside `nok`; the fail-everything stub is part of the mutation gate with its own ratchet. Found and fixed a live `B22` sibling: `restore`'s refusal exited 1 |
 
 **Built past the eight, because each pointed at a class rather than a line:** `nok_saying`
 (a negative check asserts LiNix's sentence, not only a non-zero code — the fail-everything
@@ -1628,7 +1639,7 @@ fix (cache `list_installed` per run) has a real staleness trap after an install 
 
 # Round 11 — the untested half, 2026-08-04 (owner-directed)
 
-**Not a grader's round.** Source: `docs/GRADE-2026-08-04.md` (**B+**), whose §5 is not a list of
+**Not a grader's round.** Source: `docs/archive/GRADE-2026-08-04.md` (**B+**), whose §5 is not a list of
 bugs but a list of things **nothing has ever run** — and the owner's instruction on top of it:
 *"it is crucial that we test — real live tests — as much as we can… build the tests that really
 test everything like a human."*
@@ -1663,7 +1674,7 @@ the escalation path stays unrun on every platform.
 2. **`heal` had two branches that did nothing and said nothing** — `if let Some(cap) =
    registry.get(..) { if let Some(handler) = ..as_installable() { … } }`, no `else` on either, so
    an entry naming an absent manager was neither recovered, nor failed, nor mentioned, and `heal`
-   returned `Ok`. W36's finding one branch over.
+   returned `Ok`. B36's finding one branch over.
 
 ## What this round did NOT do
 

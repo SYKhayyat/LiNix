@@ -85,7 +85,7 @@ what was built they disagreed for two days and the plan lost.
 Facts marked **(measured)** were verified against real containers or real code with a citation.
 Everything else is design.
 
-Supersedes [`AUDIT-v6.org`](AUDIT-v6.org) — the audit that found all of this — except where
+Supersedes [`docs/archive/AUDIT-v6.org`](archive/AUDIT-v6.org) — the audit that found all of this — except where
 [`spec/bugs.md`](spec/bugs.md) carries an item forward explicitly. Read the audit only for the
 underlying evidence: the measurements and the `file:line` citations behind each finding.
 
@@ -128,6 +128,16 @@ already exists". You cannot implement this correctly from a summary.
    than a detail. A ruling that lives only in a chat log is the drift that made 84 decisions
    unanswerable; a ruling that lands in an entry but not in the index is the drift that made the
    register advertise 59 open questions it had already closed.
+
+   **The same rule for a *finding*, and for the same reason.** A review round's output is a diff
+   to `target-state.md` plus a test that fails without the fix — not a new dated document.
+   Twelve dated review files in nine days is what the other way produced, and F-8 counted what
+   they bought: `cargo fmt --check` went 26 → 0 → 0 → 0 → 12 → 60 across them, closed at the
+   mechanism and the mechanism never run; `G-4` was closed with a mutation test its author
+   watched go red and reopened two days later, same ID, same defect; *"a check that cannot
+   fail"* appears in all seven grade rounds. **The finding was written down every time. Writing
+   it down is not the mechanism.** They are in `docs/archive/`, as a record of how the program
+   got here and not as instructions.
 6. **Commit at every major step**, with a message that says what changed and what it does not
    yet do.
 7. **Check everywhere. We cannot afford bugs here.** This codebase's flagship bug ran

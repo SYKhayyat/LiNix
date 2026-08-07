@@ -2772,7 +2772,7 @@ honestly, and the honesty did not make the name declarable.
 were never the problem — `2c51968` had already taught the grammar and the validator about them,
 so `winget:ARP\Machine\X64\AndroidStudio` parsed all along. On this machine the undeclarable
 names were **161: six winget names, every one containing a space, and 155 `service:` names that
-are not a package-line question at all.** `GRADE-2026-07-31.md` §5 G-2 describes 185 backslash
+are not a package-line question at all.** `docs/archive/GRADE-2026-07-31.md` §5 G-2 describes 185 backslash
 names as unwritable; that defect is closed, and the number was re-cited afterwards without being
 re-run. This is the second time in two rounds that a *count* outlived the bug it counted.
 
