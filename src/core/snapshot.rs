@@ -6,7 +6,7 @@ use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command as StdCommand;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
@@ -96,6 +96,13 @@ pub enum SnapshotLabel {
     PurgeUndeclared,
     PreCanary,
     PreRebuild,
+    /// Taken before `bisect` starts restoring, and restored when it stops.
+    ///
+    /// **`bisect` used to leave the machine wherever the binary search happened to end.** It is
+    /// a diagnostic — "which change broke this?" — and it answered by rearranging your installed
+    /// software into an arbitrary historical state and returning `Ok(())` without a word. Not
+    /// even the culprit's state: whichever candidate the last iteration probed.
+    PreBisect,
 }
 
 impl SnapshotLabel {
@@ -106,6 +113,7 @@ impl SnapshotLabel {
             SnapshotLabel::PurgeUndeclared => "purge-undeclared",
             SnapshotLabel::PreCanary => "pre_canary",
             SnapshotLabel::PreRebuild => "pre_rebuild",
+            SnapshotLabel::PreBisect => "pre_bisect",
         }
     }
 }
@@ -757,7 +765,7 @@ impl SnapshotManager {
         let mut failed = Vec::new();
         for id in &doomed {
             if dry_run {
-                debug!("[DRY-RUN] retention would prune {}", id);
+                crate::would!("retention would prune {}", id);
                 pruned.push(id.clone());
             } else {
                 match p.delete(id).await {

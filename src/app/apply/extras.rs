@@ -190,8 +190,8 @@ impl Extras<'_> {
         // could delete five files under a summary reading `already up to date`.
         for key in &drift {
             if self.config.dry_run {
-                warn!(
-                    "[DRY-RUN] `{}` is no longer declared — sync would undo it.",
+                crate::would_warn!(
+                    "`{}` is no longer declared — sync would undo it.",
                     key
                 );
             } else {

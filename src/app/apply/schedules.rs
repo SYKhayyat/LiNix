@@ -24,8 +24,8 @@ impl Schedules<'_> {
                 &self.config.guard.never_unattended,
             )?;
             if self.config.dry_run {
-                info!(
-                    "[DRY-RUN] would schedule `{}`: `{}` on `{}`",
+                crate::would!(
+                    "would schedule `{}`: `{}` on `{}`",
                     name, cfg.command, cfg.cron
                 );
                 continue;

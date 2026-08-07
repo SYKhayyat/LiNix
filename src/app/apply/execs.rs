@@ -121,7 +121,7 @@ impl Execs<'_> {
                 continue;
             }
             if self.config.dry_run {
-                info!("[DRY-RUN] would run exec:{} ({})", script, origin);
+                crate::would!("would run exec:{} ({})", script, origin);
                 continue;
             }
             // `@runs=always` is named in the line it produces: a script that runs every sync
@@ -202,7 +202,7 @@ impl Execs<'_> {
                 continue;
             };
             if self.config.dry_run {
-                info!("[DRY-RUN] would undo `exec:{}` with: {}", name, undo);
+                crate::would!("would undo `exec:{}` with: {}", name, undo);
                 continue;
             }
             info!("`exec:{}` is no longer declared — running its undo.", name);

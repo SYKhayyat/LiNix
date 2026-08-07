@@ -135,7 +135,7 @@ impl Prereqs<'_> {
         );
 
         if self.config.dry_run {
-            println!("[DRY-RUN] a real run would ask before running that.");
+            crate::would_print!("a real run would ask before running that.");
             return;
         }
         if !self.config.yes {

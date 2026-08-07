@@ -200,6 +200,17 @@ pub struct Resolver<'a> {
     /// `[vars] source` from preferences (Part IX): which provider is active when the repo holds
     /// more than one. `None` selects the sole provider file, or none.
     vars_source: Option<String>,
+    /// Resolve as if `active` held this, without the file holding it.
+    ///
+    /// For `profile show`, which answers "what would this profile give me". It used to answer by
+    /// **writing the profile's name into the real `active` file**, resolving, and writing the old
+    /// contents back — so a read-only command changed what the machine was set to for the length
+    /// of a resolve, and a `^C`, a panic or a failing second write left it changed. The next
+    /// `sync` would then converge to a profile the user had only asked to look at.
+    ///
+    /// It is the file's *body*, not a list of names, so a `when` gate in the override parses
+    /// exactly as one in the file does; there is no second grammar for the preview.
+    active_override: Option<String>,
 }
 
 impl<'a> Resolver<'a> {
@@ -212,6 +223,7 @@ impl<'a> Resolver<'a> {
             now: Utc::now(),
             bare: HashMap::new(),
             vars_source: None,
+            active_override: None,
         }
     }
 
@@ -228,6 +240,12 @@ impl<'a> Resolver<'a> {
     /// between them; keyed on `BARE`, they would be two, and both would be installed.
     pub fn with_bare(mut self, answers: HashMap<String, String>) -> Self {
         self.bare = answers;
+        self
+    }
+
+    /// Resolve against this `active` body instead of the one on disk. See [`Resolver`].
+    pub fn as_if_active(mut self, body: String) -> Self {
+        self.active_override = Some(body);
         self
     }
 
@@ -408,7 +426,12 @@ impl<'a> Resolver<'a> {
         // `$role` — the single most useful place for a variable, and the one that used to fail
         // with "unknown when key" because `active` re-detected varless facts of its own.
         let active_file = self.layout.active_file();
-        let body = std::fs::read_to_string(&active_file).unwrap_or_default();
+        // The override still carries the real path, so an error in a `when` gate quotes the file
+        // the user would have to edit rather than a name for a buffer they cannot open.
+        let body = match &self.active_override {
+            Some(body) => body.clone(),
+            None => std::fs::read_to_string(&active_file).unwrap_or_default(),
+        };
         let active: Vec<(String, Gates)> = read_active(&active_file, &body, &self.facts)?
             .into_iter()
             .filter(|e| e.on)
@@ -1189,6 +1212,52 @@ mod tests {
             .with_facts(facts())
             .at(parse_absolute("2026-07-16T12:00").unwrap())
             .resolve()
+    }
+
+    /// `profile show Work` asks "what would this profile give me", and the answer must not be
+    /// obtained by changing what the machine is set to.
+    ///
+    /// It used to write `Work` into the real `active` file, resolve, and write the old contents
+    /// back. The window between those two writes spans reading every profile and module and
+    /// probing bare names over the network — and a `^C`, a panic, or a failing second write left
+    /// `active` naming a profile the user had asked only to look at, with the next `sync`
+    /// converging to it. Two halves, and this pins both: the override decides the answer, and
+    /// the file is untouched.
+    #[test]
+    fn asking_what_a_profile_would_give_you_does_not_change_what_is_active() {
+        let f = fx(
+            "Home\n",
+            &[("Home", "use home\n"), ("Work", "use work\n")],
+            &[("home.txt", "apt:vim\n"), ("work.txt", "apt:ripgrep\n")],
+        );
+        let before = std::fs::read_to_string(f.layout.active_file()).unwrap();
+
+        let shown = Resolver::new(&f.layout, &known, &f.priority)
+            .with_facts(facts())
+            .at(parse_absolute("2026-07-16T12:00").unwrap())
+            .as_if_active("Work\n".to_string())
+            .resolve()
+            .expect("resolving against the override");
+
+        assert_eq!(
+            names(&shown, "apt"),
+            vec!["ripgrep".to_string()],
+            "the override did not decide the answer — `show` is describing the wrong profile"
+        );
+        assert_eq!(
+            std::fs::read_to_string(f.layout.active_file()).unwrap(),
+            before,
+            "`active` changed while answering a read-only question"
+        );
+
+        // And without the override, the same resolver still reads the file: an override that
+        // leaked into the default path would make every sync resolve somebody else's profile.
+        let real = Resolver::new(&f.layout, &known, &f.priority)
+            .with_facts(facts())
+            .at(parse_absolute("2026-07-16T12:00").unwrap())
+            .resolve()
+            .expect("resolving against the file");
+        assert_eq!(names(&real, "apt"), vec!["vim".to_string()]);
     }
 
     #[test]

@@ -24,15 +24,15 @@ pub async fn write_unless_previewing(
     body: &str,
     done: &'static str,
     planned: &'static str,
-) -> anyhow::Result<&'static str> {
+) -> anyhow::Result<String> {
     if app.config.dry_run {
-        return Ok(planned);
+        return Ok(format!("{} {}", crate::core::dry_run::MARKER, planned));
     }
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await.ok();
     }
     tokio::fs::write(path, body).await?;
-    Ok(done)
+    Ok(done.to_string())
 }
 
 /// What every verb module needs. A glob rather than a list per file because the

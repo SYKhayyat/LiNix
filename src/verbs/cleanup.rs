@@ -78,10 +78,8 @@ pub async fn handle_remove_orphans(app: &App) -> Result<()> {
     .await?;
 
     if app.config.dry_run {
-        println!(
-            "
-[DRY-RUN] Nothing was removed."
-        );
+        println!();
+        crate::would_print!("Nothing was removed.");
         return Ok(());
     }
 
@@ -172,10 +170,10 @@ pub fn confirm_orphan_removal(app: &App) -> Result<bool> {
 /// is a removal (level 4), not a cache clean.
 pub async fn handle_clean_cache(app: &App, all: bool) -> Result<()> {
     if app.config.dry_run {
-        println!("[DRY-RUN] Would clear the package cache for every backend that has one.");
-        println!("[DRY-RUN] Would forget the installed listings LiNix has cached.");
+        crate::would_print!("Would clear the package cache for every backend that has one.");
+        crate::would_print!("Would forget the installed listings LiNix has cached.");
         if all {
-            println!("[DRY-RUN] Would also clear LiNix's own download cache.");
+            crate::would_print!("Would also clear LiNix's own download cache.");
         }
         return Ok(());
     }
@@ -311,7 +309,7 @@ pub async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Resul
     .await?;
 
     if app.config.dry_run {
-        println!("[DRY-RUN] Nothing removed.");
+        crate::would_print!("Nothing removed.");
         return Ok(());
     }
 
@@ -568,7 +566,7 @@ pub async fn handle_unmanage(app: &App, packages: &[String], json: bool) -> Resu
     }
 
     if app.config.dry_run {
-        println!("[DRY-RUN] would stop managing:");
+        crate::would_print!("would stop managing:");
     }
 
     for r in &results {

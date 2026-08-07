@@ -545,21 +545,37 @@ fi
 #
 # A script is accounted for when CI runs it, a release script runs it, or another gate runs it.
 # Anything else has to be named below as a deliberate non-gate, with what it is instead.
-echo "== every script in scripts/ is run by something, or declared not to be a gate"
+#
+# **`docker/integration/` is in the sweep, and it is the reason this paragraph got wider.** The
+# rule used to iterate `scripts/*.sh` only, so the repo's one actual orphan —
+# `docker/integration/measure-batching.sh`, referenced by nothing executable — sat one directory
+# outside the rule written to catch orphans. It is a *measuring instrument*, and a repo whose
+# whole problem is claims outrunning measurements does not delete one of those; it wires it in
+# and widens the rule so the next one cannot hide in the same place.
+echo "== every script in scripts/ and docker/integration/ is run by something, or declared not to be a gate"
 TOTAL=$((TOTAL + 1))
 _orphans=""
-for _s in "$_here"/scripts/*.sh "$_here"/scripts/*.ps1; do
+for _s in "$_here"/scripts/*.sh "$_here"/scripts/*.ps1           "$_here"/docker/integration/*.sh; do
     [ -f "$_s" ] || continue
     _b="$(basename "$_s")"
     case "$_b" in
         # Not gates. `install.*` is what a user pipes from the web; `release-check.*` are the
         # top of the chain and are run by a person, which is their whole job.
         install.sh|install.ps1|release-check.sh|release-check.ps1) continue ;;
+        # A measurement, run by hand against a real container when a batching claim needs
+        # evidence — `Y1`'s 12,465ms-against-3,161ms came from this script. Named here rather
+        # than deleted: the alternative to a measuring instrument nobody automated is a number
+        # nobody measured.
+        measure-batching.sh) continue ;;
     esac
     # `-rl`, not `-rql`: `-q` prints nothing, so the pipe that drops the script's own file
     # would see an empty list and call every script an orphan. (It did, on the first run.)
-    if grep -rl "$_b" "$_here/.github/workflows" "$_here/scripts/release-check.sh" \
-        "$_here/scripts/release-check.ps1" "$_here/scripts/harness-logic-test.sh" 2>/dev/null \
+    # **Searched over the whole of `scripts/` and `docker/`, not a hand-written list of four
+    # files.** The list was `.github/workflows` plus three named scripts, so a script wired
+    # into a harness *that CI runs* still counted as unreachable: `stall-snapshot.ps1` is
+    # called from `integration-windows.sh:117`, and this gate had been calling it an orphan.
+    # A gate whose search set is a hand-maintained list has the defect it is looking for.
+    if grep -rl "$_b" "$_here/.github/workflows" "$_here/scripts" "$_here/docker" 2>/dev/null \
         | grep -v "/$_b\$" | grep -q .
     then
         continue

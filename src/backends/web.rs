@@ -460,3 +460,178 @@ pub fn register(
             .build(),
     ));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::sync::guard::{GuardScope, Reaped};
+    use crate::core::executor::MockExecutor;
+    use crate::core::executor::DryRunOutput;
+    use dashmap::DashMap;
+
+    /// A `web:` backend over a temporary tree, with a mock in front of every command.
+    ///
+    /// `web.rs` had **no tests at all** — a backend that runs `dpkg -i` and `rpm -e` as root
+    /// (`run(prog, args, true)`, the `true` being sudo) and whose removal path decides whether a
+    /// record stays or goes. The install half needs a live HTTP server and is the real machine's
+    /// job; everything below is local and was simply never asked about.
+    fn backend(tag: &str) -> (WebInstallable, Arc<MockExecutor>, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let vfs: Arc<DashMap<std::path::PathBuf, String>> = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(DashMap::new()),
+        );
+        let core = Arc::new(WebBackendCore::new(
+            exec,
+            tmp.path().join(tag),
+            tmp.path().join("bin"),
+            true,
+            false,
+            Vec::new(),
+        ));
+        (WebInstallable { core }, mock, tmp)
+    }
+
+    async fn record(core: &WebBackendCore, url: &str, entry: WebState) {
+        let mut state = core.load_state().await;
+        state.insert(url.to_string(), entry);
+        core.save_state(&state).await.expect("writing the state");
+    }
+
+    fn handed_to(installer: &str, package: &str, url: &str) -> WebState {
+        WebState {
+            url: url.to_string(),
+            // A handoff owns no tree of LiNix's — the manager placed the files.
+            local_path: String::new(),
+            bin_link: None,
+            etag: None,
+            last_modified: None,
+            installed_by: Some(installer.to_string()),
+            system_package: Some(package.to_string()),
+        }
+    }
+
+    fn reaped() -> Reaped {
+        Reaped::for_reason(
+            GuardScope::Remove,
+            "a unit test for the effector, which is not a test of the guard",
+        )
+    }
+
+    /// D5: a `.deb` LiNix handed to `dpkg` is removed **through `dpkg`**, by the package name
+    /// read out of the file at install time — not by the URL, and not by deleting a tree LiNix
+    /// does not own.
+    #[tokio::test]
+    async fn a_resource_a_system_manager_owns_is_removed_through_that_manager() {
+        let (web, mock, _tmp) = backend("deb");
+        let url = "https://example.invalid/fd_10.2.0_amd64.deb";
+        record(&web.core, url, handed_to("dpkg", "fd", url)).await;
+
+        mock.set_response("dpkg -r fd", Ok(DryRunOutput::new().into()));
+        web.remove(&[url.to_string()], false, reaped())
+            .await
+            .expect("the removal succeeds");
+
+        let calls = mock.get_calls().await;
+        assert!(
+            calls.iter().any(|c| c.contains("dpkg -r fd")),
+            "the removal did not go through dpkg: {calls:?}"
+        );
+        assert!(
+            !calls.iter().any(|c| c.contains("fd_10.2.0_amd64.deb")),
+            "removal named the file rather than the package dpkg lists it under: {calls:?}"
+        );
+        assert!(
+            web.core.load_state().await.get(url).is_none(),
+            "the record survived a successful removal"
+        );
+    }
+
+    /// The `rpm` half of the same rule. Written because `install_argv` deliberately differs
+    /// between the two (`dpkg -i` vs `rpm -U --replacepkgs`), and a test on only one of them
+    /// would pin the pair's shape while leaving the divergent one unasked.
+    #[tokio::test]
+    async fn the_rpm_twin_removes_by_name_too() {
+        let (web, mock, _tmp) = backend("rpm");
+        let url = "https://example.invalid/fd-10.2.0.x86_64.rpm";
+        record(&web.core, url, handed_to("rpm", "fd", url)).await;
+
+        mock.set_response("rpm -e fd", Ok(DryRunOutput::new().into()));
+        web.remove(&[url.to_string()], false, reaped())
+            .await
+            .expect("the removal succeeds");
+
+        let calls = mock.get_calls().await;
+        assert!(
+            calls.iter().any(|c| c.contains("rpm -e fd")),
+            "the removal did not go through rpm: {calls:?}"
+        );
+    }
+
+    /// **The invariant that matters most here, and the one nothing was checking.**
+    ///
+    /// When the system manager refuses, the files are still on disk and still on PATH. Dropping
+    /// the record anyway would make the resource drift *no sync can see*: LiNix would have
+    /// forgotten it, so nothing would ever try again and nothing would report it. The record
+    /// goes back, and the call returns an error naming what is still installed.
+    #[tokio::test]
+    async fn a_failed_removal_keeps_the_record_rather_than_forgetting_the_resource() {
+        let (web, mock, _tmp) = backend("stuck");
+        let url = "https://example.invalid/fd_10.2.0_amd64.deb";
+        record(&web.core, url, handed_to("dpkg", "fd", url)).await;
+
+        mock.set_response(
+            "dpkg -r fd",
+            Err(Error::Other("dpkg: dependency problems".into())),
+        );
+        let err = web
+            .remove(&[url.to_string()], false, reaped())
+            .await
+            .expect_err("a manager that refuses must not read as a removal");
+        assert!(
+            err.to_string().contains("still on disk"),
+            "the error does not say the resource is still installed: {err}"
+        );
+        assert!(
+            web.core.load_state().await.contains_key(url),
+            "the record was dropped for a resource that is still installed — the one state no \
+             sync can detect"
+        );
+    }
+
+    /// A recorded installer LiNix has no removal argv for is an error, not a silent skip. The
+    /// same shape as the failing-manager case, reached without running anything: `remove_argv`
+    /// refuses first.
+    #[tokio::test]
+    async fn an_installer_with_no_known_removal_is_reported_not_skipped() {
+        let (web, _mock, _tmp) = backend("odd");
+        let url = "https://example.invalid/fd.pkg";
+        record(&web.core, url, handed_to("brew", "fd", url)).await;
+
+        let err = web
+            .remove(&[url.to_string()], false, reaped())
+            .await
+            .expect_err("an unknown installer must not read as a removal");
+        assert!(err.to_string().contains("still on disk"), "{err}");
+        assert!(web.core.load_state().await.contains_key(url));
+    }
+
+    /// A URL that is not in the state file at all is not an error: `remove` is called with what
+    /// the plan asked to remove, and a resource already gone is the end state that was wanted.
+    #[tokio::test]
+    async fn removing_something_that_was_never_recorded_is_not_a_failure() {
+        let (web, _mock, _tmp) = backend("absent");
+        web.remove(
+            &["https://example.invalid/never-installed.tar.gz".to_string()],
+            false,
+            reaped(),
+        )
+        .await
+        .expect("an already-absent resource is the end state that was asked for");
+    }
+}

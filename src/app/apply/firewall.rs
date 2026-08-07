@@ -111,10 +111,10 @@ impl Firewall<'_> {
 
         if self.config.dry_run {
             for r in &to_open {
-                info!("[DRY-RUN] would open {} via {}", r, adapter.name);
+                crate::would!("would open {} via {}", r, adapter.name);
             }
             for r in &to_close {
-                info!("[DRY-RUN] would close {} via {}", r, adapter.name);
+                crate::would!("would close {} via {}", r, adapter.name);
             }
             return Ok(());
         }

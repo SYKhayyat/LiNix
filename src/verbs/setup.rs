@@ -386,8 +386,8 @@ pub async fn handle_path(cli: &Cli, explain: bool, set: Option<&std::path::Path>
             println!("Config repo set to {}", dir.display());
             println!("Stored in {}", settings_file.display());
         } else {
-            println!("[DRY-RUN] would set the config repo to {}", dir.display());
-            println!("[DRY-RUN] would store it in {}", settings_file.display());
+            crate::would_print!("would set the config repo to {}", dir.display());
+            crate::would_print!("would store it in {}", settings_file.display());
         }
         return Ok(());
     }
@@ -474,8 +474,8 @@ pub async fn handle_config(app: &App, cmd: &ConfigCommand) -> Result<()> {
             {
                 println!("Wrote commented default preferences to {}", path.display());
             } else {
-                println!(
-                    "[DRY-RUN] would write commented default preferences to {}",
+                crate::would_print!(
+                    "would write commented default preferences to {}",
                     path.display()
                 );
             }
@@ -590,8 +590,8 @@ pub async fn handle_canary(
     print_flight_plan(app, &changes);
 
     if app.config.dry_run {
-        println!(
-            "[DRY-RUN] Would snapshot, upgrade, run `{}`, and roll back on failure.",
+        crate::would_print!(
+            "Would snapshot, upgrade, run `{}`, and roll back on failure.",
             test
         );
         return Ok(());

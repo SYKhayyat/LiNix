@@ -474,7 +474,8 @@ impl Adopter {
             // The manifest line used to go out at `info!` and the count as a `println!`, so the
             // sentence a user saw was `Adopted 112 package(s).` about a file that was never
             // written.
-            println!("\n[DRY-RUN] would adopt {} package(s).", found.adopt.len());
+            println!();
+            crate::would_print!("would adopt {} package(s).", found.adopt.len());
             println!("{:-<64}", "");
             println!(
                 "Manifest that would be written:  {}",

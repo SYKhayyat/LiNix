@@ -66,7 +66,7 @@ impl Dependents<'_> {
                         )));
                     }
                     if self.config.dry_run {
-                        info!("[DRY-RUN] would deploy shim `{}`", name);
+                        crate::would!("would deploy shim `{}`", name);
                         continue;
                     }
                     info!("deploying `{}` ({})", name, origin);
@@ -131,7 +131,7 @@ impl Dependents<'_> {
             return Ok(());
         };
         if self.config.dry_run {
-            info!("[DRY-RUN] would apply {} `{}`", keyword, name);
+            crate::would!("would apply {} `{}`", keyword, name);
             return Ok(());
         }
         let Some(inst) = b.as_installable() else {

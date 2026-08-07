@@ -147,7 +147,7 @@ pub async fn upgrade_targeted(
 
     // Dry-run: describe the upgrades (after filters/holds) without touching anything.
     if app.config.dry_run {
-        println!("[DRY-RUN] would upgrade:");
+        crate::would_print!("would upgrade:");
         let mut n = 0;
         for (b, name) in &targets {
             if let Some(scope) = backend {
@@ -302,7 +302,7 @@ pub async fn upgrade_security(app: &App, except: &[String], json: bool) -> Resul
     // Dry-run: show the remediation plan without installing.
     if app.config.dry_run {
         if !json {
-            println!("[DRY-RUN] would upgrade to remediate:");
+            crate::would_print!("would upgrade to remediate:");
             for (backend, name, fixed) in &plan {
                 match fixed {
                     Some(v) => println!("  ↑ {}:{} → {}", backend, name, v),
@@ -427,8 +427,8 @@ async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
         enforce_policy(app, &desired).await?;
 
         if app.config.dry_run {
-            println!(
-                "[DRY-RUN] would run each backend's native whole-system upgrade (e.g. `apt upgrade`)."
+            crate::would_print!(
+                "would run each backend's native whole-system upgrade (e.g. `apt upgrade`)."
             );
             return Ok(());
         }

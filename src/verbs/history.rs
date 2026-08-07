@@ -356,7 +356,11 @@ pub async fn handle_export(
             Outcome::NoPackages => println!("  skipped {} (no matching packages)", file),
             Outcome::Wrote(path) => println!("  wrote   {}", path.display()),
             Outcome::WouldWrite(path) => {
-                println!("  [DRY-RUN] would write {}", path.display())
+                println!(
+                    "  {} would write {}",
+                    crate::core::dry_run::MARKER,
+                    path.display()
+                )
             }
             Outcome::WroteBeside { taken, renamed } => {
                 println!("  wrote   {}", renamed.display());
@@ -395,13 +399,14 @@ pub async fn handle_bundle(app: &App, out: &str, artifacts: bool, archive: bool)
     // The tense comes from the writer, not from asking the flag a second time (Q15/V.105).
     // `--dry-run bundle` wrote all nine files and said "Bundle written to X" — a preview that
     // manufactured the artifact it was asked to describe, and reported it in the past tense.
+    let lead = if report.previewed {
+        format!("{} would write a bundle to", crate::core::dry_run::MARKER)
+    } else {
+        "Bundle written to".to_string()
+    };
     println!(
         "{} {} — {} config file(s), {} package(s).",
-        if report.previewed {
-            "[DRY-RUN] would write a bundle to"
-        } else {
-            "Bundle written to"
-        },
+        lead,
         report.out.display(),
         report.files_copied,
         report.package_count

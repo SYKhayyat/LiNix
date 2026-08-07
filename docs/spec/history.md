@@ -8069,3 +8069,101 @@ refusal.
 the first positional may still carry a whole command line (the quoted `-- "jq -r .name"` form),
 and everything after it is an argument verbatim. Both spellings, one rule. An empty command is a
 `Validation` error rather than `unwrap_or(&"")` executing the empty string.
+
+## Session 2026-08-07 — a read that writes, a diagnostic that rearranges, and one marker (`LX-9`)
+
+### `[DRY-RUN]` had sixty-eight definitions
+
+One per call site, and by the time anyone counted them they had drifted four ways: `Would` beside
+`would`; `Go: [DRY-RUN] would delete …` in `backends/go.rs` with the marker **second**, so a
+`^\[DRY-RUN\]` grep — the obvious way to ask what a run would do — did not see the line at all;
+`debug!` at two sites (`snapshot.rs` retention pruning, `git.rs` committing), which is **below the
+default log level**, so those two announced themselves to nobody; and `warn!` at two more
+(`utils/file.rs`), which reads as *something is wrong* when the only thing that happened is that a
+preview previewed.
+
+None of that is a spelling problem. Each one is a user asking "what will you do" and getting an
+answer that is incomplete, or that they cannot find. **A preview that silently omits work it would
+do fails at the one thing a preview is for** — which is `Q40` again, in a place nobody had looked.
+
+`core::dry_run` already owned the *flag*, and its own doc comment makes the argument: "one rule
+('remember to check the flag') enforced by nothing." The marker was the same rule one level down.
+It owns the string now, and three macros deliver it: `would!` to the log at `info`, `would_warn!`
+for a line that is also drift the run found, `would_print!` to stdout for the verbs whose printed
+output *is* the answer. `tests/dry_run_marker_tests.rs` keeps it: the literal appears in
+`core/dry_run.rs` and nowhere else in `src/`, and the macros must still carry it — a gate that only
+forbids the literal is satisfied by deleting every dry-run line in the program.
+
+### `profile show` answered a question by changing the machine
+
+It wrote the profile's name into the real `active` file, resolved, and wrote the old contents
+back. The window between those two writes spans reading every profile and module and probing bare
+names over the network — and a `^C` in it, a panic, or a second write that failed left `active`
+naming a profile the user had asked **only to look at**, with the next `sync` converging to it.
+Nothing in the output would have said so.
+
+The fix is not a better restore, it is not writing: `Resolver::as_if_active(body)` takes the
+`active` body the resolver would have read. It is the file's *body* and not a list of names, so a
+`when` gate in the override parses exactly as one in the file does — there is no second grammar
+for the preview. The scaffolding writer is gone, and the test pins both halves: the override
+decides the answer, and the file is byte-identical afterwards.
+
+### `bisect` left the machine wherever the search stopped
+
+Worse in kind than `profile show`, because it is a **diagnostic** — "which change broke this?" —
+and it answered by restoring snapshot after snapshot and returning `Ok(())` from wherever the
+binary search happened to end. Not the culprit's state. Not the last good one. Whichever candidate
+the final iteration probed, silently, with your installed software rearranged into an arbitrary
+historical state.
+
+A `SnapshotLabel::PreBisect` snapshot is taken before the first restore and restored when the
+search ends. The loop moved into `search_for_culprit` so its `?` cannot skip the restore — inline,
+a restore that failed halfway propagated straight out and left the machine on the last snapshot it
+had reached, the original failure mode made *worse* by an error path. A provider that takes no
+snapshot is said out loud rather than assumed away.
+
+### Three keyword arms that were one arm, and the silence inside them
+
+`apply/dependents.rs` had `service:`, `link:` and `setting:` as byte-identical match arms differing
+only in the keyword and three differently-worded log lines. Collapsing them made the shared bug
+visible: each ended `let Some(inst) = b.as_installable() else { continue };` — a declared line, a
+registered backend, nothing done, no output. `Extras::undo_extra` had the twin, and its
+`return Ok(())` is worse, because the caller clears the extras lock afterwards: a resource still in
+effect is forgotten, and no later sync looks at it again. `apply/dotfiles.rs:307` already had the
+right shape; two of its three siblings had diverged from it.
+
+### `web:` and `appimage:` had no tests at all
+
+Two backends that run `dpkg -i` and `rpm -e` **as root**, whose removal path decides whether a
+record stays or goes. The install half needs a live HTTP server and is the real machine's job;
+everything else is local and was simply never asked about. Nine tests now, the same four questions
+of each — because testing one of a pair and not the other is how the pair drifts.
+
+The invariant that matters most is the one nothing was checking: when the removal fails, the files
+are still on disk and still on PATH, so **the record goes back**. Dropping it would make the
+resource drift no sync can see — LiNix would have forgotten the only thing that knows it is there.
+
+### The orphan gate had the defect it was looking for
+
+`harness-logic-test.sh`'s "every script is run by something" check searched `.github/workflows`
+plus a hand-written list of three scripts, so a script wired into a harness *that CI runs* still
+counted as unreachable — `stall-snapshot.ps1` is called from `integration-windows.sh:117` and this
+gate had been calling it an orphan. **A gate whose search set is a hand-maintained list has the
+defect it is looking for.** It searches `scripts/` and `docker/` whole now.
+
+And it iterated `scripts/*.sh` only, so the repo's one real orphan sat one directory outside the
+rule written to catch orphans: `docker/integration/measure-batching.sh`, referenced by nothing
+executable. It is a **measuring instrument** — `Y1`'s 12,465 ms against 3,161 ms came from it — and
+a repo whose whole problem is claims outrunning measurements does not delete one of those. The rule
+widened to cover `docker/integration/` and the script is named as a deliberate by-hand measurement.
+
+### `install.ps1` died where `install.sh` degraded
+
+`cargo install --git` fetches over libgit2 and needs no `git.exe`, so a Windows box with Rust and
+no Git can install LiNix perfectly well. But `$ErrorActionPreference = 'Stop'` turns a missing
+command into a terminating exception, and the script died with a raw stack trace at the one step
+that is only ever a *preference* — looking up the newest release tag. `install.sh` degrades there:
+its `git ls-remote` failure is swallowed by the pipeline's exit status and the branch fallback
+takes over. The twin that diverged, again. A `Get-Command git` check plus a `try`/`catch` puts the
+rule in both files, and a `git` that is present but cannot reach the remote gets the same answer as
+one that is absent — both are "we could not ask".

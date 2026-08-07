@@ -209,8 +209,8 @@ impl StateSnapshot {
             // releases the one hold there is, and the old wording then reported "0 hold(s)
             // were not recorded" — a number belonging to the registry, printed as if it were
             // about the release. Same shape as `adopt`'s "listed in the manifest" (R-2).
-            tracing::warn!(
-                "[DRY-RUN] {} was not written — it would have recorded {} managed package(s) \
+            crate::would_warn!(
+                "{} was not written — it would have recorded {} managed package(s) \
                  and {} hold(s)",
                 self.path.display(),
                 self.packages,

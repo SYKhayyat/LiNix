@@ -13,8 +13,8 @@ pub async fn handle_teleport(app: &App, package: &str, backend: &str) -> Result<
 
     // A dry run says where the line would move without touching a file or the machine.
     if app.config.dry_run {
-        println!(
-            "[DRY-RUN] would move `{}` to `{}:{}` and sync.",
+        crate::would_print!(
+            "would move `{}` to `{}:{}` and sync.",
             package, backend, package
         );
         return Ok(());
@@ -83,7 +83,7 @@ pub async fn handle_install(
         if json {
             println!("{}", serde_json::to_string_pretty(&planned)?);
         } else {
-            println!("[DRY-RUN] would install {} package spec(s):", planned.len());
+            crate::would_print!("would install {} package spec(s):", planned.len());
             for p in &planned {
                 println!(
                     "  + {}:{}",
@@ -553,8 +553,8 @@ async fn preview_uninstall(
     }
 
     if planned.is_empty() {
-        println!(
-            "[DRY-RUN] nothing to uninstall — {} not declared in any active file.",
+        crate::would_print!(
+            "nothing to uninstall — {} not declared in any active file.",
             match packages {
                 [one] => format!("`{}` is", one),
                 many => format!("`{}` are", many.join("`, `")),
@@ -563,7 +563,7 @@ async fn preview_uninstall(
         return Ok(());
     }
 
-    println!("[DRY-RUN] would make {} change(s):", planned.len());
+    crate::would_print!("would make {} change(s):", planned.len());
     for p in &planned {
         match p["action"].as_str() {
             Some("suspend") => println!(
@@ -621,7 +621,7 @@ pub async fn suspend_for_session(app: &App, packages: &[String]) -> Result<()> {
             .await?;
 
             if app.config.dry_run {
-                println!("[DRY-RUN] would suspend {}:{}", b.name(), bare_name);
+                crate::would_print!("would suspend {}:{}", b.name(), bare_name);
                 done = true;
                 break;
             }
@@ -692,8 +692,8 @@ pub async fn handle_hold(app: &App, packages: &[String]) -> Result<()> {
             n
         );
     } else {
-        println!(
-            "[DRY-RUN] would hold {} package(s). Nothing was recorded.",
+        crate::would_print!(
+            "would hold {} package(s). Nothing was recorded.",
             n
         );
     }
@@ -715,8 +715,8 @@ pub async fn handle_unhold(app: &App, packages: &[String]) -> Result<()> {
     if recorded {
         println!("Released {} hold(s).", n);
     } else {
-        println!(
-            "[DRY-RUN] would release {} hold(s). Nothing was recorded.",
+        crate::would_print!(
+            "would release {} hold(s). Nothing was recorded.",
             n
         );
     }

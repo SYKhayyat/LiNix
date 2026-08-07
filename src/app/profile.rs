@@ -120,8 +120,8 @@ impl ProfileManager {
             // Returning here rather than falling through to `sync_now`: with the write
             // previewed, a sync would converge to the profile that is *still* active and
             // report a plan for the wrong question.
-            info!(
-                "[DRY-RUN] would set active to {} ({} block(s) would be dropped), then sync.",
+            crate::would!(
+                "would set active to {} ({} block(s) would be dropped), then sync.",
                 names.join(", "),
                 dropped.len()
             );
@@ -176,7 +176,7 @@ impl ProfileManager {
             body.push('\n');
         }
         if !crate::utils::file::persist(&file, &body)? {
-            info!("[DRY-RUN] would add {} to active.", added.join(", "));
+            crate::would!("would add {} to active.", added.join(", "));
             return Ok(());
         }
 
@@ -239,7 +239,7 @@ impl ProfileManager {
         }
 
         if !crate::utils::file::persist(&file, &edit.body)? {
-            info!("[DRY-RUN] would deactivate {}.", names.join(", "));
+            crate::would!("would deactivate {}.", names.join(", "));
             return Ok(());
         }
 
@@ -271,20 +271,24 @@ impl ProfileManager {
     ///
     /// Resolved by the same code that resolves a sync, so what this prints and what a sync
     /// does cannot drift apart. It reports the profile as if it alone were active.
+    ///
+    /// **"As if" is now literal, and it used to be a pair of writes.** This wrote the profile's
+    /// name into the machine's real `active` file, resolved, and wrote the old contents back —
+    /// a read-only command changing what the machine is set to, for the length of a resolve
+    /// that reads every profile and module and probes bare names over the network. A `^C` in
+    /// that window, a panic, or a second write that failed left `active` pointing at a profile
+    /// the user had asked only to look at, and the next `sync` converged to it. Nothing in the
+    /// output would have said so.
+    ///
+    /// `as_if_active` is the whole fix: the resolver takes the body it would have read.
     pub async fn show(&self, name: &str) -> Result<Vec<String>> {
         self.must_exist(name).await?;
 
-        let restore = self.active_profiles().await?;
-        self.swap_active_for_read(&[name.to_string()]).await?;
-        let resolved = StateResolver::new(&self.config, self.registry.clone(), false)
+        let mut out: Vec<String> = StateResolver::new(&self.config, self.registry.clone(), false)
             .await
+            .as_if_active(active_body(&[name.to_string()]))
             .resolve_desired_state()
-            .await;
-        // Whatever happened, put `active` back: a read-only command must not change what
-        // this machine is set to.
-        self.swap_active_for_read(&restore).await?;
-
-        let mut out: Vec<String> = resolved?
+            .await?
             .values()
             .flatten()
             .filter(|s| s.present)
@@ -307,8 +311,8 @@ impl ProfileManager {
             )));
         }
         if crate::core::dry_run::active() {
-            info!(
-                "[DRY-RUN] would create profile '{}' at {}.",
+            crate::would!(
+                "would create profile '{}' at {}.",
                 name,
                 path.display()
             );
@@ -353,8 +357,8 @@ impl ProfileManager {
             lines.join("\n")
         );
         if !crate::utils::file::persist(&path, &body)? {
-            info!(
-                "[DRY-RUN] would save profile '{}' with {} package(s) to {}.",
+            crate::would!(
+                "would save profile '{}' with {} package(s) to {}.",
                 name,
                 lines.len(),
                 path.display()
@@ -417,23 +421,6 @@ impl ProfileManager {
                 .ok();
         }
         crate::utils::file::persist(&self.layout.active_file(), &active_body(active))
-    }
-
-    /// `profile show` answers "what would this profile give me" by pointing `active` at it,
-    /// resolving, and putting the file back. That pair of writes is scaffolding for a read, not
-    /// a change to the machine, so it deliberately does **not** go through the `--dry-run`
-    /// gate: honouring the flag here would make the first write a no-op, the resolve answer
-    /// about whatever was already active, and `linix --dry-run profile show Work` describe the
-    /// wrong profile — silently, which is the defect this whole order is about, moved.
-    ///
-    /// The two calls always come as a pair and the second is unconditional.
-    async fn swap_active_for_read(&self, active: &[String]) -> Result<()> {
-        tokio::fs::create_dir_all(self.layout.config_root())
-            .await
-            .ok();
-        tokio::fs::write(self.layout.active_file(), active_body(active))
-            .await
-            .map_err(Error::from)
     }
 
     /// Converge to whatever `active` now says.

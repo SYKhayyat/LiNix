@@ -323,3 +323,149 @@ pub fn register(
             .build(),
     ));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::sync::guard::{GuardScope, Reaped};
+    use crate::core::Installable;
+
+    /// `appimage.rs` had **no tests at all**, and its removal is `web.rs`'s removal with the D5
+    /// handoff taken out — same state file, same two deployed paths, same re-insert-on-failure
+    /// rule. Testing one of a pair and not the other is how the pair drifts, so both have the
+    /// same four questions asked of them now.
+    fn backend(tag: &str) -> (AppImageInstallable, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let core = Arc::new(AppImageBackendCore::new(
+            CommandExecutor::new(false, false),
+            tmp.path().join(tag),
+            tmp.path().join("bin"),
+            true,
+            false,
+            Vec::new(),
+        ));
+        (AppImageInstallable { core }, tmp)
+    }
+
+    async fn record(core: &AppImageBackendCore, name: &str, entry: AppImageState) {
+        tokio::fs::create_dir_all(&core.install_dir)
+            .await
+            .expect("the install dir");
+        let mut state = core.load_state().await;
+        state.insert(name.to_string(), entry);
+        core.save_state(&state).await.expect("writing the state");
+    }
+
+    fn reaped() -> Reaped {
+        Reaped::for_reason(
+            GuardScope::Remove,
+            "a unit test for the effector, which is not a test of the guard",
+        )
+    }
+
+    async fn touch(path: &std::path::Path) {
+        tokio::fs::create_dir_all(path.parent().expect("a parent"))
+            .await
+            .expect("the parent dir");
+        tokio::fs::write(path, b"ELF").await.expect("the file");
+    }
+
+    /// Both deployed paths go, and the record with them.
+    #[tokio::test]
+    async fn removing_an_appimage_takes_the_file_and_the_path_entry() {
+        let (app, tmp) = backend("img");
+        let local = tmp.path().join("img").join("fd.AppImage");
+        let link = tmp.path().join("bin").join("fd");
+        touch(&local).await;
+        touch(&link).await;
+        record(
+            &app.core,
+            "fd",
+            AppImageState {
+                url: "https://example.invalid/fd.AppImage".into(),
+                local_path: local.to_string_lossy().into(),
+                symlink_path: link.to_string_lossy().into(),
+            },
+        )
+        .await;
+
+        app.remove(&["fd".to_string()], false, reaped())
+            .await
+            .expect("the removal succeeds");
+
+        assert!(!local.exists(), "the AppImage is still on disk");
+        assert!(!link.exists(), "the PATH entry survived the removal");
+        assert!(app.core.load_state().await.get("fd").is_none());
+    }
+
+    /// `@download_only` never linked anything, so `symlink_path` is empty — and an empty path is
+    /// not a path to delete. The branch exists precisely because treating `""` as a path would
+    /// make every download-only removal fail.
+    #[tokio::test]
+    async fn a_download_only_appimage_has_no_path_entry_to_drop() {
+        let (app, tmp) = backend("dl");
+        let local = tmp.path().join("dl").join("tool.AppImage");
+        touch(&local).await;
+        record(
+            &app.core,
+            "tool",
+            AppImageState {
+                url: "https://example.invalid/tool.AppImage".into(),
+                local_path: local.to_string_lossy().into(),
+                symlink_path: String::new(),
+            },
+        )
+        .await;
+
+        app.remove(&["tool".to_string()], false, reaped())
+            .await
+            .expect("a download-only AppImage removes without a link");
+        assert!(!local.exists());
+        assert!(app.core.load_state().await.is_empty());
+    }
+
+    /// The twin of `web.rs`'s. A path the OS refuses leaves the AppImage installed, so the record
+    /// must go back: dropping it would make the resource drift **no sync can see**, because LiNix
+    /// would have forgotten the only thing that knows it is there.
+    ///
+    /// The undeletable path is a NUL byte, which every platform's path API refuses with
+    /// `InvalidInput` rather than `NotFound` — synthetic, deliberately, because the invariant
+    /// under test is what happens *after* a removal fails and not which removals fail.
+    #[tokio::test]
+    async fn a_failed_removal_keeps_the_record_rather_than_forgetting_the_appimage() {
+        let (app, _tmp) = backend("stuck");
+        record(
+            &app.core,
+            "wedged",
+            AppImageState {
+                url: "https://example.invalid/wedged.AppImage".into(),
+                local_path: "no\0such".into(),
+                symlink_path: String::new(),
+            },
+        )
+        .await;
+
+        let err = app
+            .remove(&["wedged".to_string()], false, reaped())
+            .await
+            .expect_err("a path that cannot be removed must not read as a removal");
+        assert!(
+            err.to_string().contains("still installed"),
+            "the error does not say the AppImage is still there: {err}"
+        );
+        assert!(
+            app.core.load_state().await.contains_key("wedged"),
+            "the record was dropped for an AppImage that is still installed"
+        );
+    }
+
+    /// A name with no record is a skip, not a failure: `remove` is handed what the plan asked to
+    /// remove, and something already gone is the end state that was wanted.
+    #[tokio::test]
+    async fn removing_something_that_was_never_recorded_is_not_a_failure() {
+        let (app, _tmp) = backend("absent");
+        app.remove(&["never-installed".to_string()], false, reaped())
+            .await
+            .expect("an already-absent AppImage is the end state that was asked for");
+    }
+}

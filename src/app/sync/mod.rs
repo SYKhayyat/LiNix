@@ -793,26 +793,26 @@ impl<'a> SyncEngine<'a> {
         // rather than at the call sites because every caller of this function mutates, and
         // the call site that was missed is how a `--dry-run` came to reinstall packages.
         if self.config.dry_run {
-            info!(
-                "[DRY-RUN] would recover {} interrupted operation(s) from a previous run:",
+            crate::would!(
+                "would recover {} interrupted operation(s) from a previous run:",
                 interrupted.len()
             );
             for (entry, _) in &interrupted {
                 match Self::replay_of(&entry.action) {
                     Some(GraphAction::Install(spec)) => {
-                        info!("[DRY-RUN]   reinstall {}:{}", spec.backend, spec.name)
+                        crate::would!("  reinstall {}:{}", spec.backend, spec.name)
                     }
                     Some(GraphAction::Remove { name, backend }) => {
-                        info!(
-                            "[DRY-RUN]   remove {}:{} (subject to the guard)",
+                        crate::would!(
+                            "  remove {}:{} (subject to the guard)",
                             backend, name
                         )
                     }
                     // Nothing to replay, so the preview says the only true thing there is:
                     // what was interrupted. Reporting it is the whole of the real run's
                     // action too, so preview and run describe the same machine.
-                    None => info!(
-                        "[DRY-RUN]   report: {}",
+                    None => crate::would!(
+                        "  report: {}",
                         entry.action.describe_interruption()
                     ),
                 }

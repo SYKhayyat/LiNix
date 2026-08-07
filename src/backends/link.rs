@@ -314,8 +314,8 @@ impl LinkBackendCore {
             return Ok(()); // the original was already preserved on an earlier run
         }
         if self.executor.dry_run {
-            info!(
-                "[DRY-RUN] Link: would back up existing {:?} to {:?} before writing the managed version.",
+            crate::would!(
+                "Link: would back up existing {:?} to {:?} before writing the managed version.",
                 target, backup
             );
             return Ok(());
@@ -429,8 +429,8 @@ impl Installable for LinkInstallable {
                 // history is a rotated secret, so this is a refusal rather than a warning.
                 refuse_target_in_repo(&self.core.config, &target_path)?;
                 if self.core.executor.dry_run {
-                    info!(
-                        "[DRY-RUN] Link: would decrypt {:?} with {} and write to {:?}",
+                    crate::would!(
+                        "Link: would decrypt {:?} with {} and write to {:?}",
                         source, tool, target_path
                     );
                     continue;
@@ -503,8 +503,8 @@ impl Installable for LinkInstallable {
                 }
 
                 if self.core.executor.dry_run {
-                    info!(
-                        "[DRY-RUN] Would remove existing file/link at {:?}",
+                    crate::would!(
+                        "Would remove existing file/link at {:?}",
                         target_path
                     );
                 } else {
@@ -573,9 +573,9 @@ impl Installable for LinkInstallable {
 
             if self.core.executor.dry_run {
                 if has_backup {
-                    info!("[DRY-RUN] Link: would restore {:?} from {:?}", path, backup);
+                    crate::would!("Link: would restore {:?} from {:?}", path, backup);
                 } else {
-                    info!("[DRY-RUN] Link: would remove {:?}", path);
+                    crate::would!("Link: would remove {:?}", path);
                 }
                 continue;
             }

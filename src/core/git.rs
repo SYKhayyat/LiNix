@@ -173,8 +173,8 @@ impl GitManager {
         // both, which is the one case in this family where the preview's side effect is a
         // permanent artifact in the user's config directory rather than a changed file.
         if crate::core::dry_run::active() {
-            tracing::warn!(
-                "[DRY-RUN] would initialise manifest version control at {} and commit the                  config as it stands.",
+            crate::would_warn!(
+                "would initialise manifest version control at {} and commit the                  config as it stands.",
                 self.root.display()
             );
             return Ok(());
@@ -209,7 +209,7 @@ impl GitManager {
         // nothing has nothing to record — and one that would have changed something must not
         // write the record either.
         if crate::core::dry_run::active() {
-            tracing::debug!("[DRY-RUN] would commit: {}", message);
+            crate::would!("would commit: {}", message);
             return Ok(None);
         }
         if !self.is_repo() {

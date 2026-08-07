@@ -81,7 +81,7 @@ pub async fn bisect(app: &App, test: &str, assume_yes: bool) -> Result<()> {
     }
 
     if app.config.dry_run {
-        println!("[DRY-RUN] Would binary-search snapshots (restoring + testing each) to find the culprit.");
+        crate::would_print!("Would binary-search snapshots (restoring + testing each) to find the culprit.");
         return Ok(());
     }
     if !assume_yes {
@@ -89,7 +89,84 @@ pub async fn bisect(app: &App, test: &str, assume_yes: bool) -> Result<()> {
         return Ok(());
     }
 
+    // **Where the machine started, so it can be put back.**
+    //
+    // `bisect` is a diagnostic: it answers "which change broke this?". It used to answer by
+    // restoring snapshot after snapshot and then returning `Ok(())` from wherever the search
+    // happened to stop — not the culprit's state, not the last good one, just whichever
+    // candidate the final iteration probed. The machine's installed software was rearranged
+    // into an arbitrary historical state, silently, by a command whose whole purpose is to
+    // *tell you something*. Same family as `profile show`, which resolved a question by editing
+    // `active`; the difference is only that this one changes the machine rather than a file.
+    //
+    // Taken before the first restore, so it captures the state the user was in, and restored on
+    // every exit from the loop including the error one.
+    let home = app
+        .snapshot_manager
+        .auto_snapshot(crate::core::snapshot::SnapshotLabel::PreBisect)
+        .await?;
+    match &home {
+        Some(s) => info!(
+            "Bisect: snapshot {} records the current state; it will be restored when the search \
+             ends.",
+            s.id
+        ),
+        // `has_provider` is checked above, so this is a provider that answered and produced
+        // nothing. Said out loud rather than assumed away: it is the difference between a
+        // diagnostic that gives you your machine back and one that does not.
+        None => warn!(
+            "Bisect: the snapshot provider took no snapshot of the current state, so this \
+             machine will be left on whichever snapshot the search ends at. Restore it yourself \
+             with `linix rollback` when you are done."
+        ),
+    }
+
     // Adaptive binary search. We mirror `first_bad` but the oracle is async (restore+test).
+    let search = search_for_culprit(app, test, &snapshots).await;
+
+    if let Some(s) = &home {
+        info!("Bisect: restoring {} — the state you started in.", s.id);
+        // Reported, not swallowed, and not allowed to hide the search's own error: a machine
+        // left on a historical snapshot is the one outcome the user must not learn about later.
+        if let Err(e) = app.snapshot_manager.restore_snapshot(&s.id).await {
+            warn!(
+                "Bisect: could not restore {}: {}. This machine is still on a snapshot the \
+                 search restored.",
+                s.id, e
+            );
+        }
+    }
+
+    match search? {
+        Some(i) => {
+            let s = &snapshots[i];
+            println!("\nFirst broken snapshot: {} ({})", s.id, s.timestamp);
+            if i > 0 {
+                let prev = &snapshots[i - 1];
+                println!("Last good snapshot:    {} ({})", prev.id, prev.timestamp);
+                println!("=> The regression was introduced between these two states.");
+            } else {
+                println!(
+                    "=> The oldest snapshot is already broken; the cause predates your history."
+                );
+            }
+        }
+        None => println!("\nNo broken snapshot found — every restored state passed the test."),
+    }
+    Ok(())
+}
+
+/// The binary search itself: restore a candidate, ask the oracle, narrow.
+///
+/// **Split out so its `?` cannot skip the restore.** With the loop inline, a restore that failed
+/// halfway propagated straight out of `bisect` and the machine was left on the last snapshot the
+/// search had reached — the failure mode of the original, made *worse* by an error path. The
+/// caller holds the result until after it has put the machine back.
+async fn search_for_culprit(
+    app: &App,
+    test: &str,
+    snapshots: &[crate::core::snapshot::Snapshot],
+) -> Result<Option<usize>> {
     let (mut lo, mut hi) = (0usize, snapshots.len());
     let mut culprit = None;
     while lo < hi {
@@ -114,24 +191,7 @@ pub async fn bisect(app: &App, test: &str, assume_yes: bool) -> Result<()> {
             hi = mid;
         }
     }
-
-    match culprit {
-        Some(i) => {
-            let s = &snapshots[i];
-            println!("\nFirst broken snapshot: {} ({})", s.id, s.timestamp);
-            if i > 0 {
-                let prev = &snapshots[i - 1];
-                println!("Last good snapshot:    {} ({})", prev.id, prev.timestamp);
-                println!("=> The regression was introduced between these two states.");
-            } else {
-                println!(
-                    "=> The oldest snapshot is already broken; the cause predates your history."
-                );
-            }
-        }
-        None => println!("\nNo broken snapshot found — every restored state passed the test."),
-    }
-    Ok(())
+    Ok(culprit)
 }
 
 #[cfg(test)]

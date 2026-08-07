@@ -39,7 +39,7 @@ impl Repositories<'_> {
                 )));
             };
             if self.config.dry_run {
-                info!("[DRY-RUN] would add repo `{}` to {}", spec, backend);
+                crate::would!("would add repo `{}` to {}", spec, backend);
             } else {
                 info!("Repo: adding `{}` to {} ({})", spec, backend, origin);
                 repos.add_repo(spec, spec, b.sudo_for_write()).await?;
@@ -51,7 +51,7 @@ impl Repositories<'_> {
         // slow part, and doing it per-repo would pay that cost N times for one backend.
         for backend in touched {
             if self.config.dry_run {
-                info!("[DRY-RUN] would refresh {} package index", backend);
+                crate::would!("would refresh {} package index", backend);
                 continue;
             }
             if let Some(b) = self.registry.get(&backend) {

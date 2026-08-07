@@ -70,7 +70,7 @@ impl Dotfiles<'_> {
         }
 
         if self.config.dry_run {
-            println!("[DRY-RUN] a real run would ask you to confirm these destinations.");
+            crate::would_print!("a real run would ask you to confirm these destinations.");
             return Ok(());
         }
         if self.config.yes {
@@ -273,8 +273,8 @@ impl Dotfiles<'_> {
                 // One line per tree, not one per file: the backend previews each placement it
                 // would touch, and forty of those for a forty-file tree is the summary a user
                 // came here to avoid writing forty `link:` lines for.
-                info!(
-                    "[DRY-RUN] would place {} file(s) from `dotfiles:{}`",
+                crate::would!(
+                    "would place {} file(s) from `dotfiles:{}`",
                     tree.plan.placements.len(),
                     tree.name
                 );

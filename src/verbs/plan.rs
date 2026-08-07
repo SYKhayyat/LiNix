@@ -436,8 +436,8 @@ pub async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Result<()> {
     }
 
     if app.config.dry_run {
-        println!(
-            "[DRY-RUN] would install {} and remove {} package(s), place {} and undo {} \
+        crate::would_print!(
+            "would install {} and remove {} package(s), place {} and undo {} \
              resource(s).",
             plan.installs.len(),
             plan.removals.len(),
@@ -670,7 +670,10 @@ pub fn scoped_by(key: &str, names: &[String]) -> bool {
 /// pins nothing, approves nothing and forgets nothing.
 fn tense(label: &str, done: &'static str, would: &'static str) -> (String, &'static str) {
     if crate::core::dry_run::active() {
-        (format!("[DRY-RUN] {}:", label), would)
+        (
+            format!("{} {}:", crate::core::dry_run::MARKER, label),
+            would,
+        )
     } else {
         (format!("{}:", label), done)
     }

@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tempfile::NamedTempFile;
 use tokio::process::Command;
 use tokio::sync::Mutex;
-use tracing::{debug, info};
+use tracing::debug;
 
 /// Set on every process LiNix spawns, carrying the pid of the LiNix that spawned it. A
 /// `linix` that finds it in its environment was started by a package manager LiNix is
@@ -740,7 +740,7 @@ impl ExecutionLayer for DryRunExecutor {
         args: &[String],
         _env: &HashMap<String, String>,
     ) -> Result<StdOutput> {
-        info!("[DRY-RUN] Would execute: {} {}", cmd, args.join(" "));
+        crate::would!("Would execute: {} {}", cmd, args.join(" "));
         Ok(DryRunOutput::new().into())
     }
 

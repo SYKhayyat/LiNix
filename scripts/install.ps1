@@ -22,10 +22,26 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
 # WHICH LiNix — the twin of install.sh's rule. `HEAD` is whatever was pushed last, which is not
 # a thing anyone can ask for twice. The default is the newest release tag; $env:LINIX_REF
 # overrides it, and a repo with no tags falls back to the branch and says so.
+#
+# **`git` is optional here and the twin already knew that.** `cargo install --git` fetches over
+# libgit2 and needs no `git.exe`, so a Windows box with Rust and no Git can install LiNix
+# perfectly well — but `$ErrorActionPreference = 'Stop'` turns a missing command into a
+# terminating `CommandNotFoundException`, and this script died on it with a raw stack trace at
+# the one step that is only ever a *preference*. `install.sh` degrades: its `git ls-remote`
+# failure is swallowed by the pipeline's exit status and the branch fallback takes over.
+# Exactly the twin-that-diverged shape CLAUDE.md is about — the rule is in both files now.
 $ref = $env:LINIX_REF
 if (-not $ref) {
-    $tags = & git ls-remote --tags --refs --sort=-v:refname $repo 'v*' 2>$null
-    if ($tags) { $ref = ($tags | Select-Object -First 1) -replace '.*/', '' }
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        # And a `git` that IS present can still fail — no network, a private repo, a proxy. That
+        # is the same "we could not ask" as having no git at all, and it gets the same answer.
+        try {
+            $tags = & git ls-remote --tags --refs --sort=-v:refname $repo 'v*' 2>$null
+            if ($tags) { $ref = ($tags | Select-Object -First 1) -replace '.*/', '' }
+        } catch {
+            $ref = $null
+        }
+    }
     if (-not $ref) { Say "no release tag published yet - installing from the default branch instead." }
 }
 

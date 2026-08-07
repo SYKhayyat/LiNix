@@ -24,7 +24,7 @@ use tempfile::NamedTempFile;
 /// now one.
 pub fn persist(path: &Path, content: &str) -> Result<bool> {
     if crate::core::dry_run::active() {
-        tracing::warn!("[DRY-RUN] would write {}", path.display());
+        crate::would_warn!("would write {}", path.display());
         return Ok(false);
     }
     atomic_write(path, content)?;
@@ -42,7 +42,7 @@ pub fn persist(path: &Path, content: &str) -> Result<bool> {
 /// keeps everything before it.
 pub fn append_line(path: &Path, line: &str) -> Result<bool> {
     if crate::core::dry_run::active() {
-        tracing::warn!("[DRY-RUN] would append to {}", path.display());
+        crate::would_warn!("would append to {}", path.display());
         return Ok(false);
     }
     if let Some(dir) = path.parent() {

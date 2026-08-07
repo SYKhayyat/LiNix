@@ -128,7 +128,7 @@ pub async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
                 &path,
                 &body,
                 "Created",
-                "[DRY-RUN] would create",
+                "would create",
             )
             .await?;
             println!("{} {}", verb, path.display());
@@ -169,7 +169,7 @@ pub async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
                 &path,
                 &body,
                 "Added",
-                "[DRY-RUN] would add",
+                "would add",
             )
             .await?;
             let count = module_registry::count_entries(&body);
@@ -223,7 +223,7 @@ pub async fn handle_service(app: &App, cmd: &ServiceCommand) -> Result<()> {
             ServiceCommand::Status { .. } | ServiceCommand::List => None,
         };
         if let Some((what, name)) = action {
-            println!("[DRY-RUN] would {} service '{}'.", what, name);
+            crate::would_print!("would {} service '{}'.", what, name);
             return Ok(());
         }
     }
@@ -613,7 +613,7 @@ pub async fn handle_schedule(app: &App, cmd: &ScheduleCommand) -> Result<()> {
                 &file,
                 &updated,
                 "Added",
-                "[DRY-RUN] would add",
+                "would add",
             )
             .await?;
             println!("{} `schedule:{}` to {}.", verb, name, file.display());
@@ -628,7 +628,7 @@ pub async fn handle_schedule(app: &App, cmd: &ScheduleCommand) -> Result<()> {
                 &file,
                 &updated,
                 "Removed",
-                "[DRY-RUN] would remove",
+                "would remove",
             )
             .await?;
             println!("{} `schedule:{}` from {}.", verb, name, file.display());

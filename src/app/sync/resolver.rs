@@ -113,6 +113,9 @@ pub struct StateResolver<'a> {
     /// disagree with what the plan froze, so `apply` resolves the model against the plan's own
     /// variables. `None` resolves them fresh, which is what every non-plan path does.
     vars_override: Option<crate::model::vars::Vars>,
+    /// Resolve as if `active` held this body. Set by `profile show`, which asks "what would
+    /// this profile give me" and must not answer by editing the machine's `active` file.
+    active_override: Option<String>,
     /// Whether this resolution may freeze an unpinned name's backend into this host's
     /// `locks/bare.HOST.toml`.
     ///
@@ -159,6 +162,7 @@ impl<'a> StateResolver<'a> {
             prefer_locks: true,
             locks,
             vars_override: None,
+            active_override: None,
             may_record_locks: false,
             remote_gate: Arc::new(tokio::sync::Semaphore::new(config.network_parallel.max(1))),
         }
@@ -175,6 +179,18 @@ impl<'a> StateResolver<'a> {
     /// provider (used by `apply` to reuse a saved plan's frozen variables).
     pub fn with_vars(mut self, vars: crate::model::vars::Vars) -> Self {
         self.vars_override = Some(vars);
+        self
+    }
+
+    /// Resolve as if `active` held `body`, leaving the file on disk untouched.
+    ///
+    /// `profile show` answers "what would this profile give me", and it used to answer by
+    /// **writing the profile's name into the real `active` file**, resolving, and writing the old
+    /// contents back. A read-only command changed what the machine was set to for the length of a
+    /// resolve — and a `^C`, a panic, or a second write that failed left it changed, so the next
+    /// `sync` converged to a profile the user had asked only to look at.
+    pub fn as_if_active(mut self, body: String) -> Self {
+        self.active_override = Some(body);
         self
     }
 
@@ -445,11 +461,15 @@ impl<'a> StateResolver<'a> {
         // workers.
         let mut reached = {
             let (layout, known, facts) = (self.layout.clone(), known.clone(), facts.clone());
+            let active = self.active_override.clone();
             let priority = priority.clone();
             tokio::task::spawn_blocking(move || {
-                crate::model::Resolver::new(&layout, &known, &priority)
-                    .with_facts(facts)
-                    .statements()
+                let mut r = crate::model::Resolver::new(&layout, &known, &priority)
+                    .with_facts(facts);
+                if let Some(body) = active {
+                    r = r.as_if_active(body);
+                }
+                r.statements()
             })
             .await
             .map_err(|e| Error::Other(format!("reading the model: {}", e)))??
