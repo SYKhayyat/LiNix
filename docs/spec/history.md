@@ -8220,3 +8220,65 @@ gate was written from**, on its first run.
 
 Nothing is deleted here. `Y19` records the cut as the owner's to rule; this is the half that needs
 no ruling, because a check that a citation resolves takes nothing away.
+
+## Session 2026-08-07 — the data path learns the one thing it could not say (`LX-4`)
+
+`onboarder.rs` ships strangers a `ParserSpec` — `Lines`, `Columns`, `Json`, `Regex`, interpreted at
+runtime, installed into **the same `parser` field the built-ins use**. Zero of 62 built-ins use it.
+`b84dff1` had already taken the hand-written list from 29 modules to 18 and left
+`backend_is_data_not_code_tests.rs` as a shrink-only ratchet with a `proof` string per exemption.
+`LX-4` is *"you did this and stopped nine short"*, and six of the nine are exempted for one shape:
+**an argv fragment that depends on the machine's settings.**
+
+### `{setting.KEY|DEFAULT}`
+
+A `ManagerConfig` row is fixed at registration, so an argv that depends on
+`[backend_settings.<backend>]` could not be written as data at all. It can now:
+`ManagerConfig::resolve_settings` substitutes `{setting.env|base}` once, at registration, from this
+backend's settings block — which is where the hand-written backends read it too
+(`conda.rs`'s `resolve_env(cfg)`), so *at call time* and *at registration* are the same answer
+computed a different number of times.
+
+Three decisions inside it, each one a bug avoided:
+
+- **Substitution is inside the token**, so `--{setting.scope|system}` is one argument. There is no
+  shell; a token with a space in it is a token with a space in it.
+- **A placeholder with no value and no default is a refusal.** `conda list -n --json` hands conda a
+  flag where an environment belongs, and conda answers *something*. The error names the key.
+- **`walk_args` is hand-written, and is not trusted.** After resolution the whole struct is
+  rendered through `Debug` and scanned for a surviving placeholder — a scan that cannot miss a
+  field, because it did not write the list. Its own self-test plants one in `list_binary`, which
+  `walk_args` deliberately does not visit, and requires the scan to catch it.
+
+### conda is a row
+
+319 lines to a `ManagerConfig` plus a `LambdaParser`, and **the argv is byte-identical**:
+`conda install -n ml -y -- numpy=1.2.3`, `conda remove -n ml -y -- numpy`,
+`conda search --json -- numpy`. That assertion is the deleted module's own test, moved to
+`tests/conda_is_a_data_row_tests.rs` rather than deleted with it — a conversion is only correct if
+the same commands still come out, so the old test is the proof and not a casualty.
+
+`search` deliberately carries no `-n`: it spans the configured channels rather than one
+environment. The hand-written backend said that in a comment; the row says it by not naming the
+placeholder in `search_args`.
+
+The manual set needed one more field. `conda list` returns the environment's whole solved closure —
+88 packages against 4 on a stock `base` — so the question *"what did the user ask for?"* is
+answered by `env export --from-history --json`, whose shape is a `dependencies` array of
+match-specs rather than the package objects `list --json` returns. **The same manager, two
+formats**, and no amount of leniency in one parser should be asked to cover both — that leniency is
+what `Q40` was. `ManualFormat::Read` carries the second reader.
+
+**What being bespoke had bought conda: nothing.** Across all 19 hand-written backends,
+`essential()` is overridden zero times, `purge` zero, `tracks_manual` zero, `Enumerable` zero,
+`RepoManager` zero. A bespoke backend is a data row someone wrote in Rust, minus eight
+capabilities.
+
+### flatpak is next and is not the builder's
+
+Its exemption named two blockers and one of them is gone. What remains is spelling: flatpak writes
+scope as `user = "true"`, a boolean, where a row needs a value to substitute into
+`--{setting.scope}`. A boolean cannot be written into a flag name without the placeholder growing a
+conditional form — **and a template language in argv rows is how a data path stops being data.**
+`examples/preferences.toml:171` documents the key, so renaming it is user-visible: `Y20`, OPEN. The
+exemption names `Y20` so the register entry and the gate cannot drift apart.

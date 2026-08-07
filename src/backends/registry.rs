@@ -156,7 +156,7 @@ pub async fn create_default_registry(
     crate::backends::appimage::register(&mut reg, &executor, config);
     crate::backends::snap::register(&mut reg, &executor, config);
     crate::backends::flatpak::register(&mut reg, &executor, config);
-    crate::backends::conda::register(&mut reg, &executor, config);
+    register_conda(&mut reg, &executor, config);
     if cfg!(target_os = "windows") {
         crate::backends::psresource::register(&mut reg, &executor, config);
     }
@@ -2409,6 +2409,83 @@ fn register_cargo(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 
 /// Python applications in their own venvs. Was 193 non-test lines, of which the only part
 /// outside this table was asking pipx where a venv lives.
+/// conda — **the backend that made the data path able to say "this argv depends on a setting".**
+///
+/// Every conda verb is environment-scoped: `-n <env>`, where the env is a user choice read from
+/// `backend_settings.conda.env`. A `ManagerConfig` row is fixed at registration and had no way to
+/// carry that, so the answer for 319 lines was a hand-written backend — one that, being bespoke,
+/// overrode `essential()`, `purge`, `tracks_manual`, `Enumerable` and `RepoManager` exactly zero
+/// times. **A bespoke backend is a data row someone wrote in Rust, minus eight capabilities.**
+///
+/// `{setting.env|base}` is the whole of what was missing. `ManagerConfig::resolve_settings`
+/// substitutes it once, at registration, from this backend's `[backend_settings]` block, which is
+/// where `conda.rs`'s own `resolve_env(cfg)` read it too.
+///
+/// **`search` deliberately carries no `-n`.** A search spans the configured channels rather than
+/// one environment, and the hand-written backend said so in a comment; here it is said by the row
+/// simply not naming the placeholder.
+fn register_conda(reg: &mut BackendRegistry, executor: &CommandExecutor, cfg_src: &Config) {
+    const ENV: &str = "{setting.env|base}";
+    let mut cfg = base_config("conda");
+    // Conda pins with `name=version` (one `=`, unlike pip's two).
+    cfg.version_pin = Some(VersionPin::Inline("{name}={version}".into()));
+    cfg.install_args = vec!["install".into(), "-n".into(), ENV.into(), "-y".into()];
+    cfg.remove_args = vec!["remove".into(), "-n".into(), ENV.into(), "-y".into()];
+    cfg.list_args = vec!["list".into(), "-n".into(), ENV.into(), "--json".into()];
+    cfg.search_args = vec!["search".into(), "--json".into()];
+    cfg.upgrade_args = vec![
+        "update".into(),
+        "-n".into(),
+        ENV.into(),
+        "-y".into(),
+        "--all".into(),
+    ];
+    // No index-refresh step: conda resolves against its channels live, which is what
+    // `update_args: None` means for every generic backend.
+    cfg.update_args = None;
+    // `conda list` returns the environment's whole solved closure, so it cannot answer "what did
+    // the user ask for?" — 88 packages against 4 on a stock `base`. `env export --from-history`
+    // can, and its shape is a `dependencies` array of match-specs rather than the package objects
+    // `list --json` returns: the same manager, two formats, which is what `ManualFormat::Read`
+    // exists to say.
+    cfg.manual = ManualListing::Command {
+        binary: None,
+        args: vec![
+            "env".into(),
+            "export".into(),
+            "-n".into(),
+            ENV.into(),
+            "--from-history".into(),
+            "--json".into(),
+        ],
+        format: ManualFormat::Read(Arc::new(crate::parsers::conda::parse_conda_history)),
+    };
+    // One conda process at a time: its environments share a package cache and a solver lock.
+    cfg.is_exclusive = true;
+    cfg.needs_root = false;
+    // conda resolves dependencies internally at install time and exposes no cheap stable
+    // per-package query, so it is not asked.
+    cfg.depends = None;
+
+    // The row is not finished until the machine's settings are in it. A failure here names the
+    // key the user has to set; it cannot silently ship `-n {setting.env}` to conda.
+    if let Err(e) = cfg.resolve_settings(cfg_src.backend_settings.get("conda")) {
+        tracing::warn!("conda: {e}");
+        return;
+    }
+
+    let core = Arc::new(GenericBackendCore {
+        name: "conda".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: crate::parsers::conda::parse_conda_list,
+            search_fn: crate::parsers::conda::parse_conda_search,
+        }),
+    });
+    register_generic(reg, core, true, true, true);
+}
+
 fn register_pipx(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("pipx");
     // pipx installs one requested application per entry; its dependencies live inside that
@@ -3334,7 +3411,7 @@ mod tests {
             ),
             ArgvCase::pkg(
                 "conda",
-                &|r, e| crate::backends::conda::register(r, e, &Config::default()),
+                &|r, e| register_conda(r, e, &Config::default()),
                 Runs("conda install -n base -y -- jq"),
                 Runs("conda remove -n base -y -- jq"),
             ),

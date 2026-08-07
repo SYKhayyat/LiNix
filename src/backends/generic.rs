@@ -175,12 +175,32 @@ pub enum ManualListing {
 }
 
 /// The shape of a `ManualListing::Command`'s output.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone)]
 pub enum ManualFormat {
     /// Same shape as `list_args` output — reuse the backend's installed parser.
     SameAsInstalled,
     /// One bare package name per line, no versions (`apt-mark showmanual`).
     BareNames,
+    /// A shape of its own, read by its own function.
+    ///
+    /// **The manual set is a different question from the installed set, so it may have a
+    /// different answer shape.** conda's is `conda env export --from-history --json`, whose
+    /// `dependencies` array holds match-specs (`python=3.13`) rather than the package objects
+    /// `conda list --json` returns — the same manager, two formats, and no amount of leniency
+    /// in one parser should be asked to cover both. That leniency is what `Q40` was.
+    Read(InstalledReader),
+}
+
+impl std::fmt::Debug for ManualFormat {
+    /// A reader is a closure with no useful rendering, and this type is printed by
+    /// `ManagerConfig`'s `Debug` — which `resolve_settings` scans for unresolved placeholders.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SameAsInstalled => f.write_str("SameAsInstalled"),
+            Self::BareNames => f.write_str("BareNames"),
+            Self::Read(_) => f.write_str("Read(..)"),
+        }
+    }
 }
 
 /// The shape of the file a [`ManualListing::ExportFile`] manager writes.
@@ -454,6 +474,182 @@ pub struct ManagerConfig {
     // `flag_map` was here: declared once, assigned at twenty-five registration sites, and read
     // at none. It was also absent from `CustomBackendDef`, so a user could not have set it even
     // if something had read it — a field that could never carry a fact into the program.
+}
+
+impl ManagerConfig {
+    /// Substitute `{setting.KEY}` and `{setting.KEY|DEFAULT}` in every argv template from this
+    /// backend's `[backend_settings]` block.
+    ///
+    /// **The one thing the data path could not say.** `conda` is environment-scoped: every verb
+    /// carries `-n <env>`, where the env is a user choice read from
+    /// `backend_settings.conda.env`. A `ManagerConfig` row is fixed at registration, so an argv
+    /// that depends on the machine's settings had no way to be written as data — and the answer,
+    /// for 319 lines, was a hand-written backend. `backend_is_data_not_code_tests.rs` records six
+    /// exemptions blocked on the same shape.
+    ///
+    /// **Resolved once, at registration, not per call.** `backend_settings` is read from
+    /// preferences before any backend registers and does not change during a run, so a per-call
+    /// substitution would be the same answer computed N times — and the hand-written backends
+    /// this replaces already resolved at registration (`conda.rs`'s `resolve_env(cfg)`).
+    ///
+    /// A placeholder that names a key with no value and no `|DEFAULT` is a **refusal**, not an
+    /// empty string: `conda list -n --json` would ask conda about a flag rather than an
+    /// environment, and a manager handed a malformed argv is exactly the silent-wrong-answer
+    /// shape this repo keeps finding.
+    pub fn resolve_settings(
+        &mut self,
+        settings: Option<&std::collections::HashMap<String, String>>,
+    ) -> crate::core::Result<()> {
+        let backend = self.name.clone();
+        let lookup = |token: &str| -> Option<String> {
+            let (key, fallback) = match token.split_once('|') {
+                Some((k, d)) => (k, Some(d)),
+                None => (token, None),
+            };
+            settings
+                .and_then(|s| s.get(key))
+                .filter(|v| !v.trim().is_empty())
+                .cloned()
+                .or_else(|| fallback.map(str::to_string))
+        };
+
+        let mut missing: Vec<String> = Vec::new();
+        walk_args(self, &mut |arg: &mut String| {
+            *arg = substitute(arg, &lookup, &mut missing);
+        });
+
+        if !missing.is_empty() {
+            return Err(crate::core::Error::Config(format!(
+                "`{backend}` needs `[backend_settings.{backend}]` to set {} — its argv is written \
+                 against {} and there is no default. Add the key, or the commands this backend \
+                 runs would be missing an operand.",
+                missing.join(", "),
+                missing
+                    .iter()
+                    .map(|k| format!("`{{setting.{k}}}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+
+        // **The independent check, and the reason a forgotten field cannot ship.** `walk_args`
+        // is a hand-written list of every argv-bearing field, and the failure mode of a hand-
+        // written list is the field somebody adds next year — a placeholder in it would reach
+        // the manager *literally*, as `-n {setting.env}`. This reads the whole struct through
+        // `Debug`, which cannot miss a field because it did not write the list.
+        let rendered = format!("{self:?}");
+        if let Some(at) = rendered.find("{setting.") {
+            return Err(crate::core::Error::Config(format!(
+                "`{backend}`: a `{{setting.…}}` placeholder survived resolution — \
+                 `generic::walk_args` does not visit the field holding it, so it would be passed \
+                 to the manager verbatim. Near: {}",
+                rendered[at..].chars().take(80).collect::<String>()
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Replace every `{setting.KEY}` / `{setting.KEY|DEFAULT}` in `arg`, recording keys that resolve
+/// to nothing. Substitution is *inside* the token, so `--{setting.scope|system}` is one argument.
+fn substitute(
+    arg: &str,
+    lookup: &dyn Fn(&str) -> Option<String>,
+    missing: &mut Vec<String>,
+) -> String {
+    const OPEN: &str = "{setting.";
+    let mut out = String::with_capacity(arg.len());
+    let mut rest = arg;
+    while let Some(start) = rest.find(OPEN) {
+        let after = &rest[start + OPEN.len()..];
+        let Some(end) = after.find('}') else {
+            break; // an unclosed placeholder is not one; the Debug scan will catch it
+        };
+        out.push_str(&rest[..start]);
+        let token = &after[..end];
+        match lookup(token) {
+            Some(value) => out.push_str(&value),
+            None => {
+                missing.push(token.split('|').next().unwrap_or(token).to_string());
+                // Left in place so the Debug scan is not the thing that reports it; the
+                // `missing` list names the key, which is what the user has to act on.
+                out.push_str(&rest[start..start + OPEN.len() + end + 1]);
+            }
+        }
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Visit every argv token in a [`ManagerConfig`].
+///
+/// Hand-written, and checked by the `Debug` scan in [`ManagerConfig::resolve_settings`] rather
+/// than trusted — a list like this is exactly the kind of thing that goes stale, and the whole
+/// point of the pair is that going stale is a build failure rather than a wrong command.
+fn walk_args(config: &mut ManagerConfig, visit: &mut dyn FnMut(&mut String)) {
+    fn each(args: &mut [String], visit: &mut dyn FnMut(&mut String)) {
+        for a in args {
+            visit(a);
+        }
+    }
+    fn maybe(args: &mut Option<Vec<String>>, visit: &mut dyn FnMut(&mut String)) {
+        if let Some(a) = args {
+            each(a, visit);
+        }
+    }
+
+    each(&mut config.install_args, visit);
+    each(&mut config.remove_args, visit);
+    each(&mut config.list_args, visit);
+    each(&mut config.search_args, visit);
+    each(&mut config.upgrade_args, visit);
+    maybe(&mut config.purge_args, visit);
+    maybe(&mut config.essential_args, visit);
+    maybe(&mut config.enumerate_args, visit);
+    maybe(&mut config.update_args, visit);
+    maybe(&mut config.repo_add_args, visit);
+    maybe(&mut config.repo_remove_args, visit);
+    maybe(&mut config.repo_list_args, visit);
+    maybe(&mut config.upgrade_reinstall_args, visit);
+    maybe(&mut config.extra_probes, visit);
+
+    match &mut config.manual {
+        ManualListing::Command { args, .. } | ManualListing::ExportFile { args, .. } => {
+            each(args, visit)
+        }
+        ManualListing::AllInstalled | ManualListing::Unsupported => {}
+    }
+    if let Some(m) = &mut config.machine_list {
+        each(&mut m.args, visit);
+    }
+    if let Some(o) = &mut config.outdated {
+        each(&mut o.args, visit);
+    }
+    if let Some(o) = &mut config.orphan_dry_run {
+        each(&mut o.args, visit);
+    }
+    if let Some(c) = &mut config.clean_cache {
+        each(&mut c.args, visit);
+    }
+    if let Some(d) = &mut config.depends {
+        each(&mut d.args, visit);
+    }
+    for p in &mut config.property_probes {
+        each(&mut p.args, visit);
+        visit(&mut p.template);
+    }
+    match &mut config.version_pin {
+        Some(VersionPin::Inline(s)) => visit(s),
+        Some(VersionPin::Before(args)) => each(args, visit),
+        Some(VersionPin::After { args, unpinned }) => {
+            each(args, visit);
+            if let Some(u) = unpinned {
+                visit(u);
+            }
+        }
+        None => {}
+    }
 }
 
 pub struct GenericBackendCore {
@@ -993,6 +1189,7 @@ impl Queryable for GenericQueryable {
                         crate::parsers::parse_bare_names(&output, &self.core.name)?
                     }
                     ManualFormat::SameAsInstalled => self.core.parser.parse_installed(&output)?,
+                    ManualFormat::Read(read) => read(&output)?,
                 })
             }
             ManualListing::ExportFile {
@@ -2934,5 +3131,181 @@ ripgrep 15.2.0
         for name in ["a", "b", "c"] {
             assert!(installs[0].contains(name), "{:?}", installs);
         }
+    }
+}
+
+#[cfg(test)]
+mod settings_interpolation_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn settings(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn row(name: &str) -> ManagerConfig {
+        ManagerConfig {
+            name: name.into(),
+            binary: None,
+            remove_binary: None,
+            install_args: vec![],
+            remove_args: vec![],
+            purge_args: None,
+            list_args: vec![],
+            manual: ManualListing::Unsupported,
+            essential_args: None,
+            search_args: vec![],
+            search_binary: None,
+            enumerate_args: None,
+            enumerate_binary: None,
+            list_binary: None,
+            upgrade_args: vec![],
+            update_args: None,
+            orphan_dry_run: None,
+            repo_add_args: None,
+            repo_remove_args: None,
+            repo_list_args: None,
+            repo_binary: None,
+            repo_list_binary: None,
+            repo_remove_binary: None,
+            repo_list_shape: RepoListing::Columns,
+            depends: None,
+            clean_cache: None,
+            version_pin: None,
+            install_source_option: None,
+            needs_root: false,
+            is_exclusive: false,
+            property_probes: Vec::new(),
+            machine_list: None,
+            outdated: None,
+            search_source: SearchSource::Command,
+            upgrade_reinstall_args: None,
+            extra_probes: None,
+        }
+    }
+
+    #[test]
+    fn a_setting_reaches_the_argv_it_is_named_in() {
+        let mut cfg = row("conda");
+        cfg.install_args = vec!["install".into(), "-n".into(), "{setting.env|base}".into()];
+        cfg.resolve_settings(Some(&settings(&[("env", "ml")])))
+            .expect("resolves");
+        assert_eq!(cfg.install_args, vec!["install", "-n", "ml"]);
+    }
+
+    #[test]
+    fn the_default_is_used_when_the_key_is_absent_or_blank() {
+        for value in [None, Some("   ")] {
+            let mut cfg = row("conda");
+            cfg.list_args = vec!["-n".into(), "{setting.env|base}".into()];
+            let s = value.map(|v| settings(&[("env", v)]));
+            cfg.resolve_settings(s.as_ref()).expect("resolves");
+            assert_eq!(cfg.list_args, vec!["-n", "base"], "for {value:?}");
+        }
+    }
+
+    /// The value substitutes *inside* the token, so one argument comes out — not two, and not a
+    /// token with a space in it that the shell would never see because there is no shell.
+    #[test]
+    fn substitution_happens_inside_a_token() {
+        let mut cfg = row("flatpak");
+        cfg.install_args = vec!["install".into(), "--{setting.scope|system}".into()];
+        cfg.resolve_settings(Some(&settings(&[("scope", "user")])))
+            .expect("resolves");
+        assert_eq!(cfg.install_args, vec!["install", "--user"]);
+    }
+
+    /// **A key with no value and no default is a refusal.** `conda list -n --json` would hand
+    /// conda a flag where an environment belongs, and conda answers *something* — which is the
+    /// silent-wrong-answer shape, not a crash.
+    #[test]
+    fn a_placeholder_with_nothing_behind_it_refuses_rather_than_emptying() {
+        let mut cfg = row("conda");
+        cfg.list_args = vec!["list".into(), "-n".into(), "{setting.env}".into()];
+        let err = cfg
+            .resolve_settings(None)
+            .expect_err("an unresolvable placeholder must not ship");
+        let msg = err.to_string();
+        assert!(msg.contains("backend_settings.conda"), "{msg}");
+        assert!(msg.contains("env"), "{msg}");
+    }
+
+    /// Every argv-bearing field, not the four somebody remembered. A placeholder that reaches a
+    /// manager literally is the failure this whole mechanism would otherwise introduce.
+    #[test]
+    fn every_argv_bearing_field_is_visited() {
+        let mut cfg = row("m");
+        let p = || "{setting.k}".to_string();
+        cfg.install_args = vec![p()];
+        cfg.remove_args = vec![p()];
+        cfg.list_args = vec![p()];
+        cfg.search_args = vec![p()];
+        cfg.upgrade_args = vec![p()];
+        cfg.purge_args = Some(vec![p()]);
+        cfg.essential_args = Some(vec![p()]);
+        cfg.enumerate_args = Some(vec![p()]);
+        cfg.update_args = Some(vec![p()]);
+        cfg.repo_add_args = Some(vec![p()]);
+        cfg.repo_remove_args = Some(vec![p()]);
+        cfg.repo_list_args = Some(vec![p()]);
+        cfg.upgrade_reinstall_args = Some(vec![p()]);
+        cfg.extra_probes = Some(vec![p()]);
+        cfg.version_pin = Some(VersionPin::Inline(p()));
+        cfg.property_probes = vec![PropertyProbe {
+            property: "x".into(),
+            args: vec![p()],
+            template: p(),
+        }];
+        cfg.manual = ManualListing::Command {
+            binary: None,
+            args: vec![p()],
+            format: ManualFormat::BareNames,
+        };
+        cfg.clean_cache = Some(CacheClean {
+            binary: None,
+            args: vec![p()],
+        });
+        cfg.orphan_dry_run = Some(OrphanDryRun {
+            binary: None,
+            args: vec![p()],
+            removes_line_prefix: String::new(),
+        });
+
+        cfg.resolve_settings(Some(&settings(&[("k", "V")])))
+            .expect("every field resolves");
+        let rendered = format!("{cfg:?}");
+        assert!(
+            !rendered.contains("{setting."),
+            "a placeholder survived: {rendered}"
+        );
+    }
+
+    /// **The guard's own self-test.** The `Debug` scan exists because `walk_args` is a
+    /// hand-written list, and a check that cannot fail is worse than no check — so this plants
+    /// exactly what `walk_args` does not visit (a *binary* name, which is not argv and is
+    /// deliberately outside the walk) and requires the scan to catch it.
+    #[test]
+    fn the_leftover_scan_can_actually_fail() {
+        let mut cfg = row("m");
+        cfg.list_binary = Some("{setting.tool}".into());
+        let err = cfg
+            .resolve_settings(Some(&settings(&[("tool", "dpkg-query")])))
+            .expect_err("the scan must catch a placeholder walk_args does not reach");
+        assert!(
+            err.to_string().contains("survived resolution"),
+            "wrong failure: {err}"
+        );
+    }
+
+    /// A row with no placeholders is untouched, which is every other backend in the tree.
+    #[test]
+    fn a_row_that_names_no_setting_is_unchanged() {
+        let mut cfg = row("apt");
+        cfg.install_args = vec!["install".into(), "-y".into()];
+        cfg.resolve_settings(None).expect("resolves");
+        assert_eq!(cfg.install_args, vec!["install", "-y"]);
     }
 }

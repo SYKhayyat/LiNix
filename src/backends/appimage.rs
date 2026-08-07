@@ -395,7 +395,7 @@ mod tests {
 
         assert!(!local.exists(), "the AppImage is still on disk");
         assert!(!link.exists(), "the PATH entry survived the removal");
-        assert!(app.core.load_state().await.get("fd").is_none());
+        assert!(!app.core.load_state().await.contains_key("fd"));
     }
 
     /// `@download_only` never linked anything, so `symlink_path` is empty — and an empty path is

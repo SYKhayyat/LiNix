@@ -547,7 +547,7 @@ mod tests {
             "removal named the file rather than the package dpkg lists it under: {calls:?}"
         );
         assert!(
-            web.core.load_state().await.get(url).is_none(),
+            !web.core.load_state().await.contains_key(url),
             "the record survived a successful removal"
         );
     }

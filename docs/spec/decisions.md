@@ -1,4 +1,4 @@
-# The decision register — all 180, three of them open
+# The decision register — all 181, four of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -15,7 +15,7 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **3** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **4** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **3** |
 | **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **170** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
@@ -73,10 +73,11 @@ status loses that, so it is kept here:
 
 ## Index
 
-**Three are open — `Z1`, raised 2026-08-03, a licence choice; `Y18`, raised 2026-08-07, three
-findings against Part II; and `Y19`, raised the same day, whether 2.5 MB of specification gets
-cut.** All 180 are accounted
-for: **170 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 3 BUILT NEVER RULED, 3 OPEN** — and this line
+**Four are open — `Z1`, raised 2026-08-03, a licence choice; and three raised 2026-08-07:
+`Y18`, findings against Part II; `Y19`, whether 2.5 MB of specification gets cut; and `Y20`,
+whether flatpak's scope key is renamed so its backend can become a data row.** All 181 are
+accounted
+for: **170 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 3 BUILT NEVER RULED, 4 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -313,7 +314,7 @@ without asking. Two are not mine: one is a legal choice and one changes a publis
 | **Z1** | There is no `LICENSE` file and no `license` key in `Cargo.toml`, for a tool with an install script and a `self-upgrade` verb. Which licence? | **OPEN** |
 | **Z2** | `lock` and `unlock` touch unrelated files and are not inverses; `unlock` can cause package churn. Rename it, or give `lock` a real inverse? | **ANSWERED** — both verbs name their axis (`versions`/`backends`/`scripts`/`all`), and every path that moves a version re-records it |
 
-### Y — the efficiency pass — 22
+### Y — the efficiency pass — 23
 
 *Not a proposal part. `docs/INEFFICIENCIES.md` audited every place in the tree slower than it has
 to be and marked the findings a user would notice as needing a ruling; the owner ruled the lot on
@@ -7100,3 +7101,38 @@ wants this repository to be. A builder who answers it by deleting has answered i
 or is thinned to the entries whose commit message does not already carry them; and where the 53
 unattached `why.md` entries land — cited from the rule they explain, moved into the doc comment of
 the test that enforces them, or retired.
+
+---
+
+## Y20
+
+**Status: OPEN — raised 2026-08-07 by `LX-4`.** Separable and small; blocks one backend
+conversion and nothing else.
+
+**Y20 — `flatpak`'s scope is a boolean where the data path needs a value. Rename the key?**
+
+`ManagerConfig` rows can now carry `{setting.KEY|DEFAULT}`, substituted at registration from
+`[backend_settings.<backend>]` — which is what took `conda` from 319 lines of hand-written Rust to
+a row, argv byte-identical. `flatpak` was exempted for the same reason and is the next one, except
+for the spelling.
+
+It writes scope as **`user = "true"`**, a boolean (`examples/preferences.toml:171`). A row needs a
+value it can substitute: `--{setting.scope|system}` where `scope` is `system` or `user`. A boolean
+cannot be written into a flag name without the placeholder growing a conditional form, and a
+template language in argv rows is how a data path stops being data.
+
+**This is a documented preferences key, so renaming it is user-visible and the owner's.** The three
+answers, in the order the owner's past rulings suggest:
+
+1. **`scope = "user" | "system"`, and `user` stops being read.** NO-LEGACY says the old key goes in
+   the same change, which means an existing `user = "true"` silently loses effect — the exact
+   silent-drift shape this repo removes. Mitigable by refusing `user` by name with a message that
+   says what to write instead, which is a refusal rather than a shim.
+2. **Keep `user`, give the placeholder a conditional form.** Cheap today, and it is the first line
+   of a template language nobody designed.
+3. **Leave flatpak hand-written.** It has a *second* blocker — it addresses applications by
+   reverse-DNS ID with an optional remote, which the name slot cannot hold alone — so answering
+   this one does not by itself convert it.
+
+The exemption in `backend_is_data_not_code_tests.rs` records the state either way; it names `Y20`
+so the entry and the gate cannot drift apart.

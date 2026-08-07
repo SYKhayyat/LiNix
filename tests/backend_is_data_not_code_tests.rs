@@ -169,12 +169,6 @@ const HAND_WRITTEN: &[HandWritten] = &[
         proof: "--install-extension",
     },
     HandWritten {
-        module: "conda.rs",
-        why: "environment-scoped: every verb carries `-n <env>` resolved at call time from the \
-              declaration and config, so the argv is not fixed at registration.",
-        proof: "\"-n\", &self.core.env",
-    },
-    HandWritten {
         module: "mise.rs",
         why: "manages tool VERSIONS rather than packages — `use -g name@version` where the \
               version is part of the identity — and reads its own config to list them.",
@@ -182,8 +176,12 @@ const HAND_WRITTEN: &[HandWritten] = &[
     },
     HandWritten {
         module: "flatpak.rs",
-        why: "carries an installation scope (`--system`/`--user`) and addresses applications by \
-              reverse-DNS ID with an optional remote, which the name slot cannot hold alone.",
+        why: "addresses applications by reverse-DNS ID with an optional remote, which the name \
+              slot cannot hold alone. Its scope flag stopped being the second blocker when \
+              `{setting.KEY|DEFAULT}` landed for conda's `-n <env>` — but flatpak spells scope \
+              as the boolean `user = \"true\"`, where a row needs a value it can substitute into \
+              `--{setting.scope}`, and renaming a documented preferences key is the owner's \
+              (`Y20`).",
         proof: "--system",
     },
     HandWritten {
