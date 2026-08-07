@@ -333,7 +333,6 @@ pub(crate) async fn handle_rebuild(
 ) -> Result<()> {
     use linix::app::rebuild::{self, Scope};
     use linix::app::sync::guard::{self, GuardScope};
-    use linix::core::transaction::GraphAction;
 
     // Before the warning about rebuilding everything: `rebuild --backend aptt` scoped to a
     // manager that does not exist, found nothing to rebuild, and said it had succeeded (Q9).
@@ -495,20 +494,16 @@ pub(crate) async fn handle_rebuild(
         // have no edge between them — in one graph they would race.
         let mut down = linix::app::sync::planner::SyncChanges::default();
         for spec in &batch.specs {
-            down.removal_tracker
-                .insert(format!("{}:{}", batch.backend, spec.name));
-            down.graph.add_node(GraphAction::Remove {
-                name: spec.name.clone(),
-                backend: batch.backend.clone(),
-            });
+            down.add_removal(&batch.backend, &spec.name);
         }
         engine.sync(down, GuardScope::Rebuild).await?;
 
+        // `add_installs`, not a loop of `add_node`: a `@requires` between two packages of the
+        // same backend is exactly what a rebuild has to honour, and this loop keyed its map by
+        // the bare name — so the lookup `requires` does, which is `backend:name`, could never
+        // hit it and the graph came out edgeless.
         let mut up = linix::app::sync::planner::SyncChanges::default();
-        for spec in &batch.specs {
-            let idx = up.graph.add_node(GraphAction::Install(spec.clone()));
-            up.install_map.insert(spec.name.clone(), idx);
-        }
+        up.add_installs(&batch.specs);
         // The removal has already happened, so a failure here means the batch's software is
         // gone. Roll the whole rebuild back rather than leaving a half-rebuilt machine.
         if let Err(e) = engine.sync(up, GuardScope::Rebuild).await {

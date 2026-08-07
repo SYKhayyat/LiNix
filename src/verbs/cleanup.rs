@@ -93,10 +93,17 @@ pub(crate) async fn handle_remove_orphans(app: &App) -> Result<()> {
         if let Some(installable) = backend.as_installable() {
             // Remove exactly the names that were shown and guarded — not the backend's own
             // autoremove, whose set can have moved since the preview.
-            installable
-                .remove(names, backend.sudo_for_write())
-                .await
-                .with_context(|| format!("removing orphans from {}", backend_name))?;
+            //
+            // One journal entry per name, not one per command: they go in one manager
+            // invocation and so succeed or fail together, but a reader of an interrupted log
+            // needs to know *which* packages a killed `remove-orphans` was part-way through.
+            linix::core::journalled(
+                &app.journal,
+                linix::core::journal::removals_of(backend_name, names),
+                installable.remove(names, backend.sudo_for_write()),
+            )
+            .await
+            .with_context(|| format!("removing orphans from {}", backend_name))?;
             println!("  {}: removed {} package(s)", backend_name, names.len());
         }
     }
@@ -331,9 +338,19 @@ pub(crate) async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -
         let Some(inst) = b.as_installable() else {
             continue;
         };
-        match inst
-            .remove(std::slice::from_ref(name), b.sudo_for_write())
-            .await
+        // The most destructive command in the program, and until now the one with no record
+        // that it had started. Journalled per package, because this loop removes one at a
+        // time and a kill part-way through leaves a machine whose only account of what went
+        // is the terminal scrollback.
+        match linix::core::journalled(
+            &app.journal,
+            vec![linix::core::JournalAction::Remove {
+                name: name.clone(),
+                backend: backend_name.clone(),
+            }],
+            inst.remove(std::slice::from_ref(name), b.sudo_for_write()),
+        )
+        .await
         {
             Ok(_) => gone += 1,
             Err(e) => {

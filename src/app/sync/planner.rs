@@ -145,8 +145,9 @@ fn partition_by_presence(
     (wanted, unwanted)
 }
 
-/// `backend:name` for a graph node.
-fn node_key(action: &GraphAction) -> String {
+/// `backend:name` for a graph node — the label every report prints, and the key `heal`
+/// collapses a node's journal ids on.
+pub fn node_key(action: &GraphAction) -> String {
     match action {
         GraphAction::Install(spec) => format!("{}:{}", spec.backend, spec.name),
         GraphAction::Remove { name, backend } => format!("{}:{}", backend, name),
@@ -322,6 +323,64 @@ impl SyncChanges {
             .count()
     }
 
+    /// Add an install node per spec, and wire an edge for every `@requires` naming another
+    /// spec in the same set.
+    ///
+    /// **The one implementation, because there were four and two of them had no edges.** The
+    /// planner wired them, `heal` wired them, and the two paths that built a graph by hand —
+    /// `apply` reading a saved plan and `rebuild` putting a backend back — called `add_node` in
+    /// a loop and stopped there. So an ordering a user wrote down held on the run that planned
+    /// it and was dropped by the command whose whole promise is *"the exact plan you inspect is
+    /// the one you later apply"*. Nothing detected it: an edgeless graph runs fine, in the
+    /// wrong order, and only a package that needs its requirement first ever notices.
+    ///
+    /// Edges only *inside* this set. A requirement already on the machine is not this run's to
+    /// schedule, and the key is `backend:name` because that is the form `requires` is written
+    /// in — keyed by the bare name it would match nothing and silently produce the edgeless
+    /// graph this function exists to stop.
+    ///
+    /// **And the only edges are the ones somebody wrote.** A node's neighbours are what splits
+    /// a manager's wave into two command lines (II.19), and a wave that splits for a reason
+    /// nobody declared splits for nothing: every manager here resolves and installs its own
+    /// dependency closure, so `apt install nginx libfoo` needs no help ordering the two — and
+    /// `apt install nginx` then `apt install libfoo` is measurably the slower way to ask for
+    /// the same machine (V.115).
+    pub fn add_installs(&mut self, specs: &[PackageSpec]) {
+        for spec in specs {
+            let key = format!("{}:{}", spec.backend, spec.name);
+            let idx = self.graph.add_node(GraphAction::Install(spec.clone()));
+            self.install_map.insert(key, idx);
+        }
+        for spec in specs {
+            let Some(&child) = self
+                .install_map
+                .get(&format!("{}:{}", spec.backend, spec.name))
+            else {
+                continue;
+            };
+            for req in &spec.requires {
+                if let Some(&parent) = self.install_map.get(req) {
+                    if parent != child {
+                        self.graph.add_edge(parent, child, ());
+                    }
+                }
+            }
+        }
+    }
+
+    /// Add a removal node and record it in the tracker.
+    ///
+    /// The tracker is not bookkeeping the caller may skip: `declined` consults it to answer
+    /// "is this already scheduled", so a removal added to the graph and not to the tracker is
+    /// one the planner can schedule a second time.
+    pub fn add_removal(&mut self, backend: &str, name: &str) {
+        self.removal_tracker.insert(format!("{}:{}", backend, name));
+        self.graph.add_node(GraphAction::Remove {
+            name: name.to_string(),
+            backend: backend.to_string(),
+        });
+    }
+
     /// Produce a copy containing only the Remove actions, for the `prune` command (which
     /// removes drift but never installs). Removals have no inter-node ordering.
     pub fn removals_only(&self) -> SyncChanges {
@@ -334,12 +393,7 @@ impl SyncChanges {
         };
         for weight in self.graph.node_weights() {
             if let GraphAction::Remove { name, backend } = weight {
-                let key = format!("{}:{}", backend, name);
-                out.removal_tracker.insert(key);
-                out.graph.add_node(GraphAction::Remove {
-                    name: name.clone(),
-                    backend: backend.clone(),
-                });
+                out.add_removal(backend, name);
             }
         }
         out
@@ -556,11 +610,7 @@ impl<'a> ChangePlanner<'a> {
                         debug!("'{}' is declared absent and is already absent.", key);
                         continue;
                     }
-                    changes.removal_tracker.insert(key);
-                    changes.graph.add_node(GraphAction::Remove {
-                        name: spec.name.clone(),
-                        backend: backend.clone(),
-                    });
+                    changes.add_removal(backend, &spec.name);
                 }
             }
 
@@ -600,11 +650,7 @@ impl<'a> ChangePlanner<'a> {
                         "Lease for '{}' expired, not in desired. Scheduling removal.",
                         key
                     );
-                    changes.removal_tracker.insert(key.clone());
-                    changes.graph.add_node(GraphAction::Remove {
-                        name: pkg.name.clone(),
-                        backend: pkg.backend.clone(),
-                    });
+                    changes.add_removal(&pkg.backend, &pkg.name);
                 } else {
                     // Drift: LiNix manages it and nothing declares it any more. Removing
                     // that is what sync IS (V.34) — not a mode, not a second command with
@@ -616,11 +662,7 @@ impl<'a> ChangePlanner<'a> {
                     // everything else and the setting protected against a bug that no
                     // longer exists (II.17).
                     debug!("Scheduling drift removal: {}", key);
-                    changes.removal_tracker.insert(key.clone());
-                    changes.graph.add_node(GraphAction::Remove {
-                        name: pkg.name.clone(),
-                        backend: pkg.backend.clone(),
-                    });
+                    changes.add_removal(&pkg.backend, &pkg.name);
                 }
             }
         } else {
@@ -632,7 +674,7 @@ impl<'a> ChangePlanner<'a> {
 
         // Installations and dependency graph
         let target_specs = self.identify_needed_actions(&declared).await?;
-        self.build_execution_graph(&mut changes, &target_specs)?;
+        changes.add_installs(&target_specs);
 
         // Stable order, for the same reason `generate_report` sorts: the crawl that produced
         // these follows a HashMap, so the same machine printed them differently each run.
@@ -818,38 +860,6 @@ impl<'a> ChangePlanner<'a> {
             return Ok(self.template_needs_update(spec).await);
         }
         Ok(false)
-    }
-
-    /// One install node per declared spec, plus the `@requires` edges written between them.
-    ///
-    /// **The only edges are the ones somebody wrote.** A node's neighbours in this graph are
-    /// what splits a manager's wave into two command lines (II.19), and a wave that splits for
-    /// a reason nobody declared is a wave that splits for nothing: every manager here resolves
-    /// and installs its own dependency closure, so `apt install nginx libfoo` needs no help
-    /// ordering the two — and `apt install nginx` then `apt install libfoo` is measurably the
-    /// slower way to ask for the same machine (V.115).
-    fn build_execution_graph(
-        &self,
-        changes: &mut SyncChanges,
-        targets: &[PackageSpec],
-    ) -> Result<()> {
-        for spec in targets {
-            let key = format!("{}:{}", spec.backend, spec.name);
-            let idx = changes.graph.add_node(GraphAction::Install(spec.clone()));
-            changes.install_map.insert(key, idx);
-        }
-        for spec in targets {
-            let child_key = format!("{}:{}", spec.backend, spec.name);
-            let child_idx = *changes.install_map.get(&child_key).ok_or_else(|| {
-                Error::Transaction(format!("Consistency Error: Node {} missing.", child_key))
-            })?;
-            for req in &spec.requires {
-                if let Some(&parent_idx) = changes.install_map.get(req) {
-                    changes.graph.add_edge(parent_idx, child_idx, ());
-                }
-            }
-        }
-        Ok(())
     }
 
     /// Every declared spec, keyed `backend:name`, with duplicates collapsed.

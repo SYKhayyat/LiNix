@@ -137,7 +137,8 @@ impl FailureDiagnosticEngine {
         suggestions
     }
 
-    #[instrument(skip(self, registry, state, config))]
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(skip(self, registry, state, config, journal))]
     pub async fn handle_failure(
         &self,
         stderr: &str,
@@ -145,6 +146,7 @@ impl FailureDiagnosticEngine {
         registry: Arc<BackendRegistry>,
         state: Arc<Mutex<StateRegistry>>,
         config: &Config,
+        journal: Arc<Mutex<crate::core::Journal>>,
         auto_install: bool,
     ) -> Result<()> {
         let suggestions = self.diagnose(stderr, current_backend);
@@ -165,7 +167,7 @@ impl FailureDiagnosticEngine {
         }
 
         if auto_install {
-            self.remediate(&suggestions, registry, state, config)
+            self.remediate(&suggestions, registry, state, config, journal)
                 .await?;
         } else {
             use std::io::IsTerminal;
@@ -189,7 +191,7 @@ impl FailureDiagnosticEngine {
             .map_err(|e| Error::Other(format!("Join error: {}", e)))??;
 
             if res {
-                self.remediate(&suggestions, registry, state, config)
+                self.remediate(&suggestions, registry, state, config, journal)
                     .await?;
             }
         }
@@ -202,6 +204,7 @@ impl FailureDiagnosticEngine {
         registry: Arc<BackendRegistry>,
         state: Arc<Mutex<StateRegistry>>,
         config: &Config,
+        journal: Arc<Mutex<crate::core::Journal>>,
     ) -> Result<()> {
         let resolver = StateResolver::new(config, registry.clone(), false).await;
 
@@ -211,9 +214,15 @@ impl FailureDiagnosticEngine {
 
             if let Some(b_cap) = registry.get(&spec.backend) {
                 if let Some(installer) = b_cap.as_installable() {
-                    match installer
-                        .install(std::slice::from_ref(&spec), b_cap.sudo_for_write())
-                        .await
+                    // Dead code that installs software is the worst kind — it looks
+                    // maintained and is never exercised — so it is held to the same rule as
+                    // the live paths rather than exempted for being unreachable.
+                    match crate::core::journalled(
+                        &journal,
+                        vec![crate::core::JournalAction::Install(spec.clone())],
+                        installer.install(std::slice::from_ref(&spec), b_cap.sudo_for_write()),
+                    )
+                    .await
                     {
                         Ok(_) => {
                             // The save runs on a blocking thread and so needs an owned,

@@ -334,8 +334,15 @@ impl EphemeralShell {
                             requires: Vec::new(),
                             present: true,
                         };
-                        inst.install(std::slice::from_ref(&spec), b.sudo_for_write())
-                            .await
+                        // The other half of `packages.rs`'s suspend, and journalled for the
+                        // same reason: a shell that exits into a killed reinstall leaves the
+                        // package neither suspended nor back.
+                        crate::core::journalled(
+                            &self.journal,
+                            vec![crate::core::JournalAction::Install(spec.clone())],
+                            inst.install(std::slice::from_ref(&spec), b.sudo_for_write()),
+                        )
+                        .await
                     }
                     None => Err(Error::Other(format!(
                         "Backend '{}' cannot install",

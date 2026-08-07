@@ -60,8 +60,17 @@ pub(crate) async fn upgrade_one(
                     spec.name,
                     version.unwrap_or("latest")
                 );
-                inst.install(std::slice::from_ref(&spec), b.sudo_for_write())
-                    .await?;
+                // An upgrade is an install of a package that is already there, and an
+                // interrupted one leaves the manager holding a half-replaced package with no
+                // declaration describing the version it was moving to. The `@version=` pin
+                // `--security` sets is inside the spec, so the recorded action is the upgrade
+                // rather than a reinstall of whatever is newest.
+                linix::core::journalled(
+                    &app.journal,
+                    vec![linix::core::JournalAction::Install(spec.clone())],
+                    inst.install(std::slice::from_ref(&spec), b.sudo_for_write()),
+                )
+                .await?;
                 acted = true;
             }
         }

@@ -905,47 +905,53 @@ impl<'a> SyncEngine<'a> {
             // Re-running the install over a half-installed package is what every manager LiNix
             // drives can do; uninstalling first was a removal the plan could not show and the
             // guard never saw (S24).
-            use petgraph::stable_graph::{NodeIndex, StableDiGraph};
-            let mut graph: StableDiGraph<GraphAction, ()> = StableDiGraph::new();
-            let mut nodes: Vec<(NodeIndex, GraphAction, Vec<String>)> = Vec::new();
-            for (action, ids) in runnable {
-                nodes.push((graph.add_node(action.clone()), action, ids));
-            }
             // An interrupted install whose dependency is also interrupted must wait for it, or
             // recovery reproduces the ordering failure that a dependency edge exists to prevent.
-            // Only edges *inside* the recovery set: a requirement that is already installed is
-            // not this run's to schedule.
-            // Keyed `backend:name`, which is the form `requires` is written in — the same
-            // lookup `ChangePlanner::build_execution_graph` does against its own install map.
-            // Keying it by the bare name would have matched nothing and silently produced an
-            // edgeless graph, which is a plan that runs but in the wrong order.
-            let by_key: std::collections::HashMap<String, NodeIndex> = nodes
-                .iter()
-                .filter_map(|(idx, action, _)| match action {
-                    GraphAction::Install(spec) => {
-                        Some((format!("{}:{}", spec.backend, spec.name), *idx))
-                    }
-                    _ => None,
-                })
-                .collect();
-            let mut edges: Vec<(NodeIndex, NodeIndex)> = Vec::new();
-            for (idx, action, _) in &nodes {
-                if let GraphAction::Install(spec) = action {
-                    for req in &spec.requires {
-                        if let Some(dep) = by_key.get(req) {
-                            if dep != idx {
-                                edges.push((*dep, *idx));
-                            }
-                        }
-                    }
+            // `add_installs` is where that rule lives — this was the fourth hand-built copy of
+            // it, and of the four, two had no edges at all.
+            use petgraph::graph::NodeIndex;
+            let mut changes = SyncChanges::default();
+            changes.add_installs(
+                &runnable
+                    .iter()
+                    .filter_map(|(action, _)| match action {
+                        GraphAction::Install(spec) => Some(spec.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            for (action, _) in &runnable {
+                if let GraphAction::Remove { name, backend } = action {
+                    changes.add_removal(backend, name);
                 }
             }
-            for (from, to) in edges {
-                graph.add_edge(from, to, ());
+            // The ids that named each operation, keyed the way the graph's weights identify it
+            // — an interrupted install and an interrupted removal of one package are two
+            // operations (`one_per_operation`), so the flag is part of the key.
+            let mut ids_by_key: std::collections::HashMap<(String, bool), Vec<String>> =
+                std::collections::HashMap::new();
+            for (action, ids) in runnable {
+                let is_install = matches!(action, GraphAction::Install(_));
+                ids_by_key
+                    .entry((planner::node_key(&action), is_install))
+                    .or_default()
+                    .extend(ids);
             }
+            let nodes: Vec<(NodeIndex, GraphAction, Vec<String>)> = changes
+                .graph
+                .node_indices()
+                .map(|idx| {
+                    let action = changes.graph[idx].clone();
+                    let is_install = matches!(action, GraphAction::Install(_));
+                    let ids = ids_by_key
+                        .remove(&(planner::node_key(&action), is_install))
+                        .unwrap_or_default();
+                    (idx, action, ids)
+                })
+                .collect();
 
             let mut tx = Transaction::with_config(
-                graph,
+                changes.graph.clone(),
                 self.registry.clone(),
                 self.journal.clone(),
                 self.diagnostics.clone(),

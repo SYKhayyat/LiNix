@@ -4185,3 +4185,97 @@ buys no property the compiler can check. Renaming the nouns too is a wire-format
 **What the finding was actually pointing at is fixed, and it is not a name.** The reason those
 four bodies looked like orphan loops is that nothing said where the decision was made. It says so
 now, on the trait, which is where somebody reading one of the four will be.
+
+
+---
+
+## `F-4` — the log followed the engine, and eight commands walked around the engine
+
+**V.147 — Why the write-ahead record belongs to the mutation and not to the command.**
+*(2026-08-06, `Y14`. Rule in II.19. Raised by `lamdan/whole-repo-2026-08-05.md` as F-4.)*
+
+The finding is accurate and its headline is wrong in a way worth keeping: *"`apply` is **the one**
+change path `heal` cannot recover."* It was one of eight.
+
+`verbs/plan.rs` contained zero references to `Transaction` or `journal` — true, verified, and the
+review found it by reading the file the `plan`/`apply` feature lives in. What no reading finds is
+the set of files it did not open. Enumerating every call that reaches `Installable::install` or
+`::remove` outside `src/backends/` turns up thirteen files. Eight of them — eleven call sites —
+recorded nothing: `apply` (2), `upgrade`, `remove-orphans` and `purge-undeclared` (2 in
+`cleanup.rs`), the suspend removal in `packages.rs`, the expired-lease sweep and the suspension
+restore (2 in `leases.rs`), `run`'s auto-provision, the shell restore, and the remediation
+install in `diagnostics.rs`. **One of them is `purge-undeclared`, which the repo's own prose
+calls the most destructive command in the program.**
+
+**The mechanism behind the miss is the same one F-2 named**, and this is the ninth instance of it:
+the journal was written for the transaction engine, so it lives in the transaction engine, and
+"what the engine schedules is what gets journalled" quietly became the rule. Nothing was ever
+decided about the other eight — they were never in the room. A gate drawn around
+`core/transaction.rs` would have passed on every one of them.
+
+**So the gate is drawn around the property.** `tests/wal_enumeration_tests.rs` scans `src/` for
+package mutations, and every file holding one must appear in a ledger saying what makes an
+interruption recoverable: `Transaction`, `Journalled`, or `Recomputed`. The third is not an escape
+hatch — it is II.19's line, and stating it per file is what stops "it is a resource" from being
+asserted about a call that installs a package. The ledger is checked in both directions, a
+`Journalled` claim is checked against the file actually containing the call, and the scan is fed
+the exact lines it exists to find before anything trusts it.
+
+**What the record is, and what it is not.** `journalled` is the log without the ceremony: it
+writes one entry per action, flushes, awaits the mutation, then closes the entries. A whole
+transaction — snapshot, health checks, `after_sync` — is the wrong shape for reclaiming an expired
+lease, and demanding one would have been the reason to keep doing nothing. The one property that
+had to be exact is that `record_start` runs before the mutation future is polled, which is free:
+a future that is passed in has not started. **The test that pins it makes the mutation the
+observer** — the body opens a second handle on the same log file and counts interrupted entries,
+which is what a fresh process after a crash would see. A wrapper that recorded around the call and
+flushed afterwards passes every assertion about the finished state and provides no recovery at
+all; only a witness inside the mutation can tell a write-ahead log from a write-behind one.
+
+**And a log that cannot be written stops the mutation.** The transaction engine already made an
+unrecordable batch stillborn rather than letting it run; the same rule now holds at every site,
+because a manager invoked with nothing recording that it was invoked is exactly the state the
+whole subsystem exists to prevent.
+
+**One thing checked and left alone.** `run` and `shell` install packages the user calls temporary,
+and the temptation is to read that as "no record needed". Temporary describes the intent, not what
+`dpkg` is left holding when the process dies between the flush and the exit. They journal.
+
+---
+
+**V.148 — Why a frozen plan is executed by the engine that executes every other plan.**
+*(2026-08-06, `Y14`. Rule in II.7 / the `plan`–`apply` list.)*
+
+`plan`/`apply` is the Terraform story: freeze what `sync` would do, review it, apply exactly that.
+It was implemented as two serial `for` loops calling the backend directly, and the steelman for
+that is real — re-entering the sync engine sounds like re-planning, which would defeat the freeze.
+
+**It does not, and that is the whole of the argument.** `SyncEngine::sync` takes a `SyncChanges`
+and executes it. The planning happens in `ChangePlanner`, which `apply` never calls. So handing
+the engine the graph rebuilt from the file preserves the freeze exactly, and everything the loops
+were missing arrives with it: the write-ahead log, the transaction, auto-rollback, the prior-state
+probe that stops a rollback uninstalling software the user already had, the pre-sync snapshot,
+`@health=`, the per-package hooks, the events, and one manager command per wave instead of one per
+package — which the engine's own measurement puts at **ten times** the cost (V.115). `apply` was
+still paying that after `sync` stopped.
+
+**The failure semantics change, and the change is the point.** The loops warned and continued, so
+`linix apply` printed `Applied plan: 6 installed` over a machine where four had failed and exited
+0. Through the engine a failed node fails the command, names the declaration it failed for
+(`Q34`), and rolls back. A frozen plan is one change to one machine — the same reason
+`continue_on_error` is off for `sync` — and half of a reviewed plan is not what was reviewed.
+
+**The second half was hiding in the same function.** Rebuilding the graph used `add_node` in a
+loop and wired no edges, so a `@requires` a user wrote survived `plan`, sat in the JSON in the
+specs' own `requires` field, and was read back as nothing. Nothing detected it, because an
+edgeless graph runs perfectly well in the wrong order and only a package that genuinely needs its
+requirement first ever notices. **`rebuild` had the same bug and a worse spelling** — it keyed its
+install map by the bare name, while `requires` is written `backend:name`, so the lookup could
+never hit however the graph was built.
+
+That is four hand-written copies of "add the nodes, wire the `requires` edges": the planner,
+`heal`, `apply` and `rebuild`. Two had edges and two did not. There is one now
+(`SyncChanges::add_installs`), and the sibling `add_removal` exists for the same reason at one
+remove — the removal tracker is what `declined` consults to answer *is this already scheduled*, so
+a removal added to the graph and not to the tracker can be scheduled twice, and four call sites
+were maintaining that pair by hand.

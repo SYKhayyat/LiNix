@@ -623,8 +623,19 @@ pub(crate) async fn suspend_for_session(app: &App, packages: &[String]) -> Resul
                 break;
             }
 
-            inst.remove(std::slice::from_ref(&bare_name), b.sudo_for_write())
-                .await?;
+            // A suspension removes a real package with a real manager; the promise that it
+            // comes back when the shell exits is a row in the registry, not something dpkg
+            // knows. Killed here, the package is half-removed and the restore has nothing to
+            // act on — so the removal is recorded before it runs, like every other.
+            linix::core::journalled(
+                &app.journal,
+                vec![linix::core::JournalAction::Remove {
+                    name: bare_name.clone(),
+                    backend: b.name().to_string(),
+                }],
+                inst.remove(std::slice::from_ref(&bare_name), b.sudo_for_write()),
+            )
+            .await?;
             app.state.lock().await.remove(b.name(), &bare_name);
             app.state
                 .lock()

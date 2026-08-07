@@ -480,6 +480,48 @@ not one; right now there is not, and the second one is unguarded on the dangerou
 
 ### F-4 · `apply` is the one change path `heal` cannot recover — `rewrite` **[verified]**
 
+> **Actioned 2026-08-06 — `Y14` in `decisions.md`, rules in II.7 + II.19, reasons in V.147 +
+> V.148.** Every claim re-verified against `main` and still true. The headline undercounts by
+> eight, and the remedy proposed here is what shipped.
+>
+> **"The one change path" is eight, across eleven call sites.** Enumerating every call reaching `Installable::install` or
+> `::remove` outside `src/backends/` finds thirteen files; **eight recorded nothing, across
+> eleven call sites.** Besides `apply`'s two: `upgrade`, `remove-orphans`, **`purge-undeclared`**
+> — this review's own words for it are *"the most destructive command in the program"* — the
+> suspend removal in `packages.rs`, the expired-lease sweep and the suspension restore in
+> `leases.rs`, `run`'s auto-provision, the shell restore, and the remediation install in
+> `diagnostics.rs`. The finding was found by reading the file the
+> `plan`/`apply` feature lives in, which is the one thing a reading cannot correct for: the set
+> of files it did not open. **The mechanism is F-2's, for the ninth time** — the journal was
+> written for the transaction engine, so it lives there, and *what the engine schedules is what
+> gets journalled* became a rule nobody decided. A gate around `core/transaction.rs` would have
+> passed on all eight; `tests/wal_enumeration_tests.rs` is drawn around the property instead,
+> and was watched failing on all eight before anything was fixed.
+>
+> **The steelman in F-4 is right and the remedy is the one that shipped.** `SyncEngine::sync`
+> does not plan — it executes a `SyncChanges` — so handing it the graph rebuilt from the file
+> preserves the freeze exactly. The other eight get `journalled`: the log without the ceremony,
+> because a snapshot and a health check are the wrong shape for reclaiming an expired lease, and
+> insisting on the whole transaction is how nine sites came to have nothing at all.
+>
+> **What F-4 could not have known, because it predates the fix it is ranked below.** Since F-1
+> batched installs per manager, `apply` was the one path still paying the 10× serial cost this
+> review measured — one `apt install` per package, in the command whose whole promise is that it
+> does what `sync` would do.
+>
+> **The last paragraph's aside was the second half of the bug.** *"It loses ordering:
+> `saved_plan_to_changes` adds nodes and no edges"* — correct, and `rebuild` had it too, with a
+> worse spelling: it keyed its install map by the bare name while `requires` is written
+> `backend:name`, so the lookup could never hit however the graph was built. Four hand-written
+> copies of "add the nodes, wire the edges"; two had edges. One now.
+>
+> **Named rather than buried: `apply` now fails where it warned.** A failed package, and a plan
+> naming a backend this machine does not have, both stop the command instead of being skipped
+> under a summary reading `Applied plan` at exit 0. That is `sync`'s behaviour and `AU1`'s rule
+> — but it is a real change to what a script wrapping `apply` sees, and the second case is
+> genuinely apply-only, since a planner cannot schedule a backend that is not there and a plan
+> file can be carried between machines. Filed BUILT, NEVER RULED for that reason.
+
 `plan`/`apply` is sold in the readme as the Terraform story: freeze what `sync` would do, review
 it, apply exactly that. `verbs/plan.rs` contains **zero** references to `Transaction`, `journal`,
 or `execute_with_telemetry`. `handle_apply` walks `installs` serially calling `inst.install`

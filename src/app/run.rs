@@ -10,11 +10,23 @@ use tracing::{debug, error, info, instrument, warn};
 pub struct Runner {
     registry: Arc<BackendRegistry>,
     config: Arc<Config>,
+    /// `linix run` provisions what the command needs and does not remove it afterwards, so
+    /// the install it performs is as real and as interruptible as any other. Calling it
+    /// temporary describes the intent, not what the package manager is left holding.
+    journal: Arc<tokio::sync::Mutex<crate::core::Journal>>,
 }
 
 impl Runner {
-    pub fn new(registry: Arc<BackendRegistry>, config: Arc<Config>) -> Self {
-        Self { registry, config }
+    pub fn new(
+        registry: Arc<BackendRegistry>,
+        config: Arc<Config>,
+        journal: Arc<tokio::sync::Mutex<crate::core::Journal>>,
+    ) -> Self {
+        Self {
+            registry,
+            config,
+            journal,
+        }
     }
 
     async fn resolve_spec(&self, spec_str: &str) -> Result<Vec<PackageSpec>> {
@@ -66,7 +78,12 @@ impl Runner {
                         spec.backend, spec.name
                     );
                     let sudo = backend_caps.sudo_for_write();
-                    installer.install(std::slice::from_ref(spec), sudo).await?;
+                    crate::core::journalled(
+                        &self.journal,
+                        vec![crate::core::JournalAction::Install(spec.clone())],
+                        installer.install(std::slice::from_ref(spec), sudo),
+                    )
+                    .await?;
                 } else {
                     return Err(Error::Transaction(format!(
                         "Component {}:{} is required but the backend does not support installation.", 

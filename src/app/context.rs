@@ -183,7 +183,11 @@ impl App {
     }
 
     pub fn runner(&self) -> Runner {
-        Runner::new(self.registry.clone(), self.config.clone())
+        Runner::new(
+            self.registry.clone(),
+            self.config.clone(),
+            self.journal.clone(),
+        )
     }
 
     pub async fn shim_manager(&self) -> Result<ShimManager> {
@@ -266,6 +270,7 @@ impl App {
             config: &self.config,
             registry: &self.registry,
             state: &self.state,
+            journal: &self.journal,
         }
     }
 

@@ -43,7 +43,7 @@ pub use git::{GitCommit, GitManager};
 pub use executor::{CommandExecutor, ExecutionLayer, RawExecutor};
 pub use transaction::{GraphAction, Transaction, TransactionConfig};
 
-pub use journal::{ActionStatus, Journal, JournalEntry};
+pub use journal::{journalled, ActionStatus, Journal, JournalAction, JournalEntry};
 pub use snapshot::{Snapshot, SnapshotManager, SnapshotProvider};
 
 pub use manager::missing_program;

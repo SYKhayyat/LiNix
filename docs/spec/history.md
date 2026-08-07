@@ -7084,3 +7084,57 @@ register's total and these are about its parts. `decision-count.sh` reads them n
 against a planted miscount.
 
 Ruled as `Y12`. Rule in II.7; reason in V.143.
+
+## 2026-08-06 — the log followed the engine, and eight commands walked around the engine (`Y14`, lamdan F-4)
+
+The review's F-4: *"`apply` is the one change path `heal` cannot recover."* Verified against
+`main` — `verbs/plan.rs` still held zero references to `Transaction`, `journal` or
+`execute_with_telemetry`, and `handle_apply` still walked two serial loops calling the backend
+directly. **The finding is accurate and its headline undercounts by eight.**
+
+Enumerating every call reaching `Installable::install`/`::remove` outside `src/backends/` finds
+thirteen files. **Eight of them recorded nothing, across eleven call sites:** `apply` (2),
+`upgrade`, `remove-orphans` and `purge-undeclared` (2 in `cleanup.rs`), the suspend removal in
+`packages.rs`, the expired-lease sweep and the suspension restore (2 in `leases.rs`), `run`'s
+auto-provision, the shell restore, and the remediation install in `diagnostics.rs`. One of those is
+**`purge-undeclared`**, which this repo's own prose calls the most destructive command in the
+program, and it was removing packages one at a time with no record that it had started.
+
+Nothing ever decided those paths were exempt. The journal was written for the transaction engine,
+so it lives in the transaction engine, and *what the engine schedules is what gets journalled*
+became the rule by default — `F-2`'s mechanism for the ninth time, and a gate drawn around
+`core/transaction.rs` would have passed all eight.
+
+**What shipped.**
+
+- **`apply` executes its frozen plan through `SyncEngine::sync`.** The freeze survives because the
+  engine does not plan — it runs the `SyncChanges` it is handed. Arriving with it: the WAL, the
+  transaction, auto-rollback, the prior-state probe, the pre-sync snapshot, `@health=`, the
+  per-package hooks, the events, and one manager command per wave instead of one per package. Two
+  hundred lines of scaffolding went with the loops, the guard call included — the engine's first
+  act is `guard::enforce` over the same graph under the same `GuardScope::Apply`.
+- **The other eight carry `journal::journalled`** — the log without the ceremony, one entry per
+  action, flushed before the mutation future is polled. A whole transaction is the wrong shape for
+  reclaiming an expired lease, and insisting on one is how eleven call sites came to have nothing.
+- **`tests/wal_enumeration_tests.rs`,** written first and watched fail on all eight. Every file in
+  `src/` holding a package mutation must name what recovers it — `Transaction`, `Journalled`, or
+  `Recomputed` under II.19's line — checked in both directions, with the `Journalled` claim checked
+  against the file that has to contain the call.
+
+**A sibling found while building, and it is the same family a layer down.** Rebuilding the graph
+from a saved plan called `add_node` in a loop and wired no edges, so a `@requires` the user wrote
+survived into the plan file — it is in the specs' own `requires` — and was read back as nothing.
+`rebuild` had it too, with a worse spelling: it keyed its install map by the bare name while
+`requires` is written `backend:name`, so the lookup could never hit however the graph was built.
+Four hand-written copies of "add the nodes, wire the edges" existed and two had edges;
+`SyncChanges::add_installs` is the one now, with `add_removal` beside it because the removal
+tracker and the graph are a pair four call sites were maintaining by hand.
+
+**And the removal ledger came down from seven files to six**, for the second time and the same
+reason: `verbs/plan.rs` no longer removes anything itself, so its entry is deleted and the floor
+follows. That is the fix landing, not the scan breaking — the note `heal` left when it stopped
+keeping its own loop is now two notes.
+
+Built, never ruled — `Y14`. Four things a user could notice, and the first is the one worth a
+ruling: **`linix apply` now fails when a package fails**, where it used to warn, continue, and
+print `Applied plan` at exit 0. Rules in II.7 and II.19; reasons in V.147 and V.148.

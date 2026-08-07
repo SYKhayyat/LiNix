@@ -342,51 +342,25 @@ pub(crate) async fn handle_plan(app: &App, out: &str) -> Result<()> {
     Ok(())
 }
 
-/// Rebuild a `SyncChanges` graph from a saved plan's install/removal lists, so the shared
-/// interactive review screen (which operates on a change graph) can also drive `apply`.
+/// Rebuild a `SyncChanges` graph from a saved plan's install/removal lists — the interactive
+/// review screen operates on a change graph, and so does the engine that executes one.
+///
+/// **This is the plan, not a rendering of it.** It used to call `add_node` in a loop and stop
+/// there, which made it a list rather than a graph: a `@requires` a user wrote was honoured on
+/// the run that planned it and dropped by the command whose promise is that the plan you
+/// inspect is the plan you apply. `add_installs` wires the edges from the specs' own
+/// `requires`, which the plan file carries — they were always in the JSON, and nothing read
+/// them back.
 pub(crate) fn saved_plan_to_changes(
     installs: &[linix::core::PackageSpec],
     removals: &[linix::app::sync::saved_plan::PlanRemoval],
 ) -> linix::app::sync::planner::SyncChanges {
-    use linix::core::GraphAction;
-    let mut graph = petgraph::stable_graph::StableDiGraph::new();
-    for spec in installs {
-        graph.add_node(GraphAction::Install(spec.clone()));
-    }
+    let mut changes = linix::app::sync::planner::SyncChanges::default();
+    changes.add_installs(installs);
     for r in removals {
-        graph.add_node(GraphAction::Remove {
-            name: r.name.clone(),
-            backend: r.backend.clone(),
-        });
+        changes.add_removal(&r.backend, &r.name);
     }
-    linix::app::sync::planner::SyncChanges {
-        graph,
-        ..Default::default()
-    }
-}
-
-/// Collect the `backend:name` keys that survived an interactive review, split into
-/// (install-keys, removal-keys) so the caller can filter the original plan lists.
-pub(crate) fn surviving_keys(
-    changes: &linix::app::sync::planner::SyncChanges,
-) -> (
-    std::collections::HashSet<String>,
-    std::collections::HashSet<String>,
-) {
-    use linix::core::GraphAction;
-    let mut installs = std::collections::HashSet::new();
-    let mut removes = std::collections::HashSet::new();
-    for w in changes.graph.node_weights() {
-        match w {
-            GraphAction::Install(s) => {
-                installs.insert(format!("{}:{}", s.backend, s.name));
-            }
-            GraphAction::Remove { name, backend } => {
-                removes.insert(format!("{}:{}", backend, name));
-            }
-        }
-    }
-    (installs, removes)
+    changes
 }
 
 pub(crate) async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Result<()> {
@@ -473,104 +447,53 @@ pub(crate) async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Resul
 
     // Optional interactive review: the same toggle screen as `sync`/`rollback`, so a captured
     // plan can still be trimmed at apply time. Skipped with --yes or without a terminal.
-    let mut installs = plan.installs.clone();
-    let mut removals = plan.removals.clone();
+    //
+    // The screen returns the plan with the deselected nodes taken out, and that IS the plan
+    // from here on. It used to hand back a set of surviving keys, which the caller then used
+    // to `retain` two flat lists that a second call rebuilt into a graph — a round trip
+    // through a vocabulary with no edges in it, so a deselection was also the only way to
+    // lose an ordering that had survived everything else.
+    let mut changes = saved_plan_to_changes(&plan.installs, &plan.removals);
     if !yes && !app.config.yes {
         use std::io::IsTerminal;
         if std::io::stdin().is_terminal() {
-            let changes = saved_plan_to_changes(&installs, &removals);
             let mut preview = TuiPreview::new(&changes, HashMap::new());
             if !preview.run()? {
                 println!("Apply cancelled.");
                 return Ok(());
             }
-            let (keep_installs, keep_removes) = surviving_keys(&preview.get_filtered_changes());
-            installs.retain(|s| keep_installs.contains(&format!("{}:{}", s.backend, s.name)));
-            removals.retain(|r| keep_removes.contains(&format!("{}:{}", r.backend, r.name)));
-            if installs.is_empty() && removals.is_empty() {
+            changes = preview.get_filtered_changes();
+            if changes.is_empty() {
                 println!("All changes deselected — nothing to apply.");
                 return Ok(());
             }
         }
     }
 
-    // `apply` executes its removals directly rather than through SyncEngine::sync, so it
-    // needs its own call to the same guard. Placed after the interactive trim, so
-    // deselecting the dangerous removals clears the guard honestly.
-    let removal_pairs: Vec<(String, String)> = removals
-        .iter()
-        .map(|r| (r.backend.clone(), r.name.clone()))
-        .collect();
-    linix::app::sync::guard::enforce(
-        &app.config,
-        &app.registry,
-        &removal_pairs,
-        linix::app::sync::guard::GuardScope::Apply,
-    )
-    .await?;
-    linix::app::sync::guard::enforce_installs(
-        &app.config,
-        installs.len(),
-        linix::app::sync::guard::GuardScope::Apply,
-    )
-    .await?;
-
-    let session_active = app.state.lock().await.active_session_id.is_some();
-    let mut installed = 0usize;
-    let mut removed = 0usize;
-
-    for spec in &installs {
-        let Some(b) = app.registry.get(&spec.backend) else {
-            warn!(
-                "apply: backend '{}' unavailable — skipping {}",
-                spec.backend, spec.name
-            );
-            continue;
-        };
-        if let Some(inst) = b.as_installable() {
-            info!("apply: installing {}:{}", spec.backend, spec.name);
-            if let Err(e) = inst
-                .install(std::slice::from_ref(spec), b.sudo_for_write())
-                .await
-            {
-                warn!(
-                    "apply: install {}:{} failed: {}",
-                    spec.backend, spec.name, e
-                );
-                continue;
-            }
-            let source = spec.options.get("__source").map_or("plan", String::as_str);
-            app.state.lock().await.add(
-                &spec.backend,
-                &spec.name,
-                None,
-                spec.options.clone(),
-                source,
-                session_active,
-            );
-            installed += 1;
-        }
-    }
-
-    for r in &removals {
-        let Some(b) = app.registry.get(&r.backend) else {
-            continue;
-        };
-        if let Some(inst) = b.as_installable() {
-            info!("apply: removing {}:{}", r.backend, r.name);
-            if let Err(e) = inst
-                .remove(std::slice::from_ref(&r.name), b.sudo_for_write())
-                .await
-            {
-                warn!("apply: remove {}:{} failed: {}", r.backend, r.name, e);
-                continue;
-            }
-            app.state.lock().await.remove(&r.backend, &r.name);
-            removed += 1;
-        }
-    }
-
-    app.state.lock().await.save()?;
+    // **The frozen plan is executed by the engine that executes every other plan.**
+    //
+    // This was a pair of serial loops calling `Installable::install` and `::remove` a package
+    // at a time, and what they skipped was not decoration. No write-ahead log — so `linix heal`,
+    // which reads the journal, could not recover an interrupted `apply` at all, on the one
+    // command named after review and deliberation. No transaction, so no rollback and no
+    // prior-state probe. No snapshot and no health check, so `@health=` on a line in the plan
+    // was checked when `sync` applied it and not when `apply` did. No batching: one
+    // `apt install` per package, which the engine's own measurement puts at ten times the cost
+    // of one command (V.115). And a failure was a `warn!` and a `continue`, so `apply` reported
+    // `Applied plan` over a machine where half of it had failed.
+    //
+    // Every one of those is a property of `SyncEngine::sync`, and the freeze survives the
+    // change because `sync` does not plan — it executes the `SyncChanges` it is handed, which
+    // here is the one rebuilt from the file above and trimmed by the review screen. The guard
+    // calls this function used to make itself are the engine's first act (`removal_pairs` over
+    // the same graph, the same `GuardScope::Apply`), so they are gone from here rather than
+    // duplicated: two calls to one guard is how a scope comes to disagree with itself.
+    let installed = changes.total_install();
+    let removed = changes.total_remove();
+    let engine = app.sync_engine().await;
+    engine
+        .sync(changes, linix::app::sync::guard::GuardScope::Apply)
+        .await?;
 
     // The resource half, through the same phase list `sync` runs (N-2). Not a second
     // implementation: `apply_non_package_phases` is the one list, and the comment above it
@@ -1549,6 +1472,116 @@ mod lock_axis_tests {
     fn re_recording_an_already_current_pin_is_not_a_change() {
         let mut locks = pins(&[("apt:curl", "8.0.1")]);
         assert_eq!(move_pins_to(&mut locks, &pins(&[("apt:curl", "8.0.1")])), 0);
+    }
+}
+
+#[cfg(test)]
+mod frozen_plan_tests {
+    use super::*;
+    use linix::app::sync::saved_plan::PlanRemoval;
+    use linix::core::{GraphAction, PackageSpec};
+
+    fn spec(backend: &str, name: &str, requires: &[&str]) -> PackageSpec {
+        PackageSpec {
+            name: name.into(),
+            backend: backend.into(),
+            options: HashMap::new(),
+            requires: requires.iter().map(|s| s.to_string()).collect(),
+            present: true,
+        }
+    }
+
+    /// `plan --help` promises "the exact plan you inspect is the one you later apply", and an
+    /// ordering is part of a plan. This rebuilt the graph with `add_node` and no edges, so a
+    /// `@requires` held when `sync` applied it and was dropped when `apply` did — silently,
+    /// because an edgeless graph runs perfectly well in the wrong order.
+    #[test]
+    fn a_frozen_plan_keeps_the_ordering_its_specs_declare() {
+        let installs = vec![
+            spec("apt", "nginx", &["apt:libfoo"]),
+            spec("apt", "libfoo", &[]),
+        ];
+        let changes = saved_plan_to_changes(&installs, &[]);
+
+        assert_eq!(changes.graph.node_count(), 2);
+        assert_eq!(
+            changes.graph.edge_count(),
+            1,
+            "the `@requires` in the plan file was read back and dropped"
+        );
+        let libfoo = changes.install_map["apt:libfoo"];
+        let nginx = changes.install_map["apt:nginx"];
+        assert!(
+            changes.graph.contains_edge(libfoo, nginx),
+            "the edge must run requirement -> dependent, or the batch is ordered backwards"
+        );
+    }
+
+    /// The control: a plan whose specs require nothing goes on one command line. This is the
+    /// same property from the other side — an edge that should not exist costs a whole extra
+    /// manager invocation, measured at ten times the batched cost (V.115).
+    #[test]
+    fn a_plan_with_no_requires_has_no_edges_to_split_the_batch() {
+        let installs = vec![spec("apt", "htop", &[]), spec("apt", "jq", &[])];
+        let changes = saved_plan_to_changes(&installs, &[]);
+        assert_eq!(changes.graph.edge_count(), 0);
+    }
+
+    /// A `requires` naming something that is not in this plan is not an edge — it is already
+    /// on the machine, and inventing a node for it would install a package nobody froze.
+    #[test]
+    fn a_requirement_outside_the_plan_adds_nothing() {
+        let installs = vec![spec("apt", "nginx", &["apt:already-there"])];
+        let changes = saved_plan_to_changes(&installs, &[]);
+        assert_eq!(changes.graph.node_count(), 1);
+        assert_eq!(changes.graph.edge_count(), 0);
+    }
+
+    /// Removals reach the graph and the tracker together. The tracker is what `declined`
+    /// consults to answer "is this already scheduled", so a removal in one and not the other
+    /// is a removal that can be scheduled twice.
+    #[test]
+    fn a_frozen_removal_is_in_the_graph_and_in_the_tracker() {
+        let removals = vec![PlanRemoval {
+            backend: "apt".into(),
+            name: "vim".into(),
+        }];
+        let changes = saved_plan_to_changes(&[], &removals);
+
+        assert_eq!(changes.total_remove(), 1);
+        assert!(changes.removal_tracker.contains("apt:vim"));
+        assert!(matches!(
+            changes.graph.node_weights().next(),
+            Some(GraphAction::Remove { name, backend }) if name == "vim" && backend == "apt"
+        ));
+    }
+
+    /// And the pair the engine's guard reads: `guard::removal_pairs` over this graph must find
+    /// the removals, because `apply` no longer calls the guard itself — it hands the plan to
+    /// `SyncEngine::sync`, whose first act is to enforce over exactly this.
+    #[test]
+    fn the_engine_guard_can_see_a_frozen_plans_removals() {
+        let removals = vec![
+            PlanRemoval {
+                backend: "apt".into(),
+                name: "vim".into(),
+            },
+            PlanRemoval {
+                backend: "brew".into(),
+                name: "fd".into(),
+            },
+        ];
+        let changes = saved_plan_to_changes(&[spec("apt", "htop", &[])], &removals);
+        let mut pairs = linix::app::sync::guard::removal_pairs(&changes);
+        pairs.sort();
+        assert_eq!(
+            pairs,
+            vec![
+                ("apt".to_string(), "vim".to_string()),
+                ("brew".to_string(), "fd".to_string())
+            ],
+            "the guard the engine runs must see every removal the plan froze"
+        );
     }
 }
 

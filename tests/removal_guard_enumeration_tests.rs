@@ -44,6 +44,13 @@ const LEDGER: &[Accounted] = &[
                      any kind is dispatched (W21) — including the shim a package line asks \
                      for with `@shim`/`@sandbox`, which resolves to a `shim:` extra (G-1)",
     },
+    // `src/verbs/plan.rs` used to be here, and its entry named `guard::enforce` at
+    // `GuardScope::Apply` — a guard `apply` called for itself because it executed its removals
+    // in a serial loop of its own. The loop is gone: a frozen plan is handed to
+    // `SyncEngine::sync`, which enforces over the same graph under the same scope before the
+    // first manager runs. **The gate did not move**, and it is now the same call `sync` makes
+    // rather than a second one that could disagree with it.
+    //
     // `src/app/sync/mod.rs` used to be here: `heal` called `handler.remove` from a serial loop
     // of its own. That loop is gone — recovery runs on the transaction engine — so the call
     // moved into `transaction.rs` below and this file now reaches no removal itself. **The gate
@@ -73,11 +80,6 @@ const LEDGER: &[Accounted] = &[
         file: "src/verbs/packages.rs",
         calls: 1,
         guarded_by: "guard::enforce at packages.rs:423, GuardScope::Remove",
-    },
-    Accounted {
-        file: "src/verbs/plan.rs",
-        calls: 1,
-        guarded_by: "guard::enforce at plan.rs:368, GuardScope::Apply",
     },
 ];
 
@@ -236,11 +238,12 @@ fn the_enumeration_can_actually_see_a_removal() {
     // The floor is a floor and not a count — it is the "did the scan still work" question, not
     // the "is every site accounted for" one, which the ledger above answers exactly. It came
     // down from 8 to 7 when `heal` stopped issuing its own removals and started scheduling
-    // them through the engine: one fewer *file* reaching a removal is the fix landing, not the
-    // scan breaking.
+    // them through the engine, and from 7 to 6 when `apply` did the same: one fewer *file*
+    // reaching a removal is the fix landing, not the scan breaking. Twice now, for the same
+    // reason — a command that stopped keeping its own copy of the loop.
     let found = removal_sites();
     assert!(
-        found.len() >= 7,
+        found.len() >= 6,
         "the scan found only {} file(s) with removals, which is fewer than this program has: {:?}",
         found.len(),
         found.keys().collect::<Vec<_>>()

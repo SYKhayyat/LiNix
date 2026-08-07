@@ -742,8 +742,11 @@ named and skipped rather than rebuilt. It cannot be put in `schedules`.
 ## Safety
 
 - **Atomic transactions.** A write-ahead log records every mutation that cannot be recomputed —
-  every package, every `exec:` script, every `@undo=` — before it runs. If LiNix is killed
-  mid-transaction, the next run heals it: packages are replayed or reverted, and an interrupted
+  every package, every `exec:` script, every `@undo=` — before it runs, **whichever command
+  issues it.** `sync`, `apply`, `upgrade`, `remove-orphans`, `purge-undeclared`, an expiring
+  lease, a `shell` restore: they all write the record first, because being killed part-way
+  through does not care which verb you typed. If LiNix is killed mid-command, the next run
+  heals it: packages are replayed or reverted, and an interrupted
   script is reported by name, because a half-run script has no recorded progress and re-running
   it would repeat the half that already ran. A crash that goes unattended for hours is still
   healable. Resources declared as an end state — a `service:`, a `setting:`, a `firewall:` rule,

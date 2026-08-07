@@ -1341,6 +1341,19 @@ every command that answers "does the machine match your files?" has to read them
 - **`plan` freezes resources and `apply` executes them**, through the same phase list `sync`
   runs. A plan that omits work `sync` would do is a review that reports nothing to see — and the
   guard's own refusal text sends the user to `linix plan` to see what would be undone.
+- **And the packages go through the engine that executes every other plan** (2026-08-06, `Y14`).
+  `apply` walked two serial loops of its own, so the one command named after review and
+  deliberation was the one with no write-ahead log, no transaction, no rollback, no snapshot, no
+  health check and one manager invocation per package — and a failure was a warning under a
+  summary reading `Applied plan`. A frozen plan is a `SyncChanges`, and `SyncEngine::sync`
+  executes one; **the freeze survives because the engine does not plan.** The guard `apply`
+  used to call for itself is the engine's first act over the same graph under the same scope,
+  which is one call rather than two that can disagree. **V.148.**
+- **A frozen plan keeps the ordering it froze.** `@requires` is in the plan file, in the specs'
+  own `requires`, and rebuilding the graph read it back as nothing — so an ordering held on the
+  run that planned it and was dropped by the command that promises *the exact plan you inspect
+  is the one you later apply*. One function wires those edges now, for the planner, `apply`,
+  `rebuild` and `heal` alike: of the four hand-written copies, two had no edges at all.
 - **A guard preview asks about the kind the items actually are.** `plan` merged resources into
   the package removal list and asked `RemovalKind::Package`, and `protection_of` opens by asking
   whether a package line could hold the name — which no `link:` key can. So `plan` predicted a
@@ -2213,6 +2226,18 @@ a `firewall:` rule, a placed `link:`. Killed halfway, the next sync reads the ma
 line unmet and finishes the job, which is a **better** recovery than replaying a log because it
 also corrects drift the log never saw. A variant for one of those would be durability theatre,
 and adding one has to argue with this paragraph first.
+
+**And the record is written wherever the mutation is issued, not only where the engine issues
+it** (2026-08-06, `Y14`). Whether a package mutation is recoverable is a property of the
+mutation, never of the verb that reached it: `apply`, `upgrade`, `remove-orphans`,
+`purge-undeclared`, an expiring lease, a suspension restored on shell exit and `run`'s
+auto-provision all reach a package manager, and each writes its entry and flushes it before the
+manager is invoked. A write that fails aborts the mutation rather than letting it run
+unrecorded. **A command that installs or removes and records nothing is a build failure** —
+`tests/wal_enumeration_tests.rs` counts the mutation sites in `src/` on every run and requires
+each to name what recovers it, so the sentence above stays a fact rather than a claim somebody
+last checked. Nine paths reached a manager with no record at all while one review sentence
+described one of them. **V.147.**
 
 **Recovery replays a package and reports a script.** Reaching a state twice is reaching it once,
 so an interrupted install is finished by installing. A script that got half way has no recorded

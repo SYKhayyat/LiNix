@@ -463,6 +463,76 @@ impl Journal {
     }
 }
 
+/// Run a mutation with a write-ahead record around it, so being killed part-way through is
+/// something `heal` can finish.
+///
+/// **This exists because the record is not the transaction's to own.** The engine journals what
+/// it schedules, and for a long time that was read as "what the engine schedules is what gets
+/// journalled" — so `apply`, `upgrade`, `remove-orphans`, `purge-undeclared`, the lease sweep,
+/// the suspension restore, `run`, `shell` and the remediation install all reached a package
+/// manager with nothing recording that they had. Nine paths, one of which is the most
+/// destructive command in the program. `apply` now goes through the engine because it executes
+/// a plan; the rest are single commands with no plan behind them, and a whole transaction —
+/// snapshot, health checks, `after_sync` — is the wrong shape for reclaiming an expired lease.
+/// What they need is the log, and this is the log without the ceremony.
+///
+/// **`record_start` runs before `mutation` is polled**, which is the whole property: a future
+/// passed in is not yet running, and awaiting it only after the WAL write has reached the disk
+/// is what makes the record write-*ahead*. A WAL write that fails aborts the mutation rather
+/// than letting it run unrecorded — the same call the engine makes stillborn.
+///
+/// One id per action, and a caller removing four names in one manager command passes four:
+/// they succeed and fail together, but a reader of an interrupted log needs the names.
+pub async fn journalled<T, Fut>(
+    journal: &tokio::sync::Mutex<Journal>,
+    actions: Vec<JournalAction>,
+    mutation: Fut,
+) -> Result<T>
+where
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let ids = {
+        let mut j = journal.lock().await;
+        let mut ids = Vec::with_capacity(actions.len());
+        for action in actions {
+            ids.push(j.record_start(action)?);
+        }
+        ids
+    };
+
+    let outcome = mutation.await;
+
+    {
+        let mut j = journal.lock().await;
+        match &outcome {
+            Ok(_) => {
+                for id in &ids {
+                    let _ = j.record_success(id);
+                }
+            }
+            Err(e) => {
+                let message = e.to_string();
+                for id in &ids {
+                    let _ = j.record_failure(id, &message);
+                }
+            }
+        }
+    }
+
+    outcome
+}
+
+/// The `JournalAction`s for removing these names from one backend.
+pub fn removals_of(backend: &str, names: &[String]) -> Vec<JournalAction> {
+    names
+        .iter()
+        .map(|name| JournalAction::Remove {
+            name: name.clone(),
+            backend: backend.to_string(),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -640,5 +710,160 @@ mod tests {
         let tmp = tempdir().unwrap();
         let journal = Journal::at(tmp.path().join("nope.json")).unwrap();
         assert!(!journal.needs_recovery());
+    }
+
+    fn a_spec(name: &str) -> crate::core::PackageSpec {
+        crate::core::PackageSpec {
+            name: name.to_string(),
+            backend: "apt".to_string(),
+            options: Default::default(),
+            requires: Vec::new(),
+            present: true,
+        }
+    }
+
+    /// The property the whole thing rests on, and the one an ordinary "did it write an entry"
+    /// test would pass without: the record is on disk **before** the manager is invoked.
+    ///
+    /// A wrapper that recorded around the call and flushed afterwards would satisfy every
+    /// assertion about the finished state and provide no recovery at all, because the case it
+    /// exists for is the process dying in the middle. So the mutation itself is the observer —
+    /// it reads the log from a second handle on the same file, which is what a fresh process
+    /// after a crash would see.
+    #[tokio::test]
+    async fn the_record_reaches_disk_before_the_mutation_runs() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("journal.jsonl");
+        let journal = tokio::sync::Mutex::new(Journal::at(path.clone()).unwrap());
+
+        let seen_by_a_later_process = {
+            let path = path.clone();
+            journalled(
+                &journal,
+                vec![JournalAction::Install(a_spec("htop"))],
+                async move { Journal::at(path).map(|j| j.interrupted_actions().len()) },
+            )
+            .await
+            .unwrap()
+        };
+
+        assert_eq!(
+            seen_by_a_later_process, 1,
+            "a process starting while the mutation was running saw no interrupted entry — the \
+             log is being written after the fact, which is not a write-ahead log"
+        );
+    }
+
+    /// Success closes every id, so the entry stops being recovery's business.
+    #[tokio::test]
+    async fn a_completed_mutation_leaves_nothing_to_heal() {
+        let tmp = tempdir().unwrap();
+        let journal = tokio::sync::Mutex::new(Journal::at(tmp.path().join("j.jsonl")).unwrap());
+
+        journalled(
+            &journal,
+            removals_of("apt", &["a".into(), "b".into()]),
+            async { Ok(()) },
+        )
+        .await
+        .unwrap();
+
+        let j = journal.lock().await;
+        assert_eq!(
+            j.entries.len(),
+            2,
+            "one entry per name, not one per command"
+        );
+        assert!(
+            !j.needs_recovery(),
+            "a mutation that finished is not interrupted work"
+        );
+    }
+
+    /// A failure is terminal and reported, not interrupted (`Q33`) — so it must not leave the
+    /// next sync running a recovery of something that already told the user what happened.
+    #[tokio::test]
+    async fn a_failed_mutation_is_recorded_failed_and_not_healable() {
+        let tmp = tempdir().unwrap();
+        let journal = tokio::sync::Mutex::new(Journal::at(tmp.path().join("j.jsonl")).unwrap());
+
+        let outcome: Result<()> = journalled(
+            &journal,
+            vec![JournalAction::Remove {
+                name: "nope".into(),
+                backend: "apt".into(),
+            }],
+            async { Err(Error::Other("no such package".into())) },
+        )
+        .await;
+
+        assert!(outcome.is_err(), "the caller's error must reach the caller");
+        let j = journal.lock().await;
+        let entry = j.entries.values().next().unwrap();
+        assert_eq!(entry.status, ActionStatus::Failed);
+        assert!(entry.error.as_deref().unwrap().contains("no such package"));
+        assert!(!j.needs_recovery());
+    }
+
+    /// A mutation that never returns — the process was killed — leaves the entry `InProgress`,
+    /// which is the whole point. Modelled by dropping the future rather than awaiting it: the
+    /// record is written by then, and nothing else runs.
+    #[tokio::test]
+    async fn an_abandoned_mutation_stays_interrupted() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("j.jsonl");
+        let journal = tokio::sync::Mutex::new(Journal::at(path.clone()).unwrap());
+
+        {
+            let pending = journalled(
+                &journal,
+                vec![JournalAction::Install(a_spec("half"))],
+                std::future::pending::<Result<()>>(),
+            );
+            futures::pin_mut!(pending);
+            // Polled once — far enough to write the record and start the mutation, never far
+            // enough to finish it — then dropped, which is what SIGKILL looks like from here.
+            let _ = futures::poll!(&mut pending);
+        }
+
+        let after_the_crash = Journal::at(path).unwrap();
+        assert_eq!(
+            after_the_crash.interrupted_actions().len(),
+            1,
+            "the next process must find the half-done install recorded"
+        );
+        assert!(after_the_crash.interrupted_actions()[0]
+            .action
+            .is_replayable());
+    }
+
+    /// A WAL write that fails stops the mutation instead of letting it run unrecorded — the
+    /// same call the transaction engine makes stillborn. Provoked by pointing the log at a
+    /// path whose parent is a file, so the append cannot succeed.
+    #[tokio::test]
+    async fn a_log_that_cannot_be_written_refuses_the_mutation() {
+        let tmp = tempdir().unwrap();
+        let blocker = tmp.path().join("not-a-dir");
+        std::fs::write(&blocker, b"x").unwrap();
+        let journal =
+            tokio::sync::Mutex::new(Journal::at(blocker.join("sub").join("j.jsonl")).unwrap());
+
+        let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = ran.clone();
+        let outcome: Result<()> = journalled(
+            &journal,
+            vec![JournalAction::Install(a_spec("htop"))],
+            async move {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await;
+
+        assert!(outcome.is_err(), "an unrecordable mutation must not run");
+        assert!(
+            !ran.load(std::sync::atomic::Ordering::SeqCst),
+            "the manager was invoked with nothing recording that it had been"
+        );
     }
 }

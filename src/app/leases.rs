@@ -7,6 +7,11 @@ pub struct Leases<'a> {
     pub(crate) config: &'a std::sync::Arc<crate::config::Config>,
     pub(crate) registry: &'a std::sync::Arc<crate::backends::BackendRegistry>,
     pub(crate) state: &'a std::sync::Arc<tokio::sync::Mutex<crate::core::state::StateRegistry>>,
+    /// The sweep and the restore both reach a package manager without a plan behind them, so
+    /// each carries its own write-ahead record. Held rather than borrowed per call for the
+    /// same reason `Execs` holds one: a maintenance pass that has to be handed the log is a
+    /// maintenance pass somebody can forget to hand it.
+    pub(crate) journal: &'a std::sync::Arc<tokio::sync::Mutex<crate::core::Journal>>,
 }
 
 impl Leases<'_> {
@@ -77,9 +82,15 @@ impl Leases<'_> {
             if let Some(b) = self.registry.get(&backend) {
                 if let Some(inst) = b.as_installable() {
                     info!("Lease expired: removing {}:{}", backend, name);
-                    if let Err(e) = inst
-                        .remove(std::slice::from_ref(&name), b.sudo_for_write())
-                        .await
+                    if let Err(e) = crate::core::journalled(
+                        self.journal,
+                        vec![crate::core::JournalAction::Remove {
+                            name: name.clone(),
+                            backend: backend.clone(),
+                        }],
+                        inst.remove(std::slice::from_ref(&name), b.sudo_for_write()),
+                    )
+                    .await
                     {
                         warn!("failed to remove expired {}:{}: {}", backend, name, e);
                         failed.push(format!("{}:{}", backend, name));
@@ -123,8 +134,12 @@ impl Leases<'_> {
             requires: Vec::new(),
             present: true,
         };
-        inst.install(std::slice::from_ref(&spec), b.sudo_for_write())
-            .await
+        crate::core::journalled(
+            self.journal,
+            vec![crate::core::JournalAction::Install(spec.clone())],
+            inst.install(std::slice::from_ref(&spec), b.sudo_for_write()),
+        )
+        .await
     }
     /// Restore any packages whose temporary-uninstall timer has elapsed (the mirror of
     /// `sweep_expired`). If a package can no longer be installed, we warn and move

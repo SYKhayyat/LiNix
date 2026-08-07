@@ -1,4 +1,4 @@
-# The decision register — all 172, one of them open
+# The decision register — all 173, one of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -16,7 +16,7 @@ not in this paragraph.
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
-| **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **1** |
+| **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **2** |
 | **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **166** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
@@ -73,8 +73,8 @@ status loses that, so it is kept here:
 
 ## Index
 
-**One is open — `Z1`, raised 2026-08-03, a licence choice.** All 172 are accounted
-for: **166 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 1 OPEN** — and this line
+**One is open — `Z1`, raised 2026-08-03, a licence choice.** All 173 are accounted
+for: **166 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 2 BUILT NEVER RULED, 1 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -311,7 +311,7 @@ without asking. Two are not mine: one is a legal choice and one changes a publis
 | **Z1** | There is no `LICENSE` file and no `license` key in `Cargo.toml`, for a tool with an install script and a `self-upgrade` verb. Which licence? | **OPEN** |
 | **Z2** | `lock` and `unlock` touch unrelated files and are not inverses; `unlock` can cause package churn. Rename it, or give `lock` a real inverse? | **ANSWERED** — both verbs name their axis (`versions`/`backends`/`scripts`/`all`), and every path that moves a version re-records it |
 
-### Y — the efficiency pass — 14
+### Y — the efficiency pass — 15
 
 *Not a proposal part. `docs/INEFFICIENCIES.md` audited every place in the tree slower than it has
 to be and marked the findings a user would notice as needing a ruling; the owner ruled the lot on
@@ -335,6 +335,7 @@ II.19 and the reasons in V.115–V.118.*
 | **Y11** | Two backends built install and remove argv by hand and lost the `--` terminator; forty backends could not clear a cache because no row could say how; one manager took two locks over one database. The argv table recorded all of it and checked none of it. RULED: **one path per backend, and a capability the machinery lacks is a field.** | 2026-08-06 |
 | **Y12** | `ChangePlanner::plan` took `Option<Scope>`, where `None` meant both "do not filter the desired set" and "reap every backend on the box"; five of eight callers passed it and four wanted only the first — the transient shell, whose desired set is its own requests, planned a removal for every other package on the machine. RULED: **a plan says what it is computed over, and the case that reaps cannot be written without the list that bounds it.** | 2026-08-06 |
 | **Y13** | Which phase of a sync a statement belongs to was written down in four lists nothing compared, and each new kind was missed by one of them — four times, by the code's own count. K17's adapter table was ruled once and implemented seven times, and four of the five shared questions had already been answered differently, including one table with no `os` field at all. RULED: **a statement declares its phase and the order is a type; K17 has one mechanism, and writing it again is a build failure.** The `Installable` → `Converge` rename it was raised with is **refused** — the convergence decision is already shared, in two places, and neither is in the bodies the review read. | 2026-08-06 |
+| **Y14** | `apply` executed a frozen plan in two serial loops of its own — no write-ahead log, so `heal` could not recover the one command named after review and deliberation; no transaction, no snapshot, no health check; one manager invocation per package; and a failure was a warning under a summary reading `Applied plan`. Eight more commands reached a package manager with no record at all. BUILT, NEVER RULED: **the record belongs to the mutation, not to the verb**, and a frozen plan is executed by the engine that executes every other plan. | 2026-08-06 |
 
 ---
 
@@ -6583,3 +6584,91 @@ a name is now refused out loud instead of silently kept; the first still wins, w
 lookup already did, so the change is that it is said rather than that it is different.
 
 Rules in II.1 and II.7; reasons in V.144, V.145 and V.146.
+
+---
+
+## Y14
+
+**Status: BUILT, NEVER RULED — built 2026-08-06.** Raised by
+`lamdan/whole-repo-2026-08-05.md` as **F-4**, ranked third on the accuracy axis. Accurate on the
+site it names and wrong about the size of it: *"`apply` is **the one** change path `heal` cannot
+recover"* — it was one of eight. The recommendation this implements is the review's own
+(*"rebuild `SyncChanges` from the saved plan and hand it to `SyncEngine::sync`; the freeze
+survives and the WAL comes with it"*), and nobody ruled it, so it is here to be confirmed or
+reversed.
+
+**Y14 — Does a command that installs or removes have to record it, or only the engine?**
+
+`verbs/plan.rs` held zero references to `Transaction`, `journal` or `execute_with_telemetry`, and
+`handle_apply` walked `installs` and then `removals` in two serial loops calling the backend
+directly. So the `plan`/`apply` pair — the feature sold in `readme.md` as the reviewable,
+frozen, Terraform-shaped change — was the one change path with no write-ahead log, and
+`linix heal`, which reads the journal, could not recover an interrupted `linix apply` because
+`apply` never wrote one.
+
+**The scan that answered it found seven more files, and eleven call sites in the eight.**
+`upgrade`, `remove-orphans` and `purge-undeclared`, the suspend removal in `packages.rs`, the
+expired-lease sweep and the suspension restore in `leases.rs`, `run`'s auto-provision, the shell
+restore, and the remediation install in `diagnostics.rs` all reached a package manager with
+nothing recording that they had. **One of them is `purge-undeclared`**, which this repo's own prose calls the most destructive command in the
+program. Nothing had ever decided that those paths did not need a record; the journal was
+written for the transaction engine, so it lived in the transaction engine, and *what the engine
+schedules is what gets journalled* became the rule by default. That is `F-2`'s mechanism — a
+gate drawn around the artifact that was under review — for the ninth time.
+
+**BUILT, part one: `apply` executes its frozen plan through `SyncEngine::sync`.** The freeze
+survives because the engine does not plan: it takes a `SyncChanges` and runs it, and the graph
+here is the one rebuilt from the plan file and trimmed by the review screen. What arrives with
+it is the write-ahead log, the transaction, auto-rollback, the prior-state probe, the pre-sync
+snapshot, `@health=`, the per-package hooks, the events, and one manager command per wave
+instead of one per package — the ten-times cost `sync` stopped paying and `apply` did not. Two
+hundred lines of scaffolding are gone with the loops, including the guard call `apply` was
+making for itself: the engine's first act is `guard::enforce` over the same graph under the same
+`GuardScope::Apply`, which is one call rather than two that can drift apart.
+
+**BUILT, part two: every other package mutation carries its own record.** `journalled` is the
+log without the ceremony — one entry per action, flushed before the mutation future is polled,
+closed after. A whole transaction is the wrong shape for reclaiming an expired lease, and
+demanding one would have been the reason to keep doing nothing. A record that cannot be written
+aborts the mutation, which is what the engine already did to an unrecordable batch.
+
+**BUILT, part three: the gate is drawn around the property.**
+`tests/wal_enumeration_tests.rs` counts every package mutation in `src/` and requires each file
+to name what makes an interruption recoverable — `Transaction`, `Journalled`, or `Recomputed`
+under II.19's line. It is checked in both directions, a `Journalled` claim is checked against
+the file that must contain the call, and the scan is fed the exact lines it exists to catch
+before anything trusts it. It was written first and watched fail on all eight.
+
+**A sibling found while building, and it is the same family one layer down.** Rebuilding the
+graph from a saved plan called `add_node` in a loop and wired no edges, so a `@requires` a user
+wrote survived into the plan file — it is in the specs' own `requires` — and was read back as
+nothing. `rebuild` had it too, with a worse spelling: it keyed its install map by the bare name
+while `requires` is written `backend:name`, so the lookup could never hit. Four hand-written
+copies of "add the nodes, wire the edges" existed; two had edges. There is one now.
+
+**Behaviour a user could notice, and it is the reason this is not filed as an implementation
+detail:**
+
+1. **`linix apply` now fails when a package fails.** It used to `warn!` and continue, then print
+   `Applied plan: N installed, M removed` and exit 0 over a machine where half the plan had not
+   happened. Through the engine a failed node fails the command, names the declaration it failed
+   for, and rolls the transaction back. This is `sync`'s behaviour, and a frozen plan is one
+   change to one machine — but it is a real change to what a script wrapping `linix apply` sees,
+   and reversing it is a one-line `continue_on_error`.
+2. **A plan naming a backend this machine does not have now fails the command.** It used to
+   `warn!` and skip, which is the only case `sync` never meets — the planner cannot schedule a
+   backend that is not there, and a plan file can be carried between machines. Failing is `AU1`'s
+   rule (work dropped in silence under a summary claiming success), but it is a real change for
+   anyone applying one plan across a fleet.
+3. **`apply` now takes a pre-sync snapshot, runs the declared health checks, fires
+   `before_sync`/`after_sync` and the `on_drift` event, and refuses on an unapproved hook
+   (II.12).** More safety and more hooks firing than before; on Windows it also means the
+   ~51-second restore point that `sync` takes and `apply` did not. It also honours
+   `[remove] purge` / `--purge`, which the hand-written loop called `remove` regardless of.
+4. **`apply` is faster**, by the same measure `Y1` ruled on: six packages went as six
+   `apt install` processes and now go as one.
+5. **`heal` can now recover an interrupted `apply`, `upgrade`, `remove-orphans`,
+   `purge-undeclared`, lease sweep or shell restore** — which is the point, and means a crash
+   during one of those is now followed by a recovery that was previously silent.
+
+Rules in II.7 and II.19; reasons in V.147 and V.148.
