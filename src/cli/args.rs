@@ -1,16 +1,19 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
-/// The 61 verbs, grouped by what a person is trying to do (AU11).
+/// Every verb, grouped by what a person is trying to do (AU11).
+///
+/// **No count is written here.** It said "61" while the map held 60, because a number in prose is
+/// a copy of something and nothing checked the copy. What is checked is stronger than a count:
+/// `tests/help_map_tests.rs` compares this map against `--help` name for name, so a verb missing
+/// from the map and a verb in the map that is not a verb are both build failures. A
+/// hand-maintained list of names beside the enum, checked by nothing, is the shape that let
+/// `undo` sit in two exemption lists for months after it stopped existing.
 ///
 /// **After the flat list, not instead of it.** clap prints one `Commands:` block in
 /// alphabetical-by-declaration order and has no per-subcommand heading, so the choice was a wall
 /// with no map or a wall with one. Every verb still appears above, exactly once, where
 /// `completions` and the coverage gates look for it — this adds orientation and removes nothing.
-///
-/// A verb missing from this map is caught by `tests/help_map_tests.rs`, which reads the map and
-/// `--help` and compares them. A hand-maintained list of sixty names beside the enum is the
-/// shape that let `undo` sit in two exemption lists for months after it stopped existing.
 const COMMAND_MAP: &str = "\
 The map (every command above, by what you are doing):
 
@@ -228,6 +231,15 @@ pub enum Commands {
         packages: Vec<String>,
         /// The command to execute
         command: String,
+        /// Arguments forwarded to that command, verbatim
+        //
+        // Without this the shim could not run. `src/bin/shim.rs` builds
+        // `linix run --packages X -- X <args...>` — the whole mechanism behind a `@shim=true`
+        // line — and `command` was a single positional, so clap refused the invocation with
+        // *unexpected argument* for anything the shimmed program was given. A user typing
+        // `linix run -p jq -- jq -r .name` met the same refusal.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
 
     /// Recover the system from an interrupted or crashed transaction (WAL)

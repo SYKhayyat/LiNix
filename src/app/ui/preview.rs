@@ -1,11 +1,12 @@
 use crate::app::sync::SyncChanges;
 use crate::core::{GraphAction, Result};
-use crossterm::{
+use petgraph::graph::NodeIndex;
+// See `history.rs`: crossterm is reached through ratatui so there can only be one of it.
+use ratatui::crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use petgraph::graph::NodeIndex;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
@@ -106,7 +107,7 @@ impl<'a> TuiPreview<'a> {
                 ]
                 .as_ref(),
             )
-            .split(f.size());
+            .split(f.area());
 
         let header = Paragraph::new("LiNix Transaction Preview - Confirm System Changes")
             .block(Block::default().borders(Borders::ALL).title("Status"));

@@ -85,69 +85,66 @@ impl Dependents<'_> {
                     }
                 }
                 Statement::Service(name, opts) => {
-                    let Some(b) = self.registry.get("service") else {
-                        warn!(
-                            "{}: the service backend is not available here — skipping `service:{}`.",
-                            origin, name
-                        );
-                        continue;
-                    };
-                    if self.config.dry_run {
-                        info!("[DRY-RUN] would apply service `{}`", name);
-                        continue;
-                    }
-                    let Some(inst) = b.as_installable() else {
-                        continue;
-                    };
-                    info!("applying `{}` ({})", name, origin);
-                    let spec = spec_from_extra("service", name, opts);
-                    inst.install(std::slice::from_ref(&spec), b.sudo_for_write())
-                        .await?;
+                    self.apply_through_backend("service", name, opts, origin)
+                        .await?
                 }
                 Statement::Link(name, opts) => {
-                    let Some(b) = self.registry.get("link") else {
-                        warn!(
-                            "{}: the link backend is not available here — skipping `link:{}`.",
-                            origin, name
-                        );
-                        continue;
-                    };
-                    if self.config.dry_run {
-                        info!("[DRY-RUN] would apply link `{}`", name);
-                        continue;
-                    }
-                    let Some(inst) = b.as_installable() else {
-                        continue;
-                    };
-                    info!("Link: applying `{}` ({})", name, origin);
-                    let spec = spec_from_extra("link", name, opts);
-                    inst.install(std::slice::from_ref(&spec), b.sudo_for_write())
-                        .await?;
+                    self.apply_through_backend("link", name, opts, origin).await?
                 }
                 Statement::Setting(name, opts) => {
-                    let Some(b) = self.registry.get("setting") else {
-                        warn!(
-                            "{}: no settings adapter here — skipping `setting:{}`.",
-                            origin, name
-                        );
-                        continue;
-                    };
-                    if self.config.dry_run {
-                        info!("[DRY-RUN] would apply setting `{}`", name);
-                        continue;
-                    }
-                    let Some(inst) = b.as_installable() else {
-                        continue;
-                    };
-                    info!("Setting: applying `{}` ({})", name, origin);
-                    let spec = spec_from_extra("setting", name, opts);
-                    inst.install(std::slice::from_ref(&spec), b.sudo_for_write())
-                        .await?;
+                    self.apply_through_backend("setting", name, opts, origin)
+                        .await?
                 }
                 // dependents() yields only these four variants.
                 _ => {}
             }
         }
+        Ok(())
+    }
+
+    /// Apply one `service:` / `link:` / `setting:` line through the backend that owns its
+    /// keyword.
+    ///
+    /// **One body, because there was never more than one behaviour.** The three arms this
+    /// replaces were byte-identical apart from the keyword and three differently-worded log
+    /// lines — `applying`, `Link: applying`, `Setting: applying` — so a reader could not tell
+    /// whether the difference in wording meant a difference in what happened. It did not.
+    ///
+    /// **A backend that cannot install is reported, not skipped.** Each arm ended
+    /// `let Some(inst) = b.as_installable() else { continue };` — a declared line, a registered
+    /// backend, and nothing done, with no output at all. That is `Q40`'s failure again: silence
+    /// standing in for success. It is a `Validation` error now, because a registry that hands
+    /// back a `setting` backend which cannot write a setting is a wiring bug in LiNix, not
+    /// something the user can fix by editing their file.
+    async fn apply_through_backend(
+        &self,
+        keyword: &str,
+        name: &str,
+        opts: &crate::config::grammar::Options,
+        origin: &crate::config::grammar::Origin,
+    ) -> Result<()> {
+        let Some(b) = self.registry.get(keyword) else {
+            warn!(
+                "{}: the `{}` backend is not available here — skipping `{}:{}`.",
+                origin, keyword, keyword, name
+            );
+            return Ok(());
+        };
+        if self.config.dry_run {
+            info!("[DRY-RUN] would apply {} `{}`", keyword, name);
+            return Ok(());
+        }
+        let Some(inst) = b.as_installable() else {
+            return Err(Error::Validation(format!(
+                "{}: the `{}` backend is registered but cannot install, so `{}:{}` could not be \
+                 applied. This is a wiring fault in LiNix rather than a problem with your file.",
+                origin, keyword, keyword, name
+            )));
+        };
+        info!("applying `{}:{}` ({})", keyword, name, origin);
+        let spec = spec_from_extra(keyword, name, opts);
+        inst.install(std::slice::from_ref(&spec), b.sudo_for_write())
+            .await?;
         Ok(())
     }
 }

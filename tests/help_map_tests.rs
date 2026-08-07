@@ -93,6 +93,23 @@ fn the_map_names_no_command_that_does_not_exist() {
         .filter(|t| t.contains('-') || declared.contains(t) || t.len() > 3)
         .filter(|t| !declared.contains(t))
         // Words that appear in the map's own sentences rather than in its lists.
+        //
+        // **`undo` is in this list, and it is the deleted command this file's header cites as
+        // the reason the file exists.** That is not a mistake and it is not safe on its own: the
+        // map's prose carries the section heading *"Undo and time travel"*, so the word appears
+        // here as English rather than as a verb — and **nothing in this list can tell those two
+        // apart.** A gate drawn around one copy of a fact, with the fact escaping into the gate,
+        // is precisely the shape the header is about.
+        //
+        // What makes it safe is a second gate, not this one:
+        // `named_commands_exist_tests.rs` resolves every `linix <word>` in `src/`, `tests/`,
+        // `scripts/`, `docker/`, `examples/`, `.github/` and `readme.md` against clap's live
+        // command tree, so a *live invocation* of `undo` fails there regardless of what this
+        // list says. Since 2026-08-07 it also covers `docs/`, against `target-state.md` II.17's
+        // register of what was deleted — and `undo` is in that register.
+        //
+        // So: this list may exempt an English word. It cannot exempt a command, because it is
+        // not the thing that decides whether a command is real.
         .filter(|t| {
             ![
                 "map",

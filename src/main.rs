@@ -393,7 +393,11 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
         Commands::Activate { profiles, add } => handle_activate(app, profiles, *add).await,
         Commands::Deactivate { profiles } => handle_deactivate(app, profiles).await,
         Commands::Profile(args) => handle_profile(app, &args.command).await,
-        Commands::Run { packages, command } => handle_run(app, packages, command).await,
+        Commands::Run {
+            packages,
+            command,
+            args,
+        } => handle_run(app, packages, command, args).await,
         Commands::Lock { axis, names, list } => handle_lock(app, *axis, names, *list).await,
         Commands::Unlock { axis, names, list } => handle_unlock(app, *axis, names, *list).await,
         Commands::Plan { out } => handle_plan(app, out).await,

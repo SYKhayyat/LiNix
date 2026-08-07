@@ -21,7 +21,9 @@
 // The rendering logic is pure and unit-tested; the ratatui event loop is a thin shell.
 
 use crate::core::Result;
-use crossterm::{
+// Through `ratatui::` and not through `crossterm::`: a direct dependency is a second version
+// number, and one stdin cannot have two key-event parsers reading it.
+use ratatui::crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -259,7 +261,7 @@ impl HistoryBrowser {
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(5), Constraint::Length(3)].as_ref())
-            .split(f.size());
+            .split(f.area());
         let cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(38), Constraint::Percentage(62)].as_ref())

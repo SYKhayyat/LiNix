@@ -7975,3 +7975,97 @@ test proves both halves — that it stops growing, and that past the ceiling it 
 
 **`watch` and `policy` both keep their verbs**, which was the owner's standing constraint. What
 `LX-5` proposed deleting, this fixes and wires in.
+
+## Session 2026-08-07 — the supply chain gets a gate, and the gate immediately says no (`LX-9`)
+
+**A tool whose entire pitch is "be careful what gets installed on your machine" shipped 380
+unaudited transitive dependencies with no mechanism that would ever tell it about a RUSTSEC
+advisory.** No `deny.toml`, no `dependabot.yml`, no `cargo-audit` step, no MSRV. That gap is
+worth more than any of the nine Dockerfiles, and `lamdan/whole-repo-2026-08-07.md` says so.
+
+`deny.toml`, `.github/dependabot.yml` and a `supply-chain` CI job now exist, and
+`rust-version` gives the MSRV a name — `1.89`, which is measured rather than chosen: it went in
+as `1.82` on the first try and clippy's `incompatible_msrv` answered that guess, because
+`std::fs::File::unlock` in `core/executor.rs` did not stabilise until `1.89`. An `msrv` CI job
+pins a toolchain to the declared version and runs `cargo check --all-targets --locked`, reading
+the number out of `Cargo.toml` rather than typing a second copy of it into the workflow.
+
+### The first run was not decorative
+
+Eight findings, on a tree nobody had bumped since it was assembled:
+
+| finding | source | why it mattered |
+|---|---|---|
+| `RUSTSEC-2026-0098/0099/0104` | `rustls-webpki` 0.101.7, held down by `reqwest` 0.11 → `rustls` 0.21 | name-constraint bypasses, and **a reachable panic in CRL parsing that fires before the certificate's signature is verified** |
+| `RUSTSEC-2026-0204` | `crossbeam-epoch` 0.9.18, via `tera` → `globwalk` → `ignore` | invalid pointer dereference in a `fmt::Pointer` impl |
+| `RUSTSEC-2026-0190` | `anyhow` 1.0.102 | unsoundness in `Error::downcast_mut()` |
+| `RUSTSEC-2025-0134` | `rustls-pemfile`, via `reqwest` 0.11 | unmaintained |
+| `RUSTSEC-2025-0119` | `number_prefix`, via `indicatif` 0.17 | unmaintained |
+| `RUSTSEC-2024-0436` | `paste`, via `ratatui` 0.29 | unmaintained |
+
+The webpki advisories are the ones that matter here in particular: LiNix's `web:` and `github:`
+backends **download and install software**, so TLS certificate handling is not incidental to this
+program, it is the thing standing between a manifest and an attacker's binary.
+
+**Every one of the eight cleared with a version bump and no code change.** reqwest 0.12,
+indicatif 0.18, ratatui 0.30, plus `cargo update` on anyhow and crossbeam-epoch. `advisories ok,
+bans ok, licenses ok, sources ok`. That is the argument for the gate in one line: the fixes were
+free and sitting there, and nothing in the repo was ever going to mention them.
+
+### Two crossterms on one stdin
+
+Bumping ratatui exposed a second bug it had been hiding. `Cargo.toml` declared `crossterm = "0.27"`
+and `src/app/ui/` imported from it directly, while ratatui drew through its own crossterm — 0.28
+after the bump. **Two key-event parsers reading one terminal, agreeing only by luck**, and 0.28
+changed how the kitty protocol's flags are read. Both UI files import from `ratatui::crossterm`
+now and the direct dependency is gone: there is one version because there is one name for it.
+
+### `Z1` is not answered by implication
+
+`cargo deny` failed on LiNix's own crate for having no licence — which is `Z1`, **OPEN**, and the
+owner's. `publish = false` in `Cargo.toml` states today's truth (crates.io refuses a package with
+no `license` key regardless) and lets `[licenses] private.ignore` skip our own crate without the
+gate picking a licence by default. When `Z1` is ruled, both lines go.
+
+`Unicode-DFS-2016` and `OpenSSL` were in the allow-list and matched nothing; an allowance nobody
+exercises is a hole with a comment on it. `CDLA-Permissive-2.0` replaced them, which is real —
+it is what Mozilla's CA root bundle carries, a data licence for a set of certificates.
+
+### The three arms that were one arm
+
+`apply/dependents.rs` had `service:`, `link:` and `setting:` as three byte-identical match arms,
+differing only in the keyword and in three differently-worded log lines (`applying`, `Link:
+applying`, `Setting: applying`) — so a reader could not tell whether the wording meant a
+difference in behaviour. It did not. One `apply_through_backend` now.
+
+Collapsing them made the shared bug visible: each ended `let Some(inst) = b.as_installable() else
+{ continue };`. **A declared line, a registered backend, nothing done, and no output at all** —
+`Q40` again, silence standing in for success. `Extras::undo_extra` had the twin, and its
+`return Ok(())` is worse: the caller clears the extras lock afterwards, so a resource that is
+still in effect is forgotten and no later sync looks at it again. Both refuse now.
+`apply/dotfiles.rs:307` already had the right shape (`ok_or_else(cannot_place)?`) — the correct
+answer was in the repo, and two of its three siblings had diverged from it.
+
+A registry test pins the other end: `service`, `link` and `setting` must be installable where they
+are registered at all, so the new refusal stays unreachable unless someone wires an adapter that
+cannot write.
+
+### The verb count nobody counted
+
+`args.rs`'s doc comment said "The 61 verbs" over a map holding 60, and four lines later described
+"a hand-maintained list of sixty names". **A number in prose is a copy, and nothing checked
+either copy.** No count is written there now — what is checked is stronger than a count:
+`help_map_tests.rs` compares the map against `--help` name for name in both directions.
+
+### `linix run` could not run what the shim asks it to run
+
+`src/bin/shim.rs` builds `linix run --packages X -- X <args…>`. **`command` was a lone positional,
+so clap refused that argv outright** — every argument after the binary name was an unexpected
+extra. `@shim=true` is the whole reason `src/bin/shim.rs` exists, and the command it invokes
+would not parse. `linix run -p jq -- jq -r .name`, the form a person would type, met the same
+refusal.
+
+`Run` takes `args: Vec<String>` with `trailing_var_arg` now, and `handle_run` joins the two:
+the first positional may still carry a whole command line (the quoted `-- "jq -r .name"` form),
+and everything after it is an argument verbatim. Both spellings, one rule. An empty command is a
+`Validation` error rather than `unwrap_or(&"")` executing the empty string.

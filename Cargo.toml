@@ -2,7 +2,18 @@
 name = "linix"
 version = "0.7.0"
 edition = "2021"
+# The oldest toolchain this is known to build on.
+#
+# **Not a guess and not aspirational.** Before this there was none, which means the answer to
+# "will this build on my machine" was whatever the author's rustup happened to have — and a
+# contributor on a distro-packaged Rust found out by watching it fail. The number moves when a
+# change needs it to, deliberately and in a commit that says why; it does not drift.
+rust-version = "1.89"
 authors = ["LiNix Contributors"]
+# Not publishable until `Z1` (the licence) is ruled: crates.io refuses a package with no `license`
+# key, so this states today's truth rather than a preference. It is also what lets `deny.toml`
+# skip the licence check on our own crate without answering `Z1` by implication.
+publish = false
 description = "Universal Mission-Critical Package Manager with DAG-based parallel execution"
 
 [dependencies]
@@ -49,13 +60,12 @@ tera = "1.19"
 # Networking & API Integration
 # rustls (not native-tls) so we don't drag in OpenSSL — that made static musl/Alpine
 # builds fail to link and required openssl-dev on every distro.
-reqwest = { version = "0.11", default-features = false, features = ["json", "stream", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 # Rate limiting. Without `quanta`: its clock calibrates the TSC on first construction, which
 # measured 200ms, once, on whichever thread got there first — a fifth of a second on `linix path`
 # for a GitHub API budget it never spends. `MonotonicClock` (std `Instant`) resolves to
 # nanoseconds, and the fastest quota here is 80 requests per MINUTE.
 governor = { version = "0.6", default-features = false, features = ["std", "jitter"] }
-nonzero_ext = "0.3"
 
 # System Utilities & Persistence
 walkdir = "2.4"
@@ -89,18 +99,19 @@ version-compare = "0.1"
 # Logging & Monitoring
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-indicatif = "0.17" # Progress bars
+indicatif = "0.18" # Progress bars
 
 # UI & Interaction
 dialoguer = "0.11"
-ratatui = "0.24"  
-crossterm = "0.27"
+ratatui = "0.30"
+# crossterm is NOT a direct dependency: it is reached through `ratatui::crossterm`.
+# Declaring it here is how the tree ended up with 0.27 under `src/app/ui/` and 0.28 under
+# ratatui, two key-event parsers on one stdin, agreeing only by luck.
 
 # --- NEW FOR 3.6.0 ---
 
 # Feature 5: Native Scheduling & Logic
 cron = "0.12"      # Cron expression parsing for schedules
-itertools = "0.12" # Advanced iteration for planning filtering
 
 # Feature 5: Notifications
 # Platform-Specific Dependencies

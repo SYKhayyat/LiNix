@@ -17,6 +17,51 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  # **The supply-chain gate this repo had none of.**
+  #
+  # A tool whose pitch is "be careful what gets installed on your machine" shipped 380 unaudited
+  # transitive dependencies — `ring` and `reqwest` among them — with no mechanism that would ever
+  # tell it about a RUSTSEC advisory. First in the file and first to run, because a dependency
+  # with a known hole is a fact about every job below it.
+  #
+  # Split from `build` deliberately: it needs no matrix, no target and no test binaries, so
+  # putting it in `build` would make one Linux answer wait on four platforms' worth of linking.
+  supply-chain:
+    name: Advisories and licences
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - name: cargo-deny
+      uses: EmbarkStudios/cargo-deny-action@v2
+      with:
+        # `deny.toml` says what each of these means. `bans` is `warn`-level there rather than
+        # `deny`, because duplicate versions in a 380-crate tree are usually somebody else's
+        # choice and a gate that gets exempted into uselessness is not a gate.
+        command: check advisories bans licenses sources
+
+  # `rust-version` in `Cargo.toml` is a promise to a contributor on a distro-packaged Rust, and a
+  # promise nothing checks is prose. It was typed as `1.82` on the first attempt and was wrong:
+  # `std::fs::File::unlock` in `core/executor.rs` did not stabilise until `1.89`, so the declared
+  # floor named a toolchain the tree does not compile on. Clippy's `incompatible_msrv` caught it
+  # locally; this is what catches the next one.
+  #
+  # **The version is read from `Cargo.toml`, not typed here.** A second copy of the number in this
+  # file would be free to disagree with the first, which is the whole failure this job exists to
+  # end. `cargo check --all-targets` and not `test`: the question is whether the toolchain can
+  # compile the tree, and the test *run* is every other job's business.
+  msrv:
+    name: Builds on the declared MSRV
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - id: msrv
+      run: echo "version=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ steps.msrv.outputs.version }}
+    - run: cargo check --all-targets --locked
+
   build:
     name: Build for ${{ matrix.target }}
     runs-on: ${{ matrix.os }}

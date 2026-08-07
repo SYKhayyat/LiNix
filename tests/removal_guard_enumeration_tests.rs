@@ -209,16 +209,15 @@ fn every_path_that_removes_anything_is_accounted_for() {
     let mut problems = Vec::new();
 
     for (file, sites) in &found {
-        match ledger.get(file.as_str()) {
-            None => problems.push(format!(
+        if !ledger.contains_key(file.as_str()) {
+            problems.push(format!(
                 "UNACCOUNTED: {} reaches a removal at {:?} and is in no ledger entry.\n    \
                  Add it to LEDGER in this file with the guard that stands in front of it — \
                  or, if nothing does, put a guard there first. This is exactly how G-1 \
                  survived: the path existed and the sentence about it was never re-counted.",
                 file,
                 sites.iter().map(|(l, _)| *l).collect::<Vec<_>>()
-            )),
-            Some(_) => {}
+            ));
         }
     }
 

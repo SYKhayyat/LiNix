@@ -1,0 +1,67 @@
+# `cargo deny` — the supply-chain gate this repo had none of.
+#
+# **A tool whose entire pitch is "be careful what gets installed on your machine" shipped 380
+# unaudited transitive dependencies, including `ring` and `reqwest`, with no mechanism that would
+# ever tell it about a RUSTSEC advisory.** No `dependabot.yml`, no `cargo-audit`, no `deny.toml`,
+# no MSRV. `lamdan/whole-repo-2026-08-07.md` puts it plainly: that gap is worth more than any of
+# the nine Dockerfiles.
+#
+# The point of this file is not to be strict today. It is that a `RUSTSEC` advisory against
+# anything in the tree becomes a red build instead of news somebody else reads.
+
+# The first run of this gate was not decorative: it found four vulnerabilities, one unsoundness
+# and three unmaintained crates, all of them behind dependencies nobody had bumped since the tree
+# was assembled. `reqwest` 0.11 held `rustls` 0.21 down onto `rustls-webpki` 0.101.7, which
+# carries three RUSTSEC advisories including a reachable panic reached *before* a certificate's
+# signature is verified — in a program whose `web:`/`github:` backends download and install
+# software. Bumping reqwest to 0.12, indicatif to 0.18, ratatui to 0.30 and updating anyhow and
+# crossbeam-epoch cleared all eight, and every one of those was a drop-in: the code did not change.
+# That is the argument for this file in one paragraph.
+
+[advisories]
+# An advisory against a dependency fails the build. That is the whole feature.
+yanked = "warn"
+ignore = []
+
+[licenses]
+# Permissive licences, plus the ones the Rust ecosystem's own crates actually use.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
+    "Unlicense",
+    # `webpki-roots` is Mozilla's CA root store, and a set of certificates is data rather than
+    # code — hence a data licence. Permissive, and the alternative is bundling no roots.
+    "CDLA-Permissive-2.0",
+]
+# Every name above is one a crate in this tree actually carries. `Unicode-DFS-2016` and `OpenSSL`
+# were here and matched nothing; an allowance nobody exercises is a hole with a comment on it, and
+# a dependency that starts carrying one should stop the build until a person looks.
+confidence-threshold = 0.8
+
+# LiNix's own licence is `Z1`, and `Z1` is OPEN — it is the owner's to answer and this file must
+# not answer it by implication. `publish = false` in `Cargo.toml` is what makes this apply, and it
+# states today's truth: with no `license` key crates.io refuses the package anyway. **When `Z1` is
+# ruled, `publish = false` goes and so do these three lines** — the gate should check our licence
+# the moment we have one.
+private = { ignore = true }
+
+[bans]
+# Two versions of the same crate is a build paying for both. `warn` rather than `deny` on purpose:
+# this tree has 380 transitive dependencies and duplicate versions are usually somebody else's
+# choice, so the honest setting is one that reports rather than one that gets exempted into
+# uselessness.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

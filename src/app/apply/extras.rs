@@ -250,8 +250,16 @@ impl Extras<'_> {
                         kind, kind, id
                     )));
                 };
+                // The twin of `Dependents::apply_through_backend`'s check, and it had the twin
+                // bug: `Ok(())` here reports the undo as done to a caller that then clears the
+                // extras lock, so the drifted resource is forgotten while still in effect and
+                // no later sync will look at it again.
                 let Some(inst) = b.as_installable() else {
-                    return Ok(());
+                    return Err(Error::Validation(format!(
+                        "the `{}` backend is registered but cannot remove, so `{}:{}` could not \
+                         be undone. This is a wiring fault in LiNix.",
+                        kind, kind, id
+                    )));
                 };
                 inst.remove(
                     std::slice::from_ref(&id.to_string()),

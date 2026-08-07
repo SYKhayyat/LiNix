@@ -207,12 +207,29 @@ pub async fn handle_shell(app: &App, packages: &[String]) -> Result<()> {
     app.shell().enter(packages).await.map_err(|e| e.into())
 }
 
-pub async fn handle_run(app: &App, packages: &[String], command: &str) -> Result<()> {
-    let parts: Vec<&str> = command.split_whitespace().collect();
-    let bin = parts.first().unwrap_or(&"");
-    let args: Vec<String> = parts.iter().skip(1).map(|s| s.to_string()).collect();
+/// `linix run --packages X -- cmd arg…`
+///
+/// **One rule, both spellings.** The first positional may still carry a whole command line, which
+/// is what the quoted form (`-- "jq -r .name"`) has always meant; everything after it is an
+/// argument, verbatim. The second half is new: `command` was a lone positional, so clap refused
+/// `-- jq -r .name` outright — and with it `src/bin/shim.rs`, which builds exactly that argv and
+/// is the entire mechanism behind a `@shim=true` line.
+pub async fn handle_run(
+    app: &App,
+    packages: &[String],
+    command: &str,
+    trailing: &[String],
+) -> Result<()> {
+    let mut parts: Vec<String> = command.split_whitespace().map(str::to_string).collect();
+    parts.extend(trailing.iter().cloned());
+    let Some((bin, args)) = parts.split_first() else {
+        return Err(crate::core::Error::Validation(
+            "`linix run` needs a command to run".into(),
+        )
+        .into());
+    };
     app.runner()
-        .run(packages, bin, &args)
+        .run(packages, bin, args)
         .await
         .map_err(|e| e.into())
 }
