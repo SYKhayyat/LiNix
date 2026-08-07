@@ -143,7 +143,7 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> 
 
     // A config can be all dependents/schedules and no package changes (just a `service:` or a
     // `schedule:` line). That is still work, so the "nothing to do" exit has to account for
-    // the dependent phase and the schedule phase too.
+    // every phase after the package plan — which it now asks `Phase` for rather than listing.
     if changes.is_empty() && !state.has_non_package_work() {
         // Even with no packages/dependents/schedules to apply, an extra may have been
         // *removed* — deleting the last `service:` line is a real change (S20). Reconcile the
@@ -151,8 +151,8 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> 
         //
         // The count is returned rather than dropped: a teardown is work, and reporting `already
         // up to date` over five deleted files is the summary disagreeing with the machine. The
-        // placement half is counted here too — `has_non_package_work` does not see a `repo:`
-        // line, so this path can still have a resource to put in place.
+        // placement half is counted here too — `repo:` is phase 1 and was applied above, so a
+        // run that reaches this line can still have put a resource in place.
         let resources = app.extras().changes(&state).await?;
         let undone = app.extras().reconcile(&state, opts.scope, 0).await?;
         return Ok(Reconciled {
@@ -263,41 +263,60 @@ async fn warn_about_unreachable_binaries(app: &App, backends: &[String]) {
 
 /// Everything a sync does after the package plan, in II.7's order.
 ///
-/// **One list, called by the preview and by the real run.** It used to be two — the dry-run
-/// branch kept its own copy — and every statement kind added since was missed by one of them:
-/// extras (S20), then `exec:`, then `dotfiles:`, then `firewall:`. Four times is not four
-/// mistakes, it is one duplicated list. Each phase honours `dry_run` internally and previews
-/// rather than acting, which is what makes a single list correct for both callers.
+/// **The list is `Phase`, and the order is `Phase`'s order.** It was a hand-written sequence
+/// of calls, and before that two of them — the dry-run branch kept its own copy — and every
+/// statement kind added since was missed by one of them: extras (S20), then `exec:`, then
+/// `dotfiles:`, then `firewall:`. Four times is not four mistakes, it is one list nothing
+/// checked. The match below is exhaustive over the enum, so a phase added to the grammar
+/// cannot compile until this function says what to do with it, and it runs in the enum's
+/// declaration order rather than in the order somebody typed the calls.
+///
+/// Each phase honours `dry_run` internally and previews rather than acting, which is what
+/// makes one list correct for the preview and the real run alike.
 pub(crate) async fn apply_non_package_phases(
     app: &App,
     state: &linix::model::DesiredState,
     scope: linix::app::sync::guard::GuardScope,
     packages_being_removed: usize,
 ) -> Result<usize> {
+    use linix::config::grammar::Phase;
+
     // Asked before the first phase runs, because afterwards the answer is zero: the resources
     // are in effect, `changes()` correctly reports nothing to do, and a summary reading that
     // back is how `sync` placed three files and printed `already up to date` (N-2). The
     // teardown half is counted from what `reconcile` actually attempted, below.
     let resources = app.extras().changes(state).await?;
 
-    // Phase 3: the dependent extras, now that every package they lean on is in.
-    app.dependents().apply(state).await?;
-    // Phase 3b (7n): the dotfiles trees — a tree is a pile of `link:` lines and belongs where
-    // they do.
-    app.dotfiles().apply(state).await?;
-    // Phase 3c (Part XI): the perimeter. After the packages, because a rule usually exists to
-    // let something in that was just installed — and its lockout check runs before any command
-    // it would issue, on this path and on the unattended one alike.
-    app.firewall().apply(state, scope_label(scope)).await?;
-    // Phase 4 (S21): provision the declared schedules onto the OS scheduler.
-    app.schedules().apply(state).await?;
-    // Phase 4b (XIII.3): the declared `exec:` scripts, after the packages and dependents a
-    // script is likely to lean on. A verb, so it has no teardown phase of its own.
-    app.execs().apply(state).await?;
-    // Phase 5 (S20): undo extras that were applied before but are no longer declared. The
-    // package removals already planned are passed in, so `max_removals` is a ceiling on the
-    // command rather than on each phase — a sync dropping three packages and three links
-    // removes six things, and a limit of five has to see six.
+    for phase in Phase::all() {
+        match phase {
+            // Not this list's, and each for a reason rather than by omission: `Resolution` is
+            // consumed before a desired state exists, `Repositories` ran before the package
+            // plan (a package from a PPA cannot install until the PPA is there), and
+            // `Packages` is the transaction the engine closed above.
+            Phase::Resolution | Phase::Repositories | Phase::Packages => {}
+            // Phase 3: the dependent extras, now that every package they lean on is in.
+            Phase::Dependents => app.dependents().apply(state).await?,
+            // Phase 3b (7n): the dotfiles trees — a tree is a pile of `link:` lines and
+            // belongs where they do.
+            Phase::Dotfiles => app.dotfiles().apply(state).await?,
+            // Phase 3c (Part XI): the perimeter. After the packages, because a rule usually
+            // exists to let something in that was just installed — and its lockout check runs
+            // before any command it would issue, on this path and on the unattended one alike.
+            Phase::Firewall => app.firewall().apply(state, scope_label(scope)).await?,
+            // Phase 4 (S21): provision the declared schedules onto the OS scheduler.
+            Phase::Schedules => app.schedules().apply(state).await?,
+            // Phase 4b (XIII.3): the declared `exec:` scripts, after the packages and
+            // dependents a script is likely to lean on. A verb, so it has no teardown phase.
+            Phase::Execs => app.execs().apply(state).await?,
+        }
+    }
+
+    // The teardown (S20): undo extras that were applied before but are no longer declared.
+    // Not a `Phase` — a phase is where a *declaration's* work happens, and this is the half
+    // that runs on the declarations that are gone. The package removals already planned are
+    // passed in, so `max_removals` is a ceiling on the command rather than on each phase — a
+    // sync dropping three packages and three links removes six things, and a limit of five
+    // has to see six.
     let undone = app
         .extras()
         .reconcile(state, scope, packages_being_removed)

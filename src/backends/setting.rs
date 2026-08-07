@@ -22,6 +22,7 @@
 //! user's own row goes through. An adapter mechanism the built-ins bypass is one nobody has
 //! tested.
 
+use crate::core::adapter::{self, AdapterRow, Detected};
 use crate::core::{
     BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
     Queryable, Result,
@@ -72,23 +73,17 @@ const BUILTIN_STORES: &str = include_str!("setting_stores.toml");
 
 impl SettingAdapter {
     fn fill(args: &[String], schema: &str, key: &str, value: &str) -> Vec<String> {
-        args.iter()
-            .map(|a| {
-                a.replace("{schema}", schema)
-                    .replace("{key}", key)
-                    .replace("{value}", value)
-            })
-            .collect()
+        adapter::fill(
+            args,
+            &[("{schema}", schema), ("{key}", key), ("{value}", value)],
+        )
     }
 
     /// Split filled argv into the program and its arguments. A row with an empty command is
     /// refused at load, so this never has to invent one.
     fn command(args: &[String], schema: &str, key: &str, value: &str) -> (String, Vec<String>) {
-        let filled = Self::fill(args, schema, key, value);
-        let (prog, rest) = filled
-            .split_first()
-            .expect("an empty adapter command was loaded");
-        (prog.clone(), rest.to_vec())
+        adapter::program_and_args(Self::fill(args, schema, key, value))
+            .expect("an empty adapter command was loaded")
     }
 
     /// Whether this store can be addressed machine-wide at all. A row that leaves the
@@ -125,42 +120,46 @@ impl SettingAdapter {
     pub fn reset_command(&self, scope: Scope, schema: &str, key: &str) -> (String, Vec<String>) {
         Self::command(self.argv_for(scope).2, schema, key, "")
     }
+}
 
-    /// A row LiNix will act on: it names itself, it can be detected, and all three commands
-    /// are present. A store that can be written but not read cannot answer X.4's
-    /// read-before-write question, so it is not an adapter — it is a command that runs every
-    /// sync, which is the thing `setting:` exists not to be.
-    fn is_usable(&self) -> Option<&'static str> {
-        if self.name.trim().is_empty() {
-            return Some("it has no `name`");
-        }
+impl AdapterRow for SettingAdapter {
+    const WHAT: &'static str = "settings adapter";
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn only_on(&self) -> Option<&str> {
+        self.os.as_deref()
+    }
+
+    /// A row LiNix will act on: it can be detected, and all three commands are present. A
+    /// store that can be written but not read cannot answer X.4's read-before-write question,
+    /// so it is not an adapter — it is a command that runs every sync, which is the thing
+    /// `setting:` exists not to be.
+    fn why_unusable(&self) -> Option<&'static str> {
         if self.detect.trim().is_empty() {
             return Some("it has no `detect` command");
         }
-        for (label, args) in [
-            ("read", &self.read),
-            ("write", &self.write),
-            ("reset", &self.reset),
-        ] {
-            if args.is_empty() {
-                return Some(match label {
-                    "read" => {
-                        "its `read` command is empty — a store LiNix cannot read is one it \
-                               would write on every sync"
-                    }
-                    "write" => "its `write` command is empty",
-                    _ => "its `reset` command is empty — removing a declaration would do nothing",
-                });
-            }
+        if self.read.is_empty() {
+            return Some(
+                "its `read` command is empty — a store LiNix cannot read is one it would write \
+                 on every sync",
+            );
+        }
+        if self.write.is_empty() {
+            return Some("its `write` command is empty");
+        }
+        if self.reset.is_empty() {
+            return Some("its `reset` command is empty — removing a declaration would do nothing");
         }
         None
     }
+}
 
-    fn applies_to_this_os(&self) -> bool {
-        match &self.os {
-            Some(os) => os.eq_ignore_ascii_case(std::env::consts::OS),
-            None => true,
-        }
+impl Detected for SettingAdapter {
+    fn detect_command(&self) -> &str {
+        &self.detect
     }
 }
 
@@ -169,22 +168,7 @@ impl SettingAdapter {
 pub fn adapters(user_rows: Vec<SettingAdapter>) -> Vec<SettingAdapter> {
     let shipped: SettingStoreFile =
         toml::from_str(BUILTIN_STORES).expect("the shipped setting_stores.toml must parse");
-    let mut out: Vec<SettingAdapter> = Vec::new();
-    for row in shipped.setting_store.into_iter().chain(user_rows) {
-        if let Some(why) = row.is_usable() {
-            warn!("ignoring the `{}` settings adapter: {}.", row.name, why);
-            continue;
-        }
-        if out.iter().any(|a| a.name.eq_ignore_ascii_case(&row.name)) {
-            warn!(
-                "ignoring a second settings adapter named `{}`: the first one wins.",
-                row.name
-            );
-            continue;
-        }
-        out.push(row);
-    }
-    out
+    adapter::merge(shipped.setting_store.into_iter().chain(user_rows))
 }
 
 /// Read the user's `[[setting_store]]` rows out of `adapters/settings.toml` (U10).
@@ -255,9 +239,7 @@ impl SettingBackendCore {
     /// silently unapplied is worse than a refusal, because the whole point is that the file
     /// is the truth (X.4).
     pub fn adapter(&self) -> Option<&SettingAdapter> {
-        self.adapters
-            .iter()
-            .find(|a| a.applies_to_this_os() && self.executor.command_exists_sync(&a.detect))
+        adapter::first_present(&self.adapters, &|c| self.executor.command_exists_sync(c))
     }
 
     fn split(spec_name: &str) -> Result<(&str, &str)> {
@@ -316,7 +298,7 @@ impl BackendCore for SettingBackendCore {
     fn probes(&self) -> Vec<String> {
         self.adapters
             .iter()
-            .filter(|a| a.applies_to_this_os())
+            .filter(|a| a.applies_here())
             .map(|a| a.detect.clone())
             .collect()
     }
@@ -579,10 +561,10 @@ mod tests {
     fn a_row_for_another_os_is_not_this_machines_store() {
         let mut elsewhere = row("elsewhere", "cmd");
         elsewhere.os = Some("plan9".into());
-        assert!(!elsewhere.applies_to_this_os());
+        assert!(!elsewhere.applies_here());
         let mut here = row("here", "cmd");
         here.os = Some(std::env::consts::OS.to_string());
-        assert!(here.applies_to_this_os());
+        assert!(here.applies_here());
     }
 
     fn registry_like() -> SettingAdapter {

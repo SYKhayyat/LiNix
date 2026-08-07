@@ -17,6 +17,7 @@
 //! row types with one behaviour is the price of not changing a ruled contract; the *asking*
 //! lives in one place ([`crate::app::Prereqs`]) rather than in each.
 
+use crate::core::adapter::{self, AdapterRow};
 use serde::Deserialize;
 
 /// One thing one manager needs before it works.
@@ -50,30 +51,6 @@ pub struct PrereqFile {
 }
 
 impl PrereqDef {
-    /// Whether this row applies to the machine LiNix is running on.
-    pub fn applies_here(&self, os: &str) -> bool {
-        match &self.os {
-            Some(want) => want.eq_ignore_ascii_case(os),
-            None => true,
-        }
-    }
-
-    /// A row LiNix will act on, or why it will not. Nothing here is guessed at: a row with no
-    /// probe would have to assume the prerequisite is missing and act unasked-for on every
-    /// sync, and a row with no command describes a problem and no answer.
-    pub fn is_usable(&self) -> Option<&'static str> {
-        if self.manager.trim().is_empty() {
-            return Some("it names no manager");
-        }
-        if self.probe.iter().all(|a| a.trim().is_empty()) {
-            return Some("its `probe` is empty, so nothing could tell whether it is needed");
-        }
-        if self.run.iter().all(|a| a.trim().is_empty()) {
-            return Some("its `run` command is empty");
-        }
-        None
-    }
-
     /// Whether this row is about one declared package rather than the manager as a whole.
     ///
     /// Derived from the argv rather than declared beside it: asdf's plugin *is* the package
@@ -90,7 +67,7 @@ impl PrereqDef {
     }
 
     fn fill(args: &[String], name: &str) -> Vec<String> {
-        args.iter().map(|a| a.replace("{name}", name)).collect()
+        adapter::fill(args, &[("{name}", name)])
     }
 
     /// The probe for one declared package (`name` is ignored by a row that does not mention it).
@@ -130,6 +107,35 @@ impl PrereqDef {
     }
 }
 
+impl AdapterRow for PrereqDef {
+    const WHAT: &'static str = "prereq row";
+    const NAMELESS: &'static str = "it names no manager";
+
+    /// A prereq row is keyed by the manager it sets up, not by a name of its own — several
+    /// rows can belong to one manager, which is why this table uses
+    /// [`usable`](crate::core::adapter::usable) rather than the name-deduplicating merge.
+    fn name(&self) -> &str {
+        &self.manager
+    }
+
+    fn only_on(&self) -> Option<&str> {
+        self.os.as_deref()
+    }
+
+    /// Nothing here is guessed at: a row with no probe would have to assume the prerequisite
+    /// is missing and act unasked-for on every sync, and a row with no command describes a
+    /// problem and no answer.
+    fn why_unusable(&self) -> Option<&'static str> {
+        if self.probe.iter().all(|a| a.trim().is_empty()) {
+            return Some("its `probe` is empty, so nothing could tell whether it is needed");
+        }
+        if self.run.iter().all(|a| a.trim().is_empty()) {
+            return Some("its `run` command is empty");
+        }
+        None
+    }
+}
+
 /// The rows that apply to `manager` on this machine, in the order they should be offered.
 ///
 /// A row naming this OS is considered before a catch-all, and the caller's own rows come
@@ -137,7 +143,7 @@ impl PrereqDef {
 /// rather than by editing LiNix.
 pub fn for_manager<'a>(rows: &'a [PrereqDef], manager: &str, os: &str) -> Vec<&'a PrereqDef> {
     rows.iter()
-        .filter(|r| r.is_usable().is_none() && r.manager == manager && r.applies_here(os))
+        .filter(|r| r.unusable().is_none() && r.manager == manager && r.applies_to(os))
         .collect()
 }
 
@@ -167,12 +173,7 @@ mod tests {
             "mix, asdf and opam each measured needing one"
         );
         for r in &file.prereq {
-            assert!(
-                r.is_usable().is_none(),
-                "{}: {:?}",
-                r.manager,
-                r.is_usable()
-            );
+            assert!(r.unusable().is_none(), "{}: {:?}", r.manager, r.unusable());
             assert!(
                 !r.missing.trim().is_empty(),
                 "{} says nothing about what is missing",
@@ -218,10 +219,10 @@ mod tests {
     fn a_row_that_cannot_answer_is_refused() {
         let mut r = row("mix", &["mix", "local.hex"]);
         r.probe = vec!["".into()];
-        assert!(r.is_usable().is_some());
+        assert!(r.unusable().is_some());
         r.probe = vec!["mix".into(), "hex.info".into()];
         r.run = vec![];
-        assert!(r.is_usable().is_some());
+        assert!(r.unusable().is_some());
     }
 
     /// A user's row comes first, so disagreeing with a shipped one is writing a row rather

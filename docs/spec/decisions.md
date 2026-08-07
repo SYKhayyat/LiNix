@@ -1,4 +1,4 @@
-# The decision register — all 171, one of them open
+# The decision register — all 172, one of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -17,7 +17,7 @@ not in this paragraph.
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **1** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **165** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **166** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -73,8 +73,8 @@ status loses that, so it is kept here:
 
 ## Index
 
-**One is open — `Z1`, raised 2026-08-03, a licence choice.** All 171 are accounted
-for: **165 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 1 OPEN** — and this line
+**One is open — `Z1`, raised 2026-08-03, a licence choice.** All 172 are accounted
+for: **166 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 1 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -311,7 +311,7 @@ without asking. Two are not mine: one is a legal choice and one changes a publis
 | **Z1** | There is no `LICENSE` file and no `license` key in `Cargo.toml`, for a tool with an install script and a `self-upgrade` verb. Which licence? | **OPEN** |
 | **Z2** | `lock` and `unlock` touch unrelated files and are not inverses; `unlock` can cause package churn. Rename it, or give `lock` a real inverse? | **ANSWERED** — both verbs name their axis (`versions`/`backends`/`scripts`/`all`), and every path that moves a version re-records it |
 
-### Y — the efficiency pass — 13
+### Y — the efficiency pass — 14
 
 *Not a proposal part. `docs/INEFFICIENCIES.md` audited every place in the tree slower than it has
 to be and marked the findings a user would notice as needing a ruling; the owner ruled the lot on
@@ -334,6 +334,7 @@ II.19 and the reasons in V.115–V.118.*
 | **Q48** | Every `link:` on Windows took the cross-drive COPY fallback, same drive or not: `is_same_drive` compared a verbatim prefix against a plain one — and the limitation it guarded does not exist, since a Windows symlink spans volumes. RULED: **a `link:` links; only a missing privilege gets a copy, and it says so.** | 2026-08-06 |
 | **Y11** | Two backends built install and remove argv by hand and lost the `--` terminator; forty backends could not clear a cache because no row could say how; one manager took two locks over one database. The argv table recorded all of it and checked none of it. RULED: **one path per backend, and a capability the machinery lacks is a field.** | 2026-08-06 |
 | **Y12** | `ChangePlanner::plan` took `Option<Scope>`, where `None` meant both "do not filter the desired set" and "reap every backend on the box"; five of eight callers passed it and four wanted only the first — the transient shell, whose desired set is its own requests, planned a removal for every other package on the machine. RULED: **a plan says what it is computed over, and the case that reaps cannot be written without the list that bounds it.** | 2026-08-06 |
+| **Y13** | Which phase of a sync a statement belongs to was written down in four lists nothing compared, and each new kind was missed by one of them — four times, by the code's own count. K17's adapter table was ruled once and implemented seven times, and four of the five shared questions had already been answered differently, including one table with no `os` field at all. RULED: **a statement declares its phase and the order is a type; K17 has one mechanism, and writing it again is a build failure.** The `Installable` → `Converge` rename it was raised with is **refused** — the convergence decision is already shared, in two places, and neither is in the bodies the review read. | 2026-08-06 |
 
 ---
 
@@ -6479,3 +6480,106 @@ written sideways for that reason.
 command removes anything it did not before.
 
 Rule in II.7; reason in V.143.
+
+---
+
+## Y13
+
+**Status: ANSWERED — built and ruled 2026-08-06.** Raised by
+`lamdan/whole-repo-2026-08-05.md` as **"The `Converge` engine"**, ranked first on the quality
+axis and framed as the review's central structural finding. Accurate on both of its consequences
+— and understated on one of them, which was five copies and is seven. Its headline, the rename,
+is refused, with the evidence below.
+
+**Y13 — Is there one engine underneath the six things LiNix converges, and if not, why not?**
+
+The review's claim is a causal chain: the product converges declared objects, the central trait is
+called `Installable`, *"there was no shared noun to hang an engine on, so each noun grew its own"*,
+and therefore four hand-written converge loops exist. It lists two structural consequences and one
+remedy. The consequences are real. The remedy is not the thing that caused them.
+
+**RULED, part one: a statement declares which phase of a sync its work happens in, and the order
+of the phases is a type.**
+
+`verbs/sync.rs` already carried the bill in its own words — *"every statement kind added since was
+missed by one of them: extras, then `exec:`, then `dotfiles:`, then `firewall:` — four times."*
+That comment was written when the dry-run branch's duplicate phase list was folded into the real
+one. It diagnosed the duplicate list correctly and did not notice that **three more copies of the
+same fact were still standing**: `dependents()` spelled out `Shim | Service | Link | Setting` in a
+`matches!`, each `has_*` helper spelled out its own kind, and `has_non_package_work` was five
+`||`s naming five kinds. A fifth kind added to the grammar would have compiled against all four,
+and the review's own note — *"`resolve.rs:29`, seven `filter_map` accessors, and
+`has_non_package_work` as a hand-written `||` chain the compiler never checks"* — is exactly
+right.
+
+`Statement::phase()` is an exhaustive match, the same move `Statement::key()` had already made for
+identity. A kind added to the grammar does not compile until somebody says where in a sync it
+belongs. `Phase`'s variants are declared in run order and `Ord` is that order, so
+`has_non_package_work` is `phase > Phase::Packages` — a comparison, extended by nobody. The
+dispatch in `apply_non_package_phases` matches exhaustively over the enum and iterates it, so the
+order is the type's rather than the order somebody typed the calls.
+
+The one exclusion that was deliberate is now *expressible*: `repo:` is not "work after the
+packages" because it is phase 1 and ran before the plan. It had in fact been forgotten — the exit's
+own comment said so and worked around it by counting placements separately — and the workaround is
+gone.
+
+**RULED, part two: K17 has one mechanism, and writing it again is a build failure.**
+
+The review counted five registries. There are **seven**: firewall adapters, init providers,
+settings stores, snapshot providers, prereq rows, bootstrap rows and secret providers. Seven row
+*types* is right and stays — one schema holding `allow`/`deny` and `start`/`stop` and
+`read`/`write`/`reset` would be a struct of twenty optional fields. Seven copies of everything
+asked *about* rows is not, and **four of the five shared questions had already been answered
+differently**:
+
+- **`[[secret]]` had no `os` field at all.** Six siblings could be confined to a platform. The one
+  table whose rows are handed a plaintext secret could not.
+- **Three tables refused a duplicate name and three kept it silently.** In `[[secret]]`, which of
+  two `vault` blocks answered was decided by file order, and nothing said so.
+- **The OS question had two spellings**, one reading `std::env::consts::OS` and one taking it as a
+  parameter — so the Windows arm of four tables could only ever be exercised on Windows.
+- **The built-in snapshot rows did not clear the floor a user's row clears**, which is the K17/U1
+  invariant written in that file's own header.
+
+`core/adapter.rs` is that mechanism. A row says what it is; the module answers everything else.
+And the gate is not a ledger of the seven tables — a ledger catches an eighth being *added*, and
+what actually happened seven times was a table quietly growing its own copy while its author did
+something reasonable in the file in front of them. So the duplication itself fails the build.
+
+**RULED, part three: the rename is refused, and `Installable` keeps its name.**
+
+The review's headline is *"the name is the mechanism"*. Checked, and it is not:
+
+- **The convergence decision is already shared, in exactly two places, and neither is in the four
+  bodies the review read.** On the package path `ChangePlanner` computes `desired − present` and
+  asks `is_drifted` — one comparison covering `@quota`, `@size`, `@mount`, `@mount_options`,
+  `@channel` and `@classic` across zfs, lvm, btrfs and snap. A converged declaration never reaches
+  the trait. On the dependent path `Dependents::apply` asks `extras::in_effect` and skips anything
+  in force. The read inside `ZfsInstallable::install` is a **local idempotence guard behind a
+  decision made upstream**, not a fourth converge loop.
+- **The rename is half a vocabulary.** Every value flowing through the trait is a `PackageSpec`,
+  produced into a `Package`, recorded in `StateRegistry.packages`, serialized into
+  `registry.json`. Renaming the verb at 159 sites while the nouns stay package-shaped leaves two
+  vocabularies where there was one and buys no property the compiler can check. Renaming the
+  nouns is a wire-format change to `registry.json` and `SavedPlan` — a compatibility decision, and
+  the owner's, not a refactor's.
+
+What made those four bodies *read* as orphan loops is that nothing said where the decision was
+made. The trait says so now, which is where somebody reading one of the four will be.
+
+**A gate shipped unable to fail, and a mutation caught it — the second time in two rulings.** The
+phase-dispatch scan searched for `Phase::Execs =>` as a substring. Folding `Execs` into the ignored
+or-pattern deletes the dispatch and still contains that substring, so the check passed over the
+exact regression it existed for. That is F-2's family reproduced inside a check written for F-2's
+family, and `Y12`'s gate did the same thing a day earlier by reporting a file clean it had not
+read. Both were found by mutating the source and watching, not by review. **A gate is not a gate
+until it has been watched to fail**, and both scans now carry their failure modes as controls.
+
+**Behaviour a user could notice: two, both narrowings, both in `adapters/secret.toml`.** A
+`[[secret]]` row may now name an `os` and is skipped elsewhere — a row that names none still
+applies everywhere, so no existing file changes meaning. And a second `[[secret]]` block claiming
+a name is now refused out loud instead of silently kept; the first still wins, which is what the
+lookup already did, so the change is that it is said rather than that it is different.
+
+Rules in II.1 and II.7; reasons in V.144, V.145 and V.146.

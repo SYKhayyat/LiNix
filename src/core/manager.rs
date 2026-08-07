@@ -96,6 +96,29 @@ pub trait BackendCore: Send + Sync {
     }
 }
 
+/// The actuator half of a converge: what to run once something upstream has decided the
+/// machine and the declaration disagree.
+///
+/// **It does not decide, and that is why it does not look like an engine.** Half the
+/// implementors here converge something that is not a package — a `service:` is enabled, a
+/// `setting:` written, a `zfs:` dataset created and given a quota — and each `install` body
+/// therefore reads a little state before acting, which looks from the outside like four
+/// hand-written converge loops with no shared machinery. They are not. The decision was
+/// already made, in exactly one of two places, and the read inside the body is a local
+/// idempotence guard behind it:
+///
+/// - **On the package path**, `ChangePlanner` computes `desired − present` and then asks
+///   `is_drifted` — one comparison covering `@quota`, `@size`, `@mount`, `@mount_options`,
+///   `@channel` and `@classic` across zfs, lvm, btrfs and snap. A converged declaration never
+///   reaches this trait at all.
+/// - **On the dependent path** (II.7's phase 3), `Dependents::apply` asks
+///   `apply::extras::in_effect` per resource and skips anything already in force. That probe
+///   exists because the loop once did *not* ask it: every sync re-copied all three declared
+///   links on Windows and left `.linix-backup` files beside them — backups of the copies LiNix
+///   had made itself — under a summary reading `already up to date`.
+///
+/// So a new implementor's obligation is not "write a converge loop". It is: **be reachable
+/// only through one of those two deciders**, and be idempotent if run twice anyway.
 #[async_trait]
 pub trait Installable: Send + Sync {
     /// The `sudo` parameter is provided by the execution engine based on `needs_root()`.

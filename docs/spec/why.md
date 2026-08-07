@@ -4050,3 +4050,138 @@ them. They are covered by a source enumeration instead. That is a workaround for
 boundary in the wrong place, not a design; it is the second finding this month whose test had to
 be written sideways for that reason, and it belongs on the list of things to fix rather than in
 the list of things that are fine.
+
+---
+
+**V.144 — Why the order of a sync is a type, and why a statement declares its own phase.**
+*(Rule in II.7. Ruled 2026-08-06, `Y13`.)*
+
+The order a sync does things in was a comment, and membership of that order was a chain of `||`.
+Neither could be checked, and between them they were wrong four times — the same way, on the same
+day each new statement kind shipped.
+
+`verbs/sync.rs` wrote the bill down itself: *"every statement kind added since was missed by one
+of them: extras, then `exec:`, then `dotfiles:`, then `firewall:` — four times."* That sentence
+was written when the dry-run branch's duplicate phase list was folded into the real one, and it
+correctly diagnosed the duplicate list. It did not notice that **three more copies of the same
+fact were still standing**: `DesiredState::dependents()` spelled out `Shim | Service | Link |
+Setting` in a `matches!`, each `has_*` helper spelled out its own kind, and
+`has_non_package_work` was five `||`s naming five of them. A fifth kind added to the grammar
+would have compiled against all four.
+
+**A phase is a property of the statement, so it lives on the statement.** `Statement::phase()` is
+an exhaustive match: a kind added to the grammar does not compile until somebody has said where
+in a sync it belongs, which is the one question every one of the four misses failed to ask. It is
+the same move `Statement::key()` already made for identity — that doc records *three* lists of
+the same twelve variants, "none of which the compiler could check against the others" — applied
+to the other fact the statement owns.
+
+**`Ord` is the run order, and the chain of ors becomes a comparison.** `phase > Phase::Packages`
+is "work the package transaction does not cover". Nothing has to be extended for a new kind to be
+counted, and the exclusion that *is* deliberate is now expressible: `repo:` is not in that answer
+because it is phase 1 and ran before the package plan, not because somebody forgot it. It had
+been forgotten — the exit's own comment said so, and worked around it by counting placements
+separately.
+
+**Two halves, and only one of them is the compiler's.** `apply_non_package_phases` matches
+exhaustively over `Phase`, so the binary will not build with a phase nobody dispatched. But
+`src/verbs/` is declared in `main.rs` and is private to the binary, so no test can call it — and
+a phase can still be dispatched to *nothing* by being folded into the ignored arm. That half is a
+source scan.
+
+**The scan shipped unable to fail, and a mutation caught it.** Its first version searched for
+`Phase::Execs =>` as a substring. Folding `Execs` into `Phase::Resolution | Phase::Repositories |
+Phase::Packages | Phase::Execs => {}` deletes the dispatch and still contains that substring, so
+the check passed over the exact regression it was written to catch. This is F-2's family
+reproduced inside a check written for F-2's family, which is now twice in two rulings — `Y12`'s
+gate reported a file clean without having read it — and the lesson is the same both times: **a
+gate is not a gate until it has been watched to fail.** The scan now requires the arm to open its
+line and to have a non-empty body, and the three ways to look dispatched without being dispatched
+— a comment, an empty body, the last alternative of an or-pattern — are each a control in its
+oracle test.
+
+---
+
+**V.145 — Why K17 has one mechanism, when it had seven.**
+*(Rule in II.7a and X.4. Ruled 2026-08-06, `Y13`.)*
+
+K17 ruled that an adapter is a row in a table and the built-ins are rows in it. It was applied
+seven times and **implemented** seven times: firewalls, init systems, settings stores, snapshot
+providers, bootstrap commands, prereq steps and secret providers each grew their own loader.
+
+Seven row *types* is correct and stays. A firewall's argv is `allow`/`deny`, an init's is
+`start`/`stop`, a settings store's is `read`/`write`/`reset`; one schema holding all of them would
+be a struct of twenty optional fields, which is the shape that makes a table unreadable. What was
+written seven times is everything asked *about* rows — the `os` filter, the floor a row clears to
+be acted on, the shipped-then-user merge, the which-row-is-this-machine search, and
+`{placeholder}` substitution.
+
+**Four of those five had already diverged, and nobody could have noticed.** Each table was written
+by someone who had read the ruling and not the other six implementations:
+
+- **`[[secret]]` had no `os` field at all.** Every one of its six siblings could be confined to a
+  platform; the single table whose rows are handed a plaintext secret was the one that could not.
+- **Three tables refused a second row claiming a name and three kept it silently**, so whether a
+  duplicate was reported depended on which table it was in. In `[[secret]]`, which of two `vault`
+  blocks answered was decided by file order and nothing said so.
+- **The OS question had two spellings** — `applies_to_this_os()` reading `std::env::consts::OS`,
+  and `applies_here(os)` taking it as a parameter. The four copies that read the constant directly
+  meant the Windows arm of four tables could only ever be exercised on Windows.
+- **The floor was seven near-copies**, agreeing on the first check and diverging after it.
+
+**The built-in snapshot rows did not go through the floor a user's row goes through**, which is
+the K17/U1 invariant stated in `snapshot_builtins.toml`'s own header. They pass it — a test says
+so directly — so this cost nothing on the day it was found, and would have cost exactly one
+shipped row the day one stopped passing.
+
+**The gate is not the ledger.** A ledger of the seven tables catches an eighth being added. It
+does not catch the thing that actually happened, which is a table quietly growing its own copy of
+machinery that already exists — because each of the seven authors was doing something reasonable
+in the file in front of them. So the duplication itself is a build failure:
+`the_shared_machinery_is_written_exactly_once` asserts the OS filter and the usability floor
+appear in `core/adapter.rs` and nowhere else in `src/`. Reintroducing a hand-written
+`applies_to_this_os` fails the suite by file and line.
+
+**`applies_to(os)` takes the OS rather than reading it**, so the platform arm of a table is
+testable on a machine that is not that platform. That is not tidiness: it is the difference
+between a Windows row that is checked and one that is hoped for.
+
+---
+
+**V.146 — Why the resource backends are not four converge loops, and why `Installable` keeps its
+name.** *(No rule — a finding checked and refused. Ruled 2026-08-06, `Y13`.)*
+
+`lamdan/whole-repo-2026-08-05.md` argued that the central abstraction should be named `Converge`,
+and that calling it `Installable` is the **cause** of there being four hand-written converge loops
+— *"there was no shared noun to hang an engine on, so each noun grew its own"*. It cites
+`ZfsInstallable::install` reading existence and creating if absent, `service.rs` enable-then-start,
+`setting.rs` read-before-write, `btrfs.rs` create-plus-fstab.
+
+The four bodies are there. The causal claim is wrong, and it is worth writing down why, because
+the reading is a natural one and will be made again.
+
+**The convergence decision is already shared, in exactly two places, and neither is in those
+bodies.** On the package path, `ChangePlanner` computes `desired − present` and then asks
+`is_drifted` — one comparison covering `@quota`, `@size`, `@mount`, `@mount_options`, `@channel`
+and `@classic` across zfs, lvm, btrfs and snap, with `limit_drifted`'s three-state reading of a
+value the backend could not read (D13). A converged declaration never reaches `Installable` at
+all. On the dependent path, `Dependents::apply` asks `apply::extras::in_effect` per resource and
+skips anything already in force — the probe that exists because the loop once did not ask it, and
+re-copied all three declared links on every Windows sync, leaving `.linix-backup` files that were
+backups of LiNix's own copies.
+
+So the read inside each `install` body is a **local idempotence guard behind a decision made
+upstream**, not a converge loop competing with three others. Merging them would merge four
+actuators, not four deciders, and would buy a shared `for spec in specs` — while separating each
+backend from the argv it exists to name.
+
+**And the rename is half a vocabulary.** `Installable` is the verb; every value that flows through
+it is a `PackageSpec`, produced into a `Package`, recorded in `StateRegistry.packages` and
+serialized into `registry.json`. Renaming the verb to `Converge` while the nouns stay
+package-shaped leaves the codebase with two vocabularies instead of one, at 159 occurrences, and
+buys no property the compiler can check. Renaming the nouns too is a wire-format change to
+`registry.json` and `SavedPlan` — a decision about compatibility, not a refactor, and the owner's.
+
+**What the finding was actually pointing at is fixed, and it is not a name.** The reason those
+four bodies looked like orphan loops is that nothing said where the decision was made. It says so
+now, on the trait, which is where somebody reading one of the four will be.

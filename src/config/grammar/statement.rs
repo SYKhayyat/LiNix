@@ -276,6 +276,116 @@ impl Statement {
         let key = self.key();
         Some(key.strip_prefix(kind)?.trim_start_matches(':').to_string())
     }
+
+    /// When in a sync this statement's work happens (II.7).
+    ///
+    /// Exhaustive on purpose: a statement kind added to the grammar cannot compile until
+    /// somebody has said where in the sync it belongs, which is the one question every one of
+    /// the four misses below failed to ask.
+    pub fn phase(&self) -> Phase {
+        match self {
+            Statement::Repo { .. } => Phase::Repositories,
+            Statement::Package(_) | Statement::Absent(_) => Phase::Packages,
+            // A `shim:` wraps a tool that must already be installed, a `service:` enables a
+            // unit a package just laid down, a `link:` writes a config a package expects, and
+            // a `setting:` addresses a store a package provides. Each leans on the package
+            // plan having run, which is what makes them dependents and not phase 2.
+            Statement::Shim(..)
+            | Statement::Service(..)
+            | Statement::Link(..)
+            | Statement::Setting(..) => Phase::Dependents,
+            Statement::Dotfiles(..) => Phase::Dotfiles,
+            Statement::Firewall(..) => Phase::Firewall,
+            Statement::Schedule(..) => Phase::Schedules,
+            Statement::Exec(..) => Phase::Execs,
+            // A `generate:` runs before the desired state exists and is replaced by the
+            // declarations it prints, so nothing downstream ever sees one. Set math, a
+            // `param`, a `use` and a variable are consumed the same way: they say what to
+            // read, never what to put on the machine.
+            Statement::Generate(..)
+            | Statement::Use(..)
+            | Statement::Param { .. }
+            | Statement::Exclude(_)
+            | Statement::Intersect(_)
+            | Statement::Subtract(_)
+            | Statement::Expr(_)
+            | Statement::Var { .. } => Phase::Resolution,
+        }
+    }
+}
+
+/// Where in a sync a statement's work happens (II.7).
+///
+/// **The order of a sync was a comment, and membership of it was a chain of `||`.** Which
+/// phase a kind belonged to was written down in places that could not check each other: the
+/// dispatch list in `sync`, the dry-run branch's copy of it, `DesiredState`'s per-kind
+/// accessors, and `has_non_package_work`'s chain of ors. Every statement kind added since was
+/// missed by one of them — extras, then `exec:`, then `dotfiles:`, then `firewall:`. A phase
+/// is a property of the statement, so it lives on the statement, and "is there work after the
+/// packages?" becomes a comparison instead of a list somebody has to remember to extend.
+///
+/// **The variants are declared in the order they run, and `Ord` is that order.** `phase >
+/// Phase::Packages` is exactly "work the package transaction does not cover", which is the
+/// question the chain of ors was written to answer and the one it got wrong four times.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Phase {
+    /// Not work. Consumed while the desired state is being computed — set math, a `param`, a
+    /// `use`, a variable, a `generate:`. None of these survives into `DesiredState::extras`,
+    /// so nothing downstream can be handed one.
+    Resolution,
+    /// Phase 1 — `repo:`, before the packages. A package from a PPA cannot install until the
+    /// PPA is there.
+    Repositories,
+    /// Phase 2 — the package transaction: `apt:jq`, `absent:apt:nano`.
+    Packages,
+    /// Phase 3 — the extras that lean on a package: `shim:`, `service:`, `link:`, `setting:`.
+    Dependents,
+    /// Phase 3b (7n) — `dotfiles:`, a tree standing for the `link:` lines it holds.
+    Dotfiles,
+    /// Phase 3c (Part XI) — `firewall:`. After the packages, because a rule usually exists to
+    /// let in something that was just installed.
+    Firewall,
+    /// Phase 4 (S21) — `schedule:`, provisioned onto the OS scheduler.
+    Schedules,
+    /// Phase 4b (XIII.3) — `exec:`, after the packages and dependents a script leans on.
+    Execs,
+}
+
+impl Phase {
+    /// The phase that runs after this one, or `None` at the end of a sync.
+    ///
+    /// **The order lives here and only here.** A phase added to the enum cannot compile
+    /// without being given a successor, and [`all`](Self::all) walks this chain rather than
+    /// reading a second list — so there is no hand-copied ordering to fall out of step with
+    /// the one the dispatch iterates.
+    pub fn next(self) -> Option<Phase> {
+        Some(match self {
+            Phase::Resolution => Phase::Repositories,
+            Phase::Repositories => Phase::Packages,
+            Phase::Packages => Phase::Dependents,
+            Phase::Dependents => Phase::Dotfiles,
+            Phase::Dotfiles => Phase::Firewall,
+            Phase::Firewall => Phase::Schedules,
+            Phase::Schedules => Phase::Execs,
+            Phase::Execs => return None,
+        })
+    }
+
+    /// Every phase, in the order a sync runs them.
+    pub fn all() -> impl Iterator<Item = Phase> {
+        std::iter::successors(Some(Phase::Resolution), |p| p.next())
+    }
+
+    /// The phases whose work happens after the package transaction has closed — the list
+    /// `sync` dispatches once the engine has returned.
+    pub fn after_packages() -> impl Iterator<Item = Phase> {
+        Phase::all().filter(|p| *p > Phase::Packages)
+    }
+
+    /// Whether this phase puts something on the machine at all.
+    pub fn is_work(self) -> bool {
+        self != Phase::Resolution
+    }
 }
 
 /// Decides whether a `prefix:` names a real backend. Injected rather than hardcoded: the

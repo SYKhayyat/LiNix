@@ -1,3 +1,4 @@
+pub mod adapter;
 pub mod argv;
 pub mod artifact_lock;
 pub mod bare_lock;
@@ -31,6 +32,7 @@ pub mod tool_help;
 pub mod transaction;
 pub mod validator;
 
+pub use adapter::{AdapterRow, Detected};
 pub use argv::{push_names, terminates_options};
 
 pub use error::{Error, Result, Retryability};

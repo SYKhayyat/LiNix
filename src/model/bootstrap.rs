@@ -13,6 +13,7 @@
 //! The file goes through II.12's approval ledger like every other `adapters/` file, so the
 //! command cannot arrive with a pulled repo and run unreviewed.
 
+use crate::core::adapter::AdapterRow;
 use serde::Deserialize;
 
 /// One way to obtain one manager.
@@ -35,30 +36,35 @@ pub struct BootstrapFile {
 }
 
 impl BootstrapDef {
-    /// Whether this row applies to the machine LiNix is running on.
-    pub fn applies_here(&self, os: &str) -> bool {
-        match &self.os {
-            Some(want) => want.eq_ignore_ascii_case(os),
-            None => true,
-        }
-    }
-
-    /// A row LiNix will act on, or why it will not. A row that names no manager or no command
-    /// describes nothing; running "the empty command" is not a thing to guess at.
-    pub fn is_usable(&self) -> Option<&'static str> {
-        if self.manager.trim().is_empty() {
-            return Some("it names no manager");
-        }
-        if self.run.iter().all(|a| a.trim().is_empty()) {
-            return Some("its `run` command is empty");
-        }
-        None
-    }
-
     /// The command as a reader would type it, for the confirmation. Printed in full and never
     /// abbreviated: the whole point of asking is that the reader sees what will run.
     pub fn command_line(&self) -> String {
         self.run.join(" ")
+    }
+}
+
+impl AdapterRow for BootstrapDef {
+    const WHAT: &'static str = "bootstrap row";
+    const NAMELESS: &'static str = "it names no manager";
+
+    /// Keyed by the manager it obtains. A file may carry a specific row and a general one for
+    /// the same manager, so this table does not deduplicate by name — [`for_manager`] picks
+    /// between them.
+    fn name(&self) -> &str {
+        &self.manager
+    }
+
+    fn only_on(&self) -> Option<&str> {
+        self.os.as_deref()
+    }
+
+    /// A row that names no command describes nothing; running "the empty command" is not a
+    /// thing to guess at.
+    fn why_unusable(&self) -> Option<&'static str> {
+        if self.run.iter().all(|a| a.trim().is_empty()) {
+            return Some("its `run` command is empty");
+        }
+        None
     }
 }
 
@@ -72,9 +78,9 @@ pub fn for_manager<'a>(
     manager: &str,
     os: &str,
 ) -> Option<&'a BootstrapDef> {
-    let usable = |r: &&BootstrapDef| r.is_usable().is_none() && r.manager == manager;
+    let usable = |r: &&BootstrapDef| r.unusable().is_none() && r.manager == manager;
     rows.iter()
-        .find(|r| usable(r) && r.os.is_some() && r.applies_here(os))
+        .find(|r| usable(r) && r.os.is_some() && r.applies_to(os))
         .or_else(|| rows.iter().find(|r| usable(r) && r.os.is_none()))
 }
 
@@ -96,15 +102,15 @@ mod tests {
 
     #[test]
     fn a_row_without_an_os_applies_anywhere() {
-        assert!(row("brew", None).applies_here("linux"));
-        assert!(row("brew", None).applies_here("windows"));
+        assert!(row("brew", None).applies_to("linux"));
+        assert!(row("brew", None).applies_to("windows"));
     }
 
     #[test]
     fn a_row_naming_an_os_applies_only_there() {
         let r = row("brew", Some("macos"));
-        assert!(r.applies_here("macos"));
-        assert!(!r.applies_here("linux"));
+        assert!(r.applies_to("macos"));
+        assert!(!r.applies_to("linux"));
     }
 
     /// A file may carry a general answer and a specific one; the one written for this machine
@@ -129,11 +135,11 @@ mod tests {
     fn an_unusable_row_is_never_chosen() {
         let mut nameless = row("brew", None);
         nameless.manager = String::new();
-        assert!(nameless.is_usable().is_some());
+        assert!(nameless.unusable().is_some());
 
         let mut commandless = row("brew", None);
         commandless.run = vec!["".into()];
-        assert!(commandless.is_usable().is_some());
+        assert!(commandless.unusable().is_some());
         assert!(for_manager(&[commandless], "brew", "linux").is_none());
     }
 

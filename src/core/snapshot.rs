@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::core::adapter::{self, AdapterRow, Detected};
 use crate::core::{CommandExecutor, Error, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Utc};
@@ -241,12 +242,28 @@ pub struct SnapshotProviderDef {
 }
 
 impl SnapshotProviderDef {
+    /// Whether a declared row can actually put a running system back. `restores_running_system`
+    /// alone is not enough — a row that claims it but gives no `restore` command still cannot,
+    /// and claiming `Live` there is exactly the V.60 lie.
+    fn is_live(&self) -> bool {
+        self.restores_running_system && !self.restore.is_empty()
+    }
+}
+
+impl AdapterRow for SnapshotProviderDef {
+    const WHAT: &'static str = "snapshot provider";
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn only_on(&self) -> Option<&str> {
+        self.os.as_deref()
+    }
+
     /// A row LiNix will drive, or why it will not. It must be able to create, list and delete;
     /// restore is the capability that is allowed to be absent, and its absence is the safe state.
-    pub fn is_usable(&self) -> Option<&'static str> {
-        if self.name.trim().is_empty() {
-            return Some("it has no `name`");
-        }
+    fn why_unusable(&self) -> Option<&'static str> {
         if self.detect.trim().is_empty() {
             return Some("it has no `detect` command");
         }
@@ -264,19 +281,11 @@ impl SnapshotProviderDef {
         }
         None
     }
+}
 
-    fn applies_to_this_os(&self) -> bool {
-        match &self.os {
-            Some(os) => os.eq_ignore_ascii_case(std::env::consts::OS),
-            None => true,
-        }
-    }
-
-    /// Whether a declared row can actually put a running system back. `restores_running_system`
-    /// alone is not enough — a row that claims it but gives no `restore` command still cannot,
-    /// and claiming `Live` there is exactly the V.60 lie.
-    fn is_live(&self) -> bool {
-        self.restores_running_system && !self.restore.is_empty()
+impl Detected for SnapshotProviderDef {
+    fn detect_command(&self) -> &str {
+        &self.detect
     }
 }
 
@@ -287,13 +296,10 @@ pub struct ConfigSnapshotProvider {
 
 impl ConfigSnapshotProvider {
     fn fill(cmd: &[String], id: &str, label: &str, source: &str) -> Vec<String> {
-        cmd.iter()
-            .map(|a| {
-                a.replace("{id}", id)
-                    .replace("{label}", label)
-                    .replace("{source}", source)
-            })
-            .collect()
+        adapter::fill(
+            cmd,
+            &[("{id}", id), ("{label}", label), ("{source}", source)],
+        )
     }
 
     /// The id LiNix generates for a provider it names itself (btrfs/zfs/lvm). The `linix_` marker
@@ -365,7 +371,7 @@ impl SnapshotProvider for ConfigSnapshotProvider {
     }
 
     async fn is_available(&self) -> bool {
-        if !self.def.applies_to_this_os() {
+        if !self.def.applies_here() {
             return false;
         }
         if !self.executor.command_exists(&self.def.detect).await {
@@ -542,17 +548,7 @@ fn config_snapshot_defs(config: &Config) -> Vec<SnapshotProviderDef> {
         return Vec::new();
     }
     match toml::from_str::<SnapshotProviderFile>(&content) {
-        Ok(f) => f
-            .snapshot
-            .into_iter()
-            .filter(|d| match d.is_usable() {
-                Some(why) => {
-                    warn!("ignoring the `{}` snapshot provider: {}.", d.name, why);
-                    false
-                }
-                None => true,
-            })
-            .collect(),
+        Ok(f) => adapter::usable(f.snapshot),
         Err(e) => {
             warn!("ignoring adapters/snapshot.toml: {}", e);
             Vec::new()
@@ -601,10 +597,15 @@ fn builtin_snapshot_defs(config: &Config) -> Vec<SnapshotProviderDef> {
             _ => {}
         }
     }
-    file.snapshot
-        .into_iter()
-        .filter(|d| !(d.name == "zfs" && d.source.trim().is_empty()))
-        .collect()
+    // Through the same floor a user's row clears, which is the whole of K17/U1: an adapter
+    // mechanism the built-ins bypass is one nobody has tested. The shipped rows all pass it —
+    // `the_builtin_snapshot_defs_hold_their_invariants` says so directly — so this costs
+    // nothing today and catches the row that stops passing it tomorrow.
+    adapter::usable(
+        file.snapshot
+            .into_iter()
+            .filter(|d| !(d.name == "zfs" && d.source.trim().is_empty())),
+    )
 }
 
 pub struct SnapshotManager {
@@ -987,14 +988,14 @@ mod tests {
     fn a_config_provider_missing_a_required_command_is_refused() {
         let mut d = def("lvm");
         d.create = vec![];
-        assert!(d.is_usable().is_some());
+        assert!(d.unusable().is_some());
         let mut d = def("lvm");
         d.list = vec![];
-        assert!(d.is_usable().is_some());
+        assert!(d.unusable().is_some());
         let mut d = def("lvm");
         d.list_pattern = String::new();
-        assert!(d.is_usable().is_some());
-        assert!(def("lvm").is_usable().is_none(), "a complete row is usable");
+        assert!(d.unusable().is_some());
+        assert!(def("lvm").unusable().is_none(), "a complete row is usable");
     }
 
     #[test]
@@ -1014,7 +1015,7 @@ list_pattern = '(linix_\S+)'
         let file: SnapshotProviderFile = toml::from_str(toml).unwrap();
         assert_eq!(file.snapshot.len(), 1);
         assert!(file.snapshot[0].is_live());
-        assert!(file.snapshot[0].is_usable().is_none());
+        assert!(file.snapshot[0].unusable().is_none());
     }
 
     // A trivial provider for the priority test: available iff `here`, named `name`.
@@ -1112,7 +1113,7 @@ list_pattern = '(linix_\S+)'
         for d in &file.snapshot {
             // detect_path/source placeholders are filled at load, so is_usable (which does not
             // check them) must pass for every shipped row as written.
-            assert!(d.is_usable().is_none(), "{} must be a usable row", d.name);
+            assert!(d.unusable().is_none(), "{} must be a usable row", d.name);
         }
 
         // Create-only, on purpose — claiming Live would be the V.60 lie.

@@ -5,8 +5,8 @@ use super::modules::{expand, expand_args, ModuleLoader};
 use super::priority::Priority;
 use super::profiles::{read_active, ProfileLoader, SetOp};
 use crate::config::grammar::{
-    statement, BackendNames, Gate, Gates, GrammarError, Options, Origin, PackageDecl, Result,
-    Selector, Statement,
+    statement, BackendNames, Gate, Gates, GrammarError, Options, Origin, PackageDecl, Phase,
+    Result, Selector, Statement,
 };
 use crate::config::parser::HostFacts;
 use crate::core::LockFile;
@@ -67,22 +67,22 @@ impl DesiredState {
         counts.into_iter().collect()
     }
 
-    /// The extras `sync` applies AFTER packages (II.7's dependent phase): shims, services
-    /// and links. A shim wraps a tool that must already be installed; a service enables a
-    /// unit a package just laid down; a link writes a config a package expects — each one
-    /// depends on the package plan having run, which is what makes them the *dependent*
-    /// phase and not part of the package map. `repo:` is phase 1 (before packages) and
-    /// `schedule:` belongs to the scheduler, so neither is here.
+    /// The declarations belonging to one phase of a sync (II.7).
+    ///
+    /// **Membership is read off the statement, never re-listed here.** Every per-kind list in
+    /// this file used to spell out its own `matches!`, so the dependent phase and the phase
+    /// `sync` dispatched were two answers to one question that nothing compared.
+    pub fn in_phase(&self, phase: Phase) -> impl Iterator<Item = &(Statement, Origin)> {
+        self.extras.iter().filter(move |(s, _)| s.phase() == phase)
+    }
+
+    /// The extras `sync` applies AFTER packages (II.7's dependent phase): shims, services,
+    /// links and settings. A shim wraps a tool that must already be installed; a service
+    /// enables a unit a package just laid down; a link writes a config a package expects —
+    /// each one depends on the package plan having run, which is what makes them the
+    /// *dependent* phase and not part of the package map.
     pub fn dependents(&self) -> impl Iterator<Item = &(Statement, Origin)> {
-        self.extras.iter().filter(|(s, _)| {
-            matches!(
-                s,
-                Statement::Shim(..)
-                    | Statement::Service(..)
-                    | Statement::Link(..)
-                    | Statement::Setting(..)
-            )
-        })
+        self.in_phase(Phase::Dependents)
     }
 
     /// Whether there is any dependent extra to apply — so `sync` knows it has work even
@@ -133,30 +133,31 @@ impl DesiredState {
     }
 
     pub fn has_firewall_rules(&self) -> bool {
-        self.firewall_rules().next().is_some()
+        self.in_phase(Phase::Firewall).next().is_some()
     }
 
     pub fn has_dotfile_trees(&self) -> bool {
-        self.dotfile_trees().next().is_some()
+        self.in_phase(Phase::Dotfiles).next().is_some()
     }
 
     pub fn has_execs(&self) -> bool {
-        self.execs().next().is_some()
+        self.in_phase(Phase::Execs).next().is_some()
     }
 
     /// Is there anything for a sync to do beyond the package plan?
     ///
-    /// **One place, deliberately.** `sync`'s "nothing to do" exit used to enumerate the
-    /// statement kinds it knew about, so every new kind was a chance to forget one — and it was
-    /// forgotten three times: extras (S20), `exec:`, and `dotfiles:`, each shipping an early
-    /// return that skipped the new phase entirely. Adding a statement kind now means adding it
-    /// here, once, where the compiler and the reader both look.
+    /// **A comparison, because it was a list.** `sync`'s "nothing to do" exit enumerated the
+    /// statement kinds it knew about, so every new kind was a chance to forget one — and it
+    /// was forgotten three times: extras (S20), `exec:`, and `dotfiles:`, each shipping an
+    /// early return that skipped the new phase entirely. A kind now declares its phase where
+    /// it is defined and the exhaustive match there is what the compiler checks; nothing here
+    /// has to be extended for a new one to be counted.
+    ///
+    /// `repo:` is excluded by being phase 1 rather than by being forgotten: repositories are
+    /// applied *before* the package plan, so by the time this question is asked their work is
+    /// already done and answering "yes" would keep a converged machine off the settled path.
     pub fn has_non_package_work(&self) -> bool {
-        self.has_dependents()
-            || self.schedules().next().is_some()
-            || self.has_execs()
-            || self.has_dotfile_trees()
-            || self.has_firewall_rules()
+        self.extras.iter().any(|(s, _)| s.phase() > Phase::Packages)
     }
 }
 

@@ -14,6 +14,114 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Session 2026-08-06 — a statement declares its phase, and K17 stops being written seven times (`Converge engine`)
+
+**One finding from the whole-repo Lamdan review, scoped out and built: the review's quality-rank-1
+structural finding, "one product, six engines / the `Converge` engine".** Ruled as `Y13`; rules in
+`target-state.md` II.1 and II.7, reasons in `why.md` V.144, V.145 and V.146. Two of its three
+claims were accurate — one of them understated — and the third, its headline, is refused with
+evidence.
+
+### What was actually there
+
+The finding names two structural consequences and one remedy.
+
+**Consequence one: half the product lives in a field called `extras`, and which phase a kind
+belongs to is a hand-written `||` chain.** True. `verbs/sync.rs` already carried the count in its
+own words — *"every statement kind added since was missed by one of them: extras, then `exec:`,
+then `dotfiles:`, then `firewall:` — four times."* That comment was written when the dry-run
+branch's duplicate phase list was folded into the real one, and it did not notice that **three
+more copies of the same fact were still standing**: `dependents()` spelling out `Shim | Service |
+Link | Setting`, each `has_*` helper spelling out its own kind, and `has_non_package_work` as five
+`||`s. A fifth kind would have compiled against all four.
+
+**Consequence two: "the resource registry is built five times."** Understated. It is **seven** —
+firewall adapters, init providers, settings stores, snapshot providers, prereq rows, bootstrap
+rows and secret providers — and by the time anyone counted, four of the five questions they all
+answer had already been answered *differently*:
+
+| | what diverged |
+|---|---|
+| `[[secret]]` | **no `os` field at all** — six siblings could be confined to a platform; the one table whose rows are handed a plaintext secret could not |
+| duplicate names | three tables refused a second row claiming a name, three kept it silently |
+| the OS filter | two spellings — one reading `std::env::consts::OS`, one taking it as a parameter, so four tables' Windows arms could only be exercised on Windows |
+| the shipped rows | the built-in snapshot rows did not clear the floor a user's row clears, which is the K17/U1 invariant written in that file's own header |
+
+**The remedy: rename `Installable` to `Converge`.** Refused — see below.
+
+### What shipped
+
+`Statement::phase()` is an exhaustive match; a kind added to the grammar does not compile until
+somebody has said where in a sync it belongs. `Phase`'s variants are in run order and `Ord` is
+that order, so `has_non_package_work` is `phase > Phase::Packages` — a comparison nobody has to
+extend. `apply_non_package_phases` matches exhaustively over the enum and iterates it, so the
+order is the type's rather than the order somebody typed the calls. The one deliberate exclusion
+is now expressible rather than forgotten: `repo:` is phase 1 and ran before the plan.
+
+`core/adapter.rs` is K17's mechanism, once. A row says what it is called, which OS it is
+restricted to, and why LiNix will not act on it; the module answers everything else — the floor,
+the merge, the search, the substitution. `[[secret]]` gained the `os` field and the
+duplicate-name refusal its six siblings had; the built-in snapshot rows now clear the same floor
+a user's row does.
+
+### Correction — the rename is refused, and the causal claim behind it is wrong
+
+The review's headline is *"the name is the mechanism"*: calling the trait `Installable` is
+supposedly **why** four hand-written converge loops exist, *"there was no shared noun to hang an
+engine on, so each noun grew its own"*.
+
+Checked, and the convergence decision **is** shared — in exactly two places, and neither is in
+the four bodies the review read. On the package path `ChangePlanner` computes `desired − present`
+and asks `is_drifted`, one comparison covering `@quota`, `@size`, `@mount`, `@mount_options`,
+`@channel` and `@classic` across zfs, lvm, btrfs and snap; a converged declaration never reaches
+the trait at all. On the dependent path `Dependents::apply` asks `extras::in_effect` and skips
+anything already in force. The existence read inside `ZfsInstallable::install` that the finding
+cites is a **local idempotence guard behind a decision made upstream**, not a fourth loop.
+
+And the rename is half a vocabulary: 159 sites, while every value flowing through the trait stays
+a `PackageSpec`/`Package` serialized into `registry.json`. Renaming the nouns too is a wire-format
+change and a compatibility decision, which is the owner's.
+
+What the finding was actually pointing at — that nothing said where the decision was made — is
+fixed, on the trait, where somebody reading one of the four bodies will be.
+
+### The part worth keeping: a gate shipped unable to fail, for the second time in two rulings
+
+The phase-dispatch scan searched the source for `Phase::Execs =>` as a substring. Folding `Execs`
+into the ignored or-pattern — `Phase::Resolution | Phase::Repositories | Phase::Packages |
+Phase::Execs => {}` — deletes the dispatch and still contains that substring. The check passed
+over the exact regression it existed for, and was caught by mutating `sync.rs` and watching, not
+by reading it.
+
+That is F-2's family reproduced inside a check written for F-2's family, and `Y12`'s scope gate
+did the same thing a day earlier by reporting a file clean it had not read. **A gate is not a gate
+until it has been watched to fail.** Both scans now carry their failure modes as controls in an
+oracle test: for this one, a comment, an empty arm body, and the last alternative of an
+or-pattern.
+
+The adapter gate was written the other way round because of it. A ledger of the seven tables
+catches an eighth being *added*; it does not catch what actually happened seven times, which is a
+table quietly growing its own copy while its author did something reasonable in the file in front
+of them. So the duplication itself fails the build —
+`the_shared_machinery_is_written_exactly_once` asserts the OS filter and the usability floor live
+in `core/adapter.rs` and nowhere else in `src/`, and was verified by putting a hand-written
+`applies_to_this_os` back into `firewall.rs` and watching it fail by file and line.
+
+### Behaviour a user could notice
+
+Two, both in `adapters/secret.toml`, both narrowings. A `[[secret]]` row may now name an `os` and
+is skipped elsewhere — a row that names none still applies everywhere, so no existing file changes
+meaning. And a second `[[secret]]` block claiming a name is refused out loud instead of silently
+kept; the first still wins, which is what the lookup already did, so what changed is that it is
+said.
+
+### Still open from this finding
+
+`extras` remains a `Vec<(Statement, Origin)>` with typed per-kind accessors beside the phase ones.
+The accessors that destructure — `schedules()`, `execs()`, `dotfile_trees()`, `firewall_rules()` —
+are extractors, not phase lists, and they are keyed on the variant they return. The *membership*
+question they used to answer separately is the one that moved to `Phase`.
+
 ## Session 2026-08-06 — the log covers what cannot be recomputed, and a tree is its links (`F-0`)
 
 **One finding from the whole-repo Lamdan review, scoped out and built: `F-0` — the write-ahead

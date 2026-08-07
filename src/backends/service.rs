@@ -7,6 +7,7 @@
 //! shipped five register first and a user row never shadows one, exactly as `custom_backends.toml`
 //! and the firewall adapters do.
 
+use crate::core::adapter::{self, AdapterRow, Detected};
 use crate::core::{
     BackendCore, CommandExecutor, Installable, MetadataProvider, Package, PackageSpec, Queryable,
     Result,
@@ -102,7 +103,7 @@ const BUILTIN: &str = include_str!("init_providers.toml");
 
 impl InitProvider {
     fn fill(cmd: &[String], name: &str) -> Vec<String> {
-        cmd.iter().map(|a| a.replace("{name}", name)).collect()
+        adapter::fill(cmd, &[("{name}", name)])
     }
 
     /// The ordered list of concrete commands that realize `action` for `name`, each paired with
@@ -150,28 +151,6 @@ impl InitProvider {
         }
     }
 
-    fn applies_to_this_os(&self) -> bool {
-        match &self.os {
-            Some(os) => os.eq_ignore_ascii_case(std::env::consts::OS),
-            None => true,
-        }
-    }
-
-    /// A row LiNix will drive, or why it will not. Start and stop are the floor: an init that
-    /// cannot do both is half a provider, and a `service:` line on it would half-apply (U36).
-    fn is_usable(&self) -> Option<&'static str> {
-        if self.name.trim().is_empty() {
-            return Some("it has no `name`");
-        }
-        if self.detect.trim().is_empty() {
-            return Some("it has no `detect` command");
-        }
-        if self.start.is_empty() || self.stop.is_empty() {
-            return Some("it cannot both start and stop a service");
-        }
-        None
-    }
-
     /// The running services this init reports, for drift. A line that does not match the pattern
     /// is skipped rather than guessed at — a header or a chain must not become a phantom service.
     fn parse_list(&self, output: &str) -> Vec<Package> {
@@ -216,24 +195,42 @@ impl InitProvider {
     }
 }
 
+impl AdapterRow for InitProvider {
+    const WHAT: &'static str = "init adapter";
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn only_on(&self) -> Option<&str> {
+        self.os.as_deref()
+    }
+
+    /// Start and stop are the floor: an init that cannot do both is half a provider, and a
+    /// `service:` line on it would half-apply (U36).
+    fn why_unusable(&self) -> Option<&'static str> {
+        if self.detect.trim().is_empty() {
+            return Some("it has no `detect` command");
+        }
+        if self.start.is_empty() || self.stop.is_empty() {
+            return Some("it cannot both start and stop a service");
+        }
+        None
+    }
+}
+
+impl Detected for InitProvider {
+    fn detect_command(&self) -> &str {
+        &self.detect
+    }
+}
+
 /// Every init adapter this machine knows: the shipped rows, then the user's. A user row that
 /// repeats a shipped name is skipped, so a stray file cannot redefine systemd.
 pub fn providers(user_rows: Vec<InitProvider>) -> Vec<InitProvider> {
     let shipped: InitProviderFile =
         toml::from_str(BUILTIN).expect("the shipped init_providers.toml must parse");
-    let mut out: Vec<InitProvider> = Vec::new();
-    for row in shipped.init.into_iter().chain(user_rows) {
-        if let Some(why) = row.is_usable() {
-            warn!("ignoring the `{}` init adapter: {}.", row.name, why);
-            continue;
-        }
-        if out.iter().any(|p| p.name.eq_ignore_ascii_case(&row.name)) {
-            warn!("ignoring a second init adapter named `{}`.", row.name);
-            continue;
-        }
-        out.push(row);
-    }
-    out
+    adapter::merge(shipped.init.into_iter().chain(user_rows))
 }
 
 /// Translate the declarative `enabled` / `status` options on a spec into the ordered list of
@@ -282,9 +279,7 @@ impl ServiceBackendCore {
     /// command is present. Built-ins are considered before user rows, so a niche row only wins
     /// where no built-in matched.
     pub fn detect_init(&self) -> Option<&InitProvider> {
-        self.providers
-            .iter()
-            .find(|p| p.applies_to_this_os() && self.executor.command_exists_sync(&p.detect))
+        adapter::first_present(&self.providers, &|c| self.executor.command_exists_sync(c))
     }
 
     /// The executor to run one action's command on: this backend's, unless the action has exit
@@ -354,7 +349,7 @@ impl BackendCore for ServiceBackendCore {
     fn probes(&self) -> Vec<String> {
         self.providers
             .iter()
-            .filter(|p| p.applies_to_this_os())
+            .filter(|p| p.applies_here())
             .map(|p| p.detect.clone())
             .collect()
     }

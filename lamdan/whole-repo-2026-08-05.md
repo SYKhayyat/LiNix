@@ -92,6 +92,44 @@ Findings keep their original numbers; the ranking is restated after F-0.
 
 ## The framing finding, restated after the ruling: one product, six engines
 
+> **Actioned 2026-08-06 — `Y13` in `decisions.md`, rules in II.1 + II.7, reasons in V.144, V.145
+> and V.146.** Two of the three claims accurate, one of those understated. The headline is
+> refused.
+>
+> **The `extras` consequence is accurate and was worse than stated.** The `||` chain was not the
+> only copy: `dependents()` spelled out `Shim | Service | Link | Setting` in a `matches!`, and
+> each `has_*` helper spelled out its own kind — three more lists beside the chain, and a fifth
+> statement kind would have compiled against all four. `Statement::phase()` is now an exhaustive
+> match, `Phase`'s `Ord` is the run order, and `has_non_package_work` is `phase >
+> Phase::Packages`. The `repo:` exclusion that `verbs/sync.rs:143` documented as a workaround is
+> now a property: `repo:` is phase 1 and ran before the plan.
+>
+> **The registry consequence is accurate and understated: it is seven, not five.** `[[bootstrap]]`
+> and `[[secret]]` are the two the sweep missed. And four of the five shared questions had already
+> been answered differently — most sharply, **`[[secret]]` had no `os` field at all**, so the one
+> table whose rows are handed a plaintext secret was the only one that could not be confined to a
+> platform. Three tables refused a duplicate name and three kept it silently; the OS filter had
+> two spellings; the built-in snapshot rows did not clear the floor a user's row clears.
+> `core/adapter.rs` is the one mechanism, and **writing it again is a build failure** — a ledger
+> of tables would have caught an eighth being added and none of the seven that were.
+>
+> **The headline — rename `Installable` to `Converge` — is refused, and the causal claim behind
+> it does not hold.** "There was no shared noun to hang an engine on, so each noun grew its own"
+> is the argument, and the convergence decision turns out to be shared already, in exactly two
+> places, neither of them in the four bodies this review read. `ChangePlanner` asks `is_drifted`
+> — one comparison over `@quota`, `@size`, `@mount`, `@mount_options`, `@channel` and `@classic`
+> across zfs, lvm, btrfs and snap — so a converged declaration never reaches the trait;
+> `Dependents::apply` asks `extras::in_effect` and skips what is in force. The existence read in
+> `ZfsInstallable::install` cited as evidence is a local idempotence guard behind a decision
+> already made. The rename is also half a vocabulary: 159 sites, while every value through the
+> trait stays a `PackageSpec` serialized into `registry.json`. What the finding was pointing at —
+> that nothing said where the decision was made — is fixed on the trait.
+>
+> **And the gate written for this shipped unable to fail.** The phase-dispatch scan searched for
+> `Phase::Execs =>` as a substring; folding `Execs` into the ignored or-pattern deletes the
+> dispatch and still contains that substring. Caught by mutation, not by review — F-2's family
+> inside a check written for F-2's family, for the second time in two rulings.
+
 Region 6 traced `linix sync` end to end: **21 top-level stages, ~50 sub-stages.** Of the 7,916
 lines in the sync path, **~640 are `desired`, `present`, `owned` and two set differences** —
 `planner.rs:413` (present), `planner.rs:522` (owned), `resolver.rs:413` (desired),

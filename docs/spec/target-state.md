@@ -45,6 +45,26 @@ backend and the program it now runs, and `check health` answers for the replacem
 for the built-in it displaced. Snapshot providers, init systems and secret stores are unchanged —
 they still never shadow a built-in.
 
+**Every adapter table answers the same three questions the same way** *(Y13)*. A row says what it
+is called, which OS it is restricted to (absent means any), and why LiNix will not act on it —
+and everything asked *about* rows is written once: the OS filter, the floor a row clears to be
+acted on, the shipped-then-user merge, the search for the row that describes this machine, and
+`{placeholder}` substitution. **A row type carries its own argv and nothing else is per-table**;
+folding a firewall's `allow`/`deny`, an init's `start`/`stop` and a store's `read`/`write`/`reset`
+into one schema would be a struct of twenty optional fields, which is the shape that makes a
+table unreadable.
+
+- **Every table can be confined to one platform.** `[[secret]]` could not, and it is the one
+  table whose rows are handed a plaintext secret.
+- **A second row claiming a name is refused and said out loud**, in every table that is keyed by
+  name. `[[bootstrap]]` and `[[prereq]]` are keyed by *manager* and carry several rows for one —
+  asdf needs a plugin per declared tool — so they pick with their own rule and do not deduplicate.
+- **The shipped rows clear the same floor a user's row clears**, which is what K17/U1 has always
+  said and what the built-in snapshot rows were not doing.
+- **Writing the shared machinery a second time is a build failure**, not a review comment: the
+  seven copies were each written by someone doing something reasonable in the file in front of
+  them, and a ledger of tables would not have caught any of them (V.145).
+
 **A definition in `adapters/backends.toml` may declare every capability a built-in has**
 (U2, extended 2026-08-05 by `Q43`/`Q44`). `outdated_args` is the manager's own "what has an
 update" verb; `machine_list_args` a machine-readable listing to prefer over `list_args`, with
@@ -940,6 +960,28 @@ first pass because a `vars` file names no backend.
    - **While it is counting, a dated line beats an undated one.** *(The only exception to
      rule 5.)*
 7. Produce the desired state.
+
+**A statement declares which phase of a sync its work happens in, and the order of the phases is
+a type** *(Y13)*. The phases, in the order they run:
+
+| phase | what runs in it |
+|---|---|
+| **resolution** | consumed while the desired state is computed — set math, `param`, `use`, a variable, `generate:`. Not work, and nothing downstream ever sees one. |
+| **repositories** | `repo:`, before the packages: a package from a PPA cannot install until the PPA is there. |
+| **packages** | the package transaction — `apt:jq`, `absent:apt:nano`. |
+| **dependents** | `shim:`, `service:`, `link:`, `setting:` — each leans on the package plan having run. |
+| **dotfiles** | `dotfiles:`, a tree standing for the `link:` lines it holds. |
+| **firewall** | `firewall:`, after the packages, because a rule usually exists to let in something just installed. |
+| **schedules** | `schedule:`, provisioned onto the OS scheduler. |
+| **execs** | `exec:`, after the packages and dependents a script leans on. |
+
+**A statement kind added to the grammar does not compile until it has been given a phase**, and
+"is there work after the package plan?" is a comparison against the package phase rather than a
+list of kinds. It was a list of kinds four times over — the dispatch, the dry-run branch's copy
+of it, the per-kind accessors, and a chain of `||` — and each new kind was missed by one of them:
+extras, then `exec:`, then `dotfiles:`, then `firewall:`. **A phase that is declared but
+dispatched to nothing is a build failure**, and `repo:` is excluded from "work after the packages"
+because it is phase 1, not because anybody remembered to leave it out (V.144).
 
 **A plan states what it was computed over, and that decides what it may remove** *(Y12)*. The
 removal set is `managed − desired`, so it is only as good as `desired`: a caller that hands the
@@ -1974,7 +2016,9 @@ row in `adapters/secret.toml` — a name and the argv that puts plaintext on std
 the existing decrypt path, so it inherits the T-series rules unchanged (restrict-before-write T5,
 no-backup T1, never-into-the-repo T2, the touch timeout T3). **A provider that does not declare
 `stdout_only = true` is refused, not trusted** (V.81): LiNix will not hand a secret to a command
-that has not promised to keep it off disk and out of the logs.
+that has not promised to keep it off disk and out of the logs. **A `[[secret]]` row may name an
+`os`, like every other adapter row** — it could not, and it was the one table whose rows are
+handed a plaintext secret (`Y13`, V.145). A row that names none applies everywhere.
 
 **A restore that cannot restore says so, before it is needed (V.60).** Taking a snapshot and
 restoring one are different capabilities and a provider may have the first without the second:

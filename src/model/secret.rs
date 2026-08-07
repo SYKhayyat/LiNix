@@ -15,6 +15,7 @@
 //! Pure: recognising a plugin identity, and the two messages. Reading the file and enforcing the
 //! timeout are the caller's.
 
+use crate::core::adapter::{self, AdapterRow};
 use serde::Deserialize;
 use std::path::Path;
 use std::time::Duration;
@@ -35,6 +36,14 @@ use std::time::Duration;
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct SecretProvider {
     pub name: String,
+    /// Restrict to one OS (`std::env::consts::OS`). Absent means any.
+    ///
+    /// Every other adapter table has carried this since it was written; this one did not, so
+    /// the single table whose rows hand a command a plaintext secret was the only one that
+    /// could not be confined to the platform it was written for. A row that names no OS still
+    /// applies everywhere, so no existing `adapters/secret.toml` changes meaning.
+    #[serde(default)]
+    pub os: Option<String>,
     /// The argv that decrypts. `{ref}` is the reference from the line (the source path or a
     /// secret id); `{identity}` is the `@identity=` value if one was given. Plaintext on stdout.
     pub decrypt: Vec<String>,
@@ -52,11 +61,33 @@ pub struct SecretProviderFile {
 }
 
 impl SecretProvider {
+    /// The `(program, args)` to run, with `{ref}` and `{identity}` filled in. Returns `None` when
+    /// the block has no program (already rejected by `unusable`, but never unwrapped).
+    pub fn command(
+        &self,
+        reference: &str,
+        identity: Option<&str>,
+    ) -> Option<(String, Vec<String>)> {
+        adapter::program_and_args(adapter::fill(
+            &self.decrypt,
+            &[("{ref}", reference), ("{identity}", identity.unwrap_or(""))],
+        ))
+    }
+}
+
+impl AdapterRow for SecretProvider {
+    const WHAT: &'static str = "secret provider";
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn only_on(&self) -> Option<&str> {
+        self.os.as_deref()
+    }
+
     /// A provider LiNix will trust with a secret, or why it will not.
-    pub fn is_usable(&self) -> Option<&'static str> {
-        if self.name.trim().is_empty() {
-            return Some("it has no `name`");
-        }
+    fn why_unusable(&self) -> Option<&'static str> {
         if self.decrypt.iter().all(|a| a.trim().is_empty()) {
             return Some("it has no `decrypt` command");
         }
@@ -69,35 +100,17 @@ impl SecretProvider {
         }
         None
     }
-
-    /// The `(program, args)` to run, with `{ref}` and `{identity}` filled in. Returns `None` when
-    /// the block has no program (already rejected by `is_usable`, but never unwrapped).
-    pub fn command(
-        &self,
-        reference: &str,
-        identity: Option<&str>,
-    ) -> Option<(String, Vec<String>)> {
-        let fill = |a: &String| {
-            a.replace("{ref}", reference)
-                .replace("{identity}", identity.unwrap_or(""))
-        };
-        let (program, rest) = self.decrypt.split_first()?;
-        Some((fill(program), rest.iter().map(fill).collect()))
-    }
 }
 
-/// Every secret provider this machine knows, from `adapters/secret.toml` — the user's rows,
-/// filtered to the usable ones (an unusable row is dropped with a reason, never half-trusted).
+/// Every secret provider this machine can use, from `adapters/secret.toml`.
+///
+/// Rows for another platform are dropped here rather than failed on later: a `[[secret]]`
+/// naming a Windows credential tool is not a provider a Linux box should pick and then fail
+/// to run. A second row claiming a name is refused the way every other adapter table refuses
+/// one — this table used to keep it silently, so which of two providers answered for `vault`
+/// depended on file order and nothing said so.
 pub fn providers(rows: Vec<SecretProvider>) -> Vec<SecretProvider> {
-    rows.into_iter()
-        .filter(|p| match p.is_usable() {
-            Some(why) => {
-                tracing::warn!("ignoring the `{}` secret provider: {}.", p.name, why);
-                false
-            }
-            None => true,
-        })
-        .collect()
+    adapter::merge(rows.into_iter().filter(|p| p.applies_here()))
 }
 
 /// How long a decrypt may run before LiNix concludes it is waiting on a prompt nobody will
@@ -210,9 +223,46 @@ mod tests {
     fn provider(name: &str, decrypt: &[&str], stdout_only: bool) -> SecretProvider {
         SecretProvider {
             name: name.into(),
+            os: None,
             decrypt: decrypt.iter().map(|s| s.to_string()).collect(),
             stdout_only,
         }
+    }
+
+    /// The field this table was the only one of the seven not to have — so the one adapter
+    /// whose rows are handed a plaintext secret was the one that could not be confined to the
+    /// platform it was written for.
+    #[test]
+    fn a_provider_can_be_restricted_to_one_os() {
+        let mut elsewhere = provider("winvault", &["cmdkey", "{ref}"], true);
+        elsewhere.os = Some("definitely-not-this-os".into());
+        assert!(!elsewhere.applies_to("linux"));
+        assert!(!elsewhere.applies_to("windows"));
+        assert!(
+            providers(vec![elsewhere]).is_empty(),
+            "a row for another platform is not a provider this machine can pick"
+        );
+
+        // A row that names no OS still applies everywhere, so no existing file changes meaning.
+        assert_eq!(
+            providers(vec![provider("vault", &["vault", "{ref}"], true)]).len(),
+            1
+        );
+    }
+
+    /// Every other adapter table refuses a second row claiming a name. This one kept it, so
+    /// which of two `vault` blocks answered depended on file order and nothing said so.
+    #[test]
+    fn a_second_provider_claiming_a_name_is_refused() {
+        let kept = providers(vec![
+            provider("vault", &["vault", "kv", "get", "{ref}"], true),
+            provider("vault", &["something-else", "{ref}"], true),
+        ]);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(
+            kept[0].decrypt[0], "vault",
+            "the first claim on the name is the one that answers"
+        );
     }
 
     #[test]
@@ -220,17 +270,17 @@ mod tests {
         // The T-series rule as a load-time gate: a provider that has not declared stdout_only is
         // refused, not trusted — the unsafe reading is never the default (V.80).
         let no_promise = provider("vault", &["vault", "kv", "get", "{ref}"], false);
-        assert!(no_promise.is_usable().unwrap().contains("stdout_only"));
+        assert!(no_promise.unusable().unwrap().contains("stdout_only"));
         // With the promise, and a command, it loads.
         assert!(provider("vault", &["vault", "kv", "get", "{ref}"], true)
-            .is_usable()
+            .unusable()
             .is_none());
     }
 
     #[test]
     fn a_provider_with_no_name_or_command_is_refused() {
-        assert!(provider("", &["x"], true).is_usable().is_some());
-        assert!(provider("v", &[], true).is_usable().is_some());
+        assert!(provider("", &["x"], true).unusable().is_some());
+        assert!(provider("v", &[], true).unusable().is_some());
     }
 
     #[test]
@@ -271,6 +321,6 @@ stdout_only = true
 "#;
         let file: SecretProviderFile = toml::from_str(toml).unwrap();
         assert_eq!(file.secret.len(), 1);
-        assert!(file.secret[0].is_usable().is_none());
+        assert!(file.secret[0].unusable().is_none());
     }
 }
