@@ -4215,7 +4215,7 @@ mod tests {
             backend: "pub".into(),
             ..Default::default()
         };
-        spec.options.insert("version".into(), "2.7.0".into());
+        spec.options.set("version", "2.7.0");
         let _ = inst.install(&[spec], false).await;
 
         let calls = mock.get_calls().await;
@@ -4312,7 +4312,7 @@ mod tests {
                 backend: backend.into(),
                 ..Default::default()
             };
-            spec.options.insert("version".into(), version.into());
+            spec.options.set("version", version);
             let _ = inst.install(&[spec], false).await;
 
             let calls = mock.get_calls().await;
@@ -4595,10 +4595,7 @@ mod tests {
             &[crate::core::PackageSpec {
                 name: "phx_new".into(),
                 backend: "mix".into(),
-                options: std::collections::HashMap::from([(
-                    "version".to_string(),
-                    "1.6.16".to_string(),
-                )]),
+                options: [("version", "1.6.16")].into_iter().collect(),
                 ..Default::default()
             }],
             false,

@@ -605,7 +605,7 @@ pub fn inspect_desired(
             if guard.pinned_only {
                 let pinned = s
                     .options
-                    .get("version")
+                    .one("version")
                     .map(|v| !v.is_empty() && v != "latest" && v != "*")
                     .unwrap_or(false);
                 if !pinned {
@@ -1110,9 +1110,9 @@ mod tests {
         let mut m: std::collections::HashMap<String, Vec<crate::core::PackageSpec>> =
             std::collections::HashMap::new();
         for (backend, name, version) in specs {
-            let mut options = std::collections::HashMap::new();
+            let mut options = crate::config::grammar::Options::default();
             if let Some(v) = version {
-                options.insert("version".to_string(), v.to_string());
+                options.set("version", v.to_string());
             }
             m.entry(backend.to_string())
                 .or_default()

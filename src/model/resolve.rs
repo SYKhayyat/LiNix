@@ -58,7 +58,7 @@ impl DesiredState {
     pub fn regex_expansions(&self) -> Vec<(String, usize)> {
         let mut counts: BTreeMap<String, usize> = BTreeMap::new();
         for spec in self.packages.values().flatten() {
-            if let Some(pattern) = spec.options.get("__from_regex") {
+            if let Some(pattern) = spec.options.one("__from_regex") {
                 *counts
                     .entry(format!("{}:re:{}", spec.backend, pattern))
                     .or_default() += 1;
@@ -1106,7 +1106,13 @@ pub fn to_spec(
     backend_defaults: Option<&Options>,
     from: Provenance<'_>,
 ) -> PackageSpec {
-    let mut properties: HashMap<String, String> = HashMap::new();
+    // **The list stays a list.** This was a `HashMap<String, String>` filled by `vs.join(";")`,
+    // under a comment reading *"`requires` is a list; the rest are single values"* — which was
+    // never true: II.2 makes any repeated key a list, and `validate_setting` refuses two values
+    // by counting them. `requires` was the one somebody remembered, and it got a real
+    // `Vec<String>` twelve lines below while every other list became a delimiter that nothing
+    // validated and `ArtifactOptions::read` split back apart.
+    let mut properties = Options::default();
 
     // The line beats `priority`, and `priority` beats the built-in default (VIII.2, D9).
     // The backend's defaults go in first and the line's own options overwrite them whole:
@@ -1114,27 +1120,25 @@ pub fn to_spec(
     // an order nobody wrote.
     if let Some(defaults) = backend_defaults {
         for (k, vs) in defaults.iter() {
-            properties.insert(k.to_string(), vs.join(";"));
+            properties.set_all(k, vs.to_vec());
         }
     }
     for (k, vs) in options.iter() {
-        // `requires` is a list; the rest are single values. Joined with `;` because that is
-        // what the planner already splits on.
-        properties.insert(k.to_string(), vs.join(";"));
+        properties.set_all(k, vs.to_vec());
     }
 
     // Which of the three levels answered, so `why` can say (D14). Kept beside the value
     // rather than recomputed later: the resolver is the only place that still knows.
     if options.contains("formats") {
-        properties.insert("__formats_from".into(), "line".into());
+        properties.set("__formats_from", "line");
     } else if backend_defaults.is_some_and(|d| d.contains("formats")) {
-        properties.insert("__formats_from".into(), format!("priority ({})", backend));
+        properties.set("__formats_from", format!("priority ({})", backend));
     }
     // Two different questions, two tags. `__source` is where the line is, for the human
     // reading an error or "Added jq to modules/imperative.txt" (II.8). `__scopes` is what
     // it belongs to, for `--module` / `--profile` to match on. One tag answering both is
     // how `upgrade --module dev` came to be matched against a filename.
-    properties.insert("__source".to_string(), from.origin.to_string());
+    properties.set("__source", from.origin.to_string());
     // The `when` conditions that admitted this line, kept only where one tests a variable:
     // that is the hop `why` cannot make on its own, because a variable's value is not in
     // the file the package is written in (W11).
@@ -1144,14 +1148,18 @@ pub fn to_spec(
         .filter(|g| !crate::model::vars::referenced_names(&g.predicate).is_empty())
         .map(Gate::to_string)
         .collect();
+    // Three tags that were three `;`-joined strings, for want of a list type. `__gated_by` and
+    // `__scopes` are genuinely plural — a line can sit inside two `when` blocks and belong to two
+    // modules — so joining them meant every reader split them back, and a module named `a;b` was
+    // two modules to whoever split last.
     if !gated_by.is_empty() {
-        properties.insert("__gated_by".to_string(), gated_by.join(";"));
+        properties.set_all("__gated_by", gated_by);
     }
     if !from.scopes.is_empty() {
-        properties.insert("__scopes".to_string(), from.scopes.join(";"));
+        properties.set_all("__scopes", from.scopes.to_vec());
     }
     if let Selector::Regex(p) = selector {
-        properties.insert("__regex".to_string(), p.clone());
+        properties.set("__regex", p.clone());
     }
     PackageSpec {
         name: selector.as_str().to_string(),
@@ -1680,7 +1688,7 @@ when $role == travel {
             .unwrap();
 
         let mosh = d.present().find(|p| p.name == "mosh").unwrap();
-        let chain: Vec<&str> = mosh.options["__gated_by"].split(';').collect();
+        let chain: Vec<&str> = mosh.options.all("__gated_by").iter().map(String::as_str).collect();
         assert_eq!(chain.len(), 3, "{:?}", chain);
         assert!(
             chain[0].starts_with("when $role == travel @ "),
@@ -1692,7 +1700,7 @@ when $role == travel {
 
         // `curl` is outside the module's block but still inside the two that led here.
         let curl = d.present().find(|p| p.name == "curl").unwrap();
-        assert_eq!(curl.options["__gated_by"].split(';').count(), 2);
+        assert_eq!(curl.options.all("__gated_by").len(), 2);
     }
 
     #[test]
@@ -1706,7 +1714,7 @@ when $role == travel {
         );
         let d = resolve(&f).unwrap();
         let curl = d.present().find(|p| p.name == "curl").unwrap();
-        assert!(!curl.options.contains_key("__gated_by"));
+        assert!(!curl.options.contains("__gated_by"));
     }
 
     #[test]
@@ -1824,7 +1832,7 @@ when $role == travel {
             .unwrap();
         let spec = d.present().find(|p| p.name == "nginx").unwrap();
         assert_eq!(
-            spec.options.get("version").map(String::as_str),
+            spec.options.one("version"),
             Some("1.24.0")
         );
     }
@@ -2099,9 +2107,9 @@ apt:nginx
         );
         let d = resolve(&f).unwrap();
         let vim = d.present().find(|p| p.name == "vim").unwrap();
-        let scopes = vim.options.get("__scopes").unwrap();
-        assert!(scopes.contains("module:editors"), "{}", scopes);
-        assert!(scopes.contains("profile:Main"), "{}", scopes);
+        let scopes = vim.options.all("__scopes");
+        assert!(scopes.iter().any(|s| s == "module:editors"), "{scopes:?}");
+        assert!(scopes.iter().any(|s| s == "profile:Main"), "{scopes:?}");
     }
 
     #[test]
@@ -2151,7 +2159,7 @@ apt:nginx
         );
         let d = resolve(&f).unwrap();
         let spec = d.present().find(|p| p.name == "^fonts-").unwrap();
-        assert_eq!(spec.options["__regex"], "^fonts-");
+        assert_eq!(spec.options.one("__regex").unwrap(), "^fonts-");
     }
 
     #[test]
@@ -2164,7 +2172,7 @@ apt:nginx
         );
         let d = resolve(&f).unwrap();
         let spec = d.present().find(|p| p.name == "curl").unwrap();
-        assert!(spec.options["__source"].contains("base.txt:1"));
+        assert!(spec.options.one("__source").unwrap().contains("base.txt:1"));
     }
 
     #[test]

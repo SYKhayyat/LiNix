@@ -137,7 +137,7 @@ async fn resolve_name(resolver: &StateResolver<'_>, spec: &str) {
         }
         Ok(specs) => {
             for s in specs {
-                match s.options.get("version") {
+                match s.options.one("version") {
                     Some(v) => println!("  {}:{}@{}", s.backend, s.name, v),
                     None => println!("  {}:{}", s.backend, s.name),
                 }

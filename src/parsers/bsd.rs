@@ -156,7 +156,7 @@ pub fn parse_xbps_search(output: &str) -> Vec<Package> {
         let mut pkg = Package::with_version(name, ver, "xbps");
         let desc = tokens[pos + 1..].join(" ");
         if !desc.is_empty() {
-            pkg.properties.insert("description".into(), desc);
+            pkg.properties.insert("description".to_string(), desc);
         }
         packages.push(pkg);
     }

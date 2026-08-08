@@ -130,7 +130,7 @@ pub fn hash_plan(
             .options
             .iter()
             .filter(|(k, _)| !k.starts_with("__"))
-            .map(|(k, v)| format!("{}={}", k, v))
+            .map(|(k, v)| format!("{}={}", k, v.join(",")))
             .collect();
         opts.sort();
         keys.push(format!("I:{}:{}|{}", s.backend, s.name, opts.join(",")));
@@ -159,10 +159,10 @@ pub fn hash_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    
 
     fn spec(backend: &str, name: &str, opt: Option<(&str, &str)>) -> PackageSpec {
-        let mut options = HashMap::new();
+        let mut options = crate::config::grammar::Options::default();
         if let Some((k, v)) = opt {
             options.insert(k.to_string(), v.to_string());
         }
@@ -203,8 +203,8 @@ mod tests {
             &crate::app::apply::ResourceChanges::default(),
             Some(1),
         );
-        plan.vars.insert("role".into(), Value::Str("travel".into()));
-        plan.vars.insert("cores".into(), Value::Num(8.0));
+        plan.vars.insert("role".to_string(), Value::Str("travel".into()));
+        plan.vars.insert("cores".to_string(), Value::Num(8.0));
         let json = serde_json::to_string(&plan).unwrap();
         let back: SavedPlan = serde_json::from_str(&json).unwrap();
         assert_eq!(back.vars["role"], Value::Str("travel".into()));

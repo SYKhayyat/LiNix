@@ -32,7 +32,7 @@ async fn test_lease_expiration_pruning_logic() {
         "brew",
         "expired-binary",
         Some("1.0.0".into()),
-        HashMap::from([("lease".into(), "1h".into())]),
+        { let mut o = linix::config::grammar::Options::default(); o.insert("lease".to_string(), "1h"); o },
         "test",
         false,
     );
@@ -49,7 +49,7 @@ async fn test_lease_expiration_pruning_logic() {
         "brew",
         "active-binary",
         Some("2.0.0".into()),
-        HashMap::new(),
+        Default::default(),
         "test",
         false,
     );
@@ -68,7 +68,7 @@ async fn test_lease_expiration_pruning_logic() {
         vec![linix::core::PackageSpec {
             name: "active-binary".into(),
             backend: "brew".into(),
-            options: HashMap::new(),
+            options: Default::default(),
             requires: vec![],
             present: true,
         }],
@@ -112,7 +112,7 @@ async fn test_lease_manifest_override_logic() {
         "brew",
         "manifest-protected",
         None,
-        HashMap::new(),
+        Default::default(),
         "test",
         false,
     );
@@ -131,7 +131,7 @@ async fn test_lease_manifest_override_logic() {
         vec![linix::core::PackageSpec {
             name: "manifest-protected".into(),
             backend: "brew".into(),
-            options: HashMap::new(),
+            options: Default::default(),
             requires: vec![],
             present: true,
         }],

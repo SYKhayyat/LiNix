@@ -109,7 +109,7 @@ fn every_option_with_a_machine_effect_converges_somewhere() {
     let body = drift_check();
     // Without this the test would pass on a tree where the extraction broke — the G2 shape.
     assert!(
-        body.contains(r#"spec.options.get("version")"#),
+        body.contains(r#"spec.options.one("version")"#),
         "the drift check no longer reads `@version`; this extraction is looking at the wrong \
          function"
     );
@@ -124,7 +124,7 @@ fn every_option_with_a_machine_effect_converges_somewhere() {
     // Matching only the first reported `@quota` and `@size` as unchecked when they are checked —
     // a false finding, which is the one thing worse than a missing one.
     let checked = |k: &str| {
-        body.contains(&format!(r#"spec.options.get("{k}")"#))
+        body.contains(&format!(r#"spec.options.one("{k}")"#))
             || body.contains(&format!(r#""{k}""#)) && body.contains("for key in [")
             || desugared.contains(&format!(r#"one("{k}")"#))
     };
@@ -289,7 +289,7 @@ fn sandbox_carries_the_stand_in_too() {
 fn the_historical_options_are_deliberately_not_drift_checked() {
     let plan = std::fs::read_to_string(repo().join("src/verbs/plan.rs")).unwrap();
     assert!(
-        plan.contains(r#"p.options.get("unverified")"#),
+        plan.contains(r#"p.options.one("unverified")"#),
         "`@unverified` no longer reads the recorded option. If it became drift-checked, the \
          reasoning above needs re-deriving rather than this assertion deleting."
     );

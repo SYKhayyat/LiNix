@@ -206,13 +206,13 @@ pub fn without_protected(plan: &mut Plan, protection: &dyn Fn(&str, &str) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    
 
     fn spec(backend: &str, name: &str) -> PackageSpec {
         PackageSpec {
             name: name.to_string(),
             backend: backend.to_string(),
-            options: HashMap::new(),
+            options: Default::default(),
             requires: Vec::new(),
             present: true,
         }

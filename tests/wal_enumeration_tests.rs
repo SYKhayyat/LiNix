@@ -91,13 +91,11 @@ const LEDGER: &[Accounted] = &[
     // already had **zero callers**, and F-6 deleted it. The file mutates nothing now, so it is
     // out of the ledger rather than accounted for a call it no longer makes. This entry going
     // is the deletion landing, not the scan breaking.
-    Accounted {
-        file: "src/verbs/cleanup.rs",
-        calls: 2,
-        recovery: Recovery::Journalled,
-        how: "journalled() around the orphan sweep and around `purge-undeclared`, one entry \
-              per name so a kill part-way names the packages that did go",
-    },
+    // `src/verbs/cleanup.rs` was here, accounted `Journalled` for two hand-rolled loops. `LX-5`
+    // routed `remove-orphans` and `purge-undeclared` through `SyncEngine`, which journals every
+    // node it runs — so the file mutates nothing directly, and its entry going is that routing
+    // landing rather than the scan breaking. The journalling is counted under
+    // `core/transaction.rs` now, with everything else the engine carries out.
     Accounted {
         file: "src/verbs/packages.rs",
         calls: 1,
@@ -113,11 +111,13 @@ const LEDGER: &[Accounted] = &[
     // ---- Resources. II.19: converged from a declaration, so the next sync recomputes them.
     Accounted {
         file: "src/app/apply/dependents.rs",
-        calls: 3,
+        calls: 1,
         recovery: Recovery::Recomputed,
         how: "`service:`, `link:` and `setting:` reached through Installable because that is \
               the trait the backends implement — each is a read-then-write converge from a \
-              line in the config, and the next sync finishes an interrupted one",
+              line in the config, and the next sync finishes an interrupted one. One call site \
+              rather than three: `LX-9` collapsed three byte-identical match arms into \
+              `apply_through_backend`, which is the same behaviour written once",
     },
     Accounted {
         file: "src/app/apply/dotfiles.rs",
@@ -150,6 +150,18 @@ const LEDGER: &[Accounted] = &[
 /// matched on its own: nothing else in the tree is called `install`, and the one install site
 /// that took no sudo argument is exactly the kind of thing a sudo-only rule would miss.
 fn is_mutation_call(line: &str) -> bool {
+    is_mutation_call_in(line, "")
+}
+
+/// Whether `line` opens a mutation, reading `rest` — the few lines after it — for the argument
+/// that tells a manager's `remove` from a collection's.
+///
+/// **`sudo` is on the same *call*, not always the same *line*.** The original predicate required
+/// both in one string, which made the audit sensitive to line wrapping: `apply/extras.rs` put
+/// `inst.remove(` and `b.sudo_for_write()` on separate lines and vanished from the mutation
+/// surface — the ledger then reported it as an entry naming a file that mutates nothing, when
+/// what had changed was the formatting. **A gate that a rustfmt pass can blind is not a gate.**
+fn is_mutation_call_in(line: &str, rest: &str) -> bool {
     let t = line.trim_start();
     if t.starts_with("//") || t.starts_with("///") {
         return false;
@@ -157,7 +169,10 @@ fn is_mutation_call(line: &str) -> bool {
     if t.contains(".install(") {
         return true;
     }
-    (t.contains(".remove(") || t.contains(".purge(")) && line.contains("sudo")
+    // `sudo` is what separates a manager's removal from `Vec::remove`/`HashMap::remove`, which
+    // take an index or a key and no privilege.
+    (t.contains(".remove(") || t.contains(".purge("))
+        && (line.contains("sudo") || rest.contains("sudo"))
 }
 
 /// Every `.rs` file under `src/`.
@@ -204,7 +219,16 @@ fn mutation_sites() -> BTreeMap<String, Vec<(usize, String)>> {
             if line.trim_start().starts_with("#[cfg(test)]") {
                 break;
             }
-            if is_mutation_call(line) {
+            // The call, not the line: an argument list wrapped across lines is the same call.
+            let rest: String = text
+                .lines()
+                .skip(i + 1)
+                .take(4)
+                .take_while(|l| !l.trim_start().starts_with("fn "))
+                .collect::<Vec<_>>()
+                .join("
+");
+            if is_mutation_call_in(line, &rest) {
                 found
                     .entry(rel.clone())
                     .or_default()
@@ -334,7 +358,10 @@ fn the_enumeration_can_actually_see_a_mutation() {
     // matching would report an empty map and pass the ledger test for the worst reason.
     let found = mutation_sites();
     assert!(
-        found.len() >= 10,
+        // Nine, not ten: `verbs/cleanup.rs` left the surface when `LX-5` routed its two removal
+        // loops through the engine. Still a real floor — a scan whose patterns silently stopped
+        // matching would report an empty map and pass the ledger test for the worst reason.
+        found.len() >= 9,
         "the scan found mutation sites in only {} file(s) — it has stopped matching",
         found.len()
     );

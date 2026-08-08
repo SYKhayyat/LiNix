@@ -16,8 +16,17 @@ pub struct Package {
 pub struct PackageSpec {
     pub name: String,
     pub backend: String,
-    /// Parsed from the manifest entry's '@' tag.
-    pub options: HashMap<String, String>,
+    /// Parsed from the manifest entry's `@` tag — **the grammar's own type**.
+    ///
+    /// It was `HashMap<String, String>`, and the seam that forced was not small:
+    /// `to_spec` joined every option value the grammar had kept as a `Vec` with `;` because
+    /// "that is what the planner already splits on", and `ArtifactOptions::read` split it back
+    /// on a `LIST_SEPARATOR` nothing validated. The comment above the join said *"requires is a
+    /// list; the rest are single values"* — which is not true, because II.2 makes any repeated
+    /// key a list and `validate_setting` refuses two values by counting them. `requires` was
+    /// the one list somebody remembered, and it got a real `Vec<String>` three lines below.
+    /// Every other one got a delimiter.
+    pub options: crate::config::grammar::Options,
     pub requires: Vec<String>,
     /// `false` for an `absent:` line — declare it must NOT exist (SPEC II.2).
     ///
@@ -37,7 +46,7 @@ impl Default for PackageSpec {
         Self {
             name: String::new(),
             backend: String::new(),
-            options: HashMap::new(),
+            options: Default::default(),
             requires: Vec::new(),
             present: true,
         }

@@ -45,7 +45,7 @@ async fn version_of(kernel: &TestKernel, upgrade: bool, locked: bool) -> Option<
         .values()
         .flatten()
         .find(|s| s.name == "ripgrep")
-        .and_then(|s| s.options.get("version").cloned())
+        .and_then(|s| s.options.one("version").map(str::to_string))
 }
 
 /// The ruling, in one assertion: an ordinary `sync` takes the recorded version. Before this,

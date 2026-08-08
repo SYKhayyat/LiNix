@@ -502,7 +502,7 @@ impl Installable for GithubInstallable {
 
             let pin = spec
                 .options
-                .get("version")
+                .one("version")
                 .map(|v| v.trim())
                 .filter(|v| !v.is_empty());
 
@@ -645,7 +645,7 @@ impl Installable for GithubInstallable {
 
                 // `@sha256` is legal only on a line that resolves to exactly one file
                 // (VIII.2/D6), so it needs no per-artifact story here.
-                if let Some(expected_sha) = spec.options.get("sha256") {
+                if let Some(expected_sha) = spec.options.one("sha256") {
                     verify_checksum(&dl_path, expected_sha).await?;
                 }
                 let sha = generate_checksum(&dl_path).await?;

@@ -506,7 +506,7 @@ impl<'a> StateResolver<'a> {
                 // looking — the character at fault is a bidi override, a NUL or an escape —
                 // and they were the only ones arriving without a file and a line.
                 Validator::validate_package_name_for(&spec.name, &spec.backend)
-                    .map_err(|e| located(e, spec.options.get("__source")))?;
+                    .map_err(|e| located(e, spec.options.one("__source").map(String::from).as_ref()))?;
             }
         }
 
@@ -778,7 +778,7 @@ impl<'a> StateResolver<'a> {
                 // The line that produced it, so `why` can say a pattern put this here rather
                 // than leaving a package nobody can find in any file.
                 one.options
-                    .insert("__from_regex".to_string(), pattern.clone());
+                    .set("__from_regex".to_string(), pattern.clone());
                 let stmt = if present {
                     Statement::Package(one)
                 } else {
@@ -1116,7 +1116,7 @@ impl<'a> StateResolver<'a> {
                     // package on a machine that has never run `linix lock` does.
                     continue;
                 };
-                if let Some(pinned) = spec.options.get("version") {
+                if let Some(pinned) = spec.options.one("version") {
                     if pinned != locked {
                         // A hand-written pin that disagrees with the lock is never quietly
                         // resolved one way: under strict mode it is an error, and otherwise
@@ -1135,7 +1135,7 @@ impl<'a> StateResolver<'a> {
                     }
                     continue;
                 }
-                spec.options.insert("version".to_string(), locked.clone());
+                spec.options.set("version".to_string(), locked.clone());
             }
         }
         Ok(())
@@ -1807,11 +1807,11 @@ mod tests {
         ]);
         let map = resolve(&r).await.unwrap();
         let curl = &map.get("apt").unwrap()[0];
-        let scopes = curl.options.get("__scopes").unwrap();
-        assert!(scopes.contains("module:dev"), "{}", scopes);
-        assert!(scopes.contains("profile:Work"), "{}", scopes);
+        let scopes = curl.options.all("__scopes");
+        assert!(scopes.iter().any(|s| s == "module:dev"), "{scopes:?}");
+        assert!(scopes.iter().any(|s| s == "profile:Work"), "{scopes:?}");
         // And `__source` stays the human answer to "where is this line?".
-        assert!(curl.options["__source"].contains("dev.txt:1"));
+        assert!(curl.options.one("__source").unwrap().contains("dev.txt:1"));
     }
 
     #[tokio::test]
@@ -1830,9 +1830,9 @@ mod tests {
             .iter()
             .find(|s| s.name == "jq")
             .unwrap();
-        let scopes = jq.options.get("__scopes").unwrap();
-        assert!(scopes.contains("module:base"), "{}", scopes);
-        assert!(scopes.contains("profile:Work"), "{}", scopes);
+        let scopes = jq.options.all("__scopes");
+        assert!(scopes.iter().any(|s| s == "module:base"), "{scopes:?}");
+        assert!(scopes.iter().any(|s| s == "profile:Work"), "{scopes:?}");
     }
 
     #[tokio::test]

@@ -258,14 +258,14 @@ async fn every_subcommand_linix_invokes_still_exists_upstream() {
             let mut unverified = spec.clone();
             unverified
                 .options
-                .insert("unverified".to_string(), "true".to_string());
+                .set("unverified".to_string(), "true".to_string());
             // And the install source, where the backend demands one. helm's install takes a URL
             // rather than a name (`INSTALLS_FROM_SOURCE`), so without this the call fails before
             // it builds an argv — and the only helm argvs this gate saw were `plugin list` and
             // `plugin uninstall`. Measured: with a plainly bogus flag planted in the capability
             // table, the gate still passed, because the flag's own code path was never driven.
             if let Some(key) = linix::backends::capability::install_source_key(backend.name()) {
-                unverified.options.insert(
+                unverified.options.set(
                     key.to_string(),
                     "https://example.invalid/linix-drift-probe".to_string(),
                 );

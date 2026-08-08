@@ -273,7 +273,7 @@ mod conditional_tests {
 
     fn with_role(role: &str) -> HostFacts {
         let mut vars = crate::model::vars::Vars::new();
-        vars.insert("role".into(), Value::Str(role.into()));
+        vars.insert("role".to_string(), Value::Str(role.into()));
         facts().with_vars(vars)
     }
 
@@ -322,7 +322,7 @@ mod conditional_tests {
         // IX.4: the sigil exists so LiNix can add a detected fact forever without changing the
         // meaning of a file where someone used that word as a variable name.
         let mut vars = crate::model::vars::Vars::new();
-        vars.insert("os".into(), Value::Str("definitely-not-linux".into()));
+        vars.insert("os".to_string(), Value::Str("definitely-not-linux".into()));
         let f = facts().with_vars(vars);
         assert!(
             eval_when("os == linux", &f).unwrap(),
@@ -334,9 +334,9 @@ mod conditional_tests {
     #[test]
     fn typed_comparisons_have_no_cross_type_coercion() {
         let mut vars = crate::model::vars::Vars::new();
-        vars.insert("gpu".into(), Value::Bool(true));
-        vars.insert("cores".into(), Value::Num(8.0));
-        vars.insert("role".into(), Value::Str("travel".into()));
+        vars.insert("gpu".to_string(), Value::Bool(true));
+        vars.insert("cores".to_string(), Value::Num(8.0));
+        vars.insert("role".to_string(), Value::Str("travel".into()));
         vars.insert(
             "tags".into(),
             Value::List(vec![Value::Str("travel".into())]),
@@ -364,7 +364,7 @@ mod conditional_tests {
     #[test]
     fn ordering_a_string_is_refused_not_answered_wrongly() {
         let mut vars = crate::model::vars::Vars::new();
-        vars.insert("ver".into(), Value::Str("10".into()));
+        vars.insert("ver".to_string(), Value::Str("10".into()));
         let f = facts().with_vars(vars);
         // `"10" > "9"` is false under string ordering and true under intuition; refuse it (W2).
         assert!(eval_when("$ver > 9", &f).is_err());
@@ -374,7 +374,7 @@ mod conditional_tests {
     fn a_bare_variable_is_not_a_condition() {
         // W3: `false` is a non-empty string, so a truthiness test would fire on `gpu = false`.
         let mut vars = crate::model::vars::Vars::new();
-        vars.insert("gpu".into(), Value::Bool(false));
+        vars.insert("gpu".to_string(), Value::Bool(false));
         let f = facts().with_vars(vars);
         let err = eval_when("$gpu", &f).unwrap_err();
         assert!(err.to_string().contains("== true"), "{}", err);

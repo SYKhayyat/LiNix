@@ -376,8 +376,8 @@ pub struct ServiceInstallable {
 impl Installable for ServiceInstallable {
     async fn install(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
         for spec in specs {
-            let enabled = spec.options.get("enabled").map(|s| s.as_str());
-            let status = spec.options.get("status").map(|s| s.as_str());
+            let enabled = spec.options.one("enabled");
+            let status = spec.options.one("status");
             let actions = actions_for(enabled, status);
             for action in &actions {
                 self.core.apply(*action, &spec.name, sudo).await?;
@@ -512,7 +512,7 @@ impl ServiceQueryable {
         let (prog, args) = cmd.split_first().expect("status is non-empty here");
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         if let Ok(out) = self.core.executor.run_output(prog, &arg_refs, false).await {
-            p.properties.insert("status_raw".into(), out);
+            p.properties.insert("status_raw".to_string(), out);
         }
         Ok(())
     }
@@ -800,7 +800,7 @@ start_benign_exits = [7]
         let spec = |status: &str| PackageSpec {
             name: "irrelevant".to_string(),
             backend: "service".to_string(),
-            options: std::collections::HashMap::from([("status".to_string(), status.to_string())]),
+            options: [("status", status)].into_iter().collect(),
             requires: Vec::new(),
             present: true,
         };

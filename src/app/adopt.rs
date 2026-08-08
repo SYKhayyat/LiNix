@@ -360,9 +360,9 @@ impl Adopter {
             .values()
             .flatten()
             .filter_map(|spec| {
-                let origin = spec.options.get("__source")?;
+                let origin = spec.options.one("__source")?;
                 // `__source` is `path:line`; the line number is not part of the file name.
-                let file = origin.rsplit_once(':').map_or(origin.as_str(), |(f, _)| f);
+                let file = origin.rsplit_once(':').map_or(origin, |(f, _)| f);
                 let stem = std::path::Path::new(file).file_stem()?.to_str()?;
                 (stem != ours)
                     .then(|| (format!("{}:{}", spec.backend, spec.name), file.to_string()))
@@ -455,7 +455,7 @@ impl Adopter {
                     &pkg.backend,
                     &pkg.name,
                     pkg.version.clone(),
-                    HashMap::new(),
+                    Default::default(),
                     source_meta,
                     false, // Adopted packages are permanent, not transient.
                 );

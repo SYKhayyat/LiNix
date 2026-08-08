@@ -201,6 +201,12 @@ fn every_ci_job_has_something_local_that_runs_it() {
         ("harness-mutation", "harness-mutation-test.sh"),
         ("argv-drift", "cargo test"),
         ("storage", "storage"),
+        // Both added with the jobs themselves (`LX-9`), and both soft locally: `cargo-deny` and
+        // a pinned toolchain are installs a contributor may not have, and a release script that
+        // refuses to run without them stops being run. Soft is not absent — the developer sees
+        // the line and can act on it, which is the whole of what this predicate asks.
+        ("supply-chain", "cargo deny check"),
+        ("msrv", "rust-version"),
     ];
     let drives_nothing = ["release"];
 

@@ -52,8 +52,11 @@ async fn a_declared_package_is_one_node_however_many_things_it_depends_on() {
 
     let planner = ChangePlanner::new(kernel.app.registry.clone(), &state_lock, &kernel.app.config);
 
-    // brew, asked, would say pkg-a needs pkg-b. Nothing asks.
-    kernel.mock_executor.set_response(
+    // brew, asked, would say pkg-a needs pkg-b. **Nothing asks, and that is the assertion** —
+    // so the answer is registered as one that must not be used. Under a plain `set_response` the
+    // registration simply went unmatched, which is indistinguishable from a test that forgot to
+    // exercise it.
+    kernel.mock_executor.set_response_that_must_not_be_used(
         "brew deps -- pkg-a",
         Ok(DryRunOutput {
             stdout: b"pkg-b\n".to_vec(),
@@ -68,7 +71,7 @@ async fn a_declared_package_is_one_node_however_many_things_it_depends_on() {
         vec![PackageSpec {
             name: "pkg-a".into(),
             backend: "brew".into(),
-            options: HashMap::new(),
+            options: Default::default(),
             requires: vec![],
             present: true,
         }],
@@ -105,14 +108,14 @@ async fn test_dag_cycle_detection_logic() {
     let spec_a = PackageSpec {
         name: "pkg-a".into(),
         backend: "brew".into(),
-        options: HashMap::new(),
+        options: Default::default(),
         requires: vec!["brew:pkg-b".into()],
         present: true,
     };
     let spec_b = PackageSpec {
         name: "pkg-b".into(),
         backend: "brew".into(),
-        options: HashMap::new(),
+        options: Default::default(),
         requires: vec!["brew:pkg-a".into()],
         present: true,
     };
@@ -153,7 +156,7 @@ async fn test_transaction_rollback_fidelity() {
     let failing_spec = PackageSpec {
         name: "fail-node".into(),
         backend: "brew".into(),
-        options: HashMap::new(),
+        options: Default::default(),
         requires: vec![],
         present: true,
     };
@@ -193,7 +196,7 @@ fn spec(name: &str, backend: &str) -> PackageSpec {
     PackageSpec {
         name: name.into(),
         backend: backend.into(),
-        options: HashMap::new(),
+        options: Default::default(),
         requires: vec![],
         present: true,
     }
@@ -250,7 +253,9 @@ async fn healing_an_interrupted_removal_still_removes() {
 
     let engine = kernel.app.sync_engine().await;
     kernel.mock_executor.set_response(
-        "brew uninstall doomed-pkg",
+        // See `backend_tests.rs`: the terminator is part of the argv, so it is part of the
+        // pattern. Without it the heal ran against the mock's default.
+        "brew uninstall -- doomed-pkg",
         Ok(DryRunOutput::default().into()),
     );
 
@@ -365,7 +370,7 @@ async fn test_semver_constraint_resolution_logic() {
         .await
         .expect("Critical Path: Resolver failed to parse semver spec line.");
 
-    assert_eq!(spec.options.get("version").unwrap(), ">=7.0.0");
+    assert_eq!(spec.options.one("version").unwrap(), ">=7.0.0");
 }
 
 /// A preview writes no manifest — the flagship bug, moved from the machine to the files.

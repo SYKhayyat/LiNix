@@ -47,8 +47,8 @@ async fn conda_calls(cfg: Config) -> Vec<String> {
     let reg = linix::backends::create_default_registry(exec, &cfg, hooks).await;
     let conda = reg.get("conda").expect("conda registers");
 
-    let mut options = HashMap::new();
-    options.insert("version".to_string(), "1.2.3".to_string());
+    let mut options = linix::config::grammar::Options::default();
+    options.set("version", "1.2.3".to_string());
     let inst = conda.as_installable().expect("conda installs");
     inst.install(
         &[PackageSpec {

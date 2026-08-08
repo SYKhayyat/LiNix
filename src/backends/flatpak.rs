@@ -99,7 +99,7 @@ pub struct FlatpakInstallable {
 /// A flatpak ref is `name/arch/branch`. The arch slot stays empty so flatpak keeps choosing it
 /// from the machine; writing `name/branch` would be read as an architecture, not a branch.
 fn install_ref(spec: &PackageSpec) -> String {
-    match spec.options.get("channel") {
+    match spec.options.one("channel") {
         Some(channel) => format!("{}//{}", spec.name, channel),
         None => spec.name.clone(),
     }
@@ -236,7 +236,7 @@ fn parse_flatpak_search(output: &str) -> Vec<Package> {
         }
         let mut p = Package::new(app_id, "flatpak");
         if let Some(desc) = cols.get(1).filter(|s| !s.is_empty()) {
-            p.properties.insert("description".into(), desc.to_string());
+            p.properties.insert("description".to_string(), desc.to_string());
         }
         if let Some(ver) = cols.get(3).filter(|s| !s.is_empty()) {
             p.version = Some(ver.to_string());

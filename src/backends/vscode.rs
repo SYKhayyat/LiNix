@@ -128,7 +128,7 @@ impl Installable for VscodeInstallable {
         let mut args = vec!["--force".to_string()];
         for spec in specs {
             // VS Code supports pinning an extension version: `publisher.ext@1.2.3`.
-            let target = match spec.options.get("version") {
+            let target = match spec.options.one("version") {
                 Some(v) if crate::backends::concrete_version(v) => format!("{}@{}", spec.name, v),
                 _ => spec.name.clone(),
             };
@@ -207,11 +207,11 @@ impl Queryable for VscodeQueryable {
                 .map(|s| s.to_string());
 
             if let Some(desc) = ext["shortDescription"].as_str() {
-                p.properties.insert("description".into(), desc.to_string());
+                p.properties.insert("description".to_string(), desc.to_string());
             }
 
             p.properties
-                .insert("publisher".into(), publisher.to_string());
+                .insert("publisher".to_string(), publisher.to_string());
             return Ok(Some(p));
         }
         Ok(None)
@@ -272,7 +272,7 @@ impl Searchable for VscodeSearchable {
 
                 let mut p = Package::new(format!("{}.{}", publisher, name), "vscode");
                 if let Some(desc) = ext["shortDescription"].as_str() {
-                    p.properties.insert("description".into(), desc.to_string());
+                    p.properties.insert("description".to_string(), desc.to_string());
                 }
                 results.push(p);
             }

@@ -8282,3 +8282,109 @@ scope as `user = "true"`, a boolean, where a row needs a value to substitute int
 conditional form — **and a template language in argv rows is how a data path stops being data.**
 `examples/preferences.toml:171` documents the key, so renaming it is user-visible: `Y20`, OPEN. The
 exemption names `Y20` so the register entry and the gate cannot drift apart.
+
+## Session 2026-08-07 — the delimiter that stood in for a list type (`LX-10`)
+
+`PackageSpec.options` was `HashMap<String, String>`, and the grammar produces
+`BTreeMap<String, Vec<String>>`. Something had to give, and what gave was the list: `to_spec`
+called `vs.join(";")` on every value, under this comment —
+
+> *"`requires` is a list; the rest are single values. Joined with `;` because that is what the
+> planner already splits on."*
+
+**Wrong twice.** II.2 makes *any* repeated key a list, and `validate_setting` refuses two values
+by counting them — so the grammar knew perfectly well. And three lines below the join,
+`requires: options.all("requires").to_vec()` gave the one list somebody remembered a real
+`Vec<String>`. **The type was available, the author reached for it once, and the seam ate the
+rest.**
+
+### What the delimiter cost, in three places that each split it back differently
+
+- `ArtifactOptions::read` had a `const LIST_SEPARATOR: char = ';'` and split `formats` on it.
+- `ChangePlanner::in_scope` took `&str` and split `__scopes` on `;` — so a module named `a;b` was
+  two scopes to it and one module to the file it came from.
+- `insight::gating_of` split `__gated_by` on `;`, so a `when` predicate containing a semicolon
+  became two gates in `why`'s output.
+
+Three answers to one question, decided by which layer split last, and **no layer validated that a
+value did not contain the delimiter.** `@bin=weird;name` was representable in the grammar and
+unrepresentable across the seam, silently.
+
+### `options: Options`, end to end
+
+The spec carries the grammar's own type now, and so does `ManagedPackage` — leaving the registry
+flat would have moved the same flatten one function along, which is not a fix. `registry.json` and
+saved plans therefore write `{"k": ["v"]}` rather than `{"k": "v"}`. An older file does not load,
+which is correct under NO LEGACY: it was written in a format that could not represent what the
+grammar accepts.
+
+`Options` gained what the change needed and nothing more: `set` (replace) beside `insert`
+(append) — **the old `HashMap` spelled both as `insert`, and one name for two operations is how a
+re-resolved package ends up with two versions** — plus `set_all`, `remove`, `len`, a
+`FromIterator`, and `Serialize`/`Deserialize`.
+
+`spec_from_extra` in `apply/dependents.rs` is the sharpest small case: it read `values.first()`
+per key, because the destination could hold only one. A `link:` line with a repeated key reached
+the backend one value short and nothing said so.
+
+### The test that a delimiter cannot pass
+
+`tests/an_option_list_survives_the_seam_tests.rs` pins the two properties: a key given twice
+arrives twice in order, and **a value containing `;` is one value** — through `to_spec`, through
+`ArtifactOptions::read`, and through a JSON round-trip, because saved plans are read later by
+something that was not there when they were written. `planner.rs`'s scope test gained the same
+case: `module:a;b` matches itself and neither half.
+
+84 files, and the diff is mostly `.get(k)` becoming `.one(k)`. The finding called this the widest
+change in the document and said it *"stops getting cheaper — every backend added before it happens
+is another call site."* That was the argument for doing it now rather than the argument for
+scheduling it.
+
+### What the full suite found, once it could finish
+
+The `LX-10` diff is 84 files, and running every test binary after it turned up nine failures that
+were **not** the refactor. Each one is a gate landed earlier this session finally getting to speak.
+
+**`LX-8`'s strict mock found six fixtures that had been proving nothing.** Every one registered a
+command the product does not run, so the call fell through to the empty-success default and the
+assertions beneath it passed on that:
+
+| fixture | registered | what ran |
+|---|---|---|
+| `e2e_tests.rs` | `brew install pkg-parallel-{0..4}`, five of them | **one** `brew install -- pkg-parallel-0 … -4` — `Y1` batches, and has since long before this |
+| `backend_tests.rs` | `cargo uninstall ripgrep` | `cargo uninstall -- ripgrep` |
+| `critical_paths_tests.rs` | `brew uninstall doomed-pkg` | `brew uninstall -- doomed-pkg` |
+| `shell_lifecycle_tests.rs` | `brew uninstall temp-tool-1` | `brew uninstall -- temp-tool-1` |
+| `critical_paths_tests.rs` | `brew deps -- pkg-a` | nothing — **and that is the assertion**, so it is `set_response_that_must_not_be_used` now |
+| `security_and_resiliency_tests.rs` ×2 | a removal that never ran | `LX-2`: a `Transaction` that removes needs a `Reaped`, and these built one without |
+
+The concurrency one is the worst of them: a test named *"high-throughput parallel DAG"* whose five
+nodes the planner collapses into a single command, asserting against a mock that answered yes to
+everything. It has been green and empty for as long as batching has existed.
+
+**`LX-1` found two real parser breaks on a live machine.** `linix list` on this Windows box warned
+about `pipx` and `yarn` — both of which had been returning *silent empty listings*, which the
+planner reads as "this machine has none of these" and answers by installing every declared package
+and dropping every removal.
+
+- `pipx list --json` on an empty machine prints a sentence and then a JSON document. Four lines
+  that are neither prose nor package rows, so the unread check counted them. **A document that
+  parses is a document that was read** — `or_unrecognised` now says so, from the first line that
+  opens one, because pipx puts its sentence above the JSON.
+- yarn brackets every command with `yarn global v1.22.22` and `Done in 0.67s.`, so an empty global
+  install still prints two lines and neither is prose by the general rule. Dropped in yarn's own
+  arm rather than in `is_prose_line`: what yarn prints around its answer is knowledge about yarn.
+
+**Three ledgers had gone stale, and one of them was blind.** `LX-5` took `verbs/cleanup.rs` off
+both the removal surface and the mutation surface, and `LX-9` collapsed `dependents.rs` from three
+call sites to one — all four entries updated. But `wal_enumeration_tests.rs`'s scan required
+`.remove(` and `sudo` **on the same line**, and `apply/extras.rs` had wrapped its call across four:
+the file vanished from the mutation surface and the ledger reported it as an entry naming a file
+that mutates nothing. **A gate a `rustfmt` pass can blind is not a gate** — the scan reads the
+call now, not the line.
+
+`grade2_info_tests.rs` scraped `linix list` and took the first token of a coloured `WARN` line as a
+backend name, so a warning read as *"a backend contradicts its own listing"* — the opposite of what
+happened. And `grade6_gate_parity` was right that `supply-chain` and `msrv` were CI jobs nothing
+local drove; both release scripts run them now, soft, because a script that refuses to run without
+`cargo-deny` installed stops being run.

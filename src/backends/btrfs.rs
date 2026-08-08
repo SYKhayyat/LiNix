@@ -407,7 +407,7 @@ impl Installable for BtrfsInstallable {
                     .await?;
             }
 
-            if let Some(quota_size) = spec.options.get("quota") {
+            if let Some(quota_size) = spec.options.one("quota") {
                 let _ = self.core.ensure_qgroups(path, sudo).await;
                 self.core
                     .executor
@@ -415,7 +415,7 @@ impl Installable for BtrfsInstallable {
                     .await?;
             }
 
-            if let Some(mount_point) = spec.options.get("mount") {
+            if let Some(mount_point) = spec.options.one("mount") {
                 if !Path::new(mount_point).exists() {
                     self.core
                         .executor
@@ -428,8 +428,7 @@ impl Installable for BtrfsInstallable {
                 let uuid = self.core.get_fs_uuid(&fs_point).await?;
                 let options = spec
                     .options
-                    .get("mount_options")
-                    .map(String::as_str)
+                    .one("mount_options")
                     .unwrap_or("defaults")
                     .to_string();
 
@@ -462,7 +461,7 @@ impl Installable for BtrfsInstallable {
                 }
 
                 let core_ref = self.core.clone();
-                let mount_str = mount_point.clone();
+                let mount_str = mount_point.to_string();
 
                 tokio::task::spawn_blocking(move || {
                     core_ref.update_fstab(&uuid, &subvol, &mount_str, &options)
@@ -574,7 +573,7 @@ impl Queryable for BtrfsQueryable {
             .map(|(key, (_, _, name))| {
                 let mut p = Package::new(name, "btrfs");
                 if let Some(point) = mounted_at.get(&key) {
-                    p.properties.insert("mount".into(), point.clone());
+                    p.properties.insert("mount".to_string(), point.clone());
                 }
                 p
             })
@@ -626,7 +625,7 @@ impl Queryable for BtrfsQueryable {
         if let Ok((subvol, _)) = self.core.subvol_for(name) {
             if let Ok(content) = fs::read_to_string(&self.core.fstab_file) {
                 if let Some(opts) = fstab_options(&content, &subvol) {
-                    p.properties.insert("mount_options".into(), opts);
+                    p.properties.insert("mount_options".to_string(), opts);
                 }
             }
         }

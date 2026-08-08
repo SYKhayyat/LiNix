@@ -2,7 +2,6 @@ use crate::core::{Error, Result};
 use crate::utils::file::persist;
 use crate::utils::safe_data_dir;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, trace};
@@ -14,7 +13,14 @@ pub struct ManagedPackage {
     pub version: Option<String>,
     pub installed_at: u64,
     pub expires_at: Option<u64>,
-    pub options: HashMap<String, String>,
+    /// The declaration's options as the grammar produced them.
+    ///
+    /// **One type from the line to the record.** It was `HashMap<String, String>` here too, so
+    /// `PackageSpec`'s options had to be flattened on the way in — and a flatten is the `;`-join
+    /// this change exists to remove, moved one function along. `registry.json` therefore stores
+    /// `{"k": ["v"]}` rather than `{"k": "v"}`; nothing reads the old shape, and under NO LEGACY
+    /// nothing is written to read it.
+    pub options: crate::config::grammar::Options,
     /// Why this row exists — a `file:line` a user wrote, or the verb that took ownership
     /// (`adopt`, `imperative`, `plan`, `sync`). Not optional: a managed row LiNix cannot
     /// attribute is one II.7 will remove with no answer to `why`, and that is exactly the
@@ -227,7 +233,7 @@ impl StateRegistry {
         backend: &str,
         name: &str,
         version: Option<String>,
-        options: HashMap<String, String>,
+        options: crate::config::grammar::Options,
         source: &str,
         is_transient: bool,
     ) {
@@ -481,7 +487,7 @@ mod tests {
             "apt",
             "libssl3",
             None,
-            HashMap::new(),
+            Default::default(),
             "modules/dev.txt:2",
             false,
         );
@@ -513,7 +519,7 @@ mod tests {
     fn every_managed_row_carries_the_origin_it_was_given() {
         let mut r = reg();
         for source in ["modules/dev.txt:14", "adopt", "imperative", "hook:choco"] {
-            r.add("apt", "jq", None, HashMap::new(), source, false);
+            r.add("apt", "jq", None, Default::default(), source, false);
             let row = r.packages.iter().find(|p| p.name == "jq").unwrap();
             assert_eq!(row.source, source);
             assert!(!row.source.is_empty());

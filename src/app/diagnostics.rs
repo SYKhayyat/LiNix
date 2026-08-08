@@ -60,10 +60,10 @@ impl DiagnosticDb {
         let mut rules = Vec::new();
 
         let mut ssl = HashMap::new();
-        ssl.insert("apt".into(), "libssl-dev".into());
-        ssl.insert("dnf".into(), "openssl-devel".into());
-        ssl.insert("pacman".into(), "openssl".into());
-        ssl.insert("brew".into(), "openssl@3".into());
+        ssl.insert("apt".to_string(), "libssl-dev".into());
+        ssl.insert("dnf".to_string(), "openssl-devel".into());
+        ssl.insert("pacman".to_string(), "openssl".into());
+        ssl.insert("brew".to_string(), "openssl@3".into());
         rules.push(DiagnosticRule {
             pattern: r"openssl/ssl\.h|libssl|cannot find -lssl|SSL_library_init".into(),
             suggestions: ssl,
@@ -73,10 +73,10 @@ impl DiagnosticDb {
         });
 
         let mut build = HashMap::new();
-        build.insert("apt".into(), "build-essential".into());
-        build.insert("dnf".into(), "development-tools".into());
-        build.insert("pacman".into(), "base-devel".into());
-        build.insert("brew".into(), "gcc".into());
+        build.insert("apt".to_string(), "build-essential".into());
+        build.insert("dnf".to_string(), "development-tools".into());
+        build.insert("pacman".to_string(), "base-devel".into());
+        build.insert("brew".to_string(), "gcc".into());
         rules.push(DiagnosticRule {
             pattern: r"cc1plus|stdio\.h|stdlib\.h|g\+\+ not found|make: command not found".into(),
             suggestions: build,
@@ -86,8 +86,8 @@ impl DiagnosticDb {
         });
 
         let mut zlib = HashMap::new();
-        zlib.insert("apt".into(), "zlib1g-dev".into());
-        zlib.insert("brew".into(), "zlib".into());
+        zlib.insert("apt".to_string(), "zlib1g-dev".into());
+        zlib.insert("brew".to_string(), "zlib".into());
         rules.push(DiagnosticRule {
             pattern: r"zlib\.h|cannot find -lz".into(),
             suggestions: zlib,

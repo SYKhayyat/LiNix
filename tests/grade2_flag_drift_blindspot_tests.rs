@@ -130,11 +130,11 @@ async fn a_capability_flag_is_sent_exactly_when_the_tool_documents_it() {
             ..Default::default()
         };
         spec.options
-            .insert("unverified".to_string(), "true".to_string());
+            .set("unverified".to_string(), "true".to_string());
         // The install source, where the backend demands one — helm's `plugin install` takes a
         // URL, and without it the call fails before it builds an argv at all.
         if let Some(key) = linix::backends::capability::install_source_key(&name) {
-            spec.options.insert(
+            spec.options.set(
                 key.to_string(),
                 "https://example.invalid/linix-drift-probe".to_string(),
             );

@@ -256,10 +256,10 @@ impl SettingBackendCore {
     fn scope_of(
         &self,
         adapter: &SettingAdapter,
-        written: Option<&String>,
+        written: Option<&str>,
         name: &str,
     ) -> Result<Scope> {
-        let scope = Scope::resolve(written.map(String::as_str), Scope::User);
+        let scope = Scope::resolve(written, Scope::User);
         if scope == Scope::System && !adapter.has_system_scope() {
             return Err(Error::Validation(format!(
                 "`setting:{}` asks for scope=system, and the `{}` store LiNix found here has \
@@ -326,8 +326,7 @@ impl Installable for SettingInstallable {
             let (schema, key) = SettingBackendCore::split(&spec.name)?;
             let want = spec
                 .options
-                .get("value")
-                .map(String::as_str)
+                .one("value")
                 .ok_or_else(|| {
                     Error::Validation(format!("`setting:{}` has no value", spec.name))
                 })?;
@@ -337,7 +336,7 @@ impl Installable for SettingInstallable {
             };
             let scope = self
                 .core
-                .scope_of(adapter, spec.options.get("scope"), &spec.name)?;
+                .scope_of(adapter, spec.options.one("scope"), &spec.name)?;
 
             // Read before write: only touch the store when it does not already hold `want`,
             // so a settled sync runs no command at all. Read in the SAME scope it will write:
@@ -597,7 +596,7 @@ mod tests {
         // that checked first.
         let core = SettingBackendCore::new(CommandExecutor::new(true, false), adapters(vec![]));
         let err = core
-            .scope_of(&gsettings(), Some(&"system".to_string()), "org.gnome.x/k")
+            .scope_of(&gsettings(), Some("system"), "org.gnome.x/k")
             .expect_err("system scope on a user-only store must be refused")
             .to_string();
         assert!(err.contains("gsettings"), "{}", err);
@@ -611,7 +610,7 @@ mod tests {
         let core = SettingBackendCore::new(CommandExecutor::new(true, false), adapters(vec![]));
         let g = gsettings();
         assert_eq!(
-            core.scope_of(&g, Some(&"user".to_string()), "org.gnome.x/k")
+            core.scope_of(&g, Some("user"), "org.gnome.x/k")
                 .unwrap(),
             Scope::User
         );

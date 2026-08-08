@@ -101,7 +101,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("locks").join("probe.toml");
         let mut p = Probe::new();
-        p.entries.insert("a".into(), "b".into());
+        p.entries.insert("a".to_string(), "b".into());
         p.save(&path).unwrap();
         assert!(path.exists(), "save did not create locks/");
         assert_eq!(Probe::load(&path).unwrap(), p);

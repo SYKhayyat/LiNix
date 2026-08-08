@@ -207,7 +207,7 @@ impl Dotfiles<'_> {
             .flat_map(|tree| {
                 tree.plan.placements.iter().map(move |placement| {
                     let mut opts = Options::default();
-                    opts.insert("target", placement.destination.display().to_string());
+                    opts.insert("target".to_string(), placement.destination.display().to_string());
                     (
                         Statement::Link(placement.source.display().to_string(), opts),
                         tree.origin.clone(),
@@ -330,7 +330,7 @@ mod tests {
 
     fn link(name: &str, target: &str) -> (Statement, Origin) {
         let mut opts = Options::default();
-        opts.insert("target", target);
+        opts.insert("target".to_string(), target);
         (
             Statement::Link(name.to_string(), opts),
             Origin::new("modules/files.txt", 1),

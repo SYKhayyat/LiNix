@@ -71,7 +71,7 @@ impl Installable for BrewInstallable {
         // Only some formulae publish versioned variants; otherwise brew installs latest.
         let targets: Vec<String> = specs
             .iter()
-            .map(|spec| match spec.options.get("version") {
+            .map(|spec| match spec.options.one("version") {
                 Some(v) if crate::backends::concrete_version(v) => format!("{}@{}", spec.name, v),
                 _ => spec.name.clone(),
             })
@@ -165,19 +165,19 @@ impl Queryable for BrewQueryable {
         if let Some(installed) = first["installed"].as_array().and_then(|a| a.first()) {
             if let Some(path) = installed["installed_as_dependency"].as_bool() {
                 pkg.properties
-                    .insert("installed_as_dependency".into(), path.to_string());
+                    .insert("installed_as_dependency".to_string(), path.to_string());
             }
             // The install path is the prefix of the installed keg
             if let Some(prefix) = installed["prefix"].as_str() {
                 pkg.properties
-                    .insert("install_path".into(), prefix.to_string());
+                    .insert("install_path".to_string(), prefix.to_string());
             }
         }
         // Fallback: use the cellar path
         if !pkg.properties.contains_key("install_path") {
             if let Some(cellar) = first["cellar"].as_str() {
                 pkg.properties
-                    .insert("install_path".into(), format!("{}/{}", cellar, pkg_name));
+                    .insert("install_path".to_string(), format!("{}/{}", cellar, pkg_name));
             }
         }
         Ok(Some(pkg))

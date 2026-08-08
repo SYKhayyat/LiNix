@@ -2,7 +2,6 @@
 
 use linix::core::executor::DryRunOutput;
 use linix::core::PackageSpec;
-use std::collections::HashMap;
 use tokio::fs;
 
 mod mock_providers;
@@ -60,17 +59,19 @@ async fn test_ephemeral_shell_atomic_purge_isolation_logic() {
     {
         let mut state = kernel.state.lock().await;
 
-        state.add("brew", "git", None, HashMap::new(), "test", false);
+        state.add("brew", "git", None, Default::default(), "test", false);
 
         state.active_session_id = Some(target_session_id.to_string());
-        state.add("brew", "temp-tool-1", None, HashMap::new(), "test", true);
+        state.add("brew", "temp-tool-1", None, Default::default(), "test", true);
 
         state.active_session_id = Some(other_session_id.to_string());
-        state.add("brew", "temp-tool-2", None, HashMap::new(), "test", true);
+        state.add("brew", "temp-tool-2", None, Default::default(), "test", true);
     }
 
     kernel.mock_executor.set_response(
-        "brew uninstall temp-tool-1",
+        // With the terminator, because that is the argv. Without it the registration matched
+        // nothing and the purge ran against the mock's default (`LX-8`).
+        "brew uninstall -- temp-tool-1",
         Ok(DryRunOutput::default().into()),
     );
 
@@ -157,7 +158,7 @@ async fn test_ephemeral_shell_mount_point_resolution() {
     let spec = PackageSpec {
         name: "curl".into(),
         backend: "brew".into(),
-        options: HashMap::new(),
+        options: Default::default(),
         requires: vec![],
         present: true,
     };

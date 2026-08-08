@@ -15,12 +15,11 @@ use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope, Scope};
 use linix::app::sync::resolver::StateResolver;
 use linix::core::executor::DryRunOutput;
 use linix::core::PackageSpec;
-use std::collections::HashMap;
 
 /// Build a PackageSpec with a pinned version option.
 fn pinned_spec(backend: &str, name: &str, version: &str) -> PackageSpec {
-    let mut options = HashMap::new();
-    options.insert("version".to_string(), version.to_string());
+    let mut options = linix::config::grammar::Options::default();
+    options.set("version", version.to_string());
     PackageSpec {
         name: name.into(),
         backend: backend.into(),
@@ -65,20 +64,16 @@ async fn resolver_records_every_scope_a_package_belongs_to() {
         "one package, declared twice — not two packages"
     );
 
-    let scopes = spec
-        .options
-        .get("__scopes")
-        .expect("__scopes should be tagged");
-    let segments: Vec<&str> = scopes.split(';').collect();
+    // A list, since `LX-10`. It was one `;`-joined string that this test split back apart.
+    let scopes = spec.options.all("__scopes");
+    assert!(!scopes.is_empty(), "__scopes should be tagged");
     assert!(
-        segments.contains(&"profile:Work"),
-        "missing profile scope in {:?}",
-        scopes
+        scopes.iter().any(|s| s == "profile:Work"),
+        "missing profile scope in {scopes:?}"
     );
     assert!(
-        segments.contains(&"module:dev"),
-        "missing module scope in {:?}",
-        scopes
+        scopes.iter().any(|s| s == "module:dev"),
+        "missing module scope in {scopes:?}"
     );
 }
 
@@ -105,7 +100,7 @@ async fn scoped_upgrade_is_non_destructive_end_to_end() {
             "cargo",
             "out-of-scope-pkg",
             None,
-            HashMap::new(),
+            Default::default(),
             "manifest:other",
             false,
         );
@@ -236,7 +231,7 @@ async fn installed_but_undeclared_lists_the_dependency_closure_too() {
             "cargo",
             "ripgrep",
             None,
-            HashMap::new(),
+            Default::default(),
             "manifest:base",
             false,
         );

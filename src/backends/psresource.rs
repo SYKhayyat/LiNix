@@ -220,7 +220,7 @@ impl Installable for PsResourceInstallable {
             );
             if let Some(ver) = spec
                 .options
-                .get("version")
+                .one("version")
                 .filter(|v| crate::backends::concrete_version(v))
             {
                 validate_version(ver)?;

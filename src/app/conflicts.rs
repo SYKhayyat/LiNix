@@ -46,7 +46,7 @@ pub fn canonical_name(name: &str) -> String {
 
 /// The version a spec pins, if any (`@version=…`).
 fn pinned_version(spec: &PackageSpec) -> Option<String> {
-    spec.options.get("version").cloned()
+    spec.options.one("version").map(str::to_string)
 }
 
 /// Detect cross-backend conflicts in a flat set of desired specs. A group of specs sharing a
@@ -93,12 +93,12 @@ pub fn detect_conflicts(specs: &[PackageSpec]) -> Vec<Conflict> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    
 
     fn spec(backend: &str, name: &str, version: Option<&str>) -> PackageSpec {
-        let mut options = HashMap::new();
+        let mut options = crate::config::grammar::Options::default();
         if let Some(v) = version {
-            options.insert("version".to_string(), v.to_string());
+            options.set("version", v.to_string());
         }
         PackageSpec {
             name: name.into(),

@@ -13,7 +13,6 @@
 
 use linix::core::{GraphAction, PackageSpec, Transaction, TransactionConfig};
 use petgraph::stable_graph::StableDiGraph;
-use std::collections::HashMap;
 
 mod mock_providers;
 use mock_providers::TestKernel;
@@ -22,7 +21,7 @@ fn spec(backend: &str, name: &str, requires: &[&str]) -> PackageSpec {
     PackageSpec {
         name: name.into(),
         backend: backend.into(),
-        options: HashMap::new(),
+        options: Default::default(),
         requires: requires.iter().map(|s| s.to_string()).collect(),
         present: true,
     }

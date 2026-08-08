@@ -104,6 +104,9 @@ fn read_inner(
                 .with_hint(vocab.nesting.to_string()));
             }
             let (k, v) = options::parse_block_line(&origin, trimmed)?;
+            // `insert`, not `set`: II.2 makes a repeated key a list, so `formats = deb` on one
+            // line and `formats = tarball` on the next are two values of one key. A bulk rename
+            // to `set` here silently kept only the last one, and `priority`'s own test caught it.
             out[entry].options.insert(k, v);
             continue;
         }

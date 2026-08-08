@@ -81,8 +81,7 @@ impl Installable for MiseInstallable {
             .map(|spec| {
                 let version = spec
                     .options
-                    .get("version")
-                    .map(|v| v.as_str())
+                    .one("version")
                     .unwrap_or("latest");
                 format!("{}@{}", spec.name, version)
             })
@@ -158,7 +157,7 @@ impl Queryable for MiseQueryable {
                             .and_then(|t| t.as_str())
                         {
                             p.properties
-                                .insert("source_type".into(), source.to_string());
+                                .insert("source_type".to_string(), source.to_string());
                         }
                         packages.push(p);
                     }

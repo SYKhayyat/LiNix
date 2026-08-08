@@ -14,7 +14,6 @@
 use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
 use linix::app::sync::resolver::StateResolver;
 use linix::core::ManagedPackage;
-use std::collections::HashMap;
 use tokio::fs;
 
 mod mock_providers;
@@ -132,7 +131,7 @@ async fn a_managed_package_whose_manager_is_gone_is_not_reaped() {
             version: None,
             installed_at: 0,
             expires_at: None,
-            options: HashMap::new(),
+            options: Default::default(),
             source: "sync".into(),
             is_transient: false,
             session_id: None,

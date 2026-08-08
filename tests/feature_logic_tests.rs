@@ -73,12 +73,15 @@ async fn test_recursive_module_expansion_logic() {
     let curl_spec = brew_specs.iter().find(|s| s.name == "curl").unwrap();
     assert!(curl_spec
         .options
-        .get("__source")
+        .one("__source")
         .unwrap()
         .contains("network.txt:1"));
-    let scopes = curl_spec.options.get("__scopes").unwrap();
-    assert!(scopes.contains("module:network"), "{}", scopes);
-    assert!(scopes.contains("profile:Work"), "{}", scopes);
+    // `__scopes` is a list, so membership is a list question. It was a `;`-joined string that
+    // every reader split for itself, and `contains` on it could not tell `module:network` from
+    // `module:network-extras`.
+    let scopes = curl_spec.options.all("__scopes");
+    assert!(scopes.iter().any(|s| s == "module:network"), "{scopes:?}");
+    assert!(scopes.iter().any(|s| s == "profile:Work"), "{scopes:?}");
 }
 
 /// W13: the plan explains a variable-driven change by diffing this run's variables against the
@@ -177,7 +180,7 @@ async fn test_sync_report_generation_schema_fidelity() {
         vec![PackageSpec {
             name: "ripgrep".into(),
             backend: "brew".into(),
-            options: HashMap::from([("__source".into(), "module:dev-tools".into())]),
+            options: { let mut o = linix::config::grammar::Options::default(); o.insert("__source".to_string(), "module:dev-tools"); o },
             requires: vec![],
             present: true,
         }],
@@ -240,14 +243,14 @@ async fn test_scoped_planner_filtering_accuracy() {
             PackageSpec {
                 name: "pkg-work".into(),
                 backend: "brew".into(),
-                options: HashMap::from([("__scopes".into(), "module:dev;profile:Work".into())]),
+                options: { let mut o = linix::config::grammar::Options::default(); o.insert("__scopes".to_string(), "module:dev"); o.insert("__scopes".to_string(), "profile:Work"); o },
                 requires: vec![],
                 present: true,
             },
             PackageSpec {
                 name: "pkg-home".into(),
                 backend: "brew".into(),
-                options: HashMap::from([("__scopes".into(), "module:media;profile:Home".into())]),
+                options: { let mut o = linix::config::grammar::Options::default(); o.insert("__scopes".to_string(), "module:media"); o.insert("__scopes".to_string(), "profile:Home"); o },
                 requires: vec![],
                 present: true,
             },

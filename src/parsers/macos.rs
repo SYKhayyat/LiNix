@@ -23,7 +23,7 @@ pub fn parse_mas_list(output: &str) -> ParseResult {
             // Store the human-readable name in properties as 'mas' packages
             // are primary identified by their numeric ID.
             p.properties
-                .insert("human_name".into(), name.trim().to_string());
+                .insert("human_name".to_string(), name.trim().to_string());
             Some(p)
         })
         .collect();
@@ -45,7 +45,7 @@ pub fn parse_mas_search(output: &str) -> Vec<Package> {
             let name = parts[1..].join(" ");
 
             let mut p = Package::new(id, "mas");
-            p.properties.insert("human_name".into(), name);
+            p.properties.insert("human_name".to_string(), name);
             Some(p)
         })
         .collect()
@@ -100,7 +100,7 @@ pub fn parse_macports_search(output: &str) -> Vec<Package> {
             if let Some((_, desc)) = line.split_once("): ") {
                 let desc = desc.trim();
                 if !desc.is_empty() {
-                    p.properties.insert("description".into(), desc.to_string());
+                    p.properties.insert("description".to_string(), desc.to_string());
                 }
             }
             Some(p)

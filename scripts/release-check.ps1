@@ -81,6 +81,32 @@ Write-Host "-> cargo build --release"
 cargo build --release
 if ($LASTEXITCODE -eq 0) { Pass "release build succeeds" } else { Fail "release build FAILED" }
 
+# The `supply-chain` and `msrv` CI jobs, run locally. A CI job nothing local drives is a gate a
+# developer finds out about from a red push, which is what grade6_gate_parity asserts against.
+# Both are soft here and hard in CI: cargo-deny and a pinned toolchain are installs a contributor
+# may not have, and a release script that refuses to run without them stops being run.
+# Twin of the same block in release-check.sh - change one, change the other.
+Write-Host "-> cargo deny check (advisories, bans, licences, sources)"
+if (Get-Command cargo-deny -ErrorAction SilentlyContinue) {
+    cargo deny check advisories bans licenses sources
+    if ($LASTEXITCODE -eq 0) { Pass "cargo deny: clean" } else { Fail "cargo deny: findings - see above" }
+} else {
+    Info "cargo-deny not installed (cargo install cargo-deny --locked); CI runs it regardless"
+}
+
+Write-Host "-> cargo check on the declared MSRV"
+$msrvLine = Select-String -Path "Cargo.toml" -Pattern '^rust-version' | Select-Object -First 1
+$msrv = if ($null -ne $msrvLine) { ($msrvLine.Line -split '"')[1] } else { $null }
+if ($null -eq $msrv) {
+    Fail "Cargo.toml declares no rust-version - the MSRV job has nothing to pin to"
+} elseif ((rustup toolchain list) -match "^$msrv") {
+    cargo "+$msrv" check --all-targets --locked
+    if ($LASTEXITCODE -eq 0) { Pass "builds on the declared MSRV ($msrv)" }
+    else { Fail "does NOT build on rust-version = $msrv - raise it deliberately or fix the use" }
+} else {
+    Info "toolchain $msrv not installed (rustup toolchain install $msrv); CI runs it regardless"
+}
+
 # CI runs this on every push and this gate did not run it at all, so the one check that asks
 # whether the harnesses' own predicates work could fail in CI after a local GO.
 Write-Host "-> scripts/harness-logic-test.sh"

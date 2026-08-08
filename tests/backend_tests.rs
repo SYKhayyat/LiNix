@@ -2,7 +2,6 @@
 
 use linix::core::executor::DryRunOutput;
 use linix::core::{BackendCapabilities, PackageSpec};
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -23,7 +22,7 @@ async fn run_capability_test(backend: Arc<BackendCapabilities>, package_name: &s
     let spec = PackageSpec {
         name: package_name.to_string(),
         backend: backend.name().to_string(),
-        options: HashMap::new(),
+        options: Default::default(),
         requires: vec![],
         present: true,
     };
@@ -159,7 +158,9 @@ async fn test_cargo_backend_hermetic_logic() {
         Ok(DryRunOutput::default().into()),
     );
     kernel.mock_executor.set_response(
-        "cargo uninstall ripgrep",
+        // With the terminator, because that is what runs. Without it this registration matched
+        // nothing and the assertion below passed on the mock's default answer.
+        "cargo uninstall -- ripgrep",
         Ok(DryRunOutput::default().into()),
     );
 
@@ -186,11 +187,8 @@ async fn test_link_backend_vfs_integrity() {
         .unwrap();
     let target_path = kernel.tmp.path().join("target_link.conf");
 
-    let mut options = HashMap::new();
-    options.insert(
-        "target".to_string(),
-        target_path.to_string_lossy().to_string(),
-    );
+    let mut options = linix::config::grammar::Options::default();
+    options.set("target", target_path.to_string_lossy().to_string());
 
     let spec = PackageSpec {
         name: source_path.to_string_lossy().to_string(),

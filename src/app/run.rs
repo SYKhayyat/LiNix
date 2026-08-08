@@ -48,7 +48,7 @@ impl Runner {
         for pkg_str in packages {
             let specs = self.resolve_spec(pkg_str).await?;
             for spec in specs {
-                if spec.options.get("sandbox") == Some(&"true".to_string()) {
+                if spec.options.one("sandbox") == Some("true") {
                     sandbox_requested = true;
                 }
                 resolved_specs.push(spec);

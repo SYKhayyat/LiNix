@@ -42,7 +42,7 @@ pub fn parse_dnf_search(output: &str) -> Vec<Package> {
             }
             let mut p = Package::new(name, "dnf");
             p.properties
-                .insert("description".into(), desc.trim().to_string());
+                .insert("description".to_string(), desc.trim().to_string());
             Some(p)
         })
         .collect()
@@ -93,12 +93,12 @@ pub fn parse_zypper_search(output: &str) -> ParseResult {
                 }
 
                 let mut p = Package::new(name, "zypper");
-                p.properties.insert("summary".into(), summary.to_string());
-                p.properties.insert("status_raw".into(), status.to_string());
+                p.properties.insert("summary".to_string(), summary.to_string());
+                p.properties.insert("status_raw".to_string(), status.to_string());
 
                 // If status contains 'i', it's already installed
                 if status.contains('i') {
-                    p.properties.insert("installed".into(), "true".into());
+                    p.properties.insert("installed".to_string(), "true".into());
                 }
 
                 Some(p)

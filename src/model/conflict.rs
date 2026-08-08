@@ -77,6 +77,8 @@ fn contradicts(a: &Declared, b: &Declared) -> bool {
 fn merge(mut a: Declared, b: Declared) -> Declared {
     for (k, vs) in b.options.iter() {
         if !a.options.contains(k) {
+            // `insert`, not `set`: this loop copies every value of a key, and `set` would keep
+            // only the last one — a merged declaration losing all but one of its `requires`.
             for v in vs {
                 a.options.insert(k, v.clone());
             }
@@ -222,7 +224,7 @@ mod tests {
         let suspended = Declared {
             options: {
                 let mut o = Options::default();
-                o.insert("until", "2026-07-18T00:00");
+                o.insert("until".to_string(), "2026-07-18T00:00");
                 o
             },
             origin: Origin::new("modules/focus.txt", 1),

@@ -482,13 +482,13 @@ pub struct Declared {
 ///
 /// The absent tag is the built-in default: `to_spec` writes the tag only when a level above
 /// it answered.
-fn format_choice(backend: &str, options: &HashMap<String, String>) -> Option<String> {
+fn format_choice(backend: &str, options: &crate::config::grammar::Options) -> Option<String> {
     if !crate::backends::capability::selects_artifacts(backend) {
         return None;
     }
     let read = crate::backends::artifact::ArtifactOptions::read(options).ok()?;
     let order = read.resolved_formats(&crate::backends::artifact::default_formats());
-    let from = match options.get("__formats_from").map(String::as_str) {
+    let from = match options.one("__formats_from") {
         Some("line") => "set on the line".to_string(),
         Some(_) => format!("set by `{}` in `priority`", backend),
         None => "the built-in default for this machine".to_string(),
@@ -502,14 +502,19 @@ fn format_choice(backend: &str, options: &HashMap<String, String>) -> Option<Str
 /// A tag whose shape does not parse is shown as written rather than dropped: a `why` that
 /// silently loses the reason a package is here is the failure it exists to prevent.
 fn gating_of(
-    options: &HashMap<String, String>,
+    options: &crate::config::grammar::Options,
     vars: &crate::model::vars::Vars,
     origins: &crate::model::vars::VarOrigins,
 ) -> Vec<Gating> {
-    let Some(tag) = options.get("__gated_by") else {
+    // The tag is a list and arrives as one. It was a `;`-joined string that this split back
+    // apart, which meant a gate predicate containing a semicolon became two gates.
+    let gates = options.all("__gated_by");
+    if gates.is_empty() {
         return Vec::new();
-    };
-    tag.split(';')
+    }
+    gates
+        .iter()
+        .map(|entry| entry.as_str())
         .map(
             |entry| match entry.parse::<crate::config::grammar::Gate>() {
                 Ok(gate) => Gating {
@@ -568,15 +573,10 @@ async fn declarations_of(app: &App, backend: &str, name: &str) -> Result<Declare
         out.declarations.push(Declaration {
             at: spec
                 .options
-                .get("__source")
-                .cloned()
+                .one("__source").map(str::to_string)
                 .unwrap_or_else(|| "an unknown file".to_string()),
-            scopes: spec
-                .options
-                .get("__scopes")
-                .map(|s| s.split(';').map(str::to_string).collect())
-                .unwrap_or_default(),
-            from_regex: spec.options.get("__from_regex").cloned(),
+            scopes: spec.options.all("__scopes").to_vec(),
+            from_regex: spec.options.one("__from_regex").map(str::to_string),
             lapsed: lapsed_keys.contains(&key.as_str()),
         });
     }
@@ -868,11 +868,14 @@ mod tests {
         }
     }
 
-    fn opts(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
+    fn opts(pairs: &[(&str, &str)]) -> crate::config::grammar::Options {
+        let mut o = crate::config::grammar::Options::default();
+        for (k, v) in pairs {
+            for part in v.split(';') {
+                o.insert(*k, part);
+            }
+        }
+        o
     }
 
     #[test]

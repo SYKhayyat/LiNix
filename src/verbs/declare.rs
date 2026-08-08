@@ -438,7 +438,7 @@ pub async fn record_hooked_target(
                 manager,
                 &name,
                 None,
-                std::collections::HashMap::new(),
+                Default::default(),
                 &source,
                 false,
             );
@@ -524,7 +524,7 @@ pub async fn handle_hook_reconcile(app: &App, manager: &str) -> Result<()> {
                     manager,
                     &pkg.name,
                     pkg.version.clone(),
-                    std::collections::HashMap::new(),
+                    Default::default(),
                     &format!("hook:{manager}"),
                     false,
                 );

@@ -63,7 +63,7 @@ pub fn parse_npm_registry(json: &serde_json::Value, backend: &str) -> Vec<Packag
                 p.version = Some(v.to_string());
             }
             if let Some(desc) = pkg["description"].as_str() {
-                p.properties.insert("description".into(), desc.to_string());
+                p.properties.insert("description".to_string(), desc.to_string());
             }
             results.push(p);
         }

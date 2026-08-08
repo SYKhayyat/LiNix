@@ -367,7 +367,7 @@ impl SnapshotRestore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    
 
     fn reg(pkgs: &[(&str, &str, &str)]) -> StateRegistry {
         let mut r = StateRegistry::default();
@@ -376,7 +376,7 @@ mod tests {
                 backend,
                 name,
                 Some(version.to_string()),
-                HashMap::new(),
+                Default::default(),
                 "imperative",
                 false,
             );

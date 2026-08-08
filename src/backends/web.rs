@@ -180,7 +180,7 @@ impl Installable for WebInstallable {
                 .await
                 .map_err(Error::from)?;
 
-            if let Some(expected_sha) = spec.options.get("sha256") {
+            if let Some(expected_sha) = spec.options.one("sha256") {
                 verify_checksum(&dl_path, expected_sha).await?;
             }
 

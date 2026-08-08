@@ -67,11 +67,10 @@ const LEDGER: &[Accounted] = &[
                      (GuardScope::Heal) before that entry becomes a node; the rollback \
                      removal at :714 is enforced at :688",
     },
-    Accounted {
-        file: "src/verbs/cleanup.rs",
-        guarded_by: "enforce at cleanup.rs:57 (RemoveOrphans) and enforce_deliberate at :220 \
-                     (PurgeUndeclared)",
-    },
+    // `src/verbs/cleanup.rs` was here, and its absence is `LX-5` landing: `remove-orphans` and
+    // `purge-undeclared` each kept a private removal loop, and both now build a graph and hand it
+    // to `SyncEngine`. The file reaches no `inst.remove` of its own, so it is not a removal
+    // surface — the guard covering it is the engine's, counted under `core/transaction.rs`.
     Accounted {
         file: "src/verbs/declare.rs",
         guarded_by: "guard::enforce_extras at declare.rs:36, GuardScope::Remove (W21) — the \

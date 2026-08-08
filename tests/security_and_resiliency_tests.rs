@@ -1,5 +1,6 @@
 // tests/security_and_resiliency_tests.rs
 
+use linix::app::sync::guard::{GuardScope, Reaped};
 use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
 use linix::core::executor::DryRunOutput;
 use linix::core::{Error, GraphAction, Transaction, TransactionConfig, Validator};
@@ -89,12 +90,12 @@ async fn test_planner_protects_mission_critical_closure() {
 
     {
         let mut state = kernel.state.lock().await;
-        state.add("apt", "sudo", None, HashMap::new(), "test", false);
+        state.add("apt", "sudo", None, Default::default(), "test", false);
         state.add(
             "apt",
             "linux-image-generic",
             None,
-            HashMap::new(),
+            Default::default(),
             "test",
             false,
         );
@@ -162,7 +163,11 @@ async fn test_transaction_atomic_rollback_fidelity() {
         kernel.app.diagnostics.clone(),
         kernel.app.config.clone(),
         TransactionConfig::default(),
-    );
+    )
+    .guarded_by(Reaped::for_reason(
+        GuardScope::Remove,
+        "a unit test of the transaction effector, not of the guard",
+    ));
 
     let result = tx.execute().await;
 
@@ -225,7 +230,11 @@ async fn rollback_after_failure(
         kernel.app.diagnostics.clone(),
         kernel.app.config.clone(),
         TransactionConfig::default(),
-    );
+    )
+    .guarded_by(Reaped::for_reason(
+        GuardScope::Remove,
+        "a unit test of the transaction effector, not of the guard",
+    ));
     let err = tx
         .execute()
         .await
@@ -449,7 +458,14 @@ async fn attempts_for(
         kernel.app.diagnostics.clone(),
         kernel.app.config.clone(),
         impatient(),
-    );
+    )
+    // `LX-2`: a transaction that may remove needs a token the guard minted. This is a unit
+    // test of the effector, which the token's own doc lists as a legitimate mint — threading a
+    // real Config and BackendRegistry through here would prove nothing about the guard.
+    .guarded_by(Reaped::for_reason(
+        GuardScope::Remove,
+        "a unit test of the transaction effector, not of the guard",
+    ));
     let _ = tx.execute().await;
 
     kernel
@@ -555,7 +571,14 @@ async fn a_permanent_removal_failure_is_attempted_once() {
         kernel.app.diagnostics.clone(),
         kernel.app.config.clone(),
         impatient(),
-    );
+    )
+    // `LX-2`: a transaction that may remove needs a token the guard minted. This is a unit
+    // test of the effector, which the token's own doc lists as a legitimate mint — threading a
+    // real Config and BackendRegistry through here would prove nothing about the guard.
+    .guarded_by(Reaped::for_reason(
+        GuardScope::Remove,
+        "a unit test of the transaction effector, not of the guard",
+    ));
     let _ = tx.execute().await;
 
     let attempts = kernel

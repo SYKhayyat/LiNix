@@ -44,9 +44,9 @@ impl std::fmt::Display for Unrecognised {
         write!(
             f,
             "`{}` answered with {} line(s) this parser does not recognise, the first being \
-             `{}`. Its output format has probably changed. Refusing to read that as an empty \
-             machine, which would plan every declared package as a fresh install and drop every \
-             removal.",
+             `{}`. Its output format has probably changed. This is not read as an empty \
+             machine: that reading would plan every declared package as a fresh install and \
+             drop every removal.",
             self.backend, self.data_lines, self.sample
         )
     }
@@ -108,6 +108,27 @@ pub fn data_lines(clean: &str) -> Vec<&str> {
 pub fn or_unrecognised(backend: &str, found: Vec<Package>, candidates: &[&str]) -> ParseResult {
     if !found.is_empty() || candidates.is_empty() {
         return Ok(found);
+    }
+    // **A document that parses is a document that was read.** `pipx list --json` on an empty
+    // machine prints `nothing has been installed with pipx` and then
+    // `{"pipx_spec_version": "0.1", "venvs": {}}` — four lines of JSON that are not prose and
+    // not package rows, so the line count said "unread" about an answer the reader understood
+    // perfectly. Measured on a real Windows box, 2026-08-07, where `linix list` warned about
+    // pipx on every run.
+    //
+    // Line-counting is the right default for text listings and the wrong one for a structured
+    // answer: the question there is whether the shape parsed, and if it did, empty is empty.
+    // From the first line that opens a document, not from the top: pipx prints its sentence
+    // above the JSON, and that sentence is not prose by the general rule — no trailing full
+    // stop, so nothing else would have dropped it.
+    if let Some(start) = candidates
+        .iter()
+        .position(|l| l.trim_start().starts_with(['{', '[']))
+    {
+        let joined = candidates[start..].join("\n");
+        if serde_json::from_str::<serde_json::Value>(joined.trim()).is_ok() {
+            return Ok(found);
+        }
     }
     Err(Unrecognised {
         backend: backend.to_string(),

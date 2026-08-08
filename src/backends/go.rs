@@ -168,9 +168,8 @@ impl Installable for GoInstallable {
             } else {
                 let ver = spec
                     .options
-                    .get("version")
+                    .one("version")
                     .filter(|v| crate::backends::concrete_version(v))
-                    .map(|s| s.as_str())
                     .unwrap_or("latest");
                 format!("{}@{}", spec.name, ver)
             };
@@ -263,7 +262,7 @@ impl GoQueryable {
                 Some(v) => Package::with_version(&name, &v, "go"),
                 None => Package::new(name, "go"),
             };
-            pkg.properties.insert("bin_path".into(), path_str);
+            pkg.properties.insert("bin_path".to_string(), path_str);
             packages.push(pkg);
         }
         Ok(packages)

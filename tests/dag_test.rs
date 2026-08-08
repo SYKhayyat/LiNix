@@ -22,21 +22,21 @@ async fn test_dag_execution_order_wiring() {
     let spec_a = PackageSpec {
         name: "compiler-core".into(),
         backend: "brew".into(),
-        options: HashMap::new(),
+        options: Default::default(),
         requires: vec![],
         present: true,
     };
     let spec_b = PackageSpec {
         name: "build-system".into(),
         backend: "brew".into(),
-        options: HashMap::new(),
+        options: Default::default(),
         requires: vec![],
         present: true,
     };
     let spec_c = PackageSpec {
         name: "complex-app".into(),
         backend: "brew".into(),
-        options: HashMap::new(),
+        options: Default::default(),
         requires: vec!["brew:compiler-core".into(), "brew:build-system".into()],
         present: true,
     };
@@ -104,14 +104,14 @@ async fn test_circular_dependency_detection_wiring() {
             PackageSpec {
                 name: "loop-a".into(),
                 backend: "brew".into(),
-                options: HashMap::new(),
+                options: Default::default(),
                 requires: vec!["brew:loop-b".into()],
                 present: true,
             },
             PackageSpec {
                 name: "loop-b".into(),
                 backend: "brew".into(),
-                options: HashMap::new(),
+                options: Default::default(),
                 requires: vec!["brew:loop-a".into()],
                 present: true,
             },

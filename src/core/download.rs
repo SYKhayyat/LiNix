@@ -22,7 +22,7 @@ use crate::core::{Error, PackageSpec, Result};
 
 /// Whether a bare flag is set on a spec. The grammar stores a bare `@flag` as `"true"`.
 fn flag(spec: &PackageSpec, name: &str) -> bool {
-    spec.options.get(name).is_some_and(|v| v == "true")
+    spec.options.one(name).is_some_and(|v| v == "true")
 }
 
 pub fn allows_http(spec: &PackageSpec) -> bool {
@@ -62,7 +62,7 @@ pub fn check_scheme(url: &str, allow_http: bool, what: &str) -> Result<()> {
 /// different bytes later is refused. The HTTPS half still applies to it, on every redirect
 /// hop.
 pub fn check_checksum_declared(spec: &PackageSpec) -> Result<()> {
-    if spec.options.contains_key("sha256") || is_unverified(spec) {
+    if spec.options.contains("sha256") || is_unverified(spec) {
         return Ok(());
     }
     Err(Error::Refused(format!(
@@ -88,16 +88,13 @@ pub fn client(allow_http: bool, user_agent: &str) -> Result<reqwest::Client> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    
 
     fn spec(opts: &[(&str, &str)]) -> PackageSpec {
         PackageSpec {
             name: "http://example.invalid/x".into(),
             backend: "web".into(),
-            options: opts
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect::<HashMap<_, _>>(),
+            options: opts.iter().map(|(k, v)| (*k, *v)).collect(),
             requires: vec![],
             present: true,
         }

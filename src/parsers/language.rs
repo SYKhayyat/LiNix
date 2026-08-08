@@ -29,7 +29,27 @@ pub fn parse_installed(backend: &str, output: &str) -> ParseResult {
         "pip" => parse_pip_json(&clean),
         "pipx" => parse_pipx_json(&clean),
         "cargo" => parse_cargo_list(&clean),
-        "yarn" => parse_yarn_list(&clean),
+        // yarn brackets every command with its own chrome — `yarn global v1.22.22` on the way in
+        // and `Done in 0.67s.` on the way out — so an EMPTY global install still prints two
+        // lines. Neither is prose by the general rule (no trailing colon, no leading digit, and
+        // "Done in 0.67s." is a three-word sentence), so the unread check counted them as rows it
+        // had failed to read and `linix list` warned about yarn on every run of a machine with no
+        // global packages. Measured on a real Windows box, 2026-08-07.
+        //
+        // Dropped here rather than in `is_prose_line`, because "what yarn prints around its
+        // answer" is knowledge about yarn, and the general rule is for what every manager does.
+        "yarn" => {
+            let body: String = clean
+                .lines()
+                .filter(|l| !is_yarn_chrome(l))
+                .collect::<Vec<_>>()
+                .join("\n");
+            return or_unrecognised(
+                backend,
+                parse_yarn_list(&body),
+                &crate::parsers::data_lines(&body),
+            );
+        }
         "gem" => parse_gem_list(&clean),
         "composer" => parse_composer_json(&clean),
         "go" => parse_go_list(&clean),
@@ -170,6 +190,12 @@ fn parse_cargo_list(output: &str) -> Vec<Package> {
 /// identical bug for the identical reason** (see `parse_bun_list`) — a parser written for a
 /// format the tool does not print, and nothing between them noticing, because an empty listing
 /// looks exactly like an empty machine.
+/// yarn's own banner and footer, which every `yarn` command prints whatever the answer is.
+fn is_yarn_chrome(line: &str) -> bool {
+    let t = line.trim();
+    t.starts_with("yarn global v") || t.starts_with("Done in ") || t.starts_with("warning ")
+}
+
 fn parse_yarn_list(output: &str) -> Vec<Package> {
     output
         .lines()
@@ -665,5 +691,80 @@ mod composer_outdated_tests {
         assert!(parse_composer_outdated("").is_empty());
         assert!(parse_composer_outdated("Changed current directory to /x\n").is_empty());
         assert!(parse_composer_outdated(r#"{"installed":[]}"#).is_empty());
+    }
+}
+
+/// The two listings a real machine had been failing to read, silently, until `LX-1` gave a
+/// parser the words for it.
+#[cfg(test)]
+mod an_empty_listing_is_not_an_unreadable_one_tests {
+    use super::*;
+
+    /// **Both of these were found by `linix list` on a real Windows box, 2026-08-07** — the run
+    /// that `LX-1` made capable of complaining. Before it, each was a silent empty listing, which
+    /// the planner reads as *"this machine has none of these"* and answers by installing every
+    /// declared package and dropping every removal.
+    ///
+    /// They are opposite mistakes with the same symptom, which is why both are pinned here.
+    #[test]
+    fn an_empty_pipx_is_empty_and_not_unreadable() {
+        // `pipx list --json` on a machine with nothing: a sentence, then a JSON document whose
+        // `venvs` object is empty. Four lines that are neither prose nor package rows, so the
+        // line count said "unread" about an answer the reader understood perfectly.
+        let out = "nothing has been installed with pipx 
+{
+    \"pipx_spec_version\": \"0.1\",
+    \"venvs\": {}
+}
+";
+        assert_eq!(
+            parse_installed("pipx", out).expect("an empty pipx is empty, not unreadable"),
+            Vec::new()
+        );
+    }
+
+    #[test]
+    fn a_populated_pipx_still_parses() {
+        // The other half: the JSON short-circuit must not swallow a real answer.
+        let out = r#"{"pipx_spec_version":"0.1","venvs":{"black":{"metadata":{"main_package":{"package":"black","package_version":"24.1.0"}}}}}"#;
+        let pkgs = parse_installed("pipx", out).expect("parses");
+        assert_eq!(pkgs.len(), 1);
+        assert_eq!(pkgs[0].name, "black");
+        assert_eq!(pkgs[0].version.as_deref(), Some("24.1.0"));
+    }
+
+    #[test]
+    fn an_empty_yarn_global_is_empty_and_not_unreadable() {
+        // yarn brackets every command with a banner and a footer, so an empty global install
+        // still prints two lines — and neither is prose by the general rule.
+        let out = "yarn global v1.22.22
+Done in 0.67s.
+";
+        assert_eq!(
+            parse_installed("yarn", out).expect("an empty yarn global is empty, not unreadable"),
+            Vec::new()
+        );
+    }
+
+    #[test]
+    fn a_populated_yarn_global_still_parses_through_its_own_chrome() {
+        let out = "yarn global v1.22.22
+info \"typescript@5.4.5\" has binaries:
+   - tsc
+Done in 0.67s.
+";
+        let pkgs = parse_installed("yarn", out).expect("parses");
+        assert_eq!(pkgs.len(), 1);
+        assert_eq!(pkgs[0].name, "typescript");
+        assert_eq!(pkgs[0].version.as_deref(), Some("5.4.5"));
+    }
+
+    /// The check that keeps the JSON short-circuit honest: a document that does NOT parse is
+    /// still unread, however many braces it opens with.
+    #[test]
+    fn broken_json_is_still_unreadable() {
+        assert!(parse_installed("pipx", "{
+  \"venvs\": {
+").is_err());
     }
 }

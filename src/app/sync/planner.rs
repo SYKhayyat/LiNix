@@ -161,7 +161,7 @@ fn node_origin(action: &GraphAction) -> Origin {
     match action {
         GraphAction::Install(spec) => spec
             .options
-            .get("__source")
+            .one("__source")
             .and_then(|s| s.parse::<Origin>().ok())
             .unwrap_or_else(Origin::argument),
         GraphAction::Remove { .. } => Origin::argument(),
@@ -457,8 +457,8 @@ impl SyncChanges {
                     report.install.push(ReportEntry {
                         backend: spec.backend.clone(),
                         name: spec.name.clone(),
-                        version: spec.options.get("version").cloned(),
-                        source: spec.options.get("__source").cloned(),
+                        version: spec.options.one("version").map(str::to_string),
+                        source: spec.options.one("__source").map(str::to_string),
                     });
                 }
                 GraphAction::Remove { name, backend } => {
@@ -814,11 +814,7 @@ impl<'a> ChangePlanner<'a> {
         for (backend, specs) in desired {
             let matched: Vec<PackageSpec> = specs
                 .iter()
-                .filter(|s| {
-                    s.options
-                        .get("__scopes")
-                        .is_some_and(|src| Self::in_scope(src, &wanted))
-                })
+                .filter(|s| Self::in_scope(s.options.all("__scopes"), &wanted))
                 .cloned()
                 .collect();
             if !matched.is_empty() {
@@ -830,12 +826,13 @@ impl<'a> ChangePlanner<'a> {
 
     /// Whether a package's `__scopes` tag holds this exact scope.
     ///
-    /// The resolver writes every scope a package belongs to, `;`-joined — `module:dev` and
-    /// `profile:Work` both, for a package a module holds and a profile reaches. The match
-    /// is on the whole segment, never a substring: `module:dev` must not match
-    /// `module:dev-tools`.
-    fn in_scope(scopes: &str, wanted: &str) -> bool {
-        scopes.split(';').any(|s| s.trim() == wanted)
+    /// The resolver writes every scope a package belongs to — `module:dev` and `profile:Work`
+    /// both, for a package a module holds and a profile reaches. **It is a list, and it used to
+    /// be those scopes `;`-joined into one string that this function split back apart**, which
+    /// meant a module named `dev;media` was two scopes to whoever split last. The match is still
+    /// on the whole entry, never a substring: `module:dev` must not match `module:dev-tools`.
+    fn in_scope(scopes: &[String], wanted: &str) -> bool {
+        scopes.iter().any(|s| s.trim() == wanted)
     }
 
     async fn identify_needed_actions(
@@ -894,7 +891,7 @@ impl<'a> ChangePlanner<'a> {
         if self.state.is_held(&spec.backend, &spec.name) {
             return Ok(false);
         }
-        if let Some(req_v) = spec.options.get("version") {
+        if let Some(req_v) = spec.options.one("version") {
             return Ok(installed
                 .version
                 .as_deref()
@@ -905,7 +902,7 @@ impl<'a> ChangePlanner<'a> {
         // channel is *readable*: a channel we cannot read is left alone rather than refreshed
         // on every sync, which would be worse than the drift it is meant to catch.
         let mut drifted = false;
-        if let Some(want) = spec.options.get("channel") {
+        if let Some(want) = spec.options.one("channel") {
             use crate::backends::capability::channel_risk;
             if let Some(current) = installed.properties.get("channel") {
                 drifted |= channel_risk(current) != channel_risk(want);
@@ -919,7 +916,7 @@ impl<'a> ChangePlanner<'a> {
         // nothing about confinement is not asking for strict, so it never schedules the
         // remove-and-reinstall that narrowing would take. Only an explicit `@classic=false`
         // does, and the backend refuses it by name rather than removing a declared package.
-        if let Some(want) = spec.options.get("classic") {
+        if let Some(want) = spec.options.one("classic") {
             if let Some(current) = installed.properties.get("classic") {
                 drifted |= current != want;
             }
@@ -943,27 +940,27 @@ impl<'a> ChangePlanner<'a> {
         // both a mount and a quota had only the mount looked at — the second option was dead the
         // moment somebody wrote the two together. `@channel` above had the identical fault and
         // is folded into the same accumulator (Q20).
-        if let Some(want) = spec.options.get("mount") {
+        if let Some(want) = spec.options.one("mount") {
             let current = installed.properties.get("mount").map(String::as_str);
             drifted |= current.map(|c| c.trim_end_matches('/')) != Some(want.trim_end_matches('/'));
         }
         // The option field of the fstab entry `@mount` wrote. Editing it and finding nothing
         // happens is the same defect as an editable `@quota` that never re-applies: the entry
         // on disk keeps yesterday's options and the next boot honours them.
-        if let Some(want) = spec.options.get("mount_options") {
+        if let Some(want) = spec.options.one("mount_options") {
             if let Some(current) = installed.properties.get("mount_options") {
                 drifted |= current != want;
             }
         }
         for key in ["quota", "size"] {
-            if let Some(want) = spec.options.get(key) {
+            if let Some(want) = spec.options.one(key) {
                 drifted |= limit_drifted(want, installed.properties.get(key));
             }
         }
         if drifted {
             return Ok(true);
         }
-        if spec.backend == "link" && spec.options.get("template") == Some(&"true".into()) {
+        if spec.backend == "link" && spec.options.one("template") == Some("true") {
             return Ok(self.template_needs_update(spec).await);
         }
         Ok(false)
@@ -1027,7 +1024,7 @@ impl<'a> ChangePlanner<'a> {
     }
 
     async fn template_needs_update(&self, spec: &PackageSpec) -> bool {
-        let target = match spec.options.get("target") {
+        let target = match spec.options.one("target") {
             Some(s) => Path::new(s),
             None => return true,
         };
@@ -1061,8 +1058,8 @@ mod tests {
         // V.45: the message must name what closed the loop, not just say one exists.
         let mut graph: StableDiGraph<GraphAction, ()> = StableDiGraph::new();
         let mk = |name: &str, src: &str| {
-            let mut options = HashMap::new();
-            options.insert("__source".to_string(), src.to_string());
+            let mut options = crate::config::grammar::Options::default();
+            options.set("__source", src.to_string());
             GraphAction::Install(PackageSpec {
                 name: name.into(),
                 backend: "apt".into(),
@@ -1113,7 +1110,7 @@ mod tests {
             version: None,
             installed_at: 0,
             expires_at: None,
-            options: HashMap::new(),
+            options: Default::default(),
             source: "test".into(),
             is_transient: false,
             session_id: None,
@@ -1550,29 +1547,32 @@ mod tests {
     }
 
     #[test]
-    fn scope_match_is_exact_segment() {
-        assert!(ChangePlanner::in_scope("module:dev", "module:dev"));
+    fn scope_match_is_exact_entry() {
+        let scopes = |names: &[&str]| -> Vec<String> { names.iter().map(|s| s.to_string()).collect() };
+
+        assert!(ChangePlanner::in_scope(&scopes(&["module:dev"]), "module:dev"));
 
         // Never a substring: `--module dev` must not sweep up `dev-tools`, and a scoped
         // upgrade acting on a package nobody named is the shape of the bug this repo is
         // named for.
-        assert!(!ChangePlanner::in_scope("module:dev-tools", "module:dev"));
-        assert!(!ChangePlanner::in_scope("module:dev", "module:dev-tools"));
+        assert!(!ChangePlanner::in_scope(&scopes(&["module:dev-tools"]), "module:dev"));
+        assert!(!ChangePlanner::in_scope(&scopes(&["module:dev"]), "module:dev-tools"));
 
         // A package belongs to every scope that declared it: the module that holds it and
-        // the profile that reaches it.
-        assert!(ChangePlanner::in_scope(
-            "module:dev;profile:Work",
-            "profile:Work"
-        ));
-        assert!(ChangePlanner::in_scope(
-            "module:dev;profile:Work",
-            "module:dev"
-        ));
-        assert!(!ChangePlanner::in_scope(
-            "module:dev;profile:Work",
-            "profile:Home"
-        ));
+        // the profile that reaches it. These were one `;`-joined string until the spec's
+        // options became the grammar's own type — and a module whose name contained a
+        // semicolon was two scopes to whoever split it.
+        let both = scopes(&["module:dev", "profile:Work"]);
+        assert!(ChangePlanner::in_scope(&both, "profile:Work"));
+        assert!(ChangePlanner::in_scope(&both, "module:dev"));
+        assert!(!ChangePlanner::in_scope(&both, "profile:Home"));
+
+        // The name a delimiter could not carry. It is one scope, and it matches itself and
+        // nothing else.
+        let awkward = scopes(&["module:a;b"]);
+        assert!(ChangePlanner::in_scope(&awkward, "module:a;b"));
+        assert!(!ChangePlanner::in_scope(&awkward, "module:a"));
+        assert!(!ChangePlanner::in_scope(&awkward, "b"));
     }
     /// The plan is displayed in a stable, sorted order regardless of how the graph was built
     /// — the node order follows dependency edges and a HashMap crawl, so without the sort in
@@ -1584,7 +1584,7 @@ mod tests {
             GraphAction::Install(PackageSpec {
                 name: name.into(),
                 backend: backend.into(),
-                options: HashMap::new(),
+                options: Default::default(),
                 requires: vec![],
                 present: true,
             })
@@ -1705,8 +1705,8 @@ mod tests {
     }
 
     fn declared(name: &str) -> PackageSpec {
-        let mut options = HashMap::new();
-        options.insert("__source".to_string(), "modules/dev.txt:1".to_string());
+        let mut options = crate::config::grammar::Options::default();
+        options.set("__source", "modules/dev.txt:1".to_string());
         PackageSpec {
             name: name.into(),
             backend: "deptest".into(),

@@ -506,8 +506,8 @@ list_pattern = 'SERVICE_NAME:\s+(\S+)'
         // Enablement declared *alongside* a status is still unanswered: the status half being
         // satisfied says nothing about the half that is not.
         let mut opts = Options::default();
-        opts.insert("status", "running");
-        opts.insert("enabled", "true");
+        opts.insert("status".to_string(), "running");
+        opts.insert("enabled".to_string(), "true");
         let both = Statement::Service("nginx".to_string(), opts);
         assert_eq!(
             in_effect(&config, &reg, &both, "service:nginx").await,

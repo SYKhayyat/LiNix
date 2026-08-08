@@ -651,8 +651,7 @@ pub async fn handle_absent(app: &App) -> Result<()> {
     for spec in absent {
         let source = spec
             .options
-            .get("__source")
-            .map(String::as_str)
+            .one("__source")
             .unwrap_or("?");
         println!("{:<15} {:<25} {}", spec.backend, spec.name, source);
     }

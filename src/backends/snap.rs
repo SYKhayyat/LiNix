@@ -69,13 +69,13 @@ pub struct SnapInstallable {
 fn install_args(spec: &PackageSpec) -> Vec<String> {
     let mut args = vec!["install".to_string()];
 
-    if spec.options.get("classic") == Some(&"true".to_string()) {
+    if spec.options.one("classic") == Some("true") {
         args.push("--classic".into());
     }
 
-    if let Some(channel) = spec.options.get("channel") {
+    if let Some(channel) = spec.options.one("channel") {
         args.push("--channel".into());
-        args.push(channel.clone());
+        args.push(channel.to_string());
     }
 
     crate::core::argv::push_names(&mut args, "snap", [&spec.name]);
@@ -141,14 +141,14 @@ fn installed_state(output: &str) -> Option<SnapState> {
 /// **Both switches ride one refresh.** A snap that needs a channel *and* a confinement change
 /// used to get only the channel — the branch that built the refresh looked at `@channel` alone,
 /// so writing the two options together silently dropped one.
-fn refresh_args(name: &str, channel: Option<&String>, to_classic: bool) -> Option<Vec<String>> {
+fn refresh_args(name: &str, channel: Option<&str>, to_classic: bool) -> Option<Vec<String>> {
     if channel.is_none() && !to_classic {
         return None;
     }
     let mut a = vec!["refresh".to_string()];
     if let Some(channel) = channel {
         a.push("--channel".to_string());
-        a.push(channel.clone());
+        a.push(channel.to_string());
     }
     if to_classic {
         a.push("--classic".to_string());
@@ -180,8 +180,8 @@ impl Installable for SnapInstallable {
             // D13: `snap install` refuses an already-installed snap, so a `@channel` change has
             // to go through `snap refresh --channel=`. Q20 puts `@classic` on the same footing.
             // Decide by whether the snap is present.
-            let want_channel = spec.options.get("channel");
-            let want_classic = spec.options.get("classic").map(String::as_str);
+            let want_channel = spec.options.one("channel");
+            let want_classic = spec.options.one("classic");
 
             let args = if let Some(state) = self.current_state(&spec.name).await {
                 if let (Some(current), Some(channel)) = (&state.channel, want_channel) {
@@ -326,11 +326,11 @@ impl Queryable for SnapQueryable {
         // declaration it applied to a different confinement.
         if let Some(state) = installed_state(&output) {
             p.properties
-                .insert("classic".into(), state.classic.to_string());
+                .insert("classic".to_string(), state.classic.to_string());
         }
         for line in output.lines() {
             if let Some(v) = line.strip_prefix("summary:") {
-                p.properties.insert("summary".into(), v.trim().to_string());
+                p.properties.insert("summary".to_string(), v.trim().to_string());
             }
             if let Some(v) = line.strip_prefix("installed:") {
                 let ver = v.split_whitespace().next().unwrap_or(v);
@@ -340,7 +340,7 @@ impl Queryable for SnapQueryable {
             // planner. `snap info` prints `tracking:     latest/stable`.
             if let Some(v) = line.strip_prefix("tracking:") {
                 let risk = crate::backends::capability::channel_risk(v.trim());
-                p.properties.insert("channel".into(), risk.to_string());
+                p.properties.insert("channel".to_string(), risk.to_string());
             }
         }
         Ok(Some(p))
@@ -378,10 +378,10 @@ fn parse_snap_find(output: &str) -> Vec<Package> {
         }
         if let Some(publisher) = parts.get(2) {
             p.properties
-                .insert("publisher".into(), publisher.to_string());
+                .insert("publisher".to_string(), publisher.to_string());
         }
         if parts.len() > 4 {
-            p.properties.insert("summary".into(), parts[4..].join(" "));
+            p.properties.insert("summary".to_string(), parts[4..].join(" "));
         }
         results.push(p);
     }
@@ -501,12 +501,12 @@ mod tests {
             requires: vec![],
             present: true,
         };
-        spec.options.insert("classic".into(), "true".into());
+        spec.options.set("classic", "true");
         assert_eq!(
             install_args(&spec),
             vec!["install", "--classic", "--", "code"]
         );
-        spec.options.insert("classic".into(), "false".into());
+        spec.options.set("classic", "false");
         assert_eq!(install_args(&spec), vec!["install", "--", "code"]);
     }
 

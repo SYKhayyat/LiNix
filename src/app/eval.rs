@@ -98,10 +98,10 @@ impl Evaluation {
         let package = |p: &crate::core::PackageSpec| ResolvedPackage {
             backend: p.backend.clone(),
             name: p.name.clone(),
-            version: p.options.get("version").cloned(),
+            version: p.options.one("version").map(str::to_string),
             source: p
                 .options
-                .get("__source")
+                .one("__source")
                 .map(|s| repo_relative(s, config_root)),
         };
 
@@ -182,10 +182,8 @@ mod tests {
     }
 
     fn spec(backend: &str, name: &str, present: bool) -> crate::core::PackageSpec {
-        let mut options = std::collections::HashMap::new();
-        options.insert(
-            "__source".to_string(),
-            format!("/repo/modules/x.txt:{}", name.len()),
+        let mut options = crate::config::grammar::Options::default();
+        options.set("__source", format!("/repo/modules/x.txt:{}", name.len()),
         );
         crate::core::PackageSpec {
             name: name.into(),
@@ -226,7 +224,7 @@ mod tests {
         );
         state
             .packages
-            .insert("cargo".into(), vec![spec("cargo", "c", true)]);
+            .insert("cargo".to_string(), vec![spec("cargo", "c", true)]);
         let a = serde_json::to_string(&Evaluation::of(&state, Path::new("/repo"))).unwrap();
         let b = serde_json::to_string(&Evaluation::of(&state, Path::new("/repo"))).unwrap();
         assert_eq!(a, b);
@@ -239,7 +237,7 @@ mod tests {
         let mut state = crate::model::DesiredState::default();
         state
             .packages
-            .insert("apt".into(), vec![spec("apt", "jq", true)]);
+            .insert("apt".to_string(), vec![spec("apt", "jq", true)]);
         let doc = Evaluation::of(&state, Path::new("/repo"));
         assert!(
             doc.present[0]
@@ -307,9 +305,9 @@ mod tests {
     fn variables_keep_their_types() {
         use crate::model::vars::Value;
         let mut state = crate::model::DesiredState::default();
-        state.vars.insert("gpu".into(), Value::Bool(true));
-        state.vars.insert("cores".into(), Value::Num(8.0));
-        state.vars.insert("host".into(), Value::Str("aria".into()));
+        state.vars.insert("gpu".to_string(), Value::Bool(true));
+        state.vars.insert("cores".to_string(), Value::Num(8.0));
+        state.vars.insert("host".to_string(), Value::Str("aria".into()));
         let json = Evaluation::of(&state, Path::new("/repo")).render().unwrap();
         assert!(json.contains("\"gpu\": true"), "{}", json);
         assert!(json.contains("\"cores\": 8.0"), "{}", json);

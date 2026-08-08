@@ -424,7 +424,7 @@ impl Transaction {
                         // used to arrive as the manager's own words about a command the user
                         // never asked for (`Q34`).
                         let origin = match &self.graph[task_data.node_index] {
-                            GraphAction::Install(s) => s.options.get("__source").cloned(),
+                            GraphAction::Install(s) => s.options.one("__source").map(str::to_string),
                             GraphAction::Remove { .. } => None,
                         };
                         first_failure =
@@ -964,11 +964,11 @@ impl Transaction {
                 backend
             )));
         };
-        let mut options = HashMap::new();
+        let mut options = crate::config::grammar::Options::default();
         if let Some(v) = version {
             // Without this the reinstall takes whatever is newest, so a rolled-back removal
             // silently loses its pin — the package comes back at a version nobody declared.
-            options.insert("version".to_string(), v.clone());
+            options.set("version", v.clone());
         }
         h.install(
             &[PackageSpec {
@@ -1336,7 +1336,7 @@ mod batching_tests {
         PackageSpec {
             name: name.to_string(),
             backend: backend.to_string(),
-            options: HashMap::new(),
+            options: Default::default(),
             requires: Vec::new(),
             present: true,
         }

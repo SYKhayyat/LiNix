@@ -330,7 +330,7 @@ impl EphemeralShell {
                         let spec = PackageSpec {
                             name: s.name.clone(),
                             backend: s.backend.clone(),
-                            options: HashMap::new(),
+                            options: Default::default(),
                             requires: Vec::new(),
                             present: true,
                         };
@@ -360,7 +360,7 @@ impl EphemeralShell {
                         &s.backend,
                         &s.name,
                         s.version.clone(),
-                        HashMap::new(),
+                        Default::default(),
                         "imperative",
                         false,
                     );

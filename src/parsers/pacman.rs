@@ -57,7 +57,7 @@ pub fn parse_search_for(output: &str, backend: &str) -> Vec<Package> {
             if let Some(desc_line) = lines.peek() {
                 if desc_line.starts_with("    ") {
                     p.properties
-                        .insert("description".into(), desc_line.trim().to_string());
+                        .insert("description".to_string(), desc_line.trim().to_string());
                     lines.next(); // Consume the description line
                 }
             }

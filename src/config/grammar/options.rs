@@ -7,7 +7,14 @@ use std::collections::BTreeMap;
 /// A key may hold more than one value: II.2 makes a key given twice a list (`requires`
 /// twice means two requirements), so the storage is a list everywhere and `one()` is the
 /// accessor that rejects the plural case.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// **Serialised as the map of lists it is.** `PackageSpec` carried
+/// `HashMap<String, String>` and `to_spec` joined every list with `;` to fit — so a saved plan
+/// wrote `"requires": "a;b"` and something downstream had to split it back on a delimiter
+/// nothing validated. A plan file written by an older build does not load, which is correct: it
+/// was written in a format that could not represent what the grammar accepts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
 pub struct Options {
     inner: BTreeMap<String, Vec<String>>,
 }
@@ -38,8 +45,37 @@ impl Options {
             .map(String::as_str)
     }
 
+    /// Append a value to `key`. **A key given twice is a list** (II.2), so this pushes.
     pub fn insert(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.inner.entry(key.into()).or_default().push(value.into());
+    }
+
+    /// Make `key` hold exactly `value`, discarding whatever it held.
+    ///
+    /// Separate from [`insert`](Self::insert) because the two are different operations and the
+    /// old `HashMap` spelled both as `insert`. A caller stamping a resolved version onto a spec
+    /// means *replace*; a caller reading a second `@requires=` from the line means *append*.
+    /// One name for both is how a re-resolved package would have ended up with two versions.
+    pub fn set(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.inner.insert(key.into(), vec![value.into()]);
+    }
+
+    /// Make `key` hold exactly these values, in order.
+    ///
+    /// The plural of [`set`](Self::set), and the reason `to_spec` no longer joins with `;`:
+    /// copying a list from one `Options` into another is the operation, and it should not have
+    /// to go through a delimiter to do it.
+    pub fn set_all(&mut self, key: impl Into<String>, values: Vec<String>) {
+        self.inner.insert(key.into(), values);
+    }
+
+    /// Drop `key` entirely. `None` when it was not there.
+    pub fn remove(&mut self, key: &str) -> Option<Vec<String>> {
+        self.inner.remove(key)
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.len()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&str, &[String])> {
@@ -50,6 +86,18 @@ impl Options {
     /// are not offered: a key is grammar, and rewriting one would change what a line means.
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut String> {
         self.inner.values_mut().flat_map(|v| v.iter_mut())
+    }
+}
+
+/// Built from pairs, appending — so the same key twice is the list II.2 says it is, and a
+/// fixture written as a sequence of pairs means what it reads as.
+impl<K: Into<String>, V: Into<String>> FromIterator<(K, V)> for Options {
+    fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
+        let mut out = Self::default();
+        for (k, v) in iter {
+            out.insert(k, v);
+        }
+        out
     }
 }
 
@@ -334,8 +382,8 @@ mod tests {
     #[test]
     fn a_repeated_key_makes_a_list() {
         let mut opts = Options::default();
-        opts.insert("requires", "apt:libfoo");
-        opts.insert("requires", "apt:libbar");
+        opts.insert("requires".to_string(), "apt:libfoo");
+        opts.insert("requires".to_string(), "apt:libbar");
         assert_eq!(opts.all("requires"), ["apt:libfoo", "apt:libbar"]);
     }
 }

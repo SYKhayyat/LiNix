@@ -666,7 +666,7 @@ fn the_deleted_register_is_the_specs_and_is_bounded() {
     // Depth: a deleted sub-verb must not be excused by a live parent, nor a live parent by the
     // presence of its deleted child.
     let mut nested = register.clone();
-    nested.insert("config path".into(), words("config path"));
+    nested.insert("config path".to_string(), words("config path"));
     assert!(
         accounted_for(&nested, &words("config path")),
         "the register holds paths, not just first words"

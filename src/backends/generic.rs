@@ -861,9 +861,9 @@ pub struct GenericInstallable {
 /// name lives in the plugin's own `plugin.yaml`, which cannot be read before it is fetched.
 fn install_source(backend: &str, spec: &PackageSpec, key: &str) -> Result<String> {
     spec.options
-        .get(key)
+        .one(key)
         .filter(|v| !v.trim().is_empty())
-        .cloned()
+        .map(str::to_string)
         .ok_or_else(|| {
             crate::core::Error::Validation(format!(
             "{backend}:{name} needs `@{key}=…`. {backend} installs from that value but lists and \
@@ -968,7 +968,7 @@ impl GenericInstallable {
             }
             // Honor an exact version pin (reproducible/locked installs) using the
             // backend's native syntax, when both a pin syntax and a concrete version exist.
-            match (spec.options.get("version"), &self.core.config.version_pin) {
+            match (spec.options.one("version"), &self.core.config.version_pin) {
                 (Some(ver), Some(pin)) if is_concrete_version(ver) => {
                     // A leading arg goes into the subcommand args, ahead of the terminator,
                     // and the name stays behind it — which is the safer of the two shapes and

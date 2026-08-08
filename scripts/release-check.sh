@@ -54,6 +54,27 @@ echo "-> cargo build --release"
 if cargo build --release; then pass "release build succeeds"
 else fail "release build FAILED"; fi
 
+# The `supply-chain` and `msrv` CI jobs, run locally — because a CI job nothing local drives is a
+# gate a developer finds out about from a red push, which is what `grade6_gate_parity` asserts
+# against. Both are soft here and hard in CI: `cargo-deny` and a pinned toolchain are installs a
+# contributor may not have, and a release script that refuses to run without them stops being run.
+echo "-> cargo deny check (advisories, bans, licences, sources)"
+if command -v cargo-deny >/dev/null 2>&1; then
+    if cargo deny check advisories bans licenses sources; then pass "cargo deny: clean"
+    else fail "cargo deny: findings — see above"; fi
+else
+    info "cargo-deny not installed (cargo install cargo-deny --locked); CI runs it regardless"
+fi
+
+echo "-> cargo check on the declared MSRV"
+MSRV="$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)"
+if rustup toolchain list 2>/dev/null | grep -q "^$MSRV"; then
+    if cargo "+$MSRV" check --all-targets --locked; then pass "builds on the declared MSRV ($MSRV)"
+    else fail "does NOT build on rust-version = $MSRV — raise it deliberately or fix the use"; fi
+else
+    info "toolchain $MSRV not installed (rustup toolchain install $MSRV); CI runs it regardless"
+fi
+
 # CI runs both of these and this script ran neither, so a local GO could still be a CI NO-GO —
 # the same asymmetry E3/E4 found in `cargo fmt`, one file over. release-check.ps1 runs the
 # predicates; parity between the two release scripts is asserted by harness-logic-test.sh

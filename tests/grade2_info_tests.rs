@@ -210,6 +210,17 @@ fn one_row_per_backend(listing: &str) -> Vec<(String, String)> {
         if cols.len() < 2 || cols[0].starts_with('-') {
             continue;
         }
+        // **A log line is not a listing row.** `list` warns on stderr when a manager's output
+        // stops parsing (`LX-1`), and the fixture merges the two streams — so the first token of
+        // `\x1b[33m WARN\x1b[0m …` was scraped as a backend name and `info` was asked about
+        // `\x1b[33m:WARN`. The failure then read as "a backend contradicts its own listing",
+        // which is the opposite of what happened. A backend name is lowercase and unadorned.
+        if !cols[0]
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+        {
+            continue;
+        }
         if !seen.iter().any(|(b, _)| b == cols[0]) {
             seen.push((cols[0].to_string(), cols[1].to_string()));
         }

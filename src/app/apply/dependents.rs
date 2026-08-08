@@ -164,11 +164,13 @@ pub(crate) fn spec_from_extra(
     name: &str,
     opts: &crate::config::grammar::Options,
 ) -> PackageSpec {
-    let mut options = std::collections::HashMap::new();
+    // **Every value, not the first of each.** This took `values.first()` because the spec's
+    // options were `HashMap<String, String>` and a list had nowhere to go — so a `link:` line
+    // with a repeated key reached the backend one value short, silently. The spec carries the
+    // grammar's own type now, so the conversion is a copy.
+    let mut options = crate::config::grammar::Options::default();
     for (key, values) in opts.iter() {
-        if let Some(first) = values.first() {
-            options.insert(key.to_string(), first.clone());
-        }
+        options.set_all(key, values.to_vec());
     }
     PackageSpec {
         name: name.to_string(),

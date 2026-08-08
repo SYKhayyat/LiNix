@@ -5,11 +5,7 @@
 
 use super::format::FormatOrder;
 use super::pattern::AssetPattern;
-use std::collections::HashMap;
-
-/// `to_spec` flattens a repeated key by joining the values with `;`, which is what preserves
-/// `formats`' order across the seam.
-const LIST_SEPARATOR: char = ';';
+use crate::config::grammar::Options;
 
 #[derive(Debug, Default)]
 pub struct ArtifactOptions {
@@ -25,30 +21,36 @@ pub struct ArtifactOptions {
 }
 
 impl ArtifactOptions {
-    pub fn read(options: &HashMap<String, String>) -> Result<Self, String> {
-        let formats = match options.get("formats") {
-            None => None,
-            Some(raw) => Some(
-                FormatOrder::parse_all(raw.split(LIST_SEPARATOR).filter(|s| !s.trim().is_empty()))
+    /// **The list arrives as a list.** `formats` used to be one string that this function split
+    /// on a `;` `to_spec` had joined it with — a delimiter nothing validated, standing in for a
+    /// `Vec` the grammar had produced and then thrown away. A `@formats=` value containing a
+    /// semicolon was unrepresentable and no layer said so.
+    pub fn read(options: &Options) -> Result<Self, String> {
+        let raw = options.all("formats");
+        let formats = if raw.is_empty() {
+            None
+        } else {
+            Some(
+                FormatOrder::parse_all(raw.iter().map(String::as_str).filter(|s| !s.trim().is_empty()))
                     .map_err(|e| e.to_string())?
                     // A `@formats=` the user wrote is an instruction, and the tie-break honours
                     // it over an asset that merely names the machine well (D2).
                     .as_user_specified(),
-            ),
+            )
         };
 
-        let asset = match options.get("asset") {
+        let asset = match options.one("asset") {
             None => None,
             Some(raw) => Some(AssetPattern::parse(raw).map_err(|e| e.to_string())?),
         };
 
         let bin = options
-            .get("bin")
+            .one("bin")
             .map(|b| b.trim().to_string())
             .filter(|b| !b.is_empty());
 
         let download_only = options
-            .get("download_only")
+            .one("download_only")
             .map(|v| v != "false" && v != "no")
             .unwrap_or(false);
 
@@ -82,15 +84,20 @@ mod tests {
     use super::*;
     use crate::backends::artifact::Format;
 
-    fn opts(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
+    /// A `;` in a value here is not a delimiter any more — it is written as the list it was
+    /// standing in for, which is the whole point of the change these tests cover.
+    fn opts(pairs: &[(&str, &str)]) -> Options {
+        let mut o = Options::default();
+        for (k, v) in pairs {
+            for part in v.split(';') {
+                o.insert(*k, part);
+            }
+        }
+        o
     }
 
     #[test]
-    fn a_joined_list_keeps_the_order_it_was_written_in() {
+    fn a_repeated_key_keeps_the_order_it_was_written_in() {
         let read = ArtifactOptions::read(&opts(&[("formats", "deb;tarball;binary")])).unwrap();
         assert_eq!(
             read.formats.unwrap().as_slice(),

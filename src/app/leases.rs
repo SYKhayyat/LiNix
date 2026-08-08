@@ -145,7 +145,7 @@ impl Leases<'_> {
         let spec = PackageSpec {
             name: name.to_string(),
             backend: backend.to_string(),
-            options: std::collections::HashMap::new(),
+            options: Default::default(),
             requires: Vec::new(),
             present: true,
         };
@@ -193,7 +193,7 @@ impl Leases<'_> {
                         &s.backend,
                         &s.name,
                         s.version.clone(),
-                        std::collections::HashMap::new(),
+                        Default::default(),
                         "imperative",
                         false,
                     );

@@ -16,7 +16,7 @@ pub fn unverified_packages(state: &crate::core::StateRegistry) -> Vec<(String, S
     state
         .packages
         .iter()
-        .filter(|p| p.options.get("unverified").is_some_and(|v| v == "true"))
+        .filter(|p| p.options.one("unverified").is_some_and(|v| v == "true"))
         .map(|p| (p.backend.clone(), p.name.clone()))
         .collect()
 }
@@ -1120,7 +1120,7 @@ pub async fn approve_health_checks(app: &App, state: &crate::model::DesiredState
     for specs in state.packages.values() {
         for spec in specs {
             if let Some(Probe::Command(cmd)) =
-                spec.options.get("health").and_then(|s| Probe::parse(s))
+                spec.options.one("health").and_then(Probe::parse)
             {
                 commands.push(cmd);
             }
@@ -1484,7 +1484,7 @@ mod frozen_plan_tests {
         PackageSpec {
             name: name.into(),
             backend: backend.into(),
-            options: HashMap::new(),
+            options: Default::default(),
             requires: requires.iter().map(|s| s.to_string()).collect(),
             present: true,
         }

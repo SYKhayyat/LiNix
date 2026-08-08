@@ -880,7 +880,7 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
 mod tests {
     use super::*;
     use crate::core::LockFile;
-    use std::collections::HashMap;
+    
 
     #[test]
     fn a_name_the_prefix_grammar_already_spends_is_refused() {
@@ -1191,7 +1191,7 @@ mod tests {
                 &[crate::core::PackageSpec {
                     name: "22/tcp".into(),
                     backend: "firewall".into(),
-                    options: HashMap::new(),
+                    options: Default::default(),
                     requires: vec![],
                     present: true,
                 }],

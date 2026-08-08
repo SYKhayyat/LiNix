@@ -425,7 +425,7 @@ impl<'a> SyncEngine<'a> {
         let mut checks = Vec::new();
         for w in changes.graph.node_weights() {
             if let GraphAction::Install(spec) = w {
-                if let Some(probe) = spec.options.get("health").and_then(|s| Probe::parse(s)) {
+                if let Some(probe) = spec.options.one("health").and_then(Probe::parse) {
                     checks.push(Check {
                         subject: format!("{}:{}", spec.backend, spec.name),
                         probe,
@@ -683,7 +683,7 @@ impl<'a> SyncEngine<'a> {
         for idx in changes.graph.node_indices() {
             match &changes.graph[idx] {
                 GraphAction::Install(spec) => {
-                    let source = spec.options.get("__source").map_or("sync", String::as_str);
+                    let source = spec.options.one("__source").unwrap_or("sync");
                     state.add(
                         &spec.backend,
                         &spec.name,
@@ -1072,7 +1072,7 @@ impl<'a> SyncEngine<'a> {
                         match &action {
                             GraphAction::Install(spec) => {
                                 let source =
-                                    spec.options.get("__source").map_or("sync", String::as_str);
+                                    spec.options.one("__source").unwrap_or("sync");
                                 let mut state = self.state.lock().await;
                                 state.add(
                                     &spec.backend,

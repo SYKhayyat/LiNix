@@ -8,7 +8,6 @@
 use super::link::{backup_path, refuse_target_in_repo, LinkBackendCore, LinkInstallable};
 use crate::config::Config;
 use crate::core::{CommandExecutor, Installable, PackageSpec};
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -20,9 +19,9 @@ fn installer() -> LinkInstallable {
 }
 
 fn inline_spec(target: &Path, content: &str) -> PackageSpec {
-    let mut options = HashMap::new();
-    options.insert("target".into(), target.to_string_lossy().to_string());
-    options.insert("content".into(), content.to_string());
+    let mut options = crate::config::grammar::Options::default();
+    options.set("target", target.to_string_lossy().to_string());
+    options.set("content", content.to_string());
     PackageSpec {
         name: target.to_string_lossy().to_string(),
         backend: "link".into(),
@@ -91,7 +90,7 @@ fn a_links_ledger_key_is_its_destination_not_its_source() {
     use crate::core::extras_lock::extra_key;
 
     let mut opts = Options::default();
-    opts.insert("target", "~/.gitconfig");
+    opts.insert("target".to_string(), "~/.gitconfig");
     let key = extra_key(&Statement::Link("dotfiles/gitconfig".into(), opts)).unwrap();
 
     let want = super::link::resolve_target("~/.gitconfig").unwrap();

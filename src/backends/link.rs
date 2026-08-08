@@ -42,7 +42,7 @@ pub fn backup_path(target: &Path) -> PathBuf {
 /// been for, so one mechanism answers the whole question.
 pub fn wants_backup(spec: &PackageSpec) -> bool {
     !matches!(
-        spec.options.get("backup").map(String::as_str),
+        spec.options.one("backup"),
         Some("no") | Some("false")
     )
 }
@@ -133,7 +133,7 @@ impl LinkBackendCore {
     /// Resolve the age identity file: explicit `@identity=`, else `$LINIX_AGE_IDENTITY`,
     /// else the conventional `~/.config/linix/age.key`.
     fn age_identity(&self, spec: &PackageSpec) -> Option<PathBuf> {
-        if let Some(id) = spec.options.get("identity") {
+        if let Some(id) = spec.options.one("identity") {
             return Some(PathBuf::from(id));
         }
         if let Ok(id) = std::env::var("LINIX_AGE_IDENTITY") {
@@ -258,15 +258,15 @@ impl LinkBackendCore {
             .map_err(|e| Error::Other(format!("Tera Parse Error in {:?}: {}", source_path, e)))?;
 
         let mut context = Context::new();
-        context.insert("OS", std::env::consts::OS);
-        context.insert("ARCH", std::env::consts::ARCH);
+        context.insert("OS".to_string(), std::env::consts::OS);
+        context.insert("ARCH".to_string(), std::env::consts::ARCH);
         context.insert(
             "USER",
             &std::env::var("USER").unwrap_or_else(|_| "unknown".to_string()),
         );
-        context.insert("HOSTNAME", &Config::get_hostname());
+        context.insert("HOSTNAME".to_string(), &Config::get_hostname());
 
-        context.insert("aliases", &self.config.aliases);
+        context.insert("aliases".to_string(), &self.config.aliases);
 
         tera.render("config", &context)
             .map_err(|e| Error::Other(format!("Tera Render Error in {:?}: {}", source_path, e)))
@@ -406,14 +406,14 @@ impl Installable for LinkInstallable {
         for spec in specs {
             let target_str = spec
                 .options
-                .get("target")
+                .one("target")
                 .ok_or_else(|| Error::Other("Link requires @target".into()))?;
 
             let target_path = resolve_target(target_str)?;
             let backup = wants_backup(spec);
 
             // Mode A: Inline content declared directly (no separate source file).
-            if let Some(content) = spec.options.get("content") {
+            if let Some(content) = spec.options.one("content") {
                 self.core
                     .apply_managed_content(&target_path, content, backup)
                     .await?;
@@ -423,7 +423,7 @@ impl Installable for LinkInstallable {
             let source = PathBuf::from(&spec.name);
 
             // Mode D: Secret — decrypt the source with age/sops and place the plaintext.
-            if let Some(tool) = spec.options.get("decrypt") {
+            if let Some(tool) = spec.options.one("decrypt") {
                 // T2, before anything is decrypted: the config root is a git repo, and a
                 // plaintext written inside it is committed by the next sync. A secret in git
                 // history is a rotated secret, so this is a refusal rather than a warning.
@@ -460,7 +460,7 @@ impl Installable for LinkInstallable {
             }
 
             // Mode B: Rendered template read from a source file.
-            if spec.options.get("template") == Some(&"true".to_string()) {
+            if spec.options.one("template") == Some("true") {
                 let rendered = self.core.render_template(&source).await?;
                 self.core
                     .apply_managed_content(&target_path, &rendered, backup)
@@ -647,7 +647,7 @@ pub fn register(
 mod tests {
     use super::*;
     use crate::core::CommandExecutor;
-    use std::collections::HashMap;
+    
     use tempfile::tempdir;
 
     fn installer() -> LinkInstallable {
@@ -658,9 +658,9 @@ mod tests {
     }
 
     fn inline_spec(target: &Path, content: &str) -> PackageSpec {
-        let mut options = HashMap::new();
-        options.insert("target".into(), target.to_string_lossy().to_string());
-        options.insert("content".into(), content.to_string());
+        let mut options = crate::config::grammar::Options::default();
+        options.set("target", target.to_string_lossy().to_string());
+        options.set("content", content.to_string());
         PackageSpec {
             name: target.to_string_lossy().to_string(),
             backend: "link".into(),
@@ -724,9 +724,9 @@ mod tests {
     }
 
     fn decrypt_spec(source: &Path, target: &Path, tool: &str) -> PackageSpec {
-        let mut options = HashMap::new();
-        options.insert("target".into(), target.to_string_lossy().to_string());
-        options.insert("decrypt".into(), tool.to_string());
+        let mut options = crate::config::grammar::Options::default();
+        options.set("target", target.to_string_lossy().to_string());
+        options.set("decrypt", tool.to_string());
         PackageSpec {
             name: source.to_string_lossy().to_string(),
             backend: "link".into(),
@@ -816,7 +816,7 @@ mod tests {
 
         let inst = installer();
         let mut spec = inline_spec(&target, "MANAGED");
-        spec.options.insert("backup".into(), "no".into());
+        spec.options.set("backup", "no");
         inst.install(&[spec], false).await.unwrap();
 
         assert_eq!(tokio::fs::read_to_string(&target).await.unwrap(), "MANAGED");
@@ -832,11 +832,11 @@ mod tests {
         let target = dir.path().join("x");
         let mut spec = inline_spec(&target, "c");
         assert!(wants_backup(&spec), "absent @backup backs up by default");
-        spec.options.insert("backup".into(), "no".into());
+        spec.options.set("backup", "no");
         assert!(!wants_backup(&spec));
-        spec.options.insert("backup".into(), "false".into());
+        spec.options.set("backup", "false");
         assert!(!wants_backup(&spec));
-        spec.options.insert("backup".into(), "yes".into());
+        spec.options.set("backup", "yes");
         assert!(
             wants_backup(&spec),
             "any value but no/false keeps the backup"

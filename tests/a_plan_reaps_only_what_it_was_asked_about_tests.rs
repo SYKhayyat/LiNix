@@ -29,7 +29,7 @@ fn spec(backend: &str, name: &str) -> PackageSpec {
     PackageSpec {
         name: name.into(),
         backend: backend.into(),
-        options: HashMap::new(),
+        options: Default::default(),
         requires: vec![],
         present: true,
     }
@@ -52,7 +52,7 @@ async fn machine_holding_four(kernel: &TestKernel) {
         ("brew", "jq"),
         ("npm", "typescript"),
     ] {
-        state.add(backend, name, None, HashMap::new(), "test", false);
+        state.add(backend, name, None, Default::default(), "test", false);
     }
 }
 

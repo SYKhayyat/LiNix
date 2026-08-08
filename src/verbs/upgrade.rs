@@ -53,7 +53,7 @@ pub async fn upgrade_one(
     let mut acted = false;
     for mut spec in resolved {
         if let Some(v) = version {
-            spec.options.insert("version".to_string(), v.to_string());
+            spec.options.set("version".to_string(), v.to_string());
         }
         // II.7c: a manager this machine does not have upgrades nothing, and says so. It was a
         // bare `if let` — so `upgrade` walked past every package on an absent manager without a

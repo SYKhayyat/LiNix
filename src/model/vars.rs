@@ -867,7 +867,7 @@ mod tests {
     #[test]
     fn expand_substitutes_into_a_value_written_outside_vars() {
         let mut vars = Vars::new();
-        vars.insert("role".into(), str_val("travel"));
+        vars.insert("role".to_string(), str_val("travel"));
         let out = expand("~/.config/$role/init.lua", &vars, &origin(3)).unwrap();
         assert_eq!(out, "~/.config/travel/init.lua");
     }
@@ -875,14 +875,14 @@ mod tests {
     #[test]
     fn expand_stringifies_a_number_or_boolean() {
         let mut vars = Vars::new();
-        vars.insert("n".into(), Value::Num(5.0));
+        vars.insert("n".to_string(), Value::Num(5.0));
         assert_eq!(expand("v$n", &vars, &origin(1)).unwrap(), "v5");
     }
 
     #[test]
     fn expand_refuses_a_list_rather_than_joining_it() {
         let mut vars = Vars::new();
-        vars.insert("tags".into(), Value::List(vec![str_val("a")]));
+        vars.insert("tags".to_string(), Value::List(vec![str_val("a")]));
         let err = expand("x-$tags", &vars, &origin(1)).unwrap_err();
         assert!(err.what.contains("list"), "{}", err);
     }
@@ -906,13 +906,13 @@ mod tests {
     #[test]
     fn diff_reports_changed_added_and_gone_but_not_case_only() {
         let mut before = Vars::new();
-        before.insert("role".into(), str_val("travel"));
-        before.insert("gpu".into(), str_val("nvidia"));
-        before.insert("os".into(), str_val("Linux"));
+        before.insert("role".to_string(), str_val("travel"));
+        before.insert("gpu".to_string(), str_val("nvidia"));
+        before.insert("os".to_string(), str_val("Linux"));
         let mut after = Vars::new();
-        after.insert("role".into(), str_val("desktop")); // changed
-        after.insert("os".into(), str_val("linux")); // case only — not a change
-        after.insert("cores".into(), Value::Num(8.0)); // added
+        after.insert("role".to_string(), str_val("desktop")); // changed
+        after.insert("os".to_string(), str_val("linux")); // case only — not a change
+        after.insert("cores".to_string(), Value::Num(8.0)); // added
                                                        // gpu is gone
         let d = diff(&before, &after);
         assert_eq!(

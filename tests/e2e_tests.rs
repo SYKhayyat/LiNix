@@ -2,7 +2,6 @@ use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
 use linix::app::sync::resolver::StateResolver;
 use linix::core::executor::DryRunOutput;
 use linix::core::{GraphAction, PackageSpec, Transaction, TransactionConfig};
-use std::collections::HashMap;
 use tokio::fs;
 
 // Import our authoritative A+ Test Infrastructure
@@ -99,19 +98,27 @@ async fn test_concurrent_transaction_safety_e2e() {
         let spec = PackageSpec {
             name: pkg_name.clone(),
             backend: "brew".into(),
-            options: HashMap::new(),
+            options: Default::default(),
             requires: vec![],
             present: true,
         };
 
-        // Setup expected responses in mock layer
-        kernel.mock_executor.set_response(
-            &format!("brew install {}", pkg_name),
-            Ok(DryRunOutput::default().into()),
-        );
-
         graph.add_node(GraphAction::Install(spec));
     }
+
+    // **One registration, because one command runs.** This registered five — `brew install
+    // pkg-parallel-0` and so on — and matched none of them: `Y1` batches a manager's installs
+    // into a single invocation, and the terminator goes in front of the whole operand list. So
+    // the assertions below ran against the mock's empty-success default and proved nothing about
+    // concurrency or about anything else, for as long as batching has existed.
+    //
+    // That the five nodes become one command is the finding, not a detail: what this test calls
+    // a "high-throughput parallel DAG" is answered by the planner collapsing it, which is the
+    // behaviour worth pinning.
+    kernel.mock_executor.set_response(
+        "brew install -- pkg-parallel-0 pkg-parallel-1 pkg-parallel-2 pkg-parallel-3 pkg-parallel-4",
+        Ok(DryRunOutput::default().into()),
+    );
 
     // 2. Initialize Transaction
     // Modernized v3.6.0: Provides Diagnostics (4th arg) and Config (5th arg)

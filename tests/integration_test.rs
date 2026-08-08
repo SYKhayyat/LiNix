@@ -145,12 +145,10 @@ async fn test_planner_template_logic_integration() {
         .unwrap();
 
     // 2. Setup a spec for the 'link' backend with template logic enabled
-    let mut options = HashMap::new();
-    options.insert(
-        "target".to_string(),
-        target_path.to_string_lossy().to_string(),
+    let mut options = linix::config::grammar::Options::default();
+    options.set("target", target_path.to_string_lossy().to_string(),
     );
-    options.insert("template".to_string(), "true".to_string());
+    options.set("template", "true".to_string());
 
     let spec = PackageSpec {
         name: source_path.to_string_lossy().to_string(),

@@ -306,9 +306,9 @@ impl TaskProvisioner for MockTaskProvisioner {
 
 #[allow(dead_code)]
 pub fn create_dummy_spec(name: &str, backend: &str, source: Option<&str>) -> PackageSpec {
-    let mut options = HashMap::new();
+    let mut options = linix::config::grammar::Options::default();
     if let Some(src) = source {
-        options.insert("__source".to_string(), src.to_string());
+        options.set("__source", src);
     }
     PackageSpec {
         name: name.to_string(),

@@ -85,7 +85,7 @@ fn parse_zfs_list(output: &str) -> Vec<Package> {
                 .map(str::trim)
                 .filter(|m| !matches!(*m, "" | "-" | "none" | "legacy"))
             {
-                p.properties.insert("mount".into(), m.to_string());
+                p.properties.insert("mount".to_string(), m.to_string());
             }
             Some(p)
         })
@@ -160,10 +160,10 @@ impl Installable for ZfsInstallable {
                 info!("ZFS: creating dataset {}", name);
                 self.core.run(&zfs_create(name), sudo).await?;
             }
-            if let Some(quota) = spec.options.get("quota") {
+            if let Some(quota) = spec.options.one("quota") {
                 self.core.run(&zfs_set("quota", quota, name), sudo).await?;
             }
-            if let Some(mount) = spec.options.get("mount") {
+            if let Some(mount) = spec.options.one("mount") {
                 self.core
                     .run(&zfs_set("mountpoint", mount, name), sudo)
                     .await?;
@@ -349,7 +349,7 @@ fn parse_lvs_list(output: &str) -> Vec<Package> {
             let (vg, lv) = (cols.next()?, cols.next()?);
             let mut p = Package::new(format!("{}/{}", vg, lv), "lvm");
             if let Some(bytes) = cols.next().and_then(|b| b.parse::<u64>().ok()) {
-                p.properties.insert("size".into(), bytes.to_string());
+                p.properties.insert("size".to_string(), bytes.to_string());
             }
             Some(p)
         })
@@ -435,7 +435,7 @@ impl Installable for LvmInstallable {
         for spec in specs {
             let (vg, lv) = split_lvm(&spec.name)?;
             let current = self.current_size(vg, lv).await;
-            let Some(size) = spec.options.get("size") else {
+            let Some(size) = spec.options.one("size") else {
                 if current.is_some() {
                     continue;
                 }
@@ -452,7 +452,7 @@ impl Installable for LvmInstallable {
                 self.core.executor.run("lvcreate", &refs, sudo).await?;
                 continue;
             };
-            let allow_shrink = spec.options.get("allow_shrink").map(String::as_str) == Some("true");
+            let allow_shrink = spec.options.one("allow_shrink") == Some("true");
             let Some((program, args)) = resize_plan(vg, lv, size, current, allow_shrink)? else {
                 continue;
             };

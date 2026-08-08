@@ -71,7 +71,7 @@ pub fn parse_search(output: &str) -> Vec<Package> {
             let (name, desc) = line.split_once(" - ")?;
             let mut p = Package::new(name.trim(), "apt");
             p.properties
-                .insert("description".into(), desc.trim().to_string());
+                .insert("description".to_string(), desc.trim().to_string());
             Some(p)
         })
         .collect()

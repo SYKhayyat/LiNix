@@ -225,10 +225,10 @@ fn parse_nix_search(output: &str) -> Result<Vec<Package>> {
             }
             if let Some(d) = meta.get("description").and_then(|v| v.as_str()) {
                 if !d.is_empty() {
-                    p.properties.insert("description".into(), d.to_string());
+                    p.properties.insert("description".to_string(), d.to_string());
                 }
             }
-            p.properties.insert("attr_path".into(), attr.clone());
+            p.properties.insert("attr_path".to_string(), attr.clone());
             results.push(p);
         }
     }
@@ -319,13 +319,13 @@ fn parse_profile_list(json: &Value) -> Vec<Package> {
         |name: String, attr: Option<String>, store: Option<String>, index: Option<usize>| {
             let mut p = Package::new(&name, "nix");
             if let Some(a) = attr {
-                p.properties.insert("full_attr".into(), a);
+                p.properties.insert("full_attr".to_string(), a);
             }
             if let Some(sp) = store {
-                p.properties.insert("store_path".into(), sp);
+                p.properties.insert("store_path".to_string(), sp);
             }
             if let Some(i) = index {
-                p.properties.insert("index".into(), i.to_string());
+                p.properties.insert("index".to_string(), i.to_string());
             }
             p
         };
