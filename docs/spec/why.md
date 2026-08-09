@@ -4532,3 +4532,183 @@ backends install. So the search asks each candidate whether it is *this binary u
 name* — the ownership test `create_shim` and `remove_shim` already share — and skips only that.
 The fallback when a `PATH` holds nothing else is the bare name, so the user gets the error they
 would have got by typing it rather than a silent re-entry.
+
+---
+
+**V.153 — Why a gate carries an oracle that drives the gate, and not a sentence about it.**
+*(Rule in II.23. Fixed 2026-08-09, `S48`.)*
+
+**Eight grade rounds named "a check that cannot fail" as this repository's signature defect, and
+the defect then appeared inside three checks written to close it.** That is not carelessness
+twice; it is the same mistake having a shape, and the shape is worth naming: *when you sit down
+to prove a scan works, the easiest true sentence to write is one about the scan's vocabulary
+rather than one about the scan.*
+
+Here is what all three did. `output_is_sanitized_tests.rs` wanted to prove its scan still
+recognised an unsanitized read of a command's stdout. So it declared
+
+```rust
+let raw_read = "let s = String::from_utf8_lossy(&out.stdout).trim().to_string();";
+assert!(raw_read.contains("from_utf8_lossy(&") && raw_read.contains(".stdout"));
+```
+
+Every word of that is true. It is also true of a tree where the scan has been deleted. The
+assertion is about the literal on the line above it, and the scan is never called — so the test
+passes on the string's contents, which the author chose, rather than on the code's behaviour,
+which is the thing under doubt. `ledger_file_rules_tests.rs` did the same with two literals, and
+`grader_refusal_exit_code_tests.rs` did it with three, **underneath a doc comment quoting the
+standard it was violating**: *"do not test your own oracle by assuming it works"*.
+
+**This was verified rather than argued.** Each predicate was mutated — `is_raw_stdout_read` to
+`false`, the ledger checks to `false`, `run_exclusive`'s per-key mutex to one global key — and
+in every case the *real* scan stayed green and only the rewritten oracle went red. The old
+oracles would have stayed green too, which is the claim, and it is now a measurement.
+
+**The structural cause is where the predicate lived.** In all three the rule was a run of
+`continue`s inside the directory walk, and in `grader_refusal_exit_code_tests.rs` the two
+helpers were nested inside the test function itself. A predicate with no name has no caller but
+the loop it sits in, so the only available way to check it is to read it — and reading it is
+precisely what had already been done, twice, by the person who wrote the bug. Giving the rule a
+name is most of the fix; the oracle is what a name makes possible.
+
+**The controls matter more than the offender.** A scan that catches the planted offender and
+also catches four innocent lines is not a working scan, it is a noisy one that will be
+suppressed. Every control in the three rewrites is a shape that a previous version of some scan
+in this repo got wrong: a phase folded into an or-pattern (V.144), a wrap that sits below its
+call instead of above it, a `stderr` read where the rule is about `stdout`, a comment mentioning
+the call. The oracle is the only place those near-misses are written down as *deliberately not
+findings*.
+
+**And the floor is the half nobody writes.** A walk with the wrong root, a `read_dir` that
+failed and returned early, an extension filter that stopped matching — each produces an empty
+result set, and an empty result set is indistinguishable from a clean tree. `Y12`'s gate
+reported a file clean without having read it, for exactly this reason. So each scan now asserts
+what it *reached* — over a hundred files under `src/`, at least six ledgers, at least ten
+refusal sites — before asserting that what it reached was clean.
+
+**Six more tests were not oracles at all; they simply asserted nothing.** The instructive one is
+`shell_lifecycle_tests.rs`, which wrote a `linix.txt`, read it back, and then split it using its
+own copy of `auto_shell`'s five lines. It asserted that `str::lines` works. It would have passed
+against a LiNix with no manifest discovery in it. Copying the production body into the test is
+the vacuous-check family wearing its most convincing disguise, because the test *looks* like it
+knows the implementation — and the fix is the ordinary one this repo keeps arriving at: there
+should be one copy, the test should call it, and here that also retired a **fourth**
+implementation of the comment rule, so `brew:jq  # a note` now parses and a URL fragment
+survives.
+
+**`dag_test.rs` is the other shape worth recording: a test whose mechanism cannot distinguish
+the two answers.** It fired one `brew` call and one `cargo` call through `tokio::join!` and
+asserted both returned `Ok` — under a doc comment claiming it proved per-backend locking. A
+single global mutex returns `Ok` for both as well; it just returns them one after the other. And
+mock commands complete instantly, so there was nothing to contend over in either world. The
+property needs *time* to be observable at all, which is why `MockExecutor` gained `set_delay`,
+and it needs both halves asserted against each other — two backends must overlap, two calls to
+one backend must not — because either half alone has a passing explanation that is the opposite
+of the intended one.
+
+---
+
+**V.154 — Why the guard scope is passed as the enum, and never as its own label.**
+*(Rule in II.10. Fixed 2026-08-09, `S49`.)*
+
+**Two functions, fourteen lines apart in behaviour and two files apart in the tree, spoke
+different languages about the same value, and nothing in between could notice.**
+
+`verbs/sync.rs` had `scope_label(GuardScope) -> &'static str`, which answered
+`"an unattended watch tick"` for `Watch` and `"sync"` for everything else.
+`apply/firewall.rs` had `guard_scope(&str) -> GuardScope`, which matched `"purge-undeclared"`,
+`"watch"`, and `_ => Sync`. The first is the only producer. The second is the only consumer.
+**Neither of the consumer's named arms could ever be reached**, because the producer never
+emitted either word.
+
+The value went in as an enum, came out as an enum, and lost its identity in the middle — which
+is the failure this repository keeps finding in new places: *the type stops at a module boundary
+and continues on the other side as a string.* `Reaped`, `Phase`, `PlanScope` and `HostBackends`
+are all this technique applied successfully. The disease is not that the cure is unknown.
+
+**What made it expensive is `N7`.** Read alone, a dead `"watch"` arm looks like a branch waiting
+for a feature. `N7` (ruled 2026-07-24) makes an unattended `watch` tick **revert drift by
+default**, reporting instead only when the revert would close the session's own port. So the
+unreachable arm was not aspirational: it was the guard scope for a live, ruled path that closes
+ports on a machine with nobody in front of it, and it silently resolved to `Sync`. A refusal on
+that path named a command the user was not running.
+
+**The test written for this exact promise could not see it, and the reason is worth keeping.**
+`a_firewall_teardown_is_a_removal_tests.rs` opens with nineteen lines diagnosing the original
+defect better than any review did. It then asserts `GuardScope::Sync.as_str() == "sync"` for
+three variants, under this comment:
+
+> *"The mapping is private, so this asserts the property through the public enum instead."*
+
+**The private mapping it declined to test is the broken one.** A getter returning what a
+constructor took is true in every world, including the one where the round trip is severed. And
+`model/firewall.rs`'s own unit test had been calling `lockout_refusal(22, "an unattended watch
+tick")` — passing the producer's output straight to the consumer's caller by hand, so the test
+and the producer agreed and neither had ever met the thing that reads it. Making the parameter
+an enum turned that into a compile error, which is how the second half was found.
+
+**Why `during()` is written out per variant.** The enum now carries both vocabularies, because
+they answer different questions: `as_str` is the command to *retype with a flag on it*, so it
+must be what the user typed; `during` is what a reader needs to understand a refusal, and there
+the load-bearing fact is whether anybody was watching. A tempting `other => other.as_str()`
+catch-all would have been shorter and is precisely the shape that produced the bug — the deleted
+label answered `"sync"` for nine of twelve scopes for exactly that reason. Twelve arms, and a
+test asserting no two of them collide.
+
+---
+
+**V.155 — Why the lock asks the command, and why `history` is a reader with a lock inside it.**
+*(Rule in II.24. Fixed 2026-08-09, `S50`.)*
+
+**A hand-written list of twenty-one strings, seventy lines from the enum it describes, decided
+whether a LiNix run took a 120-second exclusive lock on everything it knows about the machine.**
+
+The list's own test docstring is the best argument against it, and it was written by whoever
+last repaired it: *twelve of its thirty-three entries named commands the program did not have*
+— `status`, `doctor`, `unmanaged`, `absent`, `insight`, `show`, `audit`, `outdated`, `log`,
+`locate`, `metrics`, `verify`. That was found and fixed. **Two tests were then written to keep
+it fixed, and both guarded the same direction**: that every name on the list is a real command.
+
+Invention is the harmless half. A list naming a command that does not exist exempts nothing.
+The expensive halves are **omission** — a writer that is not on the list is correctly locked, so
+that one is safe — and **misclassification**, where a writer *is* on the list. Nothing checked
+that, and it was live in both directions at once:
+
+- **`history` was exempt, and reached `handle_rollback` → `handle_sync`.** That is the entire
+  install/remove path, `state.save()` included, running with no lock held. The *same function*
+  reached through `Commands::Rollback` was locked. One function, two doors, two locking regimes,
+  and which one you got depended on whether you typed the verb or picked it out of a TUI.
+- **`fleet` was absent, and touches nothing local.** It drives other machines over SSH and took
+  the writer lock for a purely remote report — every other LiNix on the box waiting behind a
+  command that was never going to write.
+
+**The argument for reading argv was good and had stopped being true.** The doc comment said the
+name was taken from argv *"rather than matched out of `Commands`, so a subcommand added later is
+locked by default instead of being forgotten by a match arm nobody updated."* That is a real
+concern and the right instinct. But `acquire_data_lock` is called at `main.rs:147`, **after clap
+has parsed** — the `Commands` was sitting right there — and an exhaustive match does not have
+the failure mode the argv read was defending against. A forgotten arm is a compile error. The
+defence was against a weakness the chosen design does not have, and it cost the thing it was
+protecting.
+
+**Why `history` stays a reader.** The obvious repair is to mark it a writer, and it is wrong.
+`AU6` records why: `edit` blocks on `$EDITOR`, and locking it meant one person reading a manifest
+in vim stopped every other LiNix on the machine for as long as they read. A history browser is
+the same shape — a human reading a screen for an unbounded time. So the exemption stays at the
+command and the lock is acquired where the mutation begins, which is one arm of one match. The
+general rule that falls out: **a command's lock class is about what it does by default; a
+mutating action inside a reader takes the lock itself.**
+
+**And `run_user_verb` was locking unconditionally for a reason that also expired.** Its comment
+said the verb name is unknown to `acquire_data_lock`, so it locks as the safe default for a
+sequence that may install or remove. But it parses each step into a `Cli` already — the sequence
+can be asked. It now takes the lock when *any* step writes, once, spanning all of them: a verb
+of five readers stops blocking the machine, and a verb whose third step syncs takes the lock
+before its first step rather than partway through, which is the case where releasing between
+steps would have let another writer in between two commands that have to agree.
+
+**Both replacement tests were watched failing.** With `History` moved to the writer arm, the
+reader-set assertion goes red naming the diff, and the clap-driven classification test goes red
+naming `history`. The reader set is read out of `Commands::writes` itself rather than restated,
+so a variant moving between the arms appears as a diff in this file — which is precisely what a
+list living seventy lines away could never do.

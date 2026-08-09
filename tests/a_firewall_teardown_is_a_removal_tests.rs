@@ -41,25 +41,58 @@ fn the_token_cannot_be_minted_by_a_caller_who_would_rather_not_ask() {
     );
 }
 
-/// The firewall's guard scope comes from the label `sync` passes down, and an unrecognised
-/// label gets the strictest of the three rather than the most convenient.
-///
 /// `N1` names three commands that can close a port: `sync`, `purge-undeclared`, and an
 /// unattended `watch` tick — the last being the dangerous one, because nobody is there to read
-/// a refusal.
+/// a refusal. Each has to arrive at the guard as itself and be named as itself.
+///
+/// **This test used to assert `GuardScope::Sync.as_str() == "sync"` for three variants, under a
+/// comment reading "the mapping is private, so this asserts the property through the public
+/// enum instead".** The private mapping it declined to test was `guard_scope`, and it was
+/// broken in the direction this file's own header calls dangerous: `scope_label` emitted
+/// `"an unattended watch tick"`, `guard_scope` matched `"watch"`, and **neither named arm was
+/// reachable**. Every firewall teardown — including `N7`'s unattended tick, which reverts by
+/// default with nobody watching — was guarded and reported as `sync`. A getter returning what a
+/// constructor took cannot see that; only the round trip can.
+///
+/// There is no round trip now. `GuardScope` is `Copy` and is passed, both functions are gone,
+/// and what is left to assert is that the two vocabularies stay distinct and both reach the
+/// message a user reads.
 #[test]
-fn every_command_that_can_close_a_port_maps_to_a_scope() {
-    // The mapping is private, so this asserts the property through the public enum instead:
-    // all three commands `N1` names exist as scopes, and are distinguishable in a message.
-    for (scope, expected) in [
-        (GuardScope::Sync, "sync"),
-        (GuardScope::PurgeUndeclared, "purge-undeclared"),
-        (GuardScope::Watch, "watch"),
+fn every_command_that_can_close_a_port_names_itself_in_the_refusal() {
+    for (scope, typed, prose) in [
+        (GuardScope::Sync, "sync", "sync"),
+        (
+            GuardScope::PurgeUndeclared,
+            "purge-undeclared",
+            "purge-undeclared",
+        ),
+        (GuardScope::Watch, "watch", "an unattended watch tick"),
     ] {
         assert_eq!(
             scope.as_str(),
-            expected,
-            "a refusal has to name the command the user typed"
+            typed,
+            "a refusal has to name the command the user typed, so they can retype it with a flag"
+        );
+        assert_eq!(
+            scope.during(),
+            prose,
+            "and it has to say what kind of run this was, which is the fact `N7` turns on"
         );
     }
+
+    // The message itself, on the path that was silently answering `sync` for all three.
+    let watch = linix::model::firewall::lockout_refusal(22, GuardScope::Watch);
+    assert!(
+        watch.contains("an unattended watch tick"),
+        "the lockout refusal did not carry the scope: {watch}"
+    );
+    let sync = linix::model::firewall::lockout_refusal(22, GuardScope::Sync);
+    assert!(
+        !sync.contains("unattended"),
+        "an attended sync was reported as unattended: {sync}"
+    );
+    assert_ne!(
+        watch, sync,
+        "two scopes produced the same refusal, which is the defect this file exists for"
+    );
 }

@@ -18,6 +18,20 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
+/// The package lines in a project-local `linix.txt`.
+///
+/// The comment rule is the grammar's, not a fourth hand-rolled one: a `#` opens a comment at
+/// the start of a line or after whitespace, so `brew:jq  # my favourite` declares `brew:jq`
+/// and `web:http://x/a#b` keeps its fragment. Filtering on `starts_with('#')` handled only the
+/// whole-line case and handed the rest of the line to the parser as part of the name.
+pub fn manifest_lines(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .map(|l| crate::config::grammar::strip_comment(l).trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
 pub struct EphemeralShell {
     registry: Arc<BackendRegistry>,
     pub state: Arc<Mutex<StateRegistry>>,
@@ -380,11 +394,7 @@ impl EphemeralShell {
         if tokio::fs::try_exists(local_config).await.unwrap_or(false) {
             debug!("using project-local linix.txt");
             let content = tokio::fs::read_to_string(local_config).await?;
-            let pkgs: Vec<String> = content
-                .lines()
-                .map(|l| l.trim().to_string())
-                .filter(|l| !l.is_empty() && !l.starts_with('#'))
-                .collect();
+            let pkgs = manifest_lines(&content);
             if !pkgs.is_empty() {
                 self.enter(&pkgs).await?;
             }

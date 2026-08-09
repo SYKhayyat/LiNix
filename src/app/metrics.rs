@@ -120,6 +120,31 @@ impl MetricsCollector {
             .push((context.to_string(), message.to_string()));
     }
 
+    /// Everything recorded so far.
+    ///
+    /// The summary is a *rendering* of this. Without a reader, the only way to ask what the
+    /// collector holds is to print it and read the paragraph back, which is why the test that
+    /// claims to check recording accuracy asserted nothing at all: it called `print_summary`
+    /// twice and stopped, and would have passed against a collector that discarded every
+    /// operation it was handed.
+    pub fn operations(&self) -> Vec<OperationMetrics> {
+        self.inner
+            .lock()
+            .expect("Metrics lock poisoned")
+            .operations
+            .clone()
+    }
+
+    /// The run's totals: `(installed, removed, bytes_downloaded)`.
+    pub fn totals(&self) -> (u64, u64, u64) {
+        let inner = self.inner.lock().expect("Metrics lock poisoned");
+        (
+            inner.packages_installed,
+            inner.packages_removed,
+            inner.total_bytes_downloaded,
+        )
+    }
+
     pub fn print_summary(&self, narration: Narration) {
         self.print_summary_opts(true, narration)
     }

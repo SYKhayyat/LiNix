@@ -396,6 +396,12 @@ async fn a_manager_that_cannot_answer_stops_the_plan_rather_than_installing_ever
 // PARSER & RESOLVER ROBUSTNESS
 // ============================================================================
 
+/// A malformed spec is refused, and the refusal says what is wrong with it.
+///
+/// This test used to call the resolver on five bad inputs, `.ok()` every result, and assert
+/// nothing at all — it passed whether the resolver refused them, accepted them, or was deleted.
+/// The grammar's whole product is its 63 distinct hints; a resiliency test that does not read
+/// the hint is testing that the process did not abort.
 #[tokio::test]
 async fn test_resolver_malformed_input_resiliency() {
     let kernel = TestKernel::new().await;
@@ -406,20 +412,42 @@ async fn test_resolver_malformed_input_resiliency() {
     )
     .await;
 
-    let malformed_inputs = vec![
-        "apt:",               // Incomplete identity
-        ":curl",              // Missing backend
-        "brew@version",       // Option segment with no value
-        "@@@@",               // Invalid grammar
-        "brew:vim@requires=", // Null requirement set
-    ];
-
-    for input in malformed_inputs {
+    for (input, what_is_wrong) in [
+        ("apt:", "a backend with no name"),
+        (":curl", "a name with no backend"),
+        ("@@@@", "no identity at all"),
+        ("brew:vim@requires=", "an option with an empty value"),
+    ] {
         let res = resolver.parse_and_probe_spec(input).await;
-        if let Ok(spec) = res {
-            Validator::validate_package_name(&spec.name).ok();
-        }
+        let Err(e) = res else {
+            panic!("`{input}` is {what_is_wrong} and the resolver accepted it: {res:?}");
+        };
+        let msg = e.to_string();
+        // Every grammar refusal locates itself by ORIGIN rather than by quoting the line —
+        // `<argument>` for something typed, `file:line` for a manifest. That is what a user
+        // with a 300-line config needs, and quoting the text back would not give it to them.
+        assert!(
+            msg.contains("<argument>"),
+            "the refusal for `{input}` does not name where the line came from: {msg:?}"
+        );
+        let (_, reason) = msg.split_once("<argument>: ").unwrap_or(("", ""));
+        assert!(
+            reason.len() > 10,
+            "`{input}` is {what_is_wrong}, and the refusal gives no reason worth reading: \
+             {msg:?}"
+        );
     }
+
+    // The control: a well-formed spec through the same path, so "everything is refused" is not
+    // the explanation for the four assertions above.
+    let good = resolver
+        .parse_and_probe_spec("brew:vim")
+        .await
+        .expect("a well-formed spec must survive the path that refuses the malformed ones");
+    assert_eq!(good.name, "vim");
+    assert_eq!(good.backend, "brew");
+    Validator::validate_package_name(&good.name)
+        .expect("a name the grammar accepted must pass the validator");
 }
 
 // ============================================================================

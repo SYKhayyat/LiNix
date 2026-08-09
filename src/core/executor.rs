@@ -833,6 +833,8 @@ pub struct MockExecutor {
     /// Registrations whose whole purpose is to stay unmatched — see
     /// [`MockExecutor::set_response_that_must_not_be_used`].
     forbidden: DashMap<String, ()>,
+    /// How long a command takes, for tests about concurrency rather than about output.
+    delays: DashMap<String, std::time::Duration>,
     /// Set by a test that means it — see [`MockExecutor::allow_unmatched_registrations`].
     allow_unmatched: std::sync::atomic::AtomicBool,
     vfs: Arc<DashMap<PathBuf, String>>,
@@ -848,6 +850,7 @@ impl MockExecutor {
             matched: DashMap::new(),
             unstubbed: DashMap::new(),
             forbidden: DashMap::new(),
+            delays: DashMap::new(),
             allow_unmatched: std::sync::atomic::AtomicBool::new(false),
             vfs,
         }
@@ -855,6 +858,11 @@ impl MockExecutor {
 
     pub fn set_response(&self, cmd_pattern: &str, response: Result<StdOutput>) {
         self.responses.insert(cmd_pattern.to_string(), response);
+    }
+
+    /// Make a command take time, so a test can observe two calls overlapping — or failing to.
+    pub fn set_delay(&self, cmd_pattern: &str, delay: std::time::Duration) {
+        self.delays.insert(cmd_pattern.to_string(), delay);
     }
 
     /// Register a convincing answer for a command the product must **not** run.
@@ -986,6 +994,13 @@ impl ExecutionLayer for MockExecutor {
         {
             let mut seen = self.last_env.lock().await;
             *seen = env.clone();
+        }
+        // A command that takes time, for the tests that are about *when* two calls run rather
+        // than what they return. Without it a mock command is instantaneous, so contention on
+        // `run_exclusive`'s per-backend mutex is unobservable and a test of lock granularity
+        // passes identically against one global mutex.
+        if let Some(d) = self.delays.get(&full_cmd).map(|d| *d.value()) {
+            tokio::time::sleep(d).await;
         }
         if let Some(res) = self.responses.get(&full_cmd) {
             self.matched.insert(full_cmd, ());

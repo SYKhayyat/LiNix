@@ -1621,6 +1621,16 @@ refused in the words the user typed (`Remove` prints as `uninstall`, `Canary` as
 `upgrade --canary`). `Sync`, `Rebuild`, `Upgrade` and the install paths also gate *installs* and
 *changes*, so `max_installs`, `deny_packages` and `pinned_only` are reached from them too.
 
+**And it is passed as the enum, never as its own label** (`S49`, V.154). A scope that is turned
+into a string by one module and back into a scope by another is a scope with two vocabularies,
+and the two do not have to agree — the firewall teardown's producer emitted
+`"an unattended watch tick"` while its consumer matched `"watch"`, so both of that consumer's
+named arms were unreachable and every teardown, including `N7`'s unattended tick, was guarded
+and reported as `sync`. `GuardScope` is `Copy`. **The enum carries both vocabularies itself**:
+`as_str` is the command to retype with a flag on it, `during` is what a refusal calls the run it
+refused — each written out per variant, because the catch-all arm is what let one label answer
+`sync` for nine of the twelve.
+
 > **This sentence was false from the day the journal was written until 2026-07-23, and the
 > eighth path is why the rule below exists.** `heal()` recovered an interrupted *install* by
 > uninstalling the package first, before the plan, before the counts, before `-y` was
@@ -2576,3 +2586,55 @@ they became rows no row did.
 for.** `clean_cache` and `list_orphans` produce argv from the same rows `install` does, and
 neither was walked against a manager's own `--help` until 2026-08-06 — a subcommand only one
 verb reaches is a subcommand upstream can delete unnoticed.
+
+## II.23 A gate is not a gate until it has been watched to fail (`S48`, V.153)
+
+**A check that scans the source carries an oracle, and the oracle drives the *same predicate the
+check drives* — over an input it must catch and over every input it must not.** Not a
+restatement of the predicate in a string literal beside it; not an assertion that a sample line
+contains the substring the scan looks for. The question an oracle answers is *does the scan
+still see*, and only running the scan answers it.
+
+**So the predicate is a named function, not a block inside the walk.** A rule spelled as four
+`continue`s inside a `for` loop can be checked only by reading it, and reading it is what every
+one of these gates was already relying on. Three of them were nested one layer deeper still —
+inside the test function — where nothing outside could reach them at all.
+
+**The controls are the shapes that look like a finding and are not**, each one written because a
+scan got it wrong: a commented-out arm, an empty body, the last alternative of an or-pattern, a
+`stderr` read where the rule is about `stdout`, a definition line where the rule is about calls,
+a wrap that sits *below* the call rather than above it, and the exemption list itself.
+
+**And a scan that reaches nothing reports nothing, which reads exactly like a clean tree.** So a
+source scan asserts a floor on what it visited — files walked, sites matched, ledgers found —
+and the floor fails before the emptiness can be read as health.
+
+**Ratchets are bidirectional.** A count that may only shrink is asserted `<= n` *and* `>= n`, so
+slack that was lowered and never re-pinned is as red as growth.
+
+## II.24 A command says whether it writes; a list beside the enum does not (`S50`, V.155)
+
+**Whether a run takes the exclusive lock on `data/` is answered by `Commands::writes()`, an
+exhaustive match on the enum itself.** Not by a list of names sitting near it. A new subcommand
+does not compile until it says which it is, which is the strongest form of "locked by default"
+available — a runtime default that treats an unrecognised name as a writer is a guess, and it is
+a guess nobody is ever prompted to revisit.
+
+**The lock is over the DATA directory, and that is the whole of the question.** `path --set`,
+`config init` and `edit` write into the CONFIG repo through `utils::file::persist`, which is
+atomic; they are readers here. `edit` is the reason the distinction is worth keeping: it blocks
+on `$EDITOR`, and locking it once stopped every other LiNix on the machine for as long as
+somebody read a manifest in vim (AU6).
+
+**`--dry-run` never exempts anything** (S25). A preview of a writer reads the state a concurrent
+writer is rewriting.
+
+**A command can be a reader that contains a writer, and the lock is taken where the writing
+starts.** `history` opens a browser a person reads at their own pace; its rollback action
+reaches the whole install/remove path. Locking the command would be the `$EDITOR` mistake;
+leaving the action unlocked was the live one. So the exemption is at the command and the
+acquisition is at the mutation, and neither is inferred from the other.
+
+**A user verb takes the lock when any of its steps writes** — not when the first does, and not
+unconditionally. One lock spans the whole verb, because two steps that have to agree about the
+same registry must not have it released between them.

@@ -144,7 +144,7 @@ async fn main() -> Result<()> {
 
     // 5. One writer at a time. Held for the whole run, released when `main` returns — a
     //    lock dropped before the last write is a lock over part of a set that must agree.
-    let _data_lock = acquire_data_lock()?;
+    let _data_lock = acquire_data_lock(&cli.command)?;
 
     // 6. Kernel Initialization
     let app = App::new(config).await?;
@@ -616,58 +616,22 @@ pub(crate) fn preferences_path_from_argv(argv: &[String]) -> Option<std::path::P
         .map(|r| r.path.join(linix::config::PREFERENCES_FILE_NAME))
 }
 
-/// Commands that only read. Everything else takes the data-directory lock, because the
-/// default has to be the safe one: locking a reader costs a wait, and not locking a writer
-/// costs an entry out of `registry.json`, which is a removal.
+/// Take the lock for a mutating command, asking the command itself.
 ///
-/// `plan` and `status` are here and `plan --save` is not a counter-example: it writes a plan
-/// file, not state. **`--dry-run` is not on this list and never exempts anything** (S25): a
-/// preview of a writer reads the same state a concurrent writer is rewriting, and the run
-/// that proved it mattered was a `--dry-run sync` that entered recovery.
-pub(crate) const READ_ONLY_COMMANDS: &[&str] = &[
-    "plan",
-    "check",
-    "list",
-    "search",
-    "diff",
-    "vars",
-    "export",
-    "sbom",
-    "why",
-    "info",
-    "history",
-    "completions",
-    "help",
-    "eval",
-    "try",
-    "repl",
-    // AU6: these five read the machine's state and never write it, and `path` is the command
-    // documented for `cd $(linix path)` — measured blocking for the full 120-second timeout
-    // while the test suite held the lock. The two that write (`path --set` writes LiNix's
-    // settings file, `config init` writes `preferences.toml`) write into the CONFIG repo, and
-    // through `utils::file::persist`, which is atomic; this lock is the DATA lock, and it is
-    // held so that nothing loses an entry out of `registry.json`.
-    //
-    // `edit` is the sharpest of them: it blocks on $EDITOR. Locked, one person reading a
-    // manifest in vim stopped every other LiNix on the machine for as long as they read it.
-    "path",
-    "protected",
-    "policy",
-    "config",
-    "edit",
-];
-
-/// Take the lock for a mutating command. The command is read from argv rather than matched
-/// out of `Commands`, so a subcommand added later is locked by default instead of being
-/// forgotten by a match arm nobody updated.
-pub(crate) fn acquire_data_lock() -> Result<Option<linix::core::datalock::DataLock>> {
-    let argv: Vec<String> = std::env::args().collect();
-    let name = find_subcommand_index(&argv)
-        .map(|i| argv[i].clone())
-        .unwrap_or_default();
-    if READ_ONLY_COMMANDS.contains(&name.as_str()) {
+/// It used to be read from argv and matched against a hand-written list of twenty-one names,
+/// on the reasoning that a subcommand added later would then be locked by default rather than
+/// forgotten by a match arm. The list was the thing that rotted — twelve of its entries once
+/// named commands the program did not have, `history` was on it while reaching the whole
+/// install path, and `fleet` was off it while touching nothing local. `Commands::writes` is
+/// exhaustive, so a subcommand added later does not compile until it answers, which is the
+/// property the argv read was reaching for and could not have.
+pub(crate) fn acquire_data_lock(
+    command: &Commands,
+) -> Result<Option<linix::core::datalock::DataLock>> {
+    if !command.writes() {
         return Ok(None);
     }
+    let name = linix::core::latency::subcommand_name(command);
     // 120s: long enough to outlast the longest wait a holder can legitimately make before it
     // starts doing work — the rate-limit ceiling, 30s by default — with room for the install
     // it then performs. It is not meant to outlast a whole sync: past this point the honest
@@ -828,9 +792,6 @@ pub(crate) fn plan_user_verb(
     Some(Ok(planned))
 }
 
-/// Run a user verb: build the config and app once from the shared leading flags, then dispatch
-/// each step against them in order, stopping at the first failure. One data lock covers the
-/// whole verb — the verb name is unknown to `acquire_data_lock`, so it locks as a writer, the
 /// Seed the settings that live in process-wide cells rather than in `App`.
 ///
 /// One function because there are two entry points that load a config, and a setting wired
@@ -844,12 +805,25 @@ fn apply_process_wide_config(config: &linix::config::Config) {
     );
 }
 
-/// safe default for a sequence that may install or remove.
+/// Run a user verb: build the config and app once from the shared leading flags, then dispatch
+/// each step against them in order, stopping at the first failure.
+///
+/// **One data lock covers the whole verb, and it is taken when ANY step writes.** The verb name
+/// is not a subcommand, so this used to lock unconditionally as the safe default for a sequence
+/// that may install or remove; now that each step parses to a `Commands`, the sequence can be
+/// asked instead. A verb of five readers stops holding the writer lock, and a verb whose third
+/// step syncs takes it before the first step runs rather than partway through.
 pub(crate) async fn run_user_verb(steps: Vec<Vec<String>>) -> Result<()> {
-    let first = Cli::parse_from(&steps[0]);
-    let config = load_and_merge_config(&first).await?;
+    let parsed: Vec<Cli> = steps.iter().map(Cli::parse_from).collect();
+    let config = load_and_merge_config(&parsed[0]).await?;
     apply_process_wide_config(&config);
-    let _data_lock = acquire_data_lock()?;
+    // The lock spans the whole verb, so the question is whether any step writes — not whether
+    // the first one does. Taking it per step would release it between two commands that have
+    // to agree about the same registry.
+    let _data_lock = match parsed.iter().find(|c| c.command.writes()) {
+        Some(writer) => acquire_data_lock(&writer.command)?,
+        None => None,
+    };
     let app = App::new(config).await?;
     for step in &steps {
         let cli = Cli::parse_from(step);
@@ -1132,7 +1106,7 @@ mod alias_tests {
 
 #[cfg(test)]
 mod log_level_tests {
-    use super::{known_subcommands, log_level_from_argv, READ_ONLY_COMMANDS};
+    use super::{known_subcommands, log_level_from_argv};
 
     fn argv(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|s| s.to_string()).collect()
@@ -1243,49 +1217,127 @@ mod log_level_tests {
         );
     }
 
-    /// Every name exempted from the data lock is a command that exists.
+    /// The lock classification, asked of the enum and of clap — the two things that cannot
+    /// drift from each other.
     ///
-    /// **The `undo` disease, found in the lock list.** Twelve of the thirty-three entries here
-    /// named commands the program does not have — `status` (now `check drift`), `doctor`,
-    /// `unmanaged` and `absent` (sections of `check`), `insight`, `show`, `audit`, `outdated`,
-    /// `log`, `locate`, `metrics`, `verify`. A list of names beside the enum drifts from it,
-    /// silently, and this one decided whether a command takes an exclusive lock.
-    ///
-    /// Asked of clap rather than of a second list, for exactly that reason.
+    /// **The `undo` disease, found in the lock list this replaces.** Twelve of its thirty-three
+    /// entries named commands the program does not have — `status` (now `check drift`),
+    /// `doctor`, `unmanaged`, `absent`, `insight`, `show`, `audit`, `outdated`, `log`, `locate`,
+    /// `metrics`, `verify`. Two tests guarded it and **both guarded invention**: that every name
+    /// on the list was real. Nothing guarded omission or misclassification, which is the half
+    /// that costs an entry out of `registry.json` — and both were live. `history` was exempt
+    /// while reaching `handle_rollback` → `handle_sync`, the entire install/remove path, and
+    /// `fleet` was absent from the list while touching no local state at all.
     #[test]
-    fn every_read_only_command_is_a_real_command() {
+    fn the_readers_are_exactly_the_commands_that_read() {
+        // The reader set, read out of `Commands::writes` itself rather than restated. A variant
+        // moving between the arms shows up here as a diff, which is what the old list could
+        // never do: it lived seventy lines from the enum and nothing compared them.
+        let src = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/cli/args.rs"),
+        )
+        .expect("args.rs");
+        let body = src
+            .split_once("pub fn writes(&self) -> bool {")
+            .expect("`Commands::writes` is gone — this test guards nothing")
+            .1;
+        // Up to the LAST `=> false,`: everything after it is the writer arm, whose variant
+        // names are spelled the same way and would otherwise be collected as readers.
+        let cut = body
+            .rfind("=> false,")
+            .expect("no reader arm — every command would take the exclusive lock");
+        let body = &body[..cut];
+
+        let readers: std::collections::BTreeSet<String> = body
+            .split("Self::")
+            .skip(1)
+            .filter_map(|c| c.split([' ', '{']).next())
+            .filter(|c| !c.is_empty())
+            .map(|c| c.to_string())
+            .collect();
+
+        let expected: std::collections::BTreeSet<String> = [
+            "Check", "Completions", "Config", "Diff", "Edit", "Eval", "Export", "Fleet",
+            "History", "Info", "List", "Path", "Plan", "Policy", "Protected", "Repl", "Sbom",
+            "Search", "Try", "Vars", "Why",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        assert_eq!(
+            readers, expected,
+            "the set of commands exempted from the data lock changed. Adding a WRITER is free;              adding a reader means claiming it never writes under `data/`, so it has to be              claimed here too. Not locking a writer costs an entry out of `registry.json`,              which is a removal."
+        );
+
+        // Invention, the half the old tests did cover: every exempted name is a real command.
         let known = known_subcommands();
-        let ghosts: Vec<&&str> = READ_ONLY_COMMANDS
+        let ghosts: Vec<&String> = readers
             .iter()
-            // clap generates `help` itself, after `command()` is built, so it is absent from
-            // the factory's list and present in the program. Named here rather than dropped
-            // from the exemption list, because `linix help sync` really does only read.
-            .filter(|name| **name != "help" && !known.contains(**name))
+            .filter(|name| !known.contains(&to_kebab(name)))
             .collect();
         assert!(
             ghosts.is_empty(),
-            "READ_ONLY_COMMANDS exempts names that are not commands: {:?}",
-            ghosts
+            "these are exempt from the data lock and are not commands: {ghosts:?}"
         );
     }
 
-    /// The direction that matters for correctness: a command LiNix cannot run without writing
-    /// must not be on the list. Stated as the two it would break first.
+    fn to_kebab(variant: &str) -> String {
+        let mut out = String::new();
+        for (i, c) in variant.chars().enumerate() {
+            if c.is_ascii_uppercase() {
+                if i > 0 {
+                    out.push('-');
+                }
+                out.push(c.to_ascii_lowercase());
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    /// The direction that matters for correctness, driven through clap rather than asserted
+    /// about a list of strings: a command LiNix cannot run without writing takes the lock.
     #[test]
-    fn the_commands_that_write_are_not_exempt() {
-        for writer in [
-            "sync",
-            "install",
-            "uninstall",
-            "adopt",
-            "heal",
-            "rollback",
-            "init",
+    fn the_commands_that_write_take_the_lock() {
+        use clap::Parser;
+        use linix::cli::args::Cli;
+        for argv in [
+            vec!["linix", "sync"],
+            vec!["linix", "install", "apt:jq"],
+            vec!["linix", "uninstall", "apt:jq"],
+            vec!["linix", "adopt"],
+            vec!["linix", "heal"],
+            vec!["linix", "rollback", "HEAD"],
+            vec!["linix", "init"],
+            vec!["linix", "purge-undeclared"],
+            vec!["linix", "remove-orphans"],
+            vec!["linix", "rebuild"],
+            vec!["linix", "apply", "linix-plan.json"],
+            vec!["linix", "self-upgrade"],
         ] {
+            let cli = Cli::parse_from(&argv);
             assert!(
-                !READ_ONLY_COMMANDS.contains(&writer),
+                cli.command.writes(),
                 "`{}` writes state and must take the data lock",
-                writer
+                argv[1]
+            );
+        }
+
+        for argv in [
+            vec!["linix", "plan"],
+            vec!["linix", "list"],
+            vec!["linix", "why", "apt:jq"],
+            // The two the old list got wrong, in opposite directions.
+            vec!["linix", "history"],
+            vec!["linix", "fleet"],
+        ] {
+            let cli = Cli::parse_from(&argv);
+            assert!(
+                !cli.command.writes(),
+                "`{}` only reads and must not hold the 120-second exclusive lock",
+                argv[1]
             );
         }
     }

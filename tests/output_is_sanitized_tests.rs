@@ -83,40 +83,24 @@ async fn search_output_hands_the_parser_clean_text() {
 fn no_raw_stdout_read_escapes_the_rule() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut raw: Vec<String> = Vec::new();
+    let mut files_seen = 0usize;
 
     visit(&root, &mut |path, src| {
+        files_seen += 1;
         let rel = path
             .strip_prefix(PathBuf::from(env!("CARGO_MANIFEST_DIR")))
             .unwrap_or(path)
             .to_string_lossy()
             .replace('\\', "/");
-        for (n, line) in src.lines().enumerate() {
-            // Everything from the first `#[cfg(test)]` on is test code, which inspects raw
-            // bytes on purpose. This codebase puts test modules last, without exception.
-            if line.trim_start().starts_with("#[cfg(test)]") {
-                return;
-            }
-            if !line.contains("from_utf8_lossy(&") {
-                continue;
-            }
-            // stderr is a message for a human, not input to a parser, and it is already
-            // trimmed at every site that shows one.
-            if line.contains(".stderr") {
-                continue;
-            }
-            if !line.contains(".stdout") {
-                continue;
-            }
-            if line.contains("text::sanitize") {
-                continue;
-            }
-            let site = format!("{rel}:{}", n + 1);
-            if ALLOWED.iter().any(|(s, _)| site.starts_with(s)) {
-                continue;
-            }
-            raw.push(format!("{site}: {}", line.trim()));
-        }
+        raw.extend(raw_reads_in(&rel, src));
     });
+
+    // A scan that reached no files reports nothing raw, which reads exactly like a clean tree.
+    assert!(
+        files_seen > 100,
+        "the scan visited {files_seen} files under src/ — it is not reaching the tree, so its \
+         silence means nothing"
+    );
 
     assert!(
         raw.is_empty(),
@@ -134,6 +118,41 @@ fn no_raw_stdout_read_escapes_the_rule() {
             "{site}'s exemption has no reason worth the name: {why:?}"
         );
     }
+}
+
+/// Does this line read a command's stdout without sanitizing it?
+///
+/// A named function rather than four `continue`s inside the walk, because a predicate that
+/// only exists inside a loop can only be checked by reading it — and the oracle below has to
+/// be able to hand it something it must catch.
+fn is_raw_stdout_read(line: &str) -> bool {
+    line.contains("from_utf8_lossy(&")
+        // stderr is a message for a human, not input to a parser, and it is already
+        // trimmed at every site that shows one.
+        && !line.contains(".stderr")
+        && line.contains(".stdout")
+        && !line.contains("text::sanitize")
+}
+
+/// Every unsanitized stdout read in one file, as `path:line: source`.
+fn raw_reads_in(rel: &str, src: &str) -> Vec<String> {
+    let mut raw = Vec::new();
+    for (n, line) in src.lines().enumerate() {
+        // Everything from the first `#[cfg(test)]` on is test code, which inspects raw bytes
+        // on purpose. This codebase puts test modules last, without exception.
+        if line.trim_start().starts_with("#[cfg(test)]") {
+            break;
+        }
+        if !is_raw_stdout_read(line) {
+            continue;
+        }
+        let site = format!("{rel}:{}", n + 1);
+        if ALLOWED.iter().any(|(s, _)| site.starts_with(s)) {
+            continue;
+        }
+        raw.push(format!("{site}: {}", line.trim()));
+    }
+    raw
 }
 
 /// Reads of stdout that must NOT be sanitized, and why.
@@ -168,18 +187,56 @@ fn visit(dir: &std::path::Path, f: &mut impl FnMut(&std::path::Path, &str)) {
 }
 
 /// A gate that has never failed is a claim, not a check.
+///
+/// This test used to assert that three string literals declared two lines above it contained
+/// substrings they visibly contained. It never called the scan, so replacing the scan's
+/// predicate with `false` left it green — the exact failure its own name warns about. It now
+/// drives the real predicate over a planted offender and every shape that must not read as one.
 #[test]
 fn the_raw_read_scan_can_actually_fail() {
-    // The scan keys on the exact expression a raw read is written as. If that spelling ever
-    // changes, this fails here rather than matching nothing forever.
-    let raw_read = "let s = String::from_utf8_lossy(&out.stdout).trim().to_string();";
-    assert!(raw_read.contains("from_utf8_lossy(&") && raw_read.contains(".stdout"));
-    assert!(!raw_read.contains("text::sanitize"));
+    let offender = "        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();";
 
-    let sanitized = "Ok(crate::utils::text::sanitize(&String::from_utf8_lossy(&out.stdout)))";
-    assert!(sanitized.contains("text::sanitize"));
+    let found = raw_reads_in("src/planted.rs", offender);
+    assert_eq!(
+        found.len(),
+        1,
+        "the scan did not see the one line it exists to find: {found:?}"
+    );
+    assert!(
+        found[0].starts_with("src/planted.rs:1: "),
+        "a caught site must name the file and line a reader can open: {}",
+        found[0]
+    );
 
-    // stderr reads are deliberately out of scope.
-    let stderr_read = "String::from_utf8_lossy(&out.stderr).trim()";
-    assert!(stderr_read.contains(".stderr"));
+    // The controls. Each is a way a line can look like the offender and not be one.
+    for (label, src) in [
+        (
+            "a sanitized read is the correct shape, not a finding",
+            "    Ok(crate::utils::text::sanitize(&String::from_utf8_lossy(&out.stdout)))",
+        ),
+        (
+            "stderr is a message for a human and is deliberately out of scope",
+            "    let e = String::from_utf8_lossy(&out.stderr).trim().to_string();",
+        ),
+        (
+            "reading bytes that are not a command's stdout is not this rule's business",
+            "    let body = String::from_utf8_lossy(&file_bytes).to_string();",
+        ),
+        (
+            "test code inspects raw bytes on purpose, and the scan stops at the marker",
+            "#[cfg(test)]\nlet s = String::from_utf8_lossy(&out.stdout).trim().to_string();",
+        ),
+    ] {
+        assert!(
+            raw_reads_in("src/planted.rs", src).is_empty(),
+            "{label} — the scan reported it anyway: {:?}",
+            raw_reads_in("src/planted.rs", src)
+        );
+    }
+
+    // And the exemption mechanism itself: the same offender, in the one file ALLOWED excuses.
+    assert!(
+        raw_reads_in("src/core/git.rs", offender).is_empty(),
+        "ALLOWED did not excuse the site it names, so the exemption list is not being consulted"
+    );
 }

@@ -96,30 +96,40 @@ async fn test_ephemeral_shell_atomic_purge_isolation_logic() {
     );
 }
 
+/// What a project-local `linix.txt` declares.
+///
+/// This test used to write a file, read it back, and then split it with its own copy of
+/// `auto_shell`'s five lines — so it asserted on `str::lines` and would have passed against a
+/// LiNix that had no manifest discovery at all. It now drives the reader the shell uses.
 #[tokio::test]
 async fn test_ephemeral_shell_auto_manifest_discovery() {
     let kernel = TestKernel::new().await;
 
-    let manifest_content = "# Dev Stack\nbrew:jq\nbrew:htop\n";
     let manifest_path = kernel.tmp.path().join("linix.txt");
-    fs::write(&manifest_path, manifest_content).await.unwrap();
+    fs::write(
+        &manifest_path,
+        "# Dev Stack\n\
+         brew:jq\n\
+         \n\
+         brew:htop  # the one I actually use\n\
+         web:https://example.com/tool.tar.gz#sha256-fragment\n",
+    )
+    .await
+    .unwrap();
 
-    let content = fs::read_to_string(&manifest_path)
-        .await
-        .expect("Failed to read test manifest.");
-    let pkgs: Vec<String> = content
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .collect();
+    let content = fs::read_to_string(&manifest_path).await.unwrap();
+    let pkgs = linix::app::shell::manifest_lines(&content);
 
     assert_eq!(
-        pkgs.len(),
-        2,
-        "Manifest parser failed to identify all package lines."
+        pkgs,
+        vec![
+            "brew:jq".to_string(),
+            "brew:htop".to_string(),
+            "web:https://example.com/tool.tar.gz#sha256-fragment".to_string(),
+        ],
+        "the reader must drop the heading, drop the blank, cut the trailing comment after \
+         whitespace, and leave a `#` that follows a non-space alone — a URL fragment is data"
     );
-    assert_eq!(pkgs[0], "brew:jq");
-    assert_eq!(pkgs[1], "brew:htop");
 }
 
 #[tokio::test]

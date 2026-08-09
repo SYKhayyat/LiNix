@@ -139,19 +139,7 @@ fn no_ledger_hand_rolls_its_own_carrier() {
         }
         ledgers.push(file.to_string());
         let src = std::fs::read_to_string(&path).expect("cannot read ledger");
-
-        if !src.contains("impl LockFile for") {
-            offenders.push(format!("{file}: does not implement LockFile"));
-        }
-        for hand_rolled in [
-            "pub fn load(path: &Path) -> Result<Self>",
-            "pub fn save(&self, path: &Path) -> Result<()>",
-            "pub fn new() -> Self",
-        ] {
-            if src.contains(hand_rolled) {
-                offenders.push(format!("{file}: hand-rolls `{hand_rolled}`"));
-            }
-        }
+        offenders.extend(offences_in(file, &src));
     }
 
     assert!(
@@ -169,15 +157,76 @@ fn no_ledger_hand_rolls_its_own_carrier() {
     );
 }
 
+/// The signatures a ledger must inherit rather than write. Each is the real one, spelled the
+/// way `src/core` spells it, so a change to the trait's shape fails the oracle below rather
+/// than quietly matching nothing for ever.
+const HAND_ROLLED: &[&str] = &[
+    "pub fn load(path: &Path) -> Result<Self>",
+    "pub fn save(&self, path: &Path) -> Result<()>",
+    "pub fn new() -> Self",
+];
+
+/// What disqualifies one ledger file.
+///
+/// A named function rather than a block inside the directory walk, because the oracle below
+/// has to be able to hand it a ledger that offends and one that does not.
+fn offences_in(file: &str, src: &str) -> Vec<String> {
+    let mut offences = Vec::new();
+    if !src.contains("impl LockFile for") {
+        offences.push(format!("{file}: does not implement LockFile"));
+    }
+    for hand_rolled in HAND_ROLLED {
+        if src.contains(hand_rolled) {
+            offences.push(format!("{file}: hand-rolls `{hand_rolled}`"));
+        }
+    }
+    offences
+}
+
 /// A gate that has never failed is a claim, not a check.
+///
+/// This test used to assert that two string literals declared one line above it contained
+/// substrings they visibly contained — it never called the scan, so gutting the scan left it
+/// green. It now drives the real predicate over a planted offender and a planted innocent.
 #[test]
 fn the_carrier_scan_can_actually_fail() {
-    // The strings the scan hunts for are the real signatures, not approximations of them: if
-    // the trait's shape changes, this fails here rather than silently matching nothing forever.
-    let sample = "    pub fn load(path: &Path) -> Result<Self> {\n";
-    assert!(sample.contains("pub fn load(path: &Path) -> Result<Self>"));
+    // The offender: a ledger that carries its own file rules, which is the thing being banned.
+    let offender = "pub struct RegexLock;\n\
+                    impl RegexLock {\n    \
+                        pub fn load(path: &Path) -> Result<Self> { todo!() }\n    \
+                        pub fn save(&self, path: &Path) -> Result<()> { todo!() }\n    \
+                        pub fn new() -> Self { Self }\n\
+                    }\n";
+    let found = offences_in("regex_lock.rs", offender);
+    assert_eq!(
+        found.len(),
+        4,
+        "the scan must report the missing impl and all three hand-rolled signatures, not {found:?}"
+    );
+    assert!(
+        found.iter().all(|o| o.starts_with("regex_lock.rs: ")),
+        "each offence must name the file a reader can open: {found:?}"
+    );
 
-    let converted = "impl LockFile for RegexLock {\n    const WHAT: &'static str = \"x\";\n}\n";
-    assert!(converted.contains("impl LockFile for"));
-    assert!(!converted.contains("pub fn save(&self, path: &Path) -> Result<()>"));
+    // The innocent: the same ledger converted. Nothing left to report.
+    let converted = "pub struct RegexLock;\n\
+                     impl LockFile for RegexLock {\n    \
+                         const WHAT: &'static str = \"x\";\n\
+                     }\n";
+    assert!(
+        offences_in("regex_lock.rs", converted).is_empty(),
+        "a converted ledger must be clean, and this one reported: {:?}",
+        offences_in("regex_lock.rs", converted)
+    );
+
+    // Each banned signature on its own, so a scan that lost one of the three is caught here
+    // rather than by the seventh ledger silently getting away with it.
+    for hand_rolled in HAND_ROLLED {
+        let one = format!("impl LockFile for X {{}}\n    {hand_rolled} {{ todo!() }}\n");
+        assert_eq!(
+            offences_in("x_lock.rs", &one).len(),
+            1,
+            "the scan stopped seeing `{hand_rolled}`"
+        );
+    }
 }

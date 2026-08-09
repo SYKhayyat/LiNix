@@ -36,15 +36,6 @@ pub struct Reconciled {
     pub left_in_place: usize,
 }
 
-/// What to call this run in a refusal a user reads — the difference that matters is whether
-/// anybody was there, because an unattended tick is the dangerous one (N7).
-pub fn scope_label(scope: crate::app::sync::guard::GuardScope) -> &'static str {
-    match scope {
-        crate::app::sync::guard::GuardScope::Watch => "an unattended watch tick",
-        _ => "sync",
-    }
-}
-
 /// One reconcile pass: resolve the model, apply repos, plan, apply, then dependents,
 /// schedules and extras — II.7's ordering, in order.
 ///
@@ -303,7 +294,7 @@ pub async fn apply_non_package_phases(
             // Phase 3c (Part XI): the perimeter. After the packages, because a rule usually
             // exists to let something in that was just installed — and its lockout check runs
             // before any command it would issue, on this path and on the unattended one alike.
-            Phase::Firewall => app.firewall().apply(state, scope_label(scope)).await?,
+            Phase::Firewall => app.firewall().apply(state, scope).await?,
             // Phase 4 (S21): provision the declared schedules onto the OS scheduler.
             Phase::Schedules => app.schedules().apply(state).await?,
             // Phase 4b (XIII.3): the declared `exec:` scripts, after the packages and

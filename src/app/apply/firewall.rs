@@ -28,7 +28,11 @@ impl Firewall<'_> {
     /// N6: a config that both declares rules and links a ruleset file **warns and applies
     /// both**, with the declaration winning. A base file plus overrides is legible; two silent
     /// owners are not.
-    pub async fn apply(&self, state: &crate::model::DesiredState, scope: &str) -> Result<()> {
+    pub async fn apply(
+        &self,
+        state: &crate::model::DesiredState,
+        scope: crate::app::sync::guard::GuardScope,
+    ) -> Result<()> {
         use crate::model::firewall::{self, Direction, Rule};
 
         let declared: Vec<(Rule, &crate::config::grammar::Options)> = state
@@ -148,7 +152,7 @@ impl Firewall<'_> {
                 self.registry,
                 &removals,
                 0,
-                guard_scope(scope),
+                scope,
             )
             .await?;
             for rule in &to_close {
@@ -268,15 +272,3 @@ impl Firewall<'_> {
     }
 }
 
-/// The guard scope for a firewall teardown, from the label `sync` passes down.
-///
-/// `N1` names the three commands that can close a port. A label this does not recognise gets
-/// `Sync`, which is the strictest of the three rather than the most convenient.
-fn guard_scope(scope: &str) -> crate::app::sync::guard::GuardScope {
-    use crate::app::sync::guard::GuardScope;
-    match scope {
-        "purge-undeclared" => GuardScope::PurgeUndeclared,
-        "watch" => GuardScope::Watch,
-        _ => GuardScope::Sync,
-    }
-}

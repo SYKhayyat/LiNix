@@ -135,21 +135,62 @@ async fn test_circular_dependency_detection_wiring() {
     }
 }
 
-/// Verifies that the CommandExecutor's LockMap allows distinct backends to execute in parallel
-/// while enforcing mutual exclusion for the same backend.
+/// The lock is per backend: two managers run at once, one manager runs one at a time.
+///
+/// **This test used to prove neither half.** It fired one `brew` call and one `cargo` call
+/// through `tokio::join!` and asserted both returned `Ok` — which a single global mutex also
+/// satisfies, because a serialised pair still both succeed. Mock commands are instantaneous,
+/// so there was nothing to contend over either. Nothing else in the suite covers granularity,
+/// so the property was untested in both directions.
+///
+/// Now each call takes measurable time, and the two halves are asserted against each other:
+/// different keys must finish in about one command's time, the same key in about two.
 #[tokio::test]
 async fn test_parallel_task_isolation_wiring() {
+    use std::time::{Duration, Instant};
+
     let kernel = TestKernel::new().await;
     let executor = kernel.app.executor.clone();
 
-    // Logic: brew and cargo should lock their own DBs and run concurrently.
-    let lock1 = executor.run_exclusive("brew", "brew", &["list"], false);
-    let lock2 = executor.run_exclusive("cargo", "cargo", &["install", "--list"], false);
+    const STEP: Duration = Duration::from_millis(300);
+    kernel.mock_executor.set_delay("brew list", STEP);
+    kernel.mock_executor.set_delay("cargo install --list", STEP);
 
-    // If the logic is correct, these join successfully.
-    // If a global lock exists, they would stall.
-    let (res1, res2) = tokio::join!(lock1, lock2);
+    // Two backends, two locks: they overlap, so the pair costs about one step rather than two.
+    let started = Instant::now();
+    let (a, b) = tokio::join!(
+        executor.run_exclusive("brew", "brew", &["list"], false),
+        executor.run_exclusive("cargo", "cargo", &["install", "--list"], false),
+    );
+    let across_backends = started.elapsed();
+    a.expect("brew");
+    b.expect("cargo");
 
-    assert!(res1.is_ok(), "Lock acquisition failed for brew");
-    assert!(res2.is_ok(), "Lock acquisition failed for cargo");
+    // One backend, one lock: the second call waits, so the pair costs about two steps. This is
+    // the half a global mutex would also pass — it is here so the half above cannot be read as
+    // "locking is simply absent".
+    let started = Instant::now();
+    let (a, b) = tokio::join!(
+        executor.run_exclusive("brew", "brew", &["list"], false),
+        executor.run_exclusive("brew", "brew", &["list"], false),
+    );
+    let same_backend = started.elapsed();
+    a.expect("brew, first");
+    b.expect("brew, second");
+
+    assert!(
+        across_backends < STEP * 2,
+        "two different backends took {across_backends:?} for two {STEP:?} commands — they \
+         serialised, so the lock is not per backend and every sync runs one manager at a time"
+    );
+    assert!(
+        same_backend >= STEP * 2,
+        "two calls to the SAME backend took {same_backend:?} — they overlapped, so nothing is \
+         holding a manager's database against a concurrent write"
+    );
+    assert!(
+        same_backend > across_backends,
+        "the same backend ({same_backend:?}) was not slower than two different ones \
+         ({across_backends:?}), so the lock key is being ignored"
+    );
 }

@@ -11,7 +11,7 @@
 //!   evaluator every `when` block goes through;
 //! - `:vars` / `:eval` → the resolver's own `resolve_vars` / `resolve_model`.
 //!
-//! It is read-only and takes no locks (it is in `READ_ONLY_COMMANDS`): it resolves and prints,
+//! It is read-only and takes no locks (`Commands::writes` answers false for it): it resolves and prints,
 //! it never touches the machine.
 
 use crate::app::sync::resolver::StateResolver;

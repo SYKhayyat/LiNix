@@ -96,30 +96,68 @@ async fn test_security_validator_strict_enforcement() {
 // TELEMETRY & PERFORMANCE
 // ============================================================================
 
-/// Verifies that the MetricsCollector accurately records parallel task
-/// performance data for the transaction summary.
+/// What the collector was handed is what the summary is built from.
+///
+/// **This test asserted nothing.** It recorded one operation, two counts, called
+/// `print_summary` twice and ended — the comment on its last step read "verification:
+/// print_summary must not panic", which is the whole of what it checked. A collector that
+/// dropped every operation on the floor passed it, and so did one whose rollup summed the
+/// wrong field.
 #[tokio::test]
 async fn test_telemetry_metrics_reporting_accuracy() {
     let metrics = MetricsCollector::new();
     let start = Utc::now();
 
-    // 1. Record a simulated successful operation
+    metrics.record_operation("task-hermetic-1", "apt", start, true, None, 1, 1024, 1);
     metrics.record_operation(
-        "task-hermetic-1",
+        "task-hermetic-2",
         "apt",
         start,
-        true, // Success
-        None, // No error
-        1,    // 1 attempt
-        1024, // 1KB downloaded
-        1,    // not batched
+        false,
+        Some("exit 100".into()),
+        3,
+        0,
+        4,
     );
-
-    // 2. Record aggregate stats
+    metrics.record_operation("task-hermetic-3", "brew", start, true, None, 1, 2048, 1);
     metrics.record_install(5);
     metrics.record_remove(2);
 
-    // 3. Verification: print_summary must not panic
+    // Every field survives the round trip, including the ones only the summary reads.
+    let ops = metrics.operations();
+    assert_eq!(ops.len(), 3, "an operation was dropped: {ops:?}");
+    let failed = ops
+        .iter()
+        .find(|o| o.name == "task-hermetic-2")
+        .expect("the failed operation was not recorded");
+    assert!(!failed.success);
+    assert_eq!(failed.error.as_deref(), Some("exit 100"));
+    assert_eq!(failed.retry_count, 3, "the retry count is what makes a flaky manager visible");
+    assert_eq!(
+        failed.batch_size, 4,
+        "batch_size is how the summary tells one command covering four packages from four \
+         commands, and it is the field with no other reader"
+    );
+
+    assert_eq!(
+        metrics.totals(),
+        (5, 2, 3072),
+        "installs, removals and bytes are summed across operations, not taken from the last one"
+    );
+
+    // The rollup the summary prints, over the operations actually collected.
+    let rollup = linix::app::metrics::backend_rollup(&ops);
+    let apt = rollup
+        .iter()
+        .find(|(b, ..)| b == "apt")
+        .expect("apt is missing from the rollup");
+    assert_eq!(apt.1, 2, "apt's two operations must roll up as two, not one");
+    assert!(
+        rollup.iter().any(|(b, ..)| b == "brew"),
+        "a second backend must appear in its own row: {rollup:?}"
+    );
+
+    // And it still renders, in both narrations — the original test's only real assertion.
     metrics.print_summary(linix::app::metrics::Narration::Change);
     metrics.print_summary(linix::app::metrics::Narration::Rebuild);
 }

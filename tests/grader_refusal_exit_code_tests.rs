@@ -180,6 +180,107 @@ fn a_security_refusal_fires_the_refusal_hook() {
 /// The fix is not an exemption list. A message builder is followed to **every** one of its call
 /// sites, and each has to wrap it — which is strictly stronger than the original, because a
 /// builder whose second caller forgets the wrap now fails where before it was invisible.
+/// The name of the `fn` a line sits inside, and whether that fn hands back a message rather
+/// than an error — i.e. is a builder whose *caller* decides the error type.
+///
+/// `Option<String>` counts as well as `String`: `health::refusal_if_unrevertable` returns
+/// one, and it is the layer that decides *whether* to refuse while `cannot_revert_refusal`
+/// decides *what to say*. Two builders in a row is a normal shape, so the follow below has
+/// to be transitive or it stops one hop short and reports a correct site.
+///
+/// At module scope rather than nested in the test, so the oracle can drive it. Nested, the
+/// only way to check it was to read it — which is how this file shipped a self-test that
+/// asserted a string literal contained a substring it visibly contained.
+fn enclosing_builder(lines: &[String], at: usize) -> Option<String> {
+    for i in (0..=at).rev() {
+        let t = lines[i].trim_start();
+        if let Some(rest) = t.strip_prefix("pub fn ").or_else(|| t.strip_prefix("fn ")) {
+            let name = rest.split(['(', '<']).next()?.trim().to_string();
+            // The signature can wrap; look at the few lines that carry the return type.
+            let sig = lines[i..(i + 8).min(lines.len())].join(" ");
+            return if sig.contains("-> String") || sig.contains("-> Option<String>") {
+                Some(name)
+            } else {
+                None
+            };
+        }
+    }
+    None
+}
+
+/// Every place `name(` is called, outside its own definition and outside test modules,
+/// as `(index into sources, 0-based line, wrapped in Error::Refused)`.
+///
+/// The index rather than a rendered `file:line`: an earlier draft looked the caller's file
+/// back up by basename to ask whether *it* was a builder, and basenames collide across a
+/// tree with fourteen `mod.rs` files. It found the wrong file and indexed past its end.
+fn call_sites(
+    sources: &[(std::path::PathBuf, Vec<String>)],
+    name: &str,
+) -> Vec<(usize, usize, bool)> {
+    let needle = format!("{}(", name);
+    let mut out = Vec::new();
+    for (fi, (_, lines)) in sources.iter().enumerate() {
+        let mut in_tests = false;
+        for (i, line) in lines.iter().enumerate() {
+            if line.trim_start().starts_with("#[cfg(test)]") {
+                in_tests = true;
+            }
+            if in_tests {
+                continue;
+            }
+            let t = line.trim_start();
+            if t.starts_with("//") || t.starts_with("pub fn ") || t.starts_with("fn ") {
+                continue;
+            }
+            if !t.contains(&needle) {
+                continue;
+            }
+            // Above *and* below: the wrap is above for `Err(Error::Refused(build(..)))`
+            // and below for `match build(..) { Some(m) => Err(Error::Refused(m)) }`, which
+            // is how `sync/mod.rs:381` reads. A window that only looked up scored that
+            // second shape as unwrapped.
+            let from = i.saturating_sub(3);
+            let to = (i + 6).min(lines.len() - 1);
+            let wrapped = lines[from..=to].join("\n").contains("Error::Refused");
+            out.push((fi, i, wrapped));
+        }
+    }
+    out
+}
+
+/// The vocabulary, and it is a list — which is the shape this repo distrusts, so the list is
+/// widened when a member is found rather than assumed complete. G-8 found the second entry:
+/// `bundle.rs`'s restore said "it refuses unless you pass --force", returned `Error::Other`,
+/// exited 1, and the round-2 sweep of this exact class could not see it because it matched
+/// only the first phrasing.
+///
+/// `refuses to` is deliberately NOT here: it is the phrasing LiNix uses about somebody ELSE
+/// refusing — "Windows Task Scheduler refuses to register one otherwise" is an
+/// `Error::Permission` and correctly so, and `linix protected`'s heading is "what LiNix
+/// refuses to remove". Both were measured as offenders when the phrase was included, and both
+/// are right as they are.
+const REFUSAL_VOCABULARY: &[&str] = &["refusing to", "Refusing to", "refuses unless"];
+
+/// Does this line claim to be refusing something?
+///
+/// A refusal is RETURNED, never printed: `linix protected`'s heading says "what LiNix refuses
+/// to remove" and is not itself a refusal. Comments and assertions about a refusal are not
+/// refusals either.
+fn says_it_is_refusing(line: &str) -> bool {
+    let t = line.trim_start();
+    if t.starts_with("//") || t.contains("assert") {
+        return false;
+    }
+    if ["println!", "print!", "info!", "warn!", "eprintln!"]
+        .iter()
+        .any(|m| t.starts_with(m))
+    {
+        return false;
+    }
+    REFUSAL_VOCABULARY.iter().any(|v| line.contains(v))
+}
+
 #[test]
 fn every_site_that_says_it_is_refusing_is_built_as_a_refusal() {
     fn walk(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
@@ -208,103 +309,13 @@ fn every_site_that_says_it_is_refusing_is_built_as_a_refusal() {
         })
         .collect();
 
-    /// The name of the `fn` a line sits inside, and whether that fn hands back a message rather
-    /// than an error — i.e. is a builder whose *caller* decides the error type.
-    ///
-    /// `Option<String>` counts as well as `String`: `health::refusal_if_unrevertable` returns
-    /// one, and it is the layer that decides *whether* to refuse while `cannot_revert_refusal`
-    /// decides *what to say*. Two builders in a row is a normal shape, so the follow below has
-    /// to be transitive or it stops one hop short and reports a correct site.
-    fn enclosing_builder(lines: &[String], at: usize) -> Option<String> {
-        for i in (0..=at).rev() {
-            let t = lines[i].trim_start();
-            if let Some(rest) = t.strip_prefix("pub fn ").or_else(|| t.strip_prefix("fn ")) {
-                let name = rest.split(['(', '<']).next()?.trim().to_string();
-                // The signature can wrap; look at the few lines that carry the return type.
-                let sig = lines[i..(i + 8).min(lines.len())].join(" ");
-                return if sig.contains("-> String") || sig.contains("-> Option<String>") {
-                    Some(name)
-                } else {
-                    None
-                };
-            }
-        }
-        None
-    }
-
-    /// Every place `name(` is called, outside its own definition and outside test modules,
-    /// as `(index into sources, 0-based line, wrapped in Error::Refused)`.
-    ///
-    /// The index rather than a rendered `file:line`: an earlier draft looked the caller's file
-    /// back up by basename to ask whether *it* was a builder, and basenames collide across a
-    /// tree with fourteen `mod.rs` files. It found the wrong file and indexed past its end.
-    fn call_sites(
-        sources: &[(std::path::PathBuf, Vec<String>)],
-        name: &str,
-    ) -> Vec<(usize, usize, bool)> {
-        let needle = format!("{}(", name);
-        let mut out = Vec::new();
-        for (fi, (_, lines)) in sources.iter().enumerate() {
-            let mut in_tests = false;
-            for (i, line) in lines.iter().enumerate() {
-                if line.trim_start().starts_with("#[cfg(test)]") {
-                    in_tests = true;
-                }
-                if in_tests {
-                    continue;
-                }
-                let t = line.trim_start();
-                if t.starts_with("//") || t.starts_with("pub fn ") || t.starts_with("fn ") {
-                    continue;
-                }
-                if !t.contains(&needle) {
-                    continue;
-                }
-                // Above *and* below: the wrap is above for `Err(Error::Refused(build(..)))`
-                // and below for `match build(..) { Some(m) => Err(Error::Refused(m)) }`, which
-                // is how `sync/mod.rs:381` reads. A window that only looked up scored that
-                // second shape as unwrapped.
-                let from = i.saturating_sub(3);
-                let to = (i + 6).min(lines.len() - 1);
-                let wrapped = lines[from..=to].join("\n").contains("Error::Refused");
-                out.push((fi, i, wrapped));
-            }
-        }
-        out
-    }
-
     let mut offenders = Vec::new();
     let mut found = 0usize;
 
     for (path, lines) in &sources {
         for (i, line) in lines.iter().enumerate() {
             let t = line.trim_start();
-            // The message, not the comment about it, and not a test asserting on it.
-            if t.starts_with("//") || t.contains("assert") {
-                continue;
-            }
-            // A refusal is RETURNED, never printed: `linix protected`'s heading says "what LiNix
-            // refuses to remove" and is not itself a refusal.
-            if ["println!", "print!", "info!", "warn!", "eprintln!"]
-                .iter()
-                .any(|m| t.starts_with(m))
-            {
-                continue;
-            }
-            // The vocabulary, and it is a list — which is the shape this repo distrusts, so the
-            // list is widened when a member is found rather than assumed complete. G-8 found the
-            // second entry: `bundle.rs`'s restore said "it refuses unless you pass --force",
-            // returned `Error::Other`, exited 1, and the round-2 sweep of this exact class could
-            // not see it because it matched only the first phrasing.
-            // `refuses to` is deliberately NOT in the list: it is the phrasing LiNix uses about
-            // somebody ELSE refusing — "Windows Task Scheduler refuses to register one
-            // otherwise" is an `Error::Permission` and correctly so, and `linix protected`'s
-            // heading is "what LiNix refuses to remove". Both were measured as offenders when
-            // the phrase was included, and both are right as they are.
-            if !["refusing to", "Refusing to", "refuses unless"]
-                .iter()
-                .any(|v| line.contains(v))
-            {
+            if !says_it_is_refusing(line) {
                 continue;
             }
             found += 1;
@@ -396,20 +407,127 @@ fn every_site_that_says_it_is_refusing_is_built_as_a_refusal() {
 /// GRADE §"Do not test your own oracle by assuming it works": 24 of 24 READY backends answered
 /// `list`, which was true and meaningless because a backend that does not exist answers the
 /// same way. So this feeds the check something it must reject.
+fn planted(name: &str, body: &str) -> (std::path::PathBuf, Vec<String>) {
+    (
+        std::path::PathBuf::from(name),
+        body.lines().map(|l| l.to_string()).collect(),
+    )
+}
+
 #[test]
 fn the_refusal_scan_rejects_an_unwrapped_builder() {
-    // A builder-shaped source pair, in the two-file split that fooled the first draft — except
-    // this caller does not wrap. The scan must say so.
-    let builder = "pub fn lockout_refusal(port: u16) -> String {\n    \
-                   format!(\"refusing to apply the firewall change: port {}\", port)\n}";
-    let good_caller = "        return Err(Error::Refused(lockout_refusal(port)));";
-    let bad_caller = "        return Err(Error::Validation(lockout_refusal(port)));";
+    // This test used to assert that three string literals declared four lines above it
+    // contained substrings they visibly contained — under a doc comment quoting the standard
+    // "do not test your own oracle by assuming it works". It never called the scan. Gutting
+    // `call_sites` or `enclosing_builder` left it green, which is the failure it warns about,
+    // committed inside the warning.
 
-    // The property under test, stated directly on the same predicate the scan uses: a call site
-    // counts as covered only when `Error::Refused` is on it or just above.
-    assert!(good_caller.contains("Error::Refused"));
-    assert!(!bad_caller.contains("Error::Refused"));
-    assert!(builder.contains("-> String") && builder.contains("refusing to"));
+    // --- `says_it_is_refusing`: the vocabulary, and the four shapes that are not refusals.
+    assert!(says_it_is_refusing(
+        "        return Err(Error::Refused(format!(\"refusing to remove {}\", n)));"
+    ));
+    for phrase in REFUSAL_VOCABULARY {
+        assert!(
+            says_it_is_refusing(&format!("    let m = format!(\"{phrase} do the thing\");")),
+            "the scan stopped recognising `{phrase}`"
+        );
+    }
+    for (label, line) in [
+        (
+            "a comment about a refusal is not a refusal",
+            "        // refusing to remove it would be wrong here",
+        ),
+        (
+            "a test asserting on a refusal is not a refusal",
+            "        assert!(msg.contains(\"refusing to\"));",
+        ),
+        (
+            "a refusal is returned, never printed",
+            "        println!(\"refusing to remove {}\", n);",
+        ),
+        (
+            "`refuses to` describes somebody else refusing — Task Scheduler, not LiNix",
+            "        let m = \"Windows Task Scheduler refuses to register one otherwise\";",
+        ),
+    ] {
+        assert!(!says_it_is_refusing(line), "{label}: {line}");
+    }
+
+    // --- `enclosing_builder`: a fn returning a message is one; a fn returning an error is not.
+    let builder: Vec<String> =
+        "pub fn lockout_refusal(port: u16) -> String {\n    \
+         format!(\"refusing to apply the firewall change: port {}\", port)\n}"
+            .lines()
+            .map(|l| l.to_string())
+            .collect();
+    assert_eq!(
+        enclosing_builder(&builder, 1).as_deref(),
+        Some("lockout_refusal"),
+        "a fn handing back a String is a builder whose caller decides the error type"
+    );
+
+    let optional: Vec<String> = "fn refusal_if_unrevertable(x: &X) -> Option<String> {\n    \
+                                 Some(format!(\"refusing to revert {}\", x))\n}"
+        .lines()
+        .map(|l| l.to_string())
+        .collect();
+    assert_eq!(
+        enclosing_builder(&optional, 1).as_deref(),
+        Some("refusal_if_unrevertable"),
+        "Option<String> is a builder too — health.rs is why that branch exists"
+    );
+
+    let terminal: Vec<String> = "fn apply(x: &X) -> Result<()> {\n    \
+                                 Err(Error::Other(format!(\"refusing to apply {}\", x)))\n}"
+        .lines()
+        .map(|l| l.to_string())
+        .collect();
+    assert_eq!(
+        enclosing_builder(&terminal, 1),
+        None,
+        "a fn that returns the error itself is the accused, not a builder to chase"
+    );
+
+    // --- `call_sites`: the wrap above, the wrap below, the missing wrap, and the exclusions.
+    let sources = vec![
+        planted("good_above.rs", "    return Err(Error::Refused(lockout_refusal(port)));"),
+        planted(
+            "good_below.rs",
+            "    match lockout_refusal(port) {\n        \
+             Some(m) => return Err(Error::Refused(m)),\n        None => {}\n    }",
+        ),
+        planted("bad.rs", "    return Err(Error::Validation(lockout_refusal(port)));"),
+    ];
+    let sites = call_sites(&sources, "lockout_refusal");
+    assert_eq!(
+        sites.len(),
+        3,
+        "the scan must find all three call sites, not {sites:?}"
+    );
+    assert!(sites[0].2, "a wrap on the same line counts as wrapped");
+    assert!(
+        sites[1].2,
+        "a wrap three lines BELOW counts — sync/mod.rs:381 reads this way, and a window that \
+         only looked up scored it as unwrapped"
+    );
+    assert!(
+        !sites[2].2,
+        "Error::Validation is not Error::Refused, and this is the whole point of the scan"
+    );
+
+    let excluded = vec![
+        planted("def.rs", "pub fn lockout_refusal(port: u16) -> String {"),
+        planted("comment.rs", "    // lockout_refusal(port) used to live here"),
+        planted(
+            "tests.rs",
+            "#[cfg(test)]\nmod t {\n    fn x() { lockout_refusal(1); }\n}",
+        ),
+    ];
+    assert!(
+        call_sites(&excluded, "lockout_refusal").is_empty(),
+        "a definition, a comment and a test module are not call sites: {:?}",
+        call_sites(&excluded, "lockout_refusal")
+    );
 
     // And the real tree must still have builders being followed, or the branch that fixed the
     // false positives is dead code and this test guards nothing.

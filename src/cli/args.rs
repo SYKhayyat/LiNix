@@ -883,6 +883,113 @@ pub enum Commands {
     },
 }
 
+impl Commands {
+    /// Does this command write LiNix's own state under `data/`, and therefore need the
+    /// exclusive lock?
+    ///
+    /// **Exhaustive, and that is the whole point.** This was a hand-maintained `&[&str]` of
+    /// twenty-one names sitting seventy lines from the enum, and its own test docstring
+    /// recorded that twelve of its thirty-three entries once named commands the program did
+    /// not have. Two tests guarded it and both guarded *invention*; nothing guarded omission
+    /// or misclassification, which is the half that costs an entry out of `registry.json`.
+    /// A new subcommand now fails to compile until it says which it is — strictly stronger
+    /// than defaulting to a writer, because a default is a guess that nobody revisits.
+    ///
+    /// The lock is over the DATA directory. Commands that write into the CONFIG repo —
+    /// `path --set`, `config init`, `edit` — are readers here and go through
+    /// `utils::file::persist`, which is atomic; `edit` is the sharpest, because it blocks on
+    /// `$EDITOR` and once stopped every other LiNix on the machine for as long as somebody
+    /// read a manifest in vim (AU6).
+    ///
+    /// **`--dry-run` never exempts anything** (S25): a preview of a writer reads the same
+    /// state a concurrent writer is rewriting, and the run that proved it mattered was a
+    /// `--dry-run sync` that entered recovery.
+    pub fn writes(&self) -> bool {
+        match self {
+            // Reads the machine, the config or a remote, and writes neither.
+            Self::Plan { .. }
+            | Self::Check { .. }
+            | Self::List { .. }
+            | Self::Search { .. }
+            | Self::Diff { .. }
+            | Self::Vars { .. }
+            | Self::Export { .. }
+            | Self::Sbom { .. }
+            | Self::Why { .. }
+            | Self::Info { .. }
+            | Self::Completions { .. }
+            | Self::Eval { .. }
+            | Self::Repl { .. }
+            | Self::Protected { .. }
+            | Self::Policy { .. }
+            | Self::Path { .. }
+            | Self::Config { .. }
+            | Self::Edit { .. } => false,
+
+            // `plan --save` writes a plan FILE, not state, so it is not a counter-example.
+            // `try` runs the rehearsal inside a container and touches nothing here.
+            Self::Try { .. } => false,
+
+            // **`fleet` was a writer by omission.** It drives other machines over SSH and
+            // touches no local state at all, and it took the 120-second exclusive lock for a
+            // purely remote report — the mirror image of `history`'s bug, from the same list.
+            Self::Fleet { .. } => false,
+
+            // **`history` is a reader at this level and a writer inside.** It opens a TUI a
+            // person reads for as long as they like, so locking the whole command reintroduces
+            // exactly the `edit` problem above. Its one mutating action —
+            // `HistoryAction::Rollback`, which reaches `handle_rollback` → `handle_sync`, the
+            // entire install/remove path — takes the lock where it fires. Without that, one
+            // function had two doors and only the one reached through `Commands::Rollback` was
+            // locked.
+            Self::History { .. } => false,
+
+            Self::Sync { .. }
+            | Self::Rebuild { .. }
+            | Self::Watch { .. }
+            | Self::Run { .. }
+            | Self::Heal { .. }
+            | Self::RemoveOrphans { .. }
+            | Self::CleanCache { .. }
+            | Self::Reset { .. }
+            | Self::PurgeUndeclared { .. }
+            | Self::Unmanage { .. }
+            | Self::Apply { .. }
+            | Self::Lock { .. }
+            | Self::Unlock { .. }
+            | Self::Teleport { .. }
+            | Self::Update { .. }
+            | Self::Upgrade { .. }
+            | Self::Install { .. }
+            | Self::Uninstall { .. }
+            | Self::Repo { .. }
+            | Self::Adopt { .. }
+            | Self::Add { .. }
+            | Self::Shell { .. }
+            | Self::Activate { .. }
+            | Self::Deactivate { .. }
+            | Self::Profile { .. }
+            | Self::Module { .. }
+            | Self::Snapshot { .. }
+            | Self::Rollback { .. }
+            | Self::Git { .. }
+            | Self::Schedule { .. }
+            | Self::Init { .. }
+            | Self::Bundle { .. }
+            | Self::Restore { .. }
+            | Self::Service { .. }
+            | Self::Bisect { .. }
+            | Self::Hooks { .. }
+            | Self::HookRecord { .. }
+            | Self::HookReconcile { .. }
+            | Self::HookObserve { .. }
+            | Self::Hold { .. }
+            | Self::Unhold { .. }
+            | Self::SelfUpgrade { .. } => true,
+        }
+    }
+}
+
 #[derive(Args, Debug)]
 pub struct ConfigArgs {
     #[command(subcommand)]
