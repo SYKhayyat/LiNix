@@ -1,3 +1,16 @@
+//! **The kernel assembles, and the parts it assembles do what their traits say.**
+//!
+//! Five properties that sit under everything else in the suite and are asserted nowhere else:
+//! the registry is populated from the configuration rather than from a hard-coded list; a
+//! backend that claims three capabilities really implements all three; the validator refuses
+//! the five shapes of a name that is a command; the metrics collector keeps every field the
+//! summary reads; and the planner notices a template whose source has moved on.
+//!
+//! **The telemetry test asserted nothing until it was rewritten.** It recorded one operation,
+//! called `print_summary` twice, and ended — its own last comment read *"verification:
+//! print_summary must not panic"*. A collector that dropped every operation on the floor passed
+//! it, and so did one whose rollup summed the wrong field.
+
 use chrono::Utc;
 use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
 use linix::app::MetricsCollector;
@@ -5,22 +18,14 @@ use linix::core::{PackageSpec, StateRegistry, Validator};
 use std::collections::HashMap;
 use tokio::fs;
 
-// Import our authoritative A+ Test Infrastructure
 use crate::mock_providers::TestKernel;
 
-// ============================================================================
-// KERNEL & BACKEND INTEGRATION
-// ============================================================================
-
-/// Verifies that the Kernel correctly discovers and registers backends
-/// in a hermetic, isolated environment.
+/// The registry is built from the configuration, not from a list compiled into the binary.
 #[tokio::test]
-async fn test_app_initialization_v3_assemble() {
-    // 1. Initialize hermetic kernel (Async DI bootstrap)
+async fn the_registry_holds_the_backends_the_config_named() {
     let kernel = TestKernel::new().await;
     let backends = kernel.app.registry.available();
 
-    // 2. Verification: In our TestKernel, we explicitly enabled brew, apt, and cargo
     assert!(
         !backends.is_empty(),
         "No backends discovered in isolated context."
@@ -38,7 +43,7 @@ async fn test_app_initialization_v3_assemble() {
 /// Verifies that backends correctly implement the exhaustive 3.6.0 trait
 /// capability matrix.
 #[tokio::test]
-async fn test_backend_capability_discovery_solid_wiring() {
+async fn a_backend_that_claims_three_capabilities_implements_all_three() {
     let kernel = TestKernel::new().await;
     let github = kernel
         .app
@@ -46,7 +51,6 @@ async fn test_backend_capability_discovery_solid_wiring() {
         .get("github")
         .expect("GitHub backend missing from registry");
 
-    // Mission-critical capability checks
     assert!(
         github.is_installable(),
         "GitHub must implement the Installable trait"
@@ -61,18 +65,12 @@ async fn test_backend_capability_discovery_solid_wiring() {
     );
 }
 
-// ============================================================================
-// SECURITY & VALIDATION
-// ============================================================================
-
-/// Verifies that the Security Validator blocks dangerous inputs that could
-/// lead to escalation or unauthorized system access.
+/// A package name that is a shell command, a substitution, or a path out of the tree is
+/// refused before it reaches an argv.
 #[tokio::test]
-async fn test_security_validator_strict_enforcement() {
-    // 1. Logic Check: Legitimate names must pass
+async fn a_name_that_is_a_command_is_refused_before_it_reaches_an_argv() {
     assert!(Validator::validate_package_name("valid-pkg-123.stable").is_ok());
 
-    // 2. Logic Check: Dangerous patterns must be blocked (Bug Fix 2 & 6 Logic)
     let dangerous_inputs = vec![
         "pkg; rm -rf /",
         "pkgname$(whoami)",
@@ -91,10 +89,6 @@ async fn test_security_validator_strict_enforcement() {
     }
 }
 
-// ============================================================================
-// TELEMETRY & PERFORMANCE
-// ============================================================================
-
 /// What the collector was handed is what the summary is built from.
 ///
 /// **This test asserted nothing.** It recorded one operation, two counts, called
@@ -103,7 +97,7 @@ async fn test_security_validator_strict_enforcement() {
 /// dropped every operation on the floor passed it, and so did one whose rollup summed the
 /// wrong field.
 #[tokio::test]
-async fn test_telemetry_metrics_reporting_accuracy() {
+async fn every_field_the_summary_reads_survives_the_round_trip() {
     let metrics = MetricsCollector::new();
     let start = Utc::now();
 
@@ -161,19 +155,13 @@ async fn test_telemetry_metrics_reporting_accuracy() {
     metrics.print_summary(linix::app::metrics::Narration::Rebuild);
 }
 
-// ============================================================================
-// PLANNER & TEMPLATE INTEGRATION
-// ============================================================================
-
-/// Verifies that the ChangePlanner correctly identifies when a configuration
-/// template needs to be physically updated on the host.
+/// A template whose source has moved on is planned as a change; one that matches is not.
 #[tokio::test]
-async fn test_planner_template_logic_integration() {
+async fn a_template_whose_source_moved_on_is_planned_as_a_change() {
     let kernel = TestKernel::new().await;
     let state = StateRegistry::default();
     let planner = ChangePlanner::new(kernel.app.registry.clone(), &state, &kernel.app.config);
 
-    // 1. Create a source template file in the test sandbox
     let source_path = kernel.tmp.path().join("nginx.tpl");
     let target_path = kernel.tmp.path().join("nginx.conf");
 
@@ -181,7 +169,6 @@ async fn test_planner_template_logic_integration() {
         .await
         .unwrap();
 
-    // 2. Setup a spec for the 'link' backend with template logic enabled
     let mut options = linix::config::grammar::Options::default();
     options.set("target", target_path.to_string_lossy().to_string(),
     );
@@ -195,19 +182,16 @@ async fn test_planner_template_logic_integration() {
         present: true,
     };
 
-    // 3. Ensure the 'link' backend binary is "available"
     kernel.mock_executor.set_command_exists("link", true);
 
     let mut desired = HashMap::new();
     desired.insert("link".to_string(), vec![spec]);
 
-    // 4. Plan the transition (Global Scope)
     let plan = planner
         .plan(&desired, PlanScope::Whole(HostBackends::default()))
         .await
         .expect("Integration Planning Failure: Template logic closure failed.");
 
-    // 5. Verification: Since target doesn't exist, planner must schedule an installation
     assert!(
         !plan.is_empty(),
         "Planner logic error: Template creation was not scheduled."

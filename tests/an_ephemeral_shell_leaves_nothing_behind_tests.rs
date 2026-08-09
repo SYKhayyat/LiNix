@@ -1,4 +1,10 @@
-// tests/shell_lifecycle_tests.rs
+//! **`linix shell` — packages live for the session and go when it ends.**
+//!
+//! The ephemeral shell is the one path that installs without declaring, so the only thing
+//! keeping it from being drift is that the teardown is exact: it removes what this session
+//! registered and nothing another session did. Four properties — the transient registration,
+//! the purge that is scoped to one session, the manifest discovered from the working directory,
+//! and the mount point a session resolves to.
 
 use linix::core::executor::DryRunOutput;
 use linix::core::PackageSpec;
@@ -6,12 +12,8 @@ use tokio::fs;
 
 use crate::mock_providers::TestKernel;
 
-// ============================================================================
-// The ephemeral shell (`linix shell`): packages live for the session and go on exit.
-// ============================================================================
-
 #[tokio::test]
-async fn test_ephemeral_shell_transient_registration_logic() {
+async fn a_session_registers_its_packages_as_transient() {
     let kernel = TestKernel::new().await;
     let shell = kernel.app.shell();
 
@@ -48,7 +50,7 @@ async fn test_ephemeral_shell_transient_registration_logic() {
 }
 
 #[tokio::test]
-async fn test_ephemeral_shell_atomic_purge_isolation_logic() {
+async fn a_purge_takes_this_sessions_packages_and_leaves_another_sessions() {
     let kernel = TestKernel::new().await;
     let shell = kernel.app.shell();
 
@@ -101,7 +103,7 @@ async fn test_ephemeral_shell_atomic_purge_isolation_logic() {
 /// `auto_shell`'s five lines — so it asserted on `str::lines` and would have passed against a
 /// LiNix that had no manifest discovery at all. It now drives the reader the shell uses.
 #[tokio::test]
-async fn test_ephemeral_shell_auto_manifest_discovery() {
+async fn a_session_finds_the_manifest_in_the_directory_it_started_in() {
     let kernel = TestKernel::new().await;
 
     let manifest_path = kernel.tmp.path().join("linix.txt");
@@ -132,7 +134,7 @@ async fn test_ephemeral_shell_auto_manifest_discovery() {
 }
 
 #[tokio::test]
-async fn test_ephemeral_shell_mount_point_resolution() {
+async fn a_session_resolves_to_its_own_mount_point() {
     let kernel = TestKernel::new().await;
     let shell = kernel.app.shell();
 

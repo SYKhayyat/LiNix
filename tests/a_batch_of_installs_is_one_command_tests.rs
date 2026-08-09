@@ -1,96 +1,37 @@
-use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
-use linix::app::sync::resolver::StateResolver;
+//! **Five independent installs are one command, and a bundle restores to the set it bundled.**
+//!
+//! What was here before was `test_e2e_sync_flow_hermetic` — one `brew:neovim` through resolver,
+//! planner and engine, asserting `is_managed`. **It is deleted, not moved**:
+//! `a_machine_converges_tests.rs` opens by naming it as the gap it exists to close, and runs the
+//! same path forward, backward and forward again over a machine the mock actually updates. One
+//! package, install-only, no second run is not a weaker version of that test; it is the part of
+//! it that proves nothing.
+//!
+//! The two that remain are about things nothing else asks.
+//!
+//! **The batch.** A five-node graph of independent installs becomes a *single* `brew install --`
+//! with five operands (`Y1`), and the terminator goes in front of the whole operand list. The
+//! test that used to live here registered five separate commands and matched none of them, so
+//! every assertion below ran against the mock's empty-success default — for as long as batching
+//! has existed. That the planner collapses the graph is the behaviour worth pinning, not a
+//! detail of how the mock is primed.
+//!
+//! **The bundle.** `bundle` and `restore` are one feature and the proof runs without git
+//! (V.59): bundle a config, restore it into a clean directory, and assert the model resolves to
+//! the same package set. A backup nothing has ever restored is a guess.
+
 use linix::core::executor::DryRunOutput;
 use linix::core::{GraphAction, PackageSpec, Transaction, TransactionConfig};
 use tokio::fs;
 
-// Import our authoritative A+ Test Infrastructure
 use crate::mock_providers::TestKernel;
 
-// ============================================================================
-// E2E LOGIC TESTS: DECLARATIVE SYNC FLOW
-// ============================================================================
-
-/// Verifies the full LiNix system lifecycle closure:
-/// Manifest Creation -> Resolution -> Planning -> Parallel Execution -> State Update.
+/// Five independent installs of one manager reach the machine as one invocation, and all five
+/// nodes reach terminal success.
 #[tokio::test]
-async fn test_e2e_sync_flow_hermetic() {
-    // 1. Initialize hermetic test environment (DI + Async Bootstrap)
+async fn five_independent_installs_reach_the_manager_as_one_command() {
     let kernel = TestKernel::new().await;
 
-    // 2. Setup: a module holding the package, and a profile that reaches it. A module
-    //    nothing activates is inert by design — profiles choose, modules hold — so the
-    //    profile and the `active` line are not ceremony here, they are the thing under
-    //    test. 'brew' is our universal mock identifier.
-    let root = kernel.app.config.config_root();
-    fs::write(root.join("modules/workstation.txt"), "brew:neovim\n")
-        .await
-        .unwrap();
-    fs::write(root.join("profiles/Work"), "use workstation\n")
-        .await
-        .unwrap();
-    fs::write(root.join("active"), "Work\n").await.unwrap();
-
-    // 3. Resolution Phase: Transform manifest strings into PackageSpecs
-    // Modernized v3.6.0: Await async constructor and provide explicit locked=false
-    let resolver = StateResolver::new(&kernel.app.config, kernel.app.registry.clone(), false).await;
-    let desired = resolver
-        .resolve_desired_state()
-        .await
-        .expect("E2E Resolution Error: Manifest closure expansion failed.");
-
-    // 4. Planning Phase: Calculate the system delta
-    let changes = {
-        let state_guard = kernel.state.lock().await;
-        let planner = ChangePlanner::new(
-            kernel.app.registry.clone(),
-            &state_guard,
-            &kernel.app.config,
-        );
-        // None handles global system reconciliation
-        planner
-            .plan(&desired, PlanScope::Whole(HostBackends::default()))
-            .await
-            .expect("E2E Planning Error: Failed to generate SyncChanges DAG.")
-    };
-
-    // 5. Prime Mocks: Set expected CLI output for the executor
-    kernel
-        .mock_executor
-        .set_response("brew install -- neovim", Ok(DryRunOutput::default().into()));
-
-    // 6. Execution Phase: Apply the transaction closure
-    // Modernized v3.6.0: Uses the Kernel's sync_engine factory to ensure 10-arg DI is correct
-    let engine = kernel.app.sync_engine().await;
-    let result = engine
-        .sync(changes, linix::app::sync::guard::GuardScope::Sync)
-        .await;
-
-    assert!(
-        result.is_ok(),
-        "E2E Transaction Logic Failed: {:?}",
-        result.err()
-    );
-
-    // 7. Verification: Consolidation check in the mission-critical registry
-    let state = kernel.state.lock().await;
-    assert!(
-        state.is_managed("brew", "neovim"),
-        "Integrity Failure: 'neovim' missing from registry post-transaction."
-    );
-}
-
-// ============================================================================
-// E2E LOGIC TESTS: CONCURRENCY & PARALLEL INTEGRITY
-// ============================================================================
-
-/// Verifies that high-breadth parallel transactions execute without deadlocks
-/// and correctly share the kernel-wide Diagnostic Engine.
-#[tokio::test]
-async fn test_concurrent_transaction_safety_e2e() {
-    let kernel = TestKernel::new().await;
-
-    // 1. Build a high-throughput parallel DAG (5 independent nodes)
     let mut graph = petgraph::stable_graph::StableDiGraph::new();
     for i in 0..5 {
         let pkg_name = format!("pkg-parallel-{}", i);
@@ -119,8 +60,6 @@ async fn test_concurrent_transaction_safety_e2e() {
         Ok(DryRunOutput::default().into()),
     );
 
-    // 2. Initialize Transaction
-    // Modernized v3.6.0: Provides Diagnostics (4th arg) and Config (5th arg)
     let mut tx = Transaction::with_config(
         graph,
         kernel.app.registry.clone(),
@@ -130,10 +69,8 @@ async fn test_concurrent_transaction_safety_e2e() {
         TransactionConfig::default(),
     );
 
-    // 3. Execute with telemetry
     let result = tx.execute_with_telemetry().await;
 
-    // 4. Verification
     assert!(
         result.is_ok(),
         "Concurrent parallel transaction failed: {:?}",
@@ -147,11 +84,9 @@ async fn test_concurrent_transaction_safety_e2e() {
     );
 }
 
-/// V.59: `bundle` and `restore` are one feature, and the proof runs without git — bundle a
-/// config, restore it into a clean directory, and assert the model parses and resolves to the
-/// same package set. A backup nothing has ever restored is a guess.
+/// A restored bundle resolves to the package set the source config resolved to.
 #[tokio::test]
-async fn test_bundle_then_restore_reproduces_the_package_set_without_git() {
+async fn a_restored_bundle_resolves_to_the_set_it_was_made_from() {
     use linix::model::{Layout, Priority, Resolver};
 
     let kernel = TestKernel::new().await;

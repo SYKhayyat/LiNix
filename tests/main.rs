@@ -11,11 +11,14 @@
 //! same fix at the scale of the whole directory: one target, ninety-nine link units saved, and
 //! `mock_providers` compiled once rather than nineteen times.
 //!
-//! **Nothing was deleted and nothing moved.** Every file is where it was, with its name, its
-//! filename-as-a-sentence and its doc comment; `autotests = false` in `Cargo.toml` is what stops
-//! cargo claiming each one, and the list below is what replaces the claim. A file added to
-//! `tests/` and not listed here does not run — which is the one cost of this arrangement, and is
-//! why `every_test_file_is_in_the_suite` at the bottom fails when the two disagree.
+//! **The conversion deleted nothing.** `autotests = false` in `Cargo.toml` is what stops cargo
+//! claiming each file as a target, and the list below is what replaces the claim. A file added
+//! to `tests/` and not listed here does not run — the one cost of this arrangement, and why
+//! `every_test_file_is_in_the_suite` at the bottom fails when the two disagree.
+//!
+//! Four files were later renamed into the directory's filename-as-a-sentence convention, out of
+//! the pre-v7 `test_*_wiring` style they were the last of; one test was deleted, by name, in
+//! favour of the successor whose own header cites it as the gap it exists to close.
 //!
 //! Two modules carry a `cfg`: their files opened with an inner `#![cfg(...)]`, which cannot
 //! survive becoming a module. On the `mod` line it is strictly better — off-platform the module
@@ -33,6 +36,7 @@ mod harness;
 /// wrote them out by hand and three of the nine were missing the one that matters.
 mod ledger;
 
+mod a_batch_of_installs_is_one_command_tests;
 mod a_config_travels_between_machines_tests;
 mod a_configured_capability_is_a_registered_one_tests;
 mod a_firewall_teardown_is_a_removal_tests;
@@ -44,6 +48,7 @@ mod a_shim_runs_what_its_line_named_tests;
 mod a_writer_that_reaches_the_disk_goes_through_one_tests;
 mod absent_marker_coverage_tests;
 mod adapter_tables_share_one_mechanism_tests;
+mod an_ephemeral_shell_leaves_nothing_behind_tests;
 mod an_exemption_table_is_audited_the_same_way_tests;
 mod an_option_list_survives_the_seam_tests;
 mod argv_drift_tests;
@@ -56,14 +61,12 @@ mod byte_order_mark_tests;
 mod conda_is_a_data_row_tests;
 mod config_root_is_absolute_tests;
 mod critical_paths_tests;
-mod dag_test;
 mod declared_options_converge_tests;
 mod deploy_refusal_precedes_the_download_tests;
 mod dotfiles_tree_is_a_pile_of_links_tests;
 mod dry_run_every_verb_tests;
 mod dry_run_marker_tests;
 mod dry_run_tests;
-mod e2e_tests;
 mod every_example_is_checked_tests;
 mod exec_lifecycle_tests;
 mod exit_code_contract_tests;
@@ -105,7 +108,6 @@ mod helm_verify_flag_tests;
 mod help_map_tests;
 mod id_namespaces_do_not_collide_tests;
 mod installed_listing_fixture_tests;
-mod integration_test;
 mod json_output_is_a_document_tests;
 mod latency_budget_tests;
 mod ledger_file_rules_tests;
@@ -127,10 +129,11 @@ mod recovery_finishes_what_it_can_tests;
 mod removal_guard_enumeration_tests;
 mod resource_plan_family_tests;
 mod security_and_resiliency_tests;
-mod shell_lifecycle_tests;
 mod snapshot_restore_reaches_every_provider_tests;
 mod startup_budget_tests;
 mod terminator_probe_tests;
+mod the_engine_runs_the_graph_in_order_tests;
+mod the_kernel_assembles_what_it_was_configured_with_tests;
 mod the_log_covers_what_cannot_be_recomputed_tests;
 mod time_travel_tests;
 mod unknown_backend_family_tests;

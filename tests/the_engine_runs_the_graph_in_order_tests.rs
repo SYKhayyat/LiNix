@@ -1,23 +1,28 @@
+//! **The order the graph is executed in, the loop it refuses, and the lock that lets two
+//! managers run at once.**
+//!
+//! Three properties of `Transaction`, each of which the engine gets wrong in a way that looks
+//! like success: a child installed before its parent still reports `Ok`; a cycle planned rather
+//! than refused hangs or repeats; and a global lock where a per-backend one belongs makes every
+//! sync run one manager at a time while every assertion still passes.
+
 use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
 use linix::core::{GraphAction, PackageSpec, StateRegistry, Transaction};
 use petgraph::stable_graph::StableDiGraph;
 use std::collections::HashMap;
 
-// Import our authoritative A+ Test Infrastructure
 use crate::mock_providers::TestKernel;
 
-/// Verifies that the LiNix Transaction engine executes nodes in the
-/// correct topological order while respecting parallel dependencies.
+/// The engine runs a node only after everything it requires.
 ///
-/// Scenario: Node C depends on Node A and Node B.
-/// Logic: (A & B) must be recorded in the call log before C.
+/// C requires A and B, so A and B must be in the call log before C. Nothing else in the suite
+/// asserts topological order: a graph executed in insertion order satisfies every other test,
+/// because the mock succeeds whatever it is handed.
 #[tokio::test]
-async fn test_dag_execution_order_wiring() {
-    // 1. Initialize hermetic test kernel (Async DI bootstrap)
+async fn a_node_runs_only_after_everything_it_requires() {
     let kernel = TestKernel::new().await;
     let mut graph = StableDiGraph::new();
 
-    // 2. Define standard package specs for a dependency chain
     let spec_a = PackageSpec {
         name: "compiler-core".into(),
         backend: "brew".into(),
@@ -40,7 +45,6 @@ async fn test_dag_execution_order_wiring() {
         present: true,
     };
 
-    // 3. Construct the DAG
     let a = graph.add_node(GraphAction::Install(spec_a));
     let b = graph.add_node(GraphAction::Install(spec_b));
     let c = graph.add_node(GraphAction::Install(spec_c));
@@ -48,8 +52,6 @@ async fn test_dag_execution_order_wiring() {
     graph.add_edge(a, c, ());
     graph.add_edge(b, c, ());
 
-    // 4. Initialize the Transaction
-    // Resolves E0061: Passes kernel-wide diagnostics engine as the 4th argument via DI
     let mut tx = Transaction::new(
         graph,
         kernel.app.registry.clone(),
@@ -58,7 +60,6 @@ async fn test_dag_execution_order_wiring() {
         kernel.app.config.clone(),
     );
 
-    // 5. Execute closure
     let result = tx.execute_with_telemetry().await;
     assert!(
         result.is_ok(),
@@ -66,7 +67,6 @@ async fn test_dag_execution_order_wiring() {
         result.err()
     );
 
-    // 6. Verification: Logic check of the call log order
     let calls = kernel.mock_executor.get_calls().await;
     let pos_a = calls
         .iter()
@@ -85,17 +85,17 @@ async fn test_dag_execution_order_wiring() {
     assert!(pos_b < pos_c, "Ordering Error: Root B must precede Child C");
 }
 
-/// Verifies that the ChangePlanner detects circular dependency loops
-/// in the manifest closure and refuses to build a flawed DAG.
+/// A cycle in the manifest closure is refused at plan time, and the refusal says it is a cycle.
+///
+/// V.45: naming the shape is the difference between a user finding the two lines and a user
+/// re-reading their whole config.
 #[tokio::test]
-async fn test_circular_dependency_detection_wiring() {
+async fn a_cycle_is_refused_by_name_rather_than_planned() {
     let kernel = TestKernel::new().await;
 
-    // Use a fresh registry-state for planner isolation
     let state = StateRegistry::default();
     let planner = ChangePlanner::new(kernel.app.registry.clone(), &state, &kernel.app.config);
 
-    // 1. Create a circular paradox: A -> B -> A
     let mut desired = HashMap::new();
     desired.insert(
         "brew".to_string(),
@@ -117,13 +117,10 @@ async fn test_circular_dependency_detection_wiring() {
         ],
     );
 
-    // 2. Attempt Planning
-    // Resolves E0061: Provides None (Full Sync)
     let plan_result = planner
         .plan(&desired, PlanScope::Whole(HostBackends::default()))
         .await;
 
-    // 3. Assert Failure
     assert!(
         plan_result.is_err(),
         "Planner allowed a circular dependency loop."
@@ -145,7 +142,7 @@ async fn test_circular_dependency_detection_wiring() {
 /// Now each call takes measurable time, and the two halves are asserted against each other:
 /// different keys must finish in about one command's time, the same key in about two.
 #[tokio::test]
-async fn test_parallel_task_isolation_wiring() {
+async fn two_managers_run_at_once_and_one_manager_runs_one_at_a_time() {
     use std::time::{Duration, Instant};
 
     let kernel = TestKernel::new().await;
