@@ -114,6 +114,79 @@ impl Reference {
     }
 }
 
+/// What a declaration declares — the keyword half of a statement, as a type.
+///
+/// **This exists because two dispatches over the extras kinds were written as `match kind: &str`
+/// with a catch-all, and both catch-alls were wrong in a way no reader could see.** The teardown
+/// answered `Ok(())` for a kind it did not recognise, which reports the undo as *done* to a
+/// caller that then clears the ledger row — so the resource is forgotten while still in effect
+/// and no later sync looks at it again. The other answered `None`, which means *unverifiable*,
+/// which places: a kind falling through there is re-applied on every sync for ever.
+///
+/// A `&str` cannot be matched exhaustively, so both dispatches had a branch nobody had to
+/// justify. This can, and neither has one now: a keyword added to the grammar does not compile
+/// until the teardown says how to undo it and the probe says whether it can be checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ResourceKind {
+    Repo,
+    Shim,
+    Schedule,
+    Service,
+    Link,
+    Setting,
+    Exec,
+    Generate,
+    Dotfiles,
+    Firewall,
+}
+
+impl ResourceKind {
+    /// The keyword a user writes, which is also the prefix of every key of this kind.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Repo => "repo",
+            Self::Shim => "shim",
+            Self::Schedule => "schedule",
+            Self::Service => "service",
+            Self::Link => "link",
+            Self::Setting => "setting",
+            Self::Exec => "exec",
+            Self::Generate => "generate",
+            Self::Dotfiles => "dotfiles",
+            Self::Firewall => "firewall",
+        }
+    }
+
+    /// Every kind, in declaration order — so a test or a report can enumerate them rather than
+    /// restate the list.
+    pub const ALL: &'static [ResourceKind] = &[
+        Self::Repo,
+        Self::Shim,
+        Self::Schedule,
+        Self::Service,
+        Self::Link,
+        Self::Setting,
+        Self::Exec,
+        Self::Generate,
+        Self::Dotfiles,
+        Self::Firewall,
+    ];
+}
+
+impl std::str::FromStr for ResourceKind {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, ()> {
+        Self::ALL.iter().copied().find(|k| k.as_str() == s).ok_or(())
+    }
+}
+
+impl std::fmt::Display for ResourceKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// One parsed line. Covers every statement kind the grammar accepts: II.2's declarations
 /// and typed lines (`Package`, `Absent`, `Repo`, `Shim`, `Schedule`, `Service`, `Link`,
 /// `Use`) **and** II.4's set operations (`Exclude`, `Intersect`, `Subtract`, `Expr`) — the
@@ -244,18 +317,18 @@ impl Statement {
     /// (an operation, not a thing). A caller that wants to group or filter by kind asks here
     /// rather than re-splitting [`key`](Self::key) on `:`, which would read `apt:jq` as the
     /// kind `apt`.
-    pub fn kind(&self) -> Option<&'static str> {
+    pub fn kind(&self) -> Option<ResourceKind> {
         Some(match self {
-            Statement::Repo { .. } => "repo",
-            Statement::Shim(..) => "shim",
-            Statement::Schedule(..) => "schedule",
-            Statement::Service(..) => "service",
-            Statement::Link(..) => "link",
-            Statement::Setting(..) => "setting",
-            Statement::Exec(..) => "exec",
-            Statement::Generate(..) => "generate",
-            Statement::Dotfiles(..) => "dotfiles",
-            Statement::Firewall(..) => "firewall",
+            Statement::Repo { .. } => ResourceKind::Repo,
+            Statement::Shim(..) => ResourceKind::Shim,
+            Statement::Schedule(..) => ResourceKind::Schedule,
+            Statement::Service(..) => ResourceKind::Service,
+            Statement::Link(..) => ResourceKind::Link,
+            Statement::Setting(..) => ResourceKind::Setting,
+            Statement::Exec(..) => ResourceKind::Exec,
+            Statement::Generate(..) => ResourceKind::Generate,
+            Statement::Dotfiles(..) => ResourceKind::Dotfiles,
+            Statement::Firewall(..) => ResourceKind::Firewall,
             Statement::Package(_)
             | Statement::Absent(_)
             | Statement::Use(..)
@@ -274,7 +347,11 @@ impl Statement {
     pub fn subject(&self) -> Option<String> {
         let kind = self.kind()?;
         let key = self.key();
-        Some(key.strip_prefix(kind)?.trim_start_matches(':').to_string())
+        Some(
+            key.strip_prefix(kind.as_str())?
+                .trim_start_matches(':')
+                .to_string(),
+        )
     }
 
     /// When in a sync this statement's work happens (II.7).
@@ -3397,7 +3474,78 @@ mod exec_tests {
         assert_eq!(cmd, "./bin/pick.sh");
         assert_eq!(
             pv("generate:./bin/pick.sh").unwrap().kind(),
-            Some("generate")
+            Some(ResourceKind::Generate)
+        );
+    }
+
+    /// The keyword and the type are one fact, so they cannot drift apart.
+    ///
+    /// `ALL` is hand-written, which is the one thing about this type that a compiler does not
+    /// check — so a variant added without being listed there would silently stop being parseable
+    /// from a ledger key. That is caught below by parsing every keyword the grammar actually
+    /// produces, rather than by trusting the list.
+    #[test]
+    fn every_resource_kind_round_trips_through_its_keyword() {
+        let mut seen = std::collections::HashSet::new();
+        for k in ResourceKind::ALL {
+            assert_eq!(
+                k.as_str().parse::<ResourceKind>(),
+                Ok(*k),
+                "`{k}` does not parse back to itself"
+            );
+            assert_eq!(k.to_string(), k.as_str());
+            assert!(seen.insert(k.as_str()), "two kinds answer `{k}`");
+        }
+        assert!("apt".parse::<ResourceKind>().is_err(), "a backend is not a kind");
+        assert!("".parse::<ResourceKind>().is_err());
+    }
+
+    /// **Every statement that has a keyword reports a kind in `ALL`, and its key opens with
+    /// that kind.** `ALL` is the one hand-maintained part of the type, and the ledger's keys
+    /// are parsed back through it — so a variant added without being listed would produce rows
+    /// nothing could dispatch on.
+    ///
+    /// The `key`-opens-with-`kind` half is what `subject()` and `split_key` both assume, in two
+    /// files, neither of which says so.
+    #[test]
+    fn every_statement_with_a_keyword_reports_a_listed_kind() {
+        let opt = Options::default;
+        let statements = [
+            Statement::Repo {
+                backend: "apt".into(),
+                spec: "ppa:x/y".into(),
+            },
+            Statement::Shim("rg".into(), opt()),
+            Statement::Schedule("nightly".into(), opt()),
+            Statement::Service("nginx".into(), opt()),
+            Statement::Link("./vimrc".into(), opt()),
+            Statement::Setting("dark".into(), opt()),
+            Statement::Exec("./bin/x.sh".into(), opt()),
+            Statement::Generate("./bin/pick.sh".into(), opt()),
+            Statement::Dotfiles("./tree".into(), opt()),
+            Statement::Firewall("22/tcp".into(), opt()),
+        ];
+        let mut kinds = std::collections::HashSet::new();
+        for stmt in &statements {
+            let kind = stmt
+                .kind()
+                .unwrap_or_else(|| panic!("{stmt:?} reported no kind"));
+            assert!(
+                ResourceKind::ALL.contains(&kind),
+                "{stmt:?} reports `{kind}`, which is not in ResourceKind::ALL"
+            );
+            assert!(
+                stmt.key().starts_with(kind.as_str()),
+                "`{}` does not open with its own kind `{kind}`",
+                stmt.key()
+            );
+            assert!(stmt.subject().is_some(), "{stmt:?} has no subject");
+            kinds.insert(kind);
+        }
+        assert_eq!(
+            kinds.len(),
+            ResourceKind::ALL.len(),
+            "a kind has no statement here"
         );
     }
 

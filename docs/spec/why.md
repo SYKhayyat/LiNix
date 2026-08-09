@@ -4912,3 +4912,74 @@ interrupt, and one flag is the answer.
 guard says yes. A removal that was refused must not make the next phase's budget smaller — the
 command is about to stop anyway, and the alternative is a counter that punishes a plan for what
 it was not allowed to do.
+
+---
+
+**V.160 — Why the kind is a type, and what the two catch-alls were quietly doing.**
+*(Rule in II.29. Fixed 2026-08-09, `S56`.)*
+
+`Statement::kind()` returned `Option<&'static str>` — the keyword, as text. Its own doc comment
+made the right argument for existing: *"A caller that wants to group or filter by kind asks here
+rather than re-splitting `key` on `:`, which would read `apt:jq` as the kind `apt`."* Correct,
+and it is why the function is there. But a `&str` cannot be matched exhaustively, so both
+dispatches over it ended in a branch nobody had to justify, and both branches were wrong in the
+direction that leaves no trace.
+
+**The teardown's catch-all reported success.**
+
+```rust
+other => {
+    warn!("no undo known for extra kind `{}`.", other);
+    Ok(())
+}
+```
+
+`Ok(())` from `undo_extra` means *the undo is done*, and the caller acts on it: the key is not
+added to `still_applied`, so the ledger is rewritten without it. **The resource is forgotten
+while still in effect, and no later sync will ever look at it again** — because the ledger is
+the only record that LiNix put it there. The `warn!` is the whole trace, and `warn!` is what
+this same file's teardown comment already identifies as too quiet: *"a deletion the user cannot
+see coming is the wrong shape, and `info!` is below the default filter, which is why this
+teardown could delete five files under a summary reading `already up to date`."*
+
+`firewall:` reached that arm. `extra_key`'s final `_ => stmt.kind().map(|_| stmt.key())` keys
+every kind with a keyword, so deleting a `firewall:` line put `firewall:22/tcp` in the ledger and
+the next sync's teardown shrugged at it. The port was in fact closed — by `Firewall::apply`,
+which diffs the whole perimeter — so nothing broke, and the arm has been correct by luck since
+the day `firewall:` was added. That is the worst kind of correct: the exhaustive version now says
+`K::Firewall => Ok(())` with the reason beside it, and the reason is a fact about the design
+rather than an accident of ordering.
+
+**The probe's catch-all placed for ever.**
+
+`in_effect` answers *is this already true?*, and its own doc comment states the stakes: `None`
+means LiNix cannot ask, **not** that the answer is yes — and a `None` is placed rather than
+guessed. So `_ => None` at the bottom is not a neutral default; it is *re-apply this on every
+sync, indefinitely*. Three kinds were answered (`service`, `link`, `shim`) and the rest arrived
+there by omission. The comment above the function names exactly the cases where that is the right
+answer — an adapter with no read-back, a `@decrypt`ed secret — but nothing distinguished those
+from a kind nobody had got to yet.
+
+**And the function already had the type in its hand.** `in_effect` takes `stmt: &Statement` at
+its second parameter and then matches on a string it split out of the *key* — the fourth
+parameter — to decide which arm to run. The typed answer was one method call away, and the
+string was preferred because that is what `split_key` returns.
+
+`ResourceKind` is that method call. Ten variants, `Display` and `FromStr` as the only conversions,
+a hand-written `ALL` that a test drives every grammar keyword through so it cannot fall behind.
+Both dispatches are exhaustive with no catch-all, and the arms that do nothing say why:
+
+- `K::Setting` — the adapter has no "current value" command.
+- `K::Repo` — answerable, but not for free, and deciding what a differing URL means is a ruling
+  rather than a refactor. **Left `None` deliberately, and written down here so the next person
+  finds a decision instead of a gap.**
+- `K::Schedule` — provisioning is idempotent at the OS scheduler and cheap to repeat.
+- `K::Firewall` — reconciled as a whole perimeter elsewhere; a per-line probe would be a second
+  opinion about the same fact.
+- `K::Exec`, `K::Generate`, `K::Dotfiles` — never keyed at all, and listed so the compiler keeps
+  that true rather than a comment claiming it.
+
+**One behaviour did change, and it is the safe direction.** A ledger row whose kind this build
+does not have — a file written by a newer LiNix, an edit by hand — is now kept and reported
+instead of being silently dropped. Forgetting a row is the one outcome that cannot be undone: the
+resource stays on the machine with nothing recording that LiNix owns it.

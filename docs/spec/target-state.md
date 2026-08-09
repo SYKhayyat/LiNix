@@ -2730,3 +2730,27 @@ next phase is measured against.
 
 **`--allow-mass-removal` answers both counts and nothing else.** Protection remains a refusal
 (V.26): nothing overrides it, on either kind.
+
+## II.29 A kind is a type, and every dispatch over it is exhaustive (`S56`, V.160)
+
+**`ResourceKind` is what a declaration declares.** `Statement::kind()` returns it; the extras
+ledger's keys parse back into it; `Display` and `FromStr` are the only conversions to and from
+the keyword a user writes.
+
+**No dispatch over a kind may have a catch-all.** Not `_ =>`, not `other =>`. A keyword added to
+the grammar must not compile until every path that acts on kinds says what it means — which
+paths those are is the compiler's business, not a reviewer's.
+
+**Where a kind genuinely has no work, the arm says so and says why.** An arm reading
+`K::Firewall => Ok(())` beside a sentence explaining that the perimeter is reconciled as a whole
+is a decision. The same `Ok(())` reached through `other =>` is an accident, and the two are
+indistinguishable at the call site — which is the entire failure this rule prevents:
+
+- **In a teardown, `Ok(())` means *done*.** The caller drops the key from the ledger, so a
+  resource nobody knew how to remove is forgotten while still in effect, and no later sync looks
+  at it again. The warning that accompanied it was below the default log filter.
+- **In a probe, `None` means *unverifiable*, and unverifiable places.** A kind that falls through
+  is re-applied on every sync, for ever.
+
+**A ledger key whose kind this build does not have is kept, not dropped.** It is left in place,
+reported, and re-offered next run. Forgetting a row is the one outcome that cannot be undone.

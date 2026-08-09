@@ -205,7 +205,20 @@ impl Extras<'_> {
         // timer LiNix has permanently forgotten it owns.
         let mut still_applied = std::collections::BTreeSet::new();
         for key in &drift {
-            let Some((kind, id)) = split_key(key) else {
+            // A key whose kind the grammar does not have is a ledger row LiNix cannot act on.
+            // Skipped rather than dropped — `still_applied` keeps it, so the next sync reports
+            // it again instead of quietly forgetting a resource that is still in effect.
+            let Some((kind, id)) = split_key(key).and_then(|(k, id)| {
+                k.parse::<crate::config::grammar::ResourceKind>()
+                    .ok()
+                    .map(|k| (k, id))
+            }) else {
+                warn!(
+                    "`{}` is in the extras ledger under a kind this build does not have; it is \
+                     left in place and kept on the ledger.",
+                    key
+                );
+                still_applied.insert(key.clone());
                 continue;
             };
             if self.config.dry_run {
@@ -240,11 +253,25 @@ impl Extras<'_> {
     }
     /// Execute the undo for one drifted extra, dispatched on its kind (S20). Each arm uses the
     /// same removal path the imperative command would.
-    async fn undo_extra(&self, kind: &str, id: &str, reaped: guard::Reaped) -> Result<()> {
+    ///
+    /// **Exhaustive over [`ResourceKind`], with no catch-all.** It used to match on a `&str` and
+    /// end in `other => { warn!(…); Ok(()) }`, and `Ok(())` here means *the undo is done* to a
+    /// caller that then drops the key from the ledger — so a resource nobody knew how to remove
+    /// was forgotten while still in effect, with a warning below the default filter as the only
+    /// trace. `firewall:` reached exactly that arm. A keyword added to the grammar now does not
+    /// compile until this function says what undoing it means.
+    async fn undo_extra(
+        &self,
+        kind: crate::config::grammar::ResourceKind,
+        id: &str,
+        reaped: guard::Reaped,
+    ) -> Result<()> {
+        use crate::config::grammar::ResourceKind as K;
         match kind {
-            "shim" => self.shim_manager().await?.remove_shim(id, reaped).await,
-            "schedule" => self.scheduler.deprovision(self.executor, id, reaped).await,
-            "service" | "link" | "setting" => {
+            K::Shim => self.shim_manager().await?.remove_shim(id, reaped).await,
+            K::Schedule => self.scheduler.deprovision(self.executor, id, reaped).await,
+            K::Service | K::Link | K::Setting => {
+                let kind = kind.as_str();
                 let Some(b) = self.registry.get(kind) else {
                     return Err(Error::BackendNotFound(format!(
                         "the `{}` backend is not available to undo `{}:{}`",
@@ -270,7 +297,7 @@ impl Extras<'_> {
                 .await
                 .map(|_| ())
             }
-            "repo" => {
+            K::Repo => {
                 // A repo key is `repo:<backend>:<spec>`; `id` here is `<backend>:<spec>`.
                 let Some((backend, spec)) = id.split_once(':') else {
                     return Err(Error::Config(format!("malformed repo key `repo:{}`", id)));
@@ -291,10 +318,21 @@ impl Extras<'_> {
                     .await
                     .map(|_| ())
             }
-            other => {
-                warn!("no undo known for extra kind `{}`.", other);
-                Ok(())
-            }
+            // The perimeter is reconciled as a whole, not row by row: `Firewall::apply` diffs
+            // what is in force against what is declared and closes the difference, under the
+            // same guard. A per-key undo here would be a second owner of the same fact, and the
+            // one that ran second would be closing a port the first had already closed.
+            K::Firewall => Ok(()),
+            // `extra_key` returns `None` for all three, so no ledger row can name them: a verb
+            // has no inverse (`exec:`, `generate:`), and a tree's rows are the `link:` keys its
+            // files were placed under (U22). Reaching this arm means a row exists for a kind
+            // that cannot produce one — a wiring fault, and an `Err` keeps the row so the next
+            // sync reports it again instead of forgetting it.
+            K::Exec | K::Generate | K::Dotfiles => Err(Error::Validation(format!(
+                "`{kind}:{id}` is recorded in the extras ledger, and a `{kind}:` line has no \
+                 teardown — it should never have been keyed there. This is a wiring fault in \
+                 LiNix; the row is kept rather than dropped."
+            ))),
         }
     }
 }
@@ -324,16 +362,17 @@ pub(crate) async fn in_effect(
     stmt: &crate::config::grammar::Statement,
     key: &str,
 ) -> Option<bool> {
-    use crate::config::grammar::Statement;
+    use crate::config::grammar::{ResourceKind as K, Statement};
     use crate::core::extras_lock::split_key;
 
     let (kind, id) = split_key(key)?;
+    let kind: K = kind.parse().ok()?;
     match kind {
         // A running service is a state the init can be asked about, and asking costs one
         // cached listing for the whole run. Left unasked, every `service:` line was
         // `unverifiable` — which places — so adopting a machine's 150 running services made
         // every later sync run 150 `sc start` calls on services that were already running.
-        "service" => {
+        K::Service => {
             let Statement::Service(_, opts) = stmt else {
                 return None;
             };
@@ -360,7 +399,7 @@ pub(crate) async fn in_effect(
         // The ledger keys a link by its resolved destination — exactly so the teardown can
         // find what was written — so the destination is the key and the source is the
         // declaration's own name.
-        "link" => {
+        K::Link => {
             let dest = std::path::Path::new(id);
             if !dest.exists() && !dest.is_symlink() {
                 return Some(false);
@@ -387,14 +426,30 @@ pub(crate) async fn in_effect(
             }
             Some(std::fs::read(dest).ok()? == want)
         }
-        "shim" => Some(
+        K::Shim => Some(
             crate::app::ShimManager::with_bin_dir(config.bin_dir.clone())
                 .await
                 .ok()?
                 .is_in_effect(id)
                 .await,
         ),
-        _ => None,
+        // **Each of these says `None` for a reason, and the reason is written down.** `None` is
+        // *unverifiable*, which places — so a kind that lands here is re-applied on every sync
+        // for ever, and that is a cost worth stating rather than inheriting from a `_` arm.
+        //
+        // - `setting:` reads back through an adapter that has no "current value" command; the
+        //   only way to know is to write and see.
+        // - `repo:` is answerable — the backend can list repositories — but not for free, and
+        //   not without deciding what a URL that differs from the declaration means. Adding
+        //   that probe changes what `sync` does on a converged machine, which is a ruling, not
+        //   a refactor.
+        // - `schedule:` provisioning is idempotent at the OS scheduler and cheap to repeat.
+        // - `firewall:` is reconciled as a whole perimeter by `Firewall::apply`, which does its
+        //   own diff against what is in force; a per-line probe here would be a second opinion.
+        // - `exec:`, `generate:` and `dotfiles:` never reach here — `extra_key` returns `None`
+        //   for all three — and are listed so the compiler keeps that true.
+        K::Setting | K::Repo | K::Schedule | K::Firewall => None,
+        K::Exec | K::Generate | K::Dotfiles => None,
     }
 }
 
@@ -459,6 +514,54 @@ list_pattern = 'SERVICE_NAME:\s+(\S+)'
             Statement::Service(name.to_string(), opts),
             format!("service:{}", name),
         )
+    }
+
+    /// **Which kinds the probe can answer, stated as an assertion rather than as a `_` arm.**
+    ///
+    /// `None` means *unverifiable*, and unverifiable **places** — so a kind falling through
+    /// here is re-applied on every sync for ever. That used to be a `_ => None` at the bottom
+    /// of a `match` on a `&str`, where a kind arrived by omission and nobody had to say why.
+    /// The dispatch is exhaustive over `ResourceKind` now; this pins the answers it gives, so
+    /// changing one is a visible decision.
+    #[tokio::test]
+    async fn each_kind_either_answers_or_says_why_it_cannot() {
+        let config = Arc::new(crate::config::Config::default());
+        let reg = BackendRegistry::new();
+        let mut opts = Options::default();
+        opts.insert("value", "1");
+
+        for (stmt, key) in [
+            (
+                Statement::Setting("dark".into(), opts.clone()),
+                "setting:dark",
+            ),
+            (
+                Statement::Repo {
+                    backend: "apt".into(),
+                    spec: "ppa:x/y".into(),
+                },
+                "repo:apt:ppa:x/y",
+            ),
+            (
+                Statement::Schedule("nightly".into(), opts.clone()),
+                "schedule:nightly",
+            ),
+            (
+                Statement::Firewall("22/tcp".into(), opts.clone()),
+                "firewall:22/tcp",
+            ),
+        ] {
+            assert_eq!(
+                in_effect(&config, &reg, &stmt, key).await,
+                None,
+                "`{key}` is documented as unverifiable; if that changed, say so here"
+            );
+        }
+
+        // A key whose kind is not a keyword at all — a package line's `backend:name` reaching
+        // this by mistake — is not "in effect", and must not be read as one.
+        let pkg = Statement::Setting("x".into(), opts);
+        assert_eq!(in_effect(&config, &reg, &pkg, "apt:jq").await, None);
     }
 
     /// The reason `adopt` made every later sync fail: a `service:` line was `unverifiable`, and
