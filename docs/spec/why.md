@@ -5090,3 +5090,65 @@ omits the capability, a planted body that does both, a planted body with an empt
 a planted body using the `cfg.upgrade_args = …` spelling that follows `base_config` — because
 the extractor has to read both spellings this file uses and a scan that only reads one would
 pass by finding nothing.
+
+---
+
+**V.163 — Why the durability is one function and the preview policy is two.**
+*(Rule in II.32. Fixed 2026-08-09, `S59`.)*
+
+`utils/file.rs` opened with a paragraph that is one of the better ones in this repo — *"There
+were two of these… A writer that honours the flag is no protection while a writer that ignores
+it sits beside it, so there is now one."* It is about a real bug (`--dry-run adopt` recorded 112
+packages as managed while correctly not writing the manifest that declares them) and it draws
+the right conclusion.
+
+**And the sentence it ends on was false in a way the paragraph made hard to see.** There were
+four rename-into-place writers:
+
+| | fsync | preview |
+|---|---|---|
+| `utils::file::atomic_write` | yes | via `persist` |
+| `CommandExecutor::write_atomic` | **no flush, no sync** | via the VFS |
+| `CommandExecutor::write_secret` | flush, **no sync** | via the VFS |
+| `InstalledListings::save_to_disk` | no, deliberately | none, deliberately |
+
+**A rename is atomic against a concurrent reader and says nothing whatever about power loss.**
+The directory entry can reach the disk before the bytes it points at do. So `write_atomic` —
+which is what writes a systemd unit, a `link:` target and every backend's state file — could
+leave a zero-length file after a crash, while `registry.json` and the WAL went through `persist`
+and survived. **That is the worst possible division of durability**: LiNix keeps its record of
+what it did and loses the thing it did, which is precisely the state `heal` is least able to
+reason about.
+
+**The fix is not "make it one writer", because two of the differences are real.** The two
+preview policies answer different questions and both are correct:
+
+- The config repo must not be touched by a preview at all. `persist` prints *would write …* and
+  returns `false` so the caller can phrase its own message.
+- A machine write must be *visible to the rest of the preview*. The executor diverts bytes into
+  a dry-run VFS so that a previewed command reading a file a previewed command would have
+  written sees it. Printing and stopping there would make every multi-step dry run wrong.
+
+What was never legitimately plural is the **durability**, and that is now `durable_write`: dir,
+temp file, write, flush, `prepare`, `sync_all`, rename. `prepare` is the permission hook, and it
+runs before the rename because that is the only moment at which a mode change is not a window —
+a `chmod` after the rename leaves world-readable plaintext at the target path for however long
+it takes, and T5's whole argument is that "however short" is not an argument for a secret.
+
+**`InstalledListings::save_to_disk` stays its own, and the reason is worth keeping.** It is a
+cache: a torn file is a miss, an fsync per listing would put a disk barrier on the read path,
+and its temp name carries the process id because *the rename is only atomic per writer* — two
+`linix` runs sharing one temp path write into each other's file and rename the interleaving,
+which is the torn listing the mechanism exists to prevent, arrived at by the mechanism.
+
+**And the comment is replaced by a scan.** A paragraph asserting a singleton is exactly what was
+wrong here: it was true when written, and nothing re-derived it. `tests/a_writer_that_reaches_
+the_disk_goes_through_one_tests.rs` walks `src/`, ignores test modules, and fails on any
+rename-into-place outside the two allowed files — each of which carries the sentence saying why
+it is allowed, checked to still be needed. Driven by an oracle over a planted offender, a
+planted innocent, and a planted file whose only offence is inside `#[cfg(test)]` (II.23).
+
+**One smaller correction rode along.** `verbs/plan.rs` claimed *"Every ledger these commands
+write goes through `utils::file::persist`"* as ground for a dry-run claim. Scoped to those
+commands it is true; read as a claim about the program it is not, and the four-writer paragraph
+above is why somebody would read it that way. It now says which scope it means.

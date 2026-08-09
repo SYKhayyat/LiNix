@@ -4,14 +4,13 @@ use dashmap::DashMap;
 use fs2::FileExt;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{IsTerminal, Write};
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::process::Command as StdCommand;
 use std::process::Output as StdOutput;
 use std::process::Stdio;
 use std::sync::Arc;
-use tempfile::NamedTempFile;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tracing::debug;
@@ -1637,29 +1636,42 @@ impl CommandExecutor {
         std::fs::read_to_string(path).map_err(Error::from)
     }
 
+    /// Write a file the *machine* owns — a systemd unit, a `link:` target, a backend's state
+    /// file — atomically and durably.
+    ///
+    /// The executor's preview policy, not [`crate::utils::file::persist`]'s: a dry run diverts
+    /// the bytes into the VFS so a later read in the same run sees what this run would have
+    /// written. Both policies are legitimate and they answer different questions; only the
+    /// durability is shared.
+    ///
+    /// **It had no `flush` and no `sync_all`.** A rename is atomic against a concurrent reader
+    /// and says nothing about power loss, so a crash after a sync could leave a zero-length
+    /// systemd unit while `registry.json` and the WAL — which go through `persist` — survived
+    /// intact. LiNix's record of what it did, without the thing it did.
     pub async fn write_atomic(&self, path: &Path, content: &str) -> Result<()> {
         if self.dry_run {
             self.vfs.insert(path.to_path_buf(), content.to_string());
             return Ok(());
         }
-        let dir = path
-            .parent()
-            .ok_or_else(|| Error::Other("Invalid path: no parent directory".into()))?;
-        tokio::fs::create_dir_all(dir).await.map_err(Error::from)?;
+        Self::durably(path, content, |_| Ok(())).await
+    }
 
-        let mut temp_file = tokio::task::spawn_blocking({
-            let dir = dir.to_path_buf();
-            move || NamedTempFile::new_in(dir)
+    /// The one place this crate's async writers meet the one durable write.
+    ///
+    /// `spawn_blocking` because `sync_all` parks a thread on the disk, and parking a runtime
+    /// worker there stalls every other task on it.
+    async fn durably(
+        path: &Path,
+        content: &str,
+        prepare: impl FnOnce(&Path) -> Result<()> + Send + 'static,
+    ) -> Result<()> {
+        let path = path.to_path_buf();
+        let content = content.to_string();
+        tokio::task::spawn_blocking(move || {
+            crate::utils::file::durable_write(&path, &content, prepare)
         })
         .await
         .map_err(|e| Error::Other(format!("IO thread failure: {}", e)))?
-        .map_err(Error::from)?;
-
-        temp_file
-            .write_all(content.as_bytes())
-            .map_err(Error::from)?;
-        temp_file.persist(path).map_err(Error::from)?;
-        Ok(())
     }
 
     /// Write content that must never be world-readable, restricted **before** it reaches its
@@ -1678,37 +1690,20 @@ impl CommandExecutor {
             self.vfs.insert(path.to_path_buf(), content.to_string());
             return Ok(());
         }
-        let dir = path
-            .parent()
-            .ok_or_else(|| Error::Other("Invalid path: no parent directory".into()))?;
-        tokio::fs::create_dir_all(dir).await.map_err(Error::from)?;
-
-        let mut temp_file = tokio::task::spawn_blocking({
-            let dir = dir.to_path_buf();
-            move || NamedTempFile::new_in(dir)
+        Self::durably(path, content, |temp| {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(temp, std::fs::Permissions::from_mode(0o600))
+                    .map_err(Error::from)?;
+            }
+            #[cfg(windows)]
+            {
+                restrict_to_owner(temp)?;
+            }
+            Ok(())
         })
         .await
-        .map_err(|e| Error::Other(format!("IO thread failure: {}", e)))?
-        .map_err(Error::from)?;
-
-        temp_file
-            .write_all(content.as_bytes())
-            .map_err(Error::from)?;
-        temp_file.flush().map_err(Error::from)?;
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(temp_file.path(), std::fs::Permissions::from_mode(0o600))
-                .map_err(Error::from)?;
-        }
-        #[cfg(windows)]
-        {
-            restrict_to_owner(temp_file.path())?;
-        }
-
-        temp_file.persist(path).map_err(Error::from)?;
-        Ok(())
     }
 
     pub async fn symlink(&self, src: &Path, dst: &Path) -> Result<()> {

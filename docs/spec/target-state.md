@@ -2798,3 +2798,28 @@ in a named exemption list, one sentence each, checked to still be needed.
 `assert_caps` pins what the registry *does* hand out, so an omission is pinned as correct on the
 day it is made. The second test asks whether the config and the registration agree, which is a
 question the matrix cannot express.
+
+## II.32 One durable write, two preview policies, and nothing else reaches the disk (`S59`, V.163)
+
+**A rename is atomic against a reader and says nothing about power loss.** The directory entry
+can reach the disk before the bytes it points at, leaving a file of the right name and zero
+length. So every write LiNix performs is: bytes to a temporary file beside the destination,
+`flush`, any permission change, `sync_all`, then rename. That sequence exists once, as
+`utils::file::durable_write`.
+
+**Two front doors, because there are two preview policies and both are correct:**
+
+- **`utils::file::persist`** — the config repo (`active`, `preferences.toml`, a manifest, a lock,
+  the WAL, the state registry). A dry run prints *would write …* and stops.
+- **`CommandExecutor::write_atomic` / `write_secret`** — the machine (a systemd unit, a `link:`
+  target, a backend's state). A dry run diverts the bytes into the VFS, so a previewed command
+  can read back what a previewed command would have written.
+
+**A permission change happens on the temporary file, before the rename.** A `chmod` afterwards
+means the target path holds readable plaintext for however long that takes, and for a secret
+"however short" is not an argument (T5).
+
+**Anything else that renames a file into place is a fourth writer and is refused by a scan**,
+unless it is listed with the reason it must be its own. There is one such entry: the
+installed-listing cache, which is deliberately neither durable nor preview-aware, because a torn
+cache file is a cache miss and an fsync per listing would be a disk barrier on the read path.

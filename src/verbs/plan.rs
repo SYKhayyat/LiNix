@@ -662,9 +662,14 @@ pub fn scoped_by(key: &str, names: &[String]) -> bool {
     names.iter().any(|n| n == key || n == tail)
 }
 
-/// The heading and verb a message uses. Every ledger these commands write goes through
+/// The heading and verb a message uses. Every ledger **these** commands write goes through
 /// `utils::file::persist`, so the answer about one of them is the answer about all: a preview
 /// pins nothing, approves nothing and forgets nothing.
+///
+/// Scoped to these commands on purpose. `persist` is the config repo's preview policy, not the
+/// program's only one — the executor diverts machine writes into a dry-run VFS instead, so that
+/// a previewed command can read back what a previewed command would have written. A claim that
+/// every writer goes through `persist` would be false, and this one does not make it.
 fn tense(label: &str, done: &'static str, would: &'static str) -> (String, &'static str) {
     if crate::core::dry_run::active() {
         (

@@ -21,7 +21,17 @@ use tempfile::NamedTempFile;
 /// packages as managed while the manifest that declares them was correctly not written, leaving
 /// the machine in the one state the model reads as *the user deleted every line*. A writer that
 /// honours the flag is no protection while a writer that ignores it sits beside it, so there is
-/// now one.
+/// now one **preview policy for the config repo**.
+///
+/// **That sentence used to say "so there is now one", full stop, and it was wrong about the
+/// thing it sounded like it was claiming.** There are two preview policies and there always
+/// were: this one, which prints *would write …* and stops, and the executor's, which diverts the
+/// bytes into a dry-run VFS so a later read in the same run sees them. Both are correct and they
+/// answer different questions — a manifest a preview must not touch, versus a file the previewed
+/// commands would go on to read. What was *not* correct is that each carried its own copy of the
+/// rename-into-place dance, and two of the three copies had no `fsync` in them. The durability
+/// is one function now ([`durable_write`]); the preview policies remain two, deliberately, and
+/// `a_writer_that_reaches_the_disk_goes_through_one_tests` enumerates them.
 pub fn persist(path: &Path, content: &str) -> Result<bool> {
     if crate::core::dry_run::active() {
         crate::would_warn!("would write {}", path.display());
@@ -64,6 +74,33 @@ pub fn append_line(path: &Path, line: &str) -> Result<bool> {
 /// The bytes, atomically, with no policy. **Private on purpose** — [`persist`] is the way in,
 /// so a new writer cannot reach the disk during a preview by picking the shorter name.
 fn atomic_write(path: &Path, content: &str) -> Result<()> {
+    durable_write(path, content, |_| Ok(()))
+}
+
+/// **The one durable write.** Bytes into a temporary file beside the destination, flushed,
+/// `prepare`d, fsynced, then renamed over the target.
+///
+/// **Every step is load-bearing and three of them were missing from two of the three callers.**
+/// `rename` is atomic against a concurrent *reader* — nobody ever sees a half-written file — and
+/// says nothing at all about power loss: a rename can reach the disk before the bytes it points
+/// at do, which leaves a file of the right name and zero length. `CommandExecutor::write_atomic`
+/// omitted both `flush` and `sync_all` and is what writes a systemd unit and a `link:` target,
+/// while `registry.json` and the WAL went through here and survived. That is the worst possible
+/// division: a crash keeps LiNix's record of what it did and loses what it did.
+///
+/// `prepare` runs on the temporary file **after** the bytes and **before** the rename, which is
+/// the only window in which a mode change is not a window. A `chmod` after the rename means the
+/// target path holds world-readable plaintext for however long that takes, and for a secret
+/// "however short" is not an argument (T5).
+///
+/// `pub(crate)` rather than private because the executor's two writers are the other legitimate
+/// front door — they answer to the dry-run VFS instead of to [`persist`]'s preview check — and a
+/// second copy of this dance is exactly what they were.
+pub(crate) fn durable_write(
+    path: &Path,
+    content: &str,
+    prepare: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
     let dir = path.parent().ok_or_else(|| {
         let err = std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -81,6 +118,7 @@ fn atomic_write(path: &Path, content: &str) -> Result<()> {
         .write_all(content.as_bytes())
         .map_err(Error::from)?;
     temp_file.flush().map_err(Error::from)?;
+    prepare(temp_file.path())?;
     temp_file.as_file().sync_all().map_err(Error::from)?;
     temp_file.persist(path).map_err(Error::from)?;
 
