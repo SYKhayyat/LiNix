@@ -5036,3 +5036,57 @@ written by a newer LiNix, a hand edit — fail the whole file, and `S56` had jus
 forgetting a row is the one outcome that cannot be undone. Parsing at the point of use lets the
 row be reported and kept, and lets the guard go on counting and protecting it, because the guard
 does not dispatch on kind and only the kind is unknown.
+
+---
+
+**V.162 — Why a capability matrix could not catch this, and why the fix is not a derivation.**
+*(Rule in II.31. Fixed 2026-08-09, `S58`.)*
+
+`winget` carries `upgrade_args: ["upgrade", "--all", "--silent"]` and an `OutdatedProbe` that
+runs `winget upgrade` to find out what needs it. `scoop` carries `["update", "*"]` and its own
+probe. Neither was registered `.with_upgradable(…)`. `choco` — the third Windows manager, in the
+same file, forty lines away — was.
+
+**So `linix upgrade` on Windows upgraded chocolatey packages and skipped the other two in
+silence.** There is no error path: `as_upgradable()` returns `None`, and every caller reads
+`None` as *this manager has no such concept*, which is the correct answer for `link:` and the
+wrong one here.
+
+**The matrix test asserted the loss.** `assert_caps(&reg, "winget", &[…])` listed five
+capabilities and `upgradable` was not among them, so the omission was pinned as intended on the
+day it was made. That is not a flaw in that test — it does its job, which is to notice a
+capability *changing*. It is a demonstration that a check written from the code can only ever
+say the code is what the code is. The question it cannot ask is whether the config and the
+registration agree, and that question is where the answer was.
+
+**Asking it turned two into three, and cleared two more.** The scan found five registrations
+whose config declares an upgrade-all verb and whose builder omits `Upgradable`:
+
+- **`winget`, `scoop`** — the reported pair. Real verbs. Registered.
+- **`gem`** — `gem update` upgrades every installed gem. The same loss, unreported. Registered.
+- **`pip`** — `pip install --upgrade` takes package names and fails without them. There is no
+  upgrade-all to register; those args are the per-package form. **Correct omission.**
+- **`bun`** — `bun upgrade` upgrades the bun runtime, not the packages bun installed.
+  Registering it would make `linix upgrade` replace the user's toolchain while reporting that it
+  had updated their packages. **Correct omission**, and the sharpest argument against the
+  obvious fix.
+
+**Which is why this is not a derivation.** The tidy version of this repair — read the capability
+set off `ManagerConfig`, the way the custom-backend onboarder already does — would have
+registered `pip` and `bun` too, and turned a silent omission into a command that does the wrong
+thing loudly. It would also have given `bun` a `Searchable` whose parser is `|_| vec![]`, which
+is the *inverse* of the mistake the onboarder's own comment warns about: turning "not
+configured" into "no results". A mechanical rule over a field that means two different things
+is not an improvement on a hand-written list; it is the same list with the reasoning deleted.
+
+**So the fix is the list, plus the reasons, plus a gate.** Three registrations added, and a scan
+that fails on any future config/builder disagreement unless the manager is named in `EXEMPT`
+with the sentence explaining it. A second test checks that no exemption has outlived its
+subject: an exemption for a manager that has since been registered, or renamed, silences nothing
+and reads as if it does.
+
+**Both scans are driven by an oracle** (II.23), over a planted body that declares the verb and
+omits the capability, a planted body that does both, a planted body with an empty `vec![]`, and
+a planted body using the `cfg.upgrade_args = …` spelling that follows `base_config` — because
+the extractor has to read both spellings this file uses and a scan that only reads one would
+pass by finding nothing.

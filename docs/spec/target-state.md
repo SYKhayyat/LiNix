@@ -2780,3 +2780,21 @@ three colons and the last one is inside the URL.
 strings and parses per row where it is used, so one unreadable row does not fail the file — and
 the guard still counts and protects it, because only its *kind* is unknown and the guard does
 not dispatch on kind.
+
+## II.31 A capability the config describes is a capability the registry hands out (`S58`, V.162)
+
+**If a manager's `ManagerConfig` says how to do something, its `BackendCapabilities` says it can
+do it.** A config carrying `upgrade_args` and a builder without `.with_upgradable(…)` is a
+manager that silently sits out `linix upgrade`: `as_upgradable()` answers `None`, and every
+caller reads that as *this manager has no such concept* — the same answer a `link:` gives.
+
+**Where the two must differ, the difference is listed with its reason.** Some `upgrade_args` are
+not an upgrade-everything verb: `pip install --upgrade` needs names and fails without them,
+`bun upgrade` replaces the runtime rather than the packages. Those are correct omissions and
+they are indistinguishable from a loss until somebody writes down which is which — so they live
+in a named exemption list, one sentence each, checked to still be needed.
+
+**A capability matrix cannot be the only check, because it is written from the code.**
+`assert_caps` pins what the registry *does* hand out, so an omission is pinned as correct on the
+day it is made. The second test asks whether the config and the registration agree, which is a
+question the matrix cannot express.

@@ -999,6 +999,7 @@ fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             .with_installable(Arc::new(GenericInstallable { core: core.clone() }))
             .with_queryable(Arc::new(GenericQueryable { core: core.clone() }))
             .with_searchable(Arc::new(GenericSearchable { core: core.clone() }))
+            .with_upgradable(Arc::new(GenericUpgradable { core: core.clone() }))
             .with_repo_manager(Arc::new(GenericRepoManager { core: core.clone() }))
             .with_metadata_provider(core.clone())
             .build(),
@@ -1079,6 +1080,7 @@ fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             .with_installable(Arc::new(GenericInstallable { core: core.clone() }))
             .with_queryable(Arc::new(GenericQueryable { core: core.clone() }))
             .with_searchable(Arc::new(GenericSearchable { core: core.clone() }))
+            .with_upgradable(Arc::new(GenericUpgradable { core: core.clone() }))
             .with_repo_manager(Arc::new(GenericRepoManager { core: core.clone() }))
             .with_metadata_provider(core.clone())
             .build(),
@@ -1369,6 +1371,7 @@ fn register_gem(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             .with_installable(Arc::new(GenericInstallable { core: core.clone() }))
             .with_queryable(Arc::new(GenericQueryable { core: core.clone() }))
             .with_searchable(Arc::new(GenericSearchable { core: core.clone() }))
+            .with_upgradable(Arc::new(GenericUpgradable { core: core.clone() }))
             .with_repo_manager(Arc::new(GenericRepoManager { core: core.clone() }))
             .with_metadata_provider(core.clone())
             .build(),
@@ -2948,6 +2951,8 @@ mod tests {
                 "metadata_provider",
             ],
         );
+        // `gem update` upgrades every installed gem, which is exactly the verb `Upgradable`
+        // is for; it was the third manager whose config said so and whose builder did not.
         assert_caps(
             &reg,
             "gem",
@@ -2955,10 +2960,16 @@ mod tests {
                 "installable",
                 "queryable",
                 "searchable",
+                "upgradable",
                 "repo_manager",
                 "metadata_provider",
             ],
         );
+        // **`bun` is deliberately none of the three.** `bun upgrade` upgrades the bun runtime,
+        // not the packages bun installed, and its `search_fn` returns nothing — so registering
+        // either capability would turn "not supported" into "did the wrong thing" and "no
+        // results". Recorded in this file's EXEMPT sibling,
+        // `a_configured_capability_is_a_registered_one_tests`.
         assert_caps(
             &reg,
             "bun",
@@ -3037,40 +3048,25 @@ mod tests {
         }
         #[cfg(target_os = "windows")]
         {
-            assert_caps(
-                &reg,
-                "winget",
-                &[
-                    "installable",
-                    "queryable",
-                    "searchable",
-                    "repo_manager",
-                    "metadata_provider",
-                ],
-            );
-            assert_caps(
-                &reg,
-                "scoop",
-                &[
-                    "installable",
-                    "queryable",
-                    "searchable",
-                    "repo_manager",
-                    "metadata_provider",
-                ],
-            );
-            assert_caps(
-                &reg,
-                "choco",
-                &[
-                    "installable",
-                    "queryable",
-                    "searchable",
-                    "upgradable",
-                    "repo_manager",
-                    "metadata_provider",
-                ],
-            );
+            // `winget upgrade --all` and `scoop update *` are real verbs, and both managers
+            // already carried an `OutdatedProbe` to find out what needed them. They were the
+            // only two of the three Windows managers not registered `Upgradable`, and this
+            // matrix pinned the omission as correct — which is what a matrix written from the
+            // code always does. `a_configured_capability_is_a_registered_one_tests` asks the
+            // other question.
+            //
+            // All three Windows managers have sources, so all three are `SYS`-shaped.
+            const WIN: &[&str] = &[
+                "installable",
+                "queryable",
+                "searchable",
+                "upgradable",
+                "repo_manager",
+                "metadata_provider",
+            ];
+            assert_caps(&reg, "winget", WIN);
+            assert_caps(&reg, "scoop", WIN);
+            assert_caps(&reg, "choco", WIN);
             assert_caps(&reg, "psresource", FULL);
         }
         #[cfg(target_os = "macos")]
