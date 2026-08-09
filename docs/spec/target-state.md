@@ -1311,9 +1311,10 @@ there's nothing for it to come back to. Did you mean a plain uninstall?"*
 `plan`, `list`, `upgrade` → yes. `sync`, `purge-undeclared` → error: *"scoping a removal
 isn't safe; use a profile."*
 
-**`clean` goes through the guard** — ask the backend what it intends, check the list against
-protection, refuse if it touches something protected. **Sync nudges:** *"3 packages are now
-orphaned; run `linix clean`."* Want it automatic? `schedule:tidy@cron=0 3 * * *,run=clean`.
+**`remove-orphans` goes through the guard** — ask the backend what it intends, check the list
+against protection, refuse if it touches something protected. **Sync nudges:** *"3 packages are
+now orphaned; run `linix remove-orphans`."* Want it automatic?
+`schedule:tidy@cron=0 3 * * *,run=clean` — `clean` there is a schedule action, not a verb.
 
 **A failed `install` withdraws the line it just wrote when that line can never succeed** (Q1,
 owner 2026-07-27; V.90). `install` writes first and syncs second (S15), so a failure leaves a
@@ -1530,7 +1531,7 @@ question is skipped and named rather than quietly widened back to everything. (V
 
 **Output:** one `modules/adopted.txt`, grouped by backend with comment headers, sorted.
 Header states: this is an estimate; deleting a line uninstalls, *except where the guard
-refuses*; `linix forget` is the way out. A second section lists what was found and left
+refuses*; `linix unmanage <backend>:<name>` is the way out. A second section lists what was found and left
 alone, commented out, with the count per reason.
 
 **Adopt does NOT consult the guard — not `protected_packages`, and not OS-essential**
@@ -2236,9 +2237,10 @@ real work and must stay.
 ## II.17 Deleted
 
 **Commands:** `prune` · `orphans` · `clone` · `migrate` (→ `adopt`) · `remove` (→
-`uninstall`) · `status` · `doctor` · `unmanaged` · `absent` · `conflicts` · `audit` (all six →
-`check <section>`, ruled 2026-07-24) · `undo` (→ `snapshot restore` for the filesystem,
-`rollback` for the manifests)
+`uninstall`) · `clean` (split in two: `remove-orphans` for what the machine no longer needs,
+`clean-cache` for the downloads it kept — V.36) · `status` · `doctor` · `unmanaged` · `absent` ·
+`conflicts` · `audit` (all six → `check <section>`, ruled 2026-07-24) · `undo` (→ `snapshot
+restore` for the filesystem, `rollback` for the manifests)
 
 **Flags:** `-g` / `--groups-dir` · `--no-global` · `--allow-regex-expansion` ·
 `--backend` on removing commands
@@ -2499,10 +2501,12 @@ list of English words to ignore, and a list of words to ignore is one more thing
 backticked command paths is found by *what it contains*, not by where it sits, and the number of
 such tables is pinned so one cannot rot past recognition and leave the gate in silence.
 
-**`docs/` is out of scope, deliberately.** It is a record — a changelog, a bug tracker and a
-decision register — and a record has to be free to write `linix doctor` when it is describing the
-day `linix doctor` was deleted. `readme.md` is in scope because it is the one document a user
-reads as instructions.
+**`docs/` is checked against the Deleted register, not against the live surface.** It is a record
+— a changelog, a bug tracker and a decision register — and a record has to be free to write
+`linix doctor` when it is describing the day `linix doctor` was deleted. So the property there is
+weaker by one clause: a dead command named in `docs/` must be one II.17 records as dead. A name
+that is neither live nor registered is the finding. `readme.md` keeps the strict rule, because it
+is the one document a user reads as instructions.
 
 **The rule this generalises: a gate is drawn around the property, not around the artifact that
 was under review.** See `why.md` for the six live defects that were sitting outside three

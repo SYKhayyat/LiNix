@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 /// Entries in `why.md` that no Part II rule and no line of `src/`or `tests/` cites.
 ///
 /// **May only go DOWN.** Raising it is the drift this file exists to catch, happening.
-const UNCITED_CEILING: usize = 53;
+const UNCITED_CEILING: usize = 52;
 
 fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

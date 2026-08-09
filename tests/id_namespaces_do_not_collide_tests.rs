@@ -122,7 +122,7 @@ fn only_the_register_defines_a_register_id() {
     // The instrument before the verdict: a scan over no files, or one whose matcher has stopped
     // matching, reports a clean tree and is indistinguishable from a clean tree.
     assert!(
-        scanned >= 5,
+        scanned >= 4,
         "the scan read {} documents, which is not the docs tree",
         scanned
     );
@@ -149,5 +149,54 @@ fn only_the_register_defines_a_register_id() {
         "these documents mint IDs the decision register owns, so a reader cannot tell a thing \
          to build from a question to ask:\n  {}",
         offences.join("\n  ")
+    );
+}
+
+/// **And the register may not define one twice.**
+///
+/// The sibling of the check above, and the one that actually fired: on 2026-08-07 four sessions
+/// each took "the next free Y", and the register came out of the day with two entries called
+/// `Y19` and two called `Y20` — a parser question and a doc-corpus cut under one ID, a firewall
+/// count and a flatpak key under the other. `scripts/decision-count.sh` counts headings, so the
+/// total was right and the collision was invisible to it. An owner asked to rule on `Y20` had
+/// two decisions to choose from and no way to know it.
+///
+/// The check above asks *who may mint an ID*; this one asks *whether an ID names one thing*.
+/// Neither implies the other, which is why the first one passed all day.
+#[test]
+fn the_register_gives_each_id_to_exactly_one_entry() {
+    let register = docs_root().join("spec").join("decisions.md");
+    let text = std::fs::read_to_string(&register).expect("the register is readable");
+
+    let mut seen: Vec<(String, usize)> = Vec::new();
+    let mut duplicates: Vec<String> = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        let Some(id) = line.strip_prefix("## ").map(str::trim) else {
+            continue;
+        };
+        // An entry heading is the bare ID. `## Index` and the like are not entries.
+        let letters = id.chars().take_while(char::is_ascii_alphabetic).count();
+        if letters == 0 || letters == id.len() || !id[letters..].chars().all(|c| c.is_ascii_digit())
+        {
+            continue;
+        }
+        if let Some((_, first)) = seen.iter().find(|(other, _)| other == id) {
+            duplicates.push(format!(
+                "`{id}` is defined at line {first} and again at {}",
+                n + 1
+            ));
+        }
+        seen.push((id.to_string(), n + 1));
+    }
+
+    assert!(
+        seen.len() > 100,
+        "the heading matcher found only {} entries, which is not this register",
+        seen.len()
+    );
+    assert!(
+        duplicates.is_empty(),
+        "one ID, two decisions — an owner asked to rule on it cannot tell which:\n  {}",
+        duplicates.join("\n  ")
     );
 }

@@ -15,9 +15,9 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **4** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **2** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **3** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **170** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **171** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -73,11 +73,11 @@ status loses that, so it is kept here:
 
 ## Index
 
-**Four are open — `Z1`, raised 2026-08-03, a licence choice; and three raised 2026-08-07:
-`Y18`, findings against Part II; `Y19`, whether 2.5 MB of specification gets cut; and `Y20`,
-whether flatpak's scope key is renamed so its backend can become a data row.** All 181 are
-accounted
-for: **170 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 3 BUILT NEVER RULED, 4 OPEN** — and this line
+**Two are open — `Z1`, raised 2026-08-03, a licence choice; and `Y21`, whether 2.5 MB of
+specification gets cut. `Y18` is HALF RULED: three of its four findings against Part II are
+corrected, and what remains is not the typo it looked like — `@source=` on a `shim:` line is
+parsed and never read.** All 181 are accounted
+for: **171 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 3 BUILT NEVER RULED, 2 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -6853,45 +6853,65 @@ a shebang names treats it as a comment, so the file runs unmodified — the whol
 
 ## Y18
 
-**Status: OPEN — three findings against Part II, raised 2026-08-07 by `LX-7`.** Raised by
-pointing `named_commands_exist_tests` at `docs/` for the first time. All three are recorded in
-`PART_II_LOOKS_WRONG` in that file, which is asserted exact and shrink-only, so none can be lost
-and none can be quietly added. **`CLAUDE.md` says a spec that looks wrong is reported, not
-edited** — so the gate carries them and the code was left alone.
+**Status: HALF RULED — raised 2026-08-07 by `LX-7`; three of the four ruled by the owner
+2026-08-08, the fourth still open.** Raised by pointing `named_commands_exist_tests` at `docs/`
+for the first time. `PART_II_LOOKS_WRONG` in that file is asserted exact and shrink-only, so a
+ruling shrinks it and nothing can be quietly added; it is down to one entry.
 
 **Y18 — Part II names three commands the program does not have. Which of them is the spec wrong
 about, and which is the program?**
+
+**Ruled 2026-08-08: the spec was wrong in every case where the code was checked.** Findings 1, 2
+and 4 are corrected in Part II in the same change. Finding 3 stays open, and the reason it does
+is the finding underneath it — see below.
 
 The gate's rule for `docs/` is weaker than the one for `src/` and `readme.md`, and deliberately:
 a record has to stay free to name a command on the day it was deleted. So the property is *a dead
 command named in `docs/` is a command the spec says is dead*, with `target-state.md` II.17 read as
 the register rather than restated. That reduced 62 raw hits to 10 and left these three.
 
-1. **`target-state.md:1316` — the sync nudge.** Prescribed as *"3 packages are now orphaned; run
-   `linix clean`."* There is no `clean` verb; the live one is `remove-orphans`. (`run=clean` on the
-   same line is a schedule action and is correct — `model/schedule.rs:6` and `resolve.rs:1403`
-   both carry it.)
-2. **`target-state.md:1533` — the `adopt` output header.** Prescribed as *"`linix forget` is the
+1. **The sync nudge — RULED, spec corrected.** Prescribed as *"3 packages are now orphaned; run
+   `linix clean`."* There is no `clean` verb; the live one is `remove-orphans`, and the rule now
+   says so — including the bare `clean` in the sentence above it, which named the same absent
+   verb without the prefix that made it visible to the gate. (`run=clean` is a schedule action,
+   not a command — `model/schedule.rs:6` and `resolve.rs:1403` both carry it — and the rule now
+   says that out loud so the next reader does not correct it.)
+2. **The `adopt` output header — RULED, spec corrected.** Prescribed as *"`linix forget` is the
    way out."* `app/adopt.rs:498` already writes `linix unmanage <backend>:<name>`, and
-   `adopt.rs:979` asserts it. **The code is right and the rule is stale**, which is the direction
-   worth naming: the checked artifact held and the prose did not.
-3. **`target-state.md:2216` — II.17's register is incomplete.** II.16's own table records
-   `linix shim jq --source cargo:jq` becoming the line `shim:jq@source=cargo:jq`, so the command
-   was deleted; II.17 never gained the entry. **The gap has a live cost.** `bugs.md:76` still
-   carries *"`linix shim --source` is required, documented, and thrown away. **(verified)**"* as
-   an open, verified defect against a command that does not exist. Whether that is *fixed by
-   deletion* or *an option lost in the move* is the ruling; the entry has been annotated, not
-   closed.
+   `adopt.rs:979` asserts it. **The code was right and the rule was stale**, which is the
+   direction worth naming: the checked artifact held and the prose did not.
+3. **II.17's register is incomplete — STILL OPEN, and it is not only bookkeeping.** II.16's own
+   table records `linix shim jq --source cargo:jq` becoming the line `shim:jq@source=cargo:jq`,
+   so the command was deleted; II.17 never gained the entry. `bugs.md:76` therefore still carries
+   *"`linix shim --source` is required, documented, and thrown away. **(verified)**"* as an open
+   defect against a command nobody can run.
 
-**A fourth finding, and it is against the rule this change alters.** `target-state.md:2503` reads
-***"`docs/` is out of scope, deliberately"***, and gives the record argument for it. That argument
-is kept — it is why the `docs/` property is the weaker one — but the sentence is now false as
-written: `docs/` is scanned, against II.17 rather than against the surface. **Part II was left
-alone and this is the report.** The rule wants one clause, roughly: *`docs/` is checked against the
-Deleted register, not against the live surface, so a record stays free to name what it is recording
-the death of.* Until that lands, `target-state.md` and `tests/named_commands_exist_tests.rs`
-disagree about the scope of the same gate — which is, precisely, the class of drift the gate was
-extended to find.
+   **The bug did not die with the command.** `source` is a legal option on a `shim:` line —
+   `config/grammar/statement.rs:1477` lists it in `SHIM_OPTION_KEYS` and `:2690` asserts it
+   parses — and no apply path reads it: `app/apply/dependents.rs:71` calls `create_shim(name)`
+   and nothing else. Accepted, documented, discarded, in the new spelling. So the ruling is not
+   *deletion or loss* but **what `@source=` should mean**, and there are only two honest answers:
+   teach the shim to record and exec the named provider, or refuse the option by name until it
+   does. II.17's missing row goes in whichever way it lands.
+
+   Worth knowing before ruling: `exec_shim` has **no test caller anywhere in the tree**, and
+   `Runner::run` spawns the shim's own name through `PATH` (`app/run.rs:174`) without excluding
+   `bin_dir` — which is the directory the shim was deployed into, ahead of the real binary, on
+   purpose. Nothing was measured; the shape is enough to say the mechanism `@source=` belongs to
+   has never been exercised.
+   **And a fifth finding, produced by writing the ruling down.** Correcting finding 1 meant
+   writing the sentence *"`linix clean`, where the verb is `remove-orphans`"* into four
+   documents, and the gate reddened on all four: `clean` is a deleted command II.17 never
+   recorded, exactly as `shim` is. It is entered now — split into `remove-orphans` and
+   `clean-cache` (V.36) — because nothing hangs on it the way `@source=` hangs on `shim`. **The
+   register being incomplete is not a documentation problem; it is what makes a correction
+   unwritable.**
+4. **The rule about the gate's own scope — RULED, spec corrected.** `target-state.md` read
+   ***"`docs/` is out of scope, deliberately"*** while the gate was scanning `docs/`, so the
+   canonical spec and the test disagreed about the scope of the same gate. The record argument is
+   kept and is now stated as the reason for the weaker property rather than for an exemption:
+   *`docs/` is checked against the Deleted register, not against the live surface.* Reasons in
+   `why.md`, under `F-2`.
 
 **What shipped in the same change, because none of it needed a ruling:**
 
@@ -7050,13 +7070,45 @@ count is trivially separable if the answer is no.**
 
 ---
 
-## Y19
+## Y21
 
-**Status: OPEN — raised 2026-08-07 by `LX-6`.** Not blocking anything that builds. Blocking every
-future read of this repository, which is a slower and larger cost.
+**Status: ANSWERED — raised 2026-08-07 by `LX-6`, ruled by the owner 2026-08-08.**
 
-**Y19 — 2.5 MB of specification was written under documentation economics and is read under
+**Y21 — 2.5 MB of specification was written under documentation economics and is read under
 context economics. Does the corpus get cut, and if so where?**
+
+**Ruled: cut it. Distil the record into a short list of lessons and put that where an agent will
+not read it.**
+
+What went, and it is all recoverable from git by SHA: `docs/archive/` (twelve grade rounds,
+readiness reviews and session logs, whose own README said nothing inside it was current),
+`docs/spec/proposals/` (six designs, every one of them ruled and folded into Part II),
+`docs/spec/history.md` (8,390 lines organised by *session*, a unit no maintainer has), and
+`docs/INEFFICIENCIES.md` (an audit whose every finding was already marked fixed, fixed-by, or
+not-done-with-the-reason). **17,900 lines, about 1.4 MB.**
+
+What stayed, and why each: `target-state.md` is the rule, `why.md` is the reason `CLAUDE.md`
+makes mandatory reading before changing a rule, `decisions.md` is the ruling — *an event outside
+the tree, with a person and a date on it* — and that is the one artifact git cannot reconstruct,
+so it is kept at full fidelity rather than compressed to a status line. `plan.md`, `bugs.md`,
+`principles.md`, `readme.md` and `SPEC.md` are the map and the trackers. `BUILDER.md` and
+`GRADER.md` stayed where they are: they are briefs a person still hands to an agent, which makes
+them tools rather than records, and the cut was about records.
+
+**`docs/attic/lessons.md` is the distillate** — thirty-one things, each one the residue of at
+least one shipped defect, under a header telling agents not to read it. That header is the point
+of the ruling and not a joke: the lessons are for a person, once. An agent that reads them is
+paying the context cost the cut exists to stop, for advice that is already enforced by the gates
+in `tests/`.
+
+**The one thing this loses, said plainly.** The grade rounds were where a builder was handed
+"the newest `GRADE-*.md`" as a brief. That handoff needs a new source; the findings themselves
+are all in `bugs.md` and the register, which is where the disposition discipline had already put
+them.
+
+**The 53 unattached `why.md` entries** — the third part of the question — are not retired here.
+`why_entries_are_attached_to_something_tests.rs` ratchets the count down and every citation
+resolves; attaching the remainder is work, not a ruling.
 
 429,405 words across `docs/`. ~570k tokens — more than half a 1M context before a line of the
 119,388 lines of Rust. And it is written *for an agent*: `BUILDER.md:1` is `# YOU ARE THE BUILDER`,
@@ -7072,7 +7124,7 @@ macOS *"has never been run"* and its job *"has not yet gone green"* for **eleven
 commits** after `history.md` recorded the green run — four lines under a sentence about exactly
 that failure. The `62` beside it was right the whole time, because a test asserts it. *Where this
 corpus is checked it is true, and where it is prose it is not.* (That paragraph is corrected as of
-this entry; the pattern it demonstrates is what `Y19` is about.)
+this entry; the pattern it demonstrates is what `Y21` is about.)
 
 **What was built rather than proposed**, because it needs no ruling and deletes nothing:
 
@@ -7104,12 +7156,35 @@ the test that enforces them, or retired.
 
 ---
 
-## Y20
+## Y22
 
-**Status: OPEN — raised 2026-08-07 by `LX-4`.** Separable and small; blocks one backend
-conversion and nothing else.
+**Status: ANSWERED — raised 2026-08-07 by `LX-4`, ruled by the owner 2026-08-08.**
 
-**Y20 — `flatpak`'s scope is a boolean where the data path needs a value. Rename the key?**
+**Y22 — `flatpak`'s scope is a boolean where the data path needs a value. Rename the key?**
+
+**Ruled: answer 1, and there are no legacy users to migrate.** `[backend_settings.flatpak]` takes
+`scope = "user" | "system"`, defaulting to `system`, which is what flatpak itself does with
+neither flag. `user` is deleted, and **refused by name** — a config that still sets it gets a
+message naming `scope` rather than an install that silently goes machine-wide. That refusal is
+not a compatibility shim: it reads the key in order to reject it, and never to honour it.
+
+The scope is parsed once, at registration, into the existing `model::scope::Scope` — the same
+type and the same vocabulary as `@scope=` on `setting:`, `link:` and `shim:` (V.69), so there is
+one answer to "what does `user` mean" rather than a second one living in a backend. A value
+neither word is refused rather than defaulted, because falling back to `system` on a typo is the
+one outcome that installs for every account under a line asking for the opposite. Two call sites
+used to read the raw map and compare it to `"true"` separately — `scope_args` and `needs_root` —
+which is two chances to disagree about a string; there is now one field of type `Scope`.
+
+**This does not by itself convert flatpak, and the exemption stays.** What remains is `@channel`:
+`install_ref` builds the flatpak ref `name//channel`, and `ManagerConfig` has `VersionPin` for
+`@version` and no equivalent for `@channel`. The shape is identical — a `ChannelPin` with the
+same `Inline` / flag split would carry both flatpak's `name//branch` and snap's `--channel=`, and
+`get_dependencies`' `runtime=` read already fits `DependsProbe`'s `NameReader`. **The exemption's
+"optional remote" half was checked and is not a blocker**: no path in `flatpak.rs` passes a
+remote to `install`, so nothing in the code needs the name slot to hold one.
+
+The three answers as they were put, kept because the second one is the trap:
 
 `ManagerConfig` rows can now carry `{setting.KEY|DEFAULT}`, substituted at registration from
 `[backend_settings.<backend>]` — which is what took `conda` from 319 lines of hand-written Rust to
@@ -7121,18 +7196,13 @@ value it can substitute: `--{setting.scope|system}` where `scope` is `system` or
 cannot be written into a flag name without the placeholder growing a conditional form, and a
 template language in argv rows is how a data path stops being data.
 
-**This is a documented preferences key, so renaming it is user-visible and the owner's.** The three
-answers, in the order the owner's past rulings suggest:
-
-1. **`scope = "user" | "system"`, and `user` stops being read.** NO-LEGACY says the old key goes in
-   the same change, which means an existing `user = "true"` silently loses effect — the exact
-   silent-drift shape this repo removes. Mitigable by refusing `user` by name with a message that
-   says what to write instead, which is a refusal rather than a shim.
+1. **`scope = "user" | "system"`, and `user` stops being read.** ← taken. NO-LEGACY says the old
+   key goes in the same change, and the silent-drift risk that would create is answered by
+   refusing the old key by name.
 2. **Keep `user`, give the placeholder a conditional form.** Cheap today, and it is the first line
    of a template language nobody designed.
-3. **Leave flatpak hand-written.** It has a *second* blocker — it addresses applications by
-   reverse-DNS ID with an optional remote, which the name slot cannot hold alone — so answering
-   this one does not by itself convert it.
+3. **Leave flatpak hand-written.** Still true for now, for the `@channel` reason above — but that
+   is a mechanism to build, not a property of flatpak.
 
-The exemption in `backend_is_data_not_code_tests.rs` records the state either way; it names `Y20`
-so the entry and the gate cannot drift apart.
+The exemption in `backend_is_data_not_code_tests.rs` names `Y22` so the entry and the gate cannot
+drift apart; it now names `@channel` as the one blocker left.

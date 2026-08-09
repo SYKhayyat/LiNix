@@ -3673,6 +3673,18 @@ at all. The scanner skips exactly one file, `tests/named_commands_exist_tests.rs
 a gate that asserts a string is absent must spell the string out; it is skipped by `file!()`
 rather than by a path literal, and a test asserts the file would otherwise have been read.
 
+**Why `docs/` is checked against a weaker property, and checked at all.** *(Owner ruling,
+2026-08-08 — `Y18`.)* The first version of this gate left `docs/` out on the grounds that a
+record must stay free to name a command on the day it was deleted, which is true and is not a
+reason to leave 2.5 MB unread. The clause that makes both work: in `docs/`, a dead command has
+to be one II.17's Deleted register records as dead. A name that is neither live nor registered
+is a finding. Pointed there, 62 raw hits reduced to three, and all three were Part II itself —
+a sync nudge naming `linix clean` where the verb is `remove-orphans`, an `adopt` header naming
+`linix forget` where the code already wrote `linix unmanage`, and `shim`, deleted by II.16 and
+never entered in II.17. The register being incomplete is what let a **verified** bug in
+`bugs.md` go on describing a command nobody could run. **A weaker property that runs beats a
+strict one scoped to the files that happened to be open.**
+
 **Two findings in the same report were checked and one of them was wrong.** `F-2` reads
 `harness-logic-test.sh:553`'s `install.*` exemption as excusing the install scripts from
 subcommand validation, and calls it *"the argument for including it, written down as the reason

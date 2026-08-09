@@ -1,7 +1,10 @@
 use crate::verbs::perform_maintenance;
-use crate::verbs::plan::{approve_adapters, approve_exec_scripts, approve_generate_commands, build_and_write_locks, resolve_for_approval};
-use crate::verbs::sync::{enforce_policy, print_flight_plan};
+use crate::verbs::plan::{
+    approve_adapters, approve_exec_scripts, approve_generate_commands, build_and_write_locks,
+    resolve_for_approval,
+};
 use crate::verbs::prelude::*;
+use crate::verbs::sync::{enforce_policy, print_flight_plan};
 
 /// `absent` (II.8): every `absent:` line in force, and the module it comes from — what LiNix
 /// keeps OFF this machine, and where each rule is written. Read-only.
@@ -314,7 +317,7 @@ nix_gc_age = "30d"
 
 # Per-backend settings. Example: install flatpaks into the user scope.
 # [backend_settings.flatpak]
-# user = "true"
+# scope = "user"
 
 # ---------------------------------------------------------------------------
 # [guard] — the ten refusals (II.10). One table, one home.

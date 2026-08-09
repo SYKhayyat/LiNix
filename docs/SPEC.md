@@ -13,21 +13,14 @@ which point nobody could find a decision in it and 84 of them had no recorded an
 | [`spec/why.md`](spec/why.md) | V | The reason behind every Part II rule — each one the scar of a real bug. | **Before changing any Part II rule.** |
 | [`spec/plan.md`](spec/plan.md) | III + IV | The work in dependency order, each phase with its exit condition; then the proofs. | When picking up work. |
 | [`spec/bugs.md`](spec/bugs.md) | VI | Bugs killed by this design, and bugs carried forward. | Before building anything. |
-| [`spec/decisions.md`](spec/decisions.md) | — | **All 181 decisions. 170 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 3 BUILT NEVER RULED, 4 OPEN.** Counted, not typed — `scripts/decision-count.sh --check`. | Before proposing anything. |
-| [`spec/history.md`](spec/history.md) | VII | How far the work got, session by session. **The living truth** — every frozen status line drifts behind the tree. | After Part II, before touching anything. |
-| [`INEFFICIENCIES.md`](INEFFICIENCIES.md) | — | Every place in the tree slower than it has to be, and the disposition of all 47 — fixed, fixed by something else, or not done with the reason. | Before adding a fan-out, a cache, or a concurrency cap. |
-| [`spec/proposals/`](spec/proposals/) | VIII–XIII | Six features, all designed and all now ruled. Kept for the reasoning, not the questions. | When building one of them. |
+| [`spec/decisions.md`](spec/decisions.md) | — | **All 181 decisions. 171 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 3 BUILT NEVER RULED, 2 OPEN.** Counted, not typed — `scripts/decision-count.sh --check`. | Before proposing anything. |
+| [`attic/lessons.md`](attic/lessons.md) | — | Thirty-one lessons, each the residue of a shipped defect. For a person, once. | **Never.** It says so at the top, and it means agents. |
 
-**The proposals, and the decisions each one raised — every one of which is now ruled:**
-
-| part | file | decisions |
-|---|---|---|
-| VIII | [artifact selection and channels](spec/proposals/artifacts.md) | D1–D17 |
-| IX | [user-defined `when` variables](spec/proposals/vars.md) | W1–W14 |
-| X | [rebuild, caches, desktops, backup](spec/proposals/rebuild.md) | K1–K18 |
-| XI | [`firewall:`](spec/proposals/firewall.md) | N1–N7 |
-| XII | [secrets](spec/proposals/secrets.md) | T1–T7 |
-| XIII | [the next round](spec/proposals/next-round.md) | U1–U39 |
+**Parts VIII–XIII were proposal documents — artifacts and channels (`D1`–`D17`), `when`
+variables (`W1`–`W14`), rebuild and caches (`K1`–`K18`), `firewall:` (`N1`–`N7`), secrets
+(`T1`–`T7`) and the next round (`U1`–`U39`). Every one of those decisions is ruled and every
+rule they produced is in Part II, so the documents were deleted (`Y21`). The IDs still resolve:
+they are entries in the register.
 
 **Where the work stands (updated 2026-07-26).** Phases 0–6 are built and the container matrix
 (ubuntu/fedora/arch/alpine/tools) is green, run for real. **Phase 7 and the entire U-series
@@ -79,15 +72,12 @@ restore, D5's `dpkg -i`/`rpm -U` handoff, U30 storage removal — are argv-teste
 
 > **This paragraph was false for eleven days and 228 commits, and it sits four lines under a
 > sentence about exactly this.** It said macOS *"has never been run"* and that its job *"has not
-> yet gone green"*, while [`spec/history.md`](spec/history.md)'s 2026-07-27 entry recorded the
-> green run in the same repository. The `62` beside it was right the whole time, because
+> yet gone green"*, while the session record for 2026-07-27 — four lines further down the same
+> tree — had the green run in it. The `62` beside it was right the whole time, because
 > `tests/backend_count_matches_the_spec_tests.rs` asserts it against the code and this had
 > nothing. **Where this file is checked it is true, and where it is prose it is not** — so read
 > `23` as the weaker kind of claim, sourced from the harness's own Darwin canary rather than from
 > a gate, and go to the run before you quote it.
-
-The full assessment, with the numbers and the order to fix them in, is the first entry in
-[`spec/history.md`](spec/history.md).
 
 **For what remains to build and in what order, read the ordered list at the top of
 [`spec/plan.md`](spec/plan.md). It is the only list of build state** — the register says whether
@@ -97,9 +87,14 @@ what was built they disagreed for two days and the plan lost.
 Facts marked **(measured)** were verified against real containers or real code with a citation.
 Everything else is design.
 
-Supersedes [`docs/archive/AUDIT-v6.org`](archive/AUDIT-v6.org) — the audit that found all of this — except where
-[`spec/bugs.md`](spec/bugs.md) carries an item forward explicitly. Read the audit only for the
-underlying evidence: the measurements and the `file:line` citations behind each finding.
+Supersedes the v6 audit that found all of this, except where [`spec/bugs.md`](spec/bugs.md)
+carries an item forward explicitly.
+
+**Citations to `docs/archive/`, `spec/proposals/`, `spec/history.md` and `INEFFICIENCIES.md`
+name files this repository no longer has.** They were cut on 2026-08-08 (`Y21`); every one is in
+git, and `git log --diff-filter=D --name-only` finds the commit that removed it. The reasoning
+worth keeping from them is thirty-one lines in [`attic/lessons.md`](attic/lessons.md), which is
+not for agents to read.
 
 ---
 
@@ -148,8 +143,8 @@ already exists". You cannot implement this correctly from a summary.
    mechanism and the mechanism never run; `G-4` was closed with a mutation test its author
    watched go red and reopened two days later, same ID, same defect; *"a check that cannot
    fail"* appears in all seven grade rounds. **The finding was written down every time. Writing
-   it down is not the mechanism.** They are in `docs/archive/`, as a record of how the program
-   got here and not as instructions.
+   it down is not the mechanism.** Those twelve files were deleted on 2026-08-08 (`Y21`); they
+   were a record of how the program got here and never instructions.
 6. **Commit at every major step**, with a message that says what changed and what it does not
    yet do.
 7. **Check everywhere. We cannot afford bugs here.** This codebase's flagship bug ran

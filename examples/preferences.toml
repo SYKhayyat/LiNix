@@ -168,7 +168,7 @@ sh("systemctl start docker");
 
 # Backend-Specific Settings
 [backend_settings.flatpak]
-user = "true"
+scope = "user"
 
 [backend_settings.github]
 # token = "ghp_your_personal_access_token_for_higher_limits"

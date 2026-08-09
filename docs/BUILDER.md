@@ -14,17 +14,17 @@
 **Your job: raise LiNix to an A by writing code.** Work through the numbered work orders in this
 document, in tier order. Everything you need is here or named here.
 
-**Where the grade stands: C+ when this document was written, B− after round 5** — the ledger of
-how it moved is one file per round, `docs/GRADE-*.md`, newest last. **Start from the newest**:
-its §2 says which older orders are closed (do not re-open those) and its §3 is the specification
-for the newest tier at the bottom of this document. Round 6's orders are `B33`–`B43`.
+**Where the grade stands: C+ when this document was written, B− after round 5.** The per-round
+ledgers that recorded the movement — `docs/archive/GRADE-*.md` and the readiness reviews — were
+deleted on 2026-08-08 (`Y21`) along with the rest of the record corpus. They are in git, and
+every finding they raised was dispositioned into `docs/spec/bugs.md` and the register before they
+went. **This document's work orders still stand on their own; its citations to those files are
+provenance, not homework.**
 
 You are working in the LiNix repo at the path given to you. Start by reading, in this order:
 
-1. `docs/archive/READINESS-2026-07-27.md` **§5** (why the bugs cluster where they do) and **§8.1** (the
-   rubric you are being graded against). Do not skip these — they are why the work orders are
-   shaped the way they are.
-2. `CLAUDE.md` and `docs/SPEC.md` — the repo's binding rules.
+1. `CLAUDE.md` and `docs/SPEC.md` — the repo's binding rules.
+2. `docs/spec/bugs.md` — what is known broken and what was carried forward.
 3. This document, in full, before you touch anything.
 
 **You are not being asked to make the tests pass. You are being asked to make the checks capable

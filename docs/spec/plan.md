@@ -10,12 +10,12 @@ assets in a GitHub release, which blocks nothing here: it was parked on D5, D5 w
 built, and the entry went a week without anyone re-reading its condition. Detail for each item is
 in its Phase section below; this list is the sequence, not the spec.
 
-> **The previous version of this list was written from `history.md` and was wrong about six of
-> its eleven near-term items**, all in the same direction: it listed as unbuilt work that had
-> already shipped. **K2** (`51bd3b1`), **7c** (`ed0d996`), **7d** (`2060d4b`), **7n** (`c7dea64`)
+> **The previous version of this list was written from the session record and was wrong about
+> six of its eleven near-term items**, all in the same direction: it listed as unbuilt work that
+> had already shipped. **K2** (`51bd3b1`), **7c** (`ed0d996`), **7d** (`2060d4b`), **7n** (`c7dea64`)
 > and **7o** (`ca9466b`) were all committed on 2026-07-24 — *before* that list was written on
 > 2026-07-26 — and **T6** was sitting finished in the working tree. Two more were listed as
-> wholly unbuilt when they are half built (`7e`, `U31`). **`history.md` was 52 commits behind
+> wholly unbuilt when they are half built (`7e`, `U31`). **That record was 52 commits behind
 > when it was consulted**, and a list derived from a stale source is stale however carefully it
 > is reasoned. Every line below is re-derived from the tree by grep, with the file that proves it
 > named; **rule 9 applies to a build list exactly as it applies to a ✅.**
@@ -39,8 +39,7 @@ last, after the mechanism they ride is proven.
 
 **The register is at zero unbuilt items and that is not the same as ready.** These are not
 features and none of them is a decision; they are the things a first user would hit. Ordered by
-what blocks the next one. The reasoning and the measurements are the first entry in
-[`history.md`](history.md).
+what blocks the next one.
 
 0a. ~~**S33 — make CI green.** One test (`tests/feature_logic_tests.rs:90`) commits to a temp git
     repo and unwraps, so the suite passes only where a global git identity exists.~~ **FIXED

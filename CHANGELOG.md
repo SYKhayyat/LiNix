@@ -85,6 +85,16 @@ ask at all, ask in one breath.*
 
 ### Changed
 
+- **`[backend_settings.flatpak]` takes `scope = "user" | "system"`, not `user = "true"`**
+  (`Y22`). **Breaking: there is no fallback.** A row in the data-driven backend table substitutes
+  a settings *value* into argv (`--{setting.scope|system}`), and a boolean cannot be written into
+  a flag name without the placeholder growing a conditional — which is where a data path stops
+  being data. The old key is refused **by name**, with a message saying what to write, because a
+  `user = "true"` that silently stopped meaning anything would install for every account under
+  a line asking for the opposite. Scope is parsed once, at registration, through the same
+  `Scope` type as `@scope=` on `setting:`/`link:`/`shim:`; a value that is neither word is
+  refused rather than defaulted.
+
 - **`purge-unmanaged` is now `purge-undeclared`** (`Q31`). **Breaking: there is no alias.** The
   word `unmanaged` named two different sets on two screens of the same program — *what `adopt`
   would take* (1 package on the measured host) and *every installed package nothing declares*
@@ -111,6 +121,16 @@ ask at all, ask in one breath.*
   identical durations under that heading used to be the signature of a fully serialised run.
 
 ### Removed
+
+- **2.5 MB of specification, cut to 1.1 MB** (`Y21`, owner ruling): `docs/archive/` (twelve
+  grade rounds and readiness reviews), `docs/spec/proposals/` (six designs, all ruled and folded
+  into Part II), `docs/spec/history.md` (8,390 lines organised by *session*) and
+  `docs/INEFFICIENCIES.md` (an audit with every finding dispositioned). 17,900 lines. The rules,
+  their reasons and the rulings stay at full fidelity; what those files were *for* is thirty-one
+  lines in `docs/attic/lessons.md`, which opens by telling agents not to read it. All of it is in
+  git.
+- `Config::validate()` — a validation function with no callers anywhere, whose one rule
+  (`max_parallel > 0`) every one of its eleven consumers already enforces with `.max(1)`.
 
 - `AppCore`/`AppServices` — a dead thirteen-field duplicate of `App` with no references.
 - `PackageCache`/`SmartCache` — a TTL'd cache whose every accessor had zero callers. Replaced by

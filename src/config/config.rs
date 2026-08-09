@@ -844,13 +844,6 @@ impl Config {
         self.retention.snapshots.clone()
     }
 
-    pub fn validate(&self) -> Result<()> {
-        if self.max_parallel == 0 {
-            return Err(Error::Config("max_parallel must be greater than 0".into()));
-        }
-        Ok(())
-    }
-
     /// The `protected_packages` entry that protects `package_name`, or `None` if nothing does.
     ///
     /// **The rule, never a bool.** `is_protected` returned one, and its last caller — the

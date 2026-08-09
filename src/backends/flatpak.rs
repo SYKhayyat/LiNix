@@ -2,6 +2,7 @@ use crate::core::{
     BackendCore, CommandExecutor, Installable, MetadataProvider, Package, PackageSpec, Queryable,
     Result, Searchable, Upgradable,
 };
+use crate::model::scope::Scope;
 use crate::utils::text::sanitize;
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -11,32 +12,58 @@ use tracing::{debug, info};
 pub struct FlatpakBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
-    /// Backend-specific settings like default scope (user vs system).
-    pub settings: HashMap<String, String>,
+    /// Whose installation flatpak acts on. Parsed once at registration: two call sites reading
+    /// the raw map is two chances to disagree about what the string meant.
+    pub scope: Scope,
 }
 
 impl FlatpakBackendCore {
-    pub fn new(executor: CommandExecutor, settings: HashMap<String, String>) -> Self {
+    pub fn new(executor: CommandExecutor, scope: Scope) -> Self {
         Self {
             executor,
             name: "flatpak".to_string(),
-            settings,
+            scope,
         }
     }
 
     pub fn scope_args(&self) -> Vec<&str> {
-        if self
-            .settings
-            .get("user")
-            .map(|v| v == "true")
-            .unwrap_or(false)
-        {
-            vec!["--user"]
-        } else {
-            vec!["--system"]
+        match self.scope {
+            Scope::User => vec!["--user"],
+            Scope::System => vec!["--system"],
         }
     }
+
+    /// The `[backend_settings.flatpak]` block as a scope, or the message that says what to
+    /// write instead.
+    ///
+    /// `--user` and `--system` are a value, not a flag: the argv needs the word itself, which
+    /// is why the key is `scope` and not the boolean it used to be.
+    pub fn scope_from_settings(settings: Option<&HashMap<String, String>>) -> Result<Scope> {
+        let Some(settings) = settings else {
+            return Ok(FLATPAK_DEFAULT_SCOPE);
+        };
+        if settings.contains_key("user") {
+            return Err(crate::core::Error::Config(format!(
+                "`[backend_settings.flatpak]` sets `user`, which flatpak no longer reads. Write \
+                 `scope = \"user\"` or `scope = \"system\"` instead — the flag needs the word, \
+                 not a boolean. Default is `{FLATPAK_DEFAULT_SCOPE}`."
+            )));
+        }
+        let Some(written) = settings.get("scope") else {
+            return Ok(FLATPAK_DEFAULT_SCOPE);
+        };
+        Scope::parse(written).ok_or_else(|| {
+            crate::core::Error::Config(format!(
+                "`[backend_settings.flatpak]` has `scope = \"{written}\"`. Scope is {}. \
+                 Omitting it means `{FLATPAK_DEFAULT_SCOPE}`.",
+                Scope::vocabulary()
+            ))
+        })
+    }
 }
+
+/// What `flatpak` itself does when neither flag is passed.
+pub const FLATPAK_DEFAULT_SCOPE: Scope = Scope::System;
 
 #[async_trait]
 impl BackendCore for FlatpakBackendCore {
@@ -56,12 +83,8 @@ impl BackendCore for FlatpakBackendCore {
     }
 
     fn needs_root(&self) -> bool {
-        // If the 'user' setting is true, Flatpak does not need root privileges.
-        !self
-            .settings
-            .get("user")
-            .map(|v| v == "true")
-            .unwrap_or(false)
+        // A user-scoped install writes under `$HOME` and must not be run through sudo.
+        self.scope == Scope::System
     }
 }
 
@@ -135,7 +158,12 @@ impl Installable for FlatpakInstallable {
         Ok(())
     }
 
-    async fn remove(&self, names: &[String], sudo: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
+    async fn remove(
+        &self,
+        names: &[String],
+        sudo: bool,
+        _reaped: crate::app::sync::guard::Reaped,
+    ) -> Result<()> {
         if names.is_empty() {
             return Ok(());
         }
@@ -236,7 +264,8 @@ fn parse_flatpak_search(output: &str) -> Vec<Package> {
         }
         let mut p = Package::new(app_id, "flatpak");
         if let Some(desc) = cols.get(1).filter(|s| !s.is_empty()) {
-            p.properties.insert("description".to_string(), desc.to_string());
+            p.properties
+                .insert("description".to_string(), desc.to_string());
         }
         if let Some(ver) = cols.get(3).filter(|s| !s.is_empty()) {
             p.version = Some(ver.to_string());
@@ -282,12 +311,16 @@ pub fn register(
     exec: &CommandExecutor,
     cfg: &crate::config::Config,
 ) {
-    let settings = cfg
-        .backend_settings
-        .get("flatpak")
-        .cloned()
-        .unwrap_or_default();
-    let core = Arc::new(FlatpakBackendCore::new(exec.duplicate(), settings));
+    // A scope this backend cannot read is not a default to fall back on: `--system` where the
+    // user asked for `--user` installs for every account and needs root to do it.
+    let scope = match FlatpakBackendCore::scope_from_settings(cfg.backend_settings.get("flatpak")) {
+        Ok(scope) => scope,
+        Err(e) => {
+            tracing::warn!("flatpak: {e}");
+            return;
+        }
+    };
+    let core = Arc::new(FlatpakBackendCore::new(exec.duplicate(), scope));
     reg.register(Arc::new(
         crate::core::BackendCapabilities::builder(core.clone())
             .with_installable(Arc::new(FlatpakInstallable { core: core.clone() }))
@@ -327,6 +360,66 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             ..Default::default()
+        }
+    }
+
+    fn settings(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// Both spellings, the absent case, and the absent *block* — the argv difference is which
+    /// installation gets written, so a wrong answer here is a package installed for the wrong
+    /// people.
+    #[test]
+    fn every_way_of_writing_the_scope_reaches_the_argv() {
+        for (written, expect, flag) in [
+            (Some("user"), Scope::User, "--user"),
+            (Some("system"), Scope::System, "--system"),
+            (None, FLATPAK_DEFAULT_SCOPE, "--system"),
+        ] {
+            let block = written.map(|w| settings(&[("scope", w)]));
+            let scope = FlatpakBackendCore::scope_from_settings(block.as_ref()).unwrap();
+            assert_eq!(scope, expect, "scope = {written:?}");
+            let core = FlatpakBackendCore::new(CommandExecutor::new(false, false), scope);
+            assert_eq!(core.scope_args(), vec![flag]);
+            assert_eq!(
+                core.needs_root(),
+                scope == Scope::System,
+                "a user-scoped install writes under $HOME and must not ask for root"
+            );
+        }
+        assert_eq!(
+            FlatpakBackendCore::scope_from_settings(None).unwrap(),
+            FLATPAK_DEFAULT_SCOPE,
+            "no `[backend_settings.flatpak]` block at all"
+        );
+    }
+
+    /// The old boolean is refused by name rather than ignored: a `user = "true"` that silently
+    /// stopped meaning anything would install system-wide under a line asking for the opposite.
+    #[test]
+    fn the_boolean_this_key_used_to_be_is_refused_and_names_its_replacement() {
+        let err = FlatpakBackendCore::scope_from_settings(Some(&settings(&[("user", "true")])))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("scope = \"user\""), "{err}");
+
+        // Refused whatever it says — `user = "false"` meant `--system`, which is the default,
+        // and accepting it in silence would teach that the key still works.
+        assert!(
+            FlatpakBackendCore::scope_from_settings(Some(&settings(&[("user", "false")]))).is_err()
+        );
+    }
+
+    /// A scope nobody can parse is not a default to fall back on.
+    #[test]
+    fn a_scope_that_is_neither_word_is_refused() {
+        for bad in ["User", "SYSTEM", "machine", "global", "true", ""] {
+            let err = FlatpakBackendCore::scope_from_settings(Some(&settings(&[("scope", bad)])));
+            assert!(err.is_err(), "`scope = \"{bad}\"` was accepted");
         }
     }
 
@@ -373,10 +466,17 @@ mod tests {
             vfs,
             Arc::new(dashmap::DashMap::new()),
         );
-        let core = Arc::new(FlatpakBackendCore::new(exec, HashMap::new()));
+        let core = Arc::new(FlatpakBackendCore::new(exec, FLATPAK_DEFAULT_SCOPE));
 
         FlatpakInstallable { core: core.clone() }
-            .remove(&["org.gimp.GIMP".to_string()], false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"))
+            .remove(
+                &["org.gimp.GIMP".to_string()],
+                false,
+                crate::app::sync::guard::Reaped::for_reason(
+                    crate::app::sync::guard::GuardScope::Remove,
+                    "a unit test of the effector itself",
+                ),
+            )
             .await
             .unwrap();
         FlatpakSearchable { core: core.clone() }

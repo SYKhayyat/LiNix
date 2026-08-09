@@ -176,12 +176,11 @@ const HAND_WRITTEN: &[HandWritten] = &[
     },
     HandWritten {
         module: "flatpak.rs",
-        why: "addresses applications by reverse-DNS ID with an optional remote, which the name \
-              slot cannot hold alone. Its scope flag stopped being the second blocker when \
-              `{setting.KEY|DEFAULT}` landed for conda's `-n <env>` — but flatpak spells scope \
-              as the boolean `user = \"true\"`, where a row needs a value it can substitute into \
-              `--{setting.scope}`, and renaming a documented preferences key is the owner's \
-              (`Y20`).",
+        why: "`@channel` becomes part of the ref itself — `install_ref` writes `name//branch` — \
+              and `ManagerConfig` has `VersionPin` for `@version` with no equivalent for a \
+              channel. Scope stopped being the blocker when `Y22` renamed the key to \
+              `scope = \"user\"|\"system\"`, which a row can substitute as \
+              `--{setting.scope|system}`.",
         proof: "--system",
     },
     HandWritten {

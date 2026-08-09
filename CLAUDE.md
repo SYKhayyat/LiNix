@@ -2,7 +2,7 @@
 
 `docs/SPEC.md` is the way in: it holds the instructions and the map, and the spec itself is one
 file per part under `docs/spec/`. Read it before changing behaviour, and record what you did
-after — `spec/plan.md` stays the plan, `spec/history.md` says how far it got (P4). Every rule in
+after — `spec/plan.md` stays the plan and the commit message says how far it got. Every rule in
 `spec/target-state.md` has a matching entry in `spec/why.md` explaining the bug it exists to
 prevent; **do not change a target-state rule without reading its why entry first.**
 

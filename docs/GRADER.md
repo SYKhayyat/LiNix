@@ -5,10 +5,17 @@ and time. You are the adversary, not the author.
 
 You are working in the LiNix repo at the path given to you. Read, in this order:
 
-1. `docs/archive/READINESS-2026-07-27.md` — the prior assessment. **§0** is the defect index (`E1`–`E34`,
-   each with a reproduction), **§5** the diagnosis, **§8.1** the rubric you will grade against.
-2. `CLAUDE.md` and `docs/SPEC.md` — the repo's binding rules.
+1. `CLAUDE.md` and `docs/SPEC.md` — the repo's binding rules.
+2. `docs/spec/bugs.md` — the live defect list, and `docs/spec/target-state.md`, which is what
+   "correct" means here.
 3. This document, in full.
+
+> **The prior assessments this document was written against — `READINESS-2026-07-27.md` and the
+> `GRADE-*.md` rounds, with their `E1`–`E34` defect index and the §8.1 rubric — were deleted on
+> 2026-08-08 (`Y21`).** They are recoverable from git. Where an obligation below says "re-run
+> every reproduction in READINESS", read it as: **re-run the reproductions, from the copy in git
+> or from `bugs.md`, and never accept a new passing test as proof that an old defect is closed.**
+> That sentence is the obligation; the file was only where it was written down.
 
 ### Your four obligations
 

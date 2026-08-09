@@ -59,12 +59,12 @@
 //!
 //! The register is `target-state.md` II.17 *Deleted*, read as data rather than restated here —
 //! the same reason `grammar_table_matches_the_spec_tests.rs` reads `KEYWORDS` through the
-//! parser's accessors. A record keeps its freedom: `history.md` may write `linix doctor` as often
+//! parser's accessors. A record keeps its freedom: the register may write `linix doctor` as often
 //! as it likes, because II.17 says `doctor` is gone. What it may no longer do is name a command
 //! that is neither live nor recorded as dead — which is what a stale instruction looks like.
 //!
-//! `docs/archive/` is out: its own README says *"Nothing here is current"*, so it is a record of
-//! records and II.17 is under no obligation to explain it.
+//! `docs/attic/` is out. It holds one file, and its first line tells the reader not to read it;
+//! a gate reading it anyway would be the only thing in the tree that does.
 //!
 //! Also not covered: an argv built from `Command::new(env!("CARGO_BIN_EXE_linix"))`, which is
 //! argument-vector shaped rather than text shaped. Those run in the suite, so clap answers them
@@ -314,10 +314,10 @@ fn covered_files() -> Vec<PathBuf> {
     out
 }
 
-/// Every file under `docs/` that carries prose, except the archive.
+/// Every file under `docs/` that carries prose, except the attic.
 ///
-/// `docs/archive/README` states that nothing inside it is current. A register of what is deleted
-/// cannot be expected to account for a directory that has already declared itself out of date.
+/// `docs/attic/lessons.md` opens by telling every reader not to read it, and a scan that read it
+/// would be holding the one file in the tree to a rule the file exists to opt out of.
 fn documentation_files() -> Vec<PathBuf> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -326,7 +326,7 @@ fn documentation_files() -> Vec<PathBuf> {
         let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
         paths.sort();
         for p in paths {
-            if p.file_name().and_then(|n| n.to_str()) == Some("archive") {
+            if p.file_name().and_then(|n| n.to_str()) == Some("attic") {
                 continue;
             }
             if p.is_dir() {
@@ -338,7 +338,10 @@ fn documentation_files() -> Vec<PathBuf> {
     }
 
     let mut out = Vec::new();
-    walk(&Path::new(env!("CARGO_MANIFEST_DIR")).join("docs"), &mut out);
+    walk(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("docs"),
+        &mut out,
+    );
     out
 }
 
@@ -354,9 +357,10 @@ fn documentation_files() -> Vec<PathBuf> {
 /// taking every backticked path in the section is safe: a live name in this set changes nothing,
 /// because the surface answers for it first.
 fn deleted_register() -> BTreeMap<String, Vec<String>> {
-    let text =
-        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/spec/target-state.md"))
-            .expect("docs/spec/target-state.md should be readable");
+    let text = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/spec/target-state.md"),
+    )
+    .expect("docs/spec/target-state.md should be readable");
 
     let mut out = BTreeMap::new();
     let mut inside = false;
@@ -399,9 +403,11 @@ const NOT_AN_INVOCATION: &[(&str, &str)] = &[
     ),
     (
         "refresh",
-        "a verb proposed and declined (`proposals/next-round.md`: \"a named composition of \
-         existing verbs — `linix refresh` = `sync`\"). Never built, so never deleted; II.17 \
-         records what was removed, not what was turned down",
+        "a verb proposed and declined — \"a named composition of existing verbs: \
+         `linix refresh` = `sync`, then `upgrade`\". Never built, so never deleted; II.17 records \
+         what was removed, not what was turned down. The proposal document it came from was cut \
+         with the rest of the record corpus (`Y21`); the register's U-series entries are where \
+         the decision now lives",
     ),
 ];
 
@@ -412,23 +418,7 @@ const NOT_AN_INVOCATION: &[(&str, &str)] = &[
 /// a script this repo deleted, `config path` and `config edit` are sub-verbs, and `setup` is this
 /// gate's own catch quoted back in the session that fixed it. Every one is pinned to its line, so
 /// an exemption cannot drift onto a sentence that stopped being a record.
-const RECORDED_AS_ABSENT: &[(&str, usize, &str)] = &[
-    (
-        "docs/spec/history.md",
-        3371,
-        "\"they call the nonexistent `linix backends`\" — the sentence is the report",
-    ),
-    (
-        "docs/spec/history.md",
-        4769,
-        "\"**`linix config path` and `linix config edit` are deleted**, not deprecated\"",
-    ),
-    (
-        "docs/spec/history.md",
-        7464,
-        "this gate catching `linix setup` in a comment, quoted in the session that fixed it",
-    ),
-];
+const RECORDED_AS_ABSENT: &[(&str, usize, &str)] = &[];
 
 /// Part II naming a command the program does not have.
 ///
@@ -440,31 +430,15 @@ const RECORDED_AS_ABSENT: &[(&str, usize, &str)] = &[
 /// argument for pointing it at `docs/`. The list is asserted exact and shrink-only: closing one
 /// means deleting a line here, and nothing can be added without a build failure to argue about
 /// first.
-const PART_II_LOOKS_WRONG: &[(&str, &str, &str)] = &[
-    (
-        "clean",
-        "docs/spec/target-state.md:1316",
-        "the sync nudge prescribed as \"3 packages are now orphaned; run `linix clean`\". The \
-         live verb is `remove-orphans`. (`run=clean` on the same line is a schedule action, not a \
-         command, and is correct.)",
-    ),
-    (
-        "forget",
-        "docs/spec/target-state.md:1533",
-        "the header `adopt` is told to write into `modules/adopted.txt`. `app/adopt.rs:498` \
-         already writes `linix unmanage <backend>:<name>`, so the code is right and the rule is \
-         stale",
-    ),
-    (
-        "shim",
-        "docs/spec/target-state.md:2216",
-        "II.16's own table records `linix shim jq --source cargo:jq` becoming the line \
+const PART_II_LOOKS_WRONG: &[(&str, &str, &str)] = &[(
+    "shim",
+    "docs/spec/target-state.md:2217",
+    "II.16's own table records `linix shim jq --source cargo:jq` becoming the line \
          `shim:jq@source=cargo:jq` — so the command was deleted, and II.17's register does not \
          say so. The gap has a live cost: `bugs.md:76` still carries \"`linix shim --source` is \
          required, documented, and thrown away. **(verified)**\" as an open bug against a command \
          that does not exist, which is F4's failure a second time",
-    ),
-];
+)];
 
 fn scan() -> Vec<Invocation> {
     scan_files(covered_files())
@@ -685,16 +659,18 @@ fn the_deleted_register_is_the_specs_and_is_bounded() {
     );
     assert_eq!(
         PART_II_LOOKS_WRONG.len(),
-        3,
+        1,
         "this list is findings against the canonical spec, and it shrinks. If an owner ruled on \
          one, delete its line. If a new one appeared, the spec grew a stale instruction and that \
          is the thing to report — not the thing to record."
     );
     assert_eq!(
         RECORDED_AS_ABSENT.len(),
-        3,
+        0,
         "each entry claims a specific line is a record of a command's absence rather than an \
-         instruction to run it; that claim is read, not appended to"
+         instruction to run it; that claim is read, not appended to. All three lived in \
+         `history.md`, which `Y21` deleted — the sentences went with the file, so the exemptions \
+         went too rather than sitting here excusing nothing."
     );
 
     // Every finding must still be findable. An entry whose line was fixed without the entry being
