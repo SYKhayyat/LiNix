@@ -223,6 +223,14 @@ after which `also_removing` disappears.
 an unattended `watch` tick — which the file's own header calls "the dangerous one, because nobody is
 there to read a refusal" — is guarded and reported as `sync`. `GuardScope` is `Copy`. Pass it.
 
+**And the register makes this worse, not academic.** I checked `N7` expecting to find the watch path
+was report-only, which would have made the dead arm harmless. The opposite: **`N7` (ruled owner,
+2026-07-24) is *revert by default* on an unattended tick**, reporting instead only when the revert
+would close the session's own port. So the unreachable `"watch"` arm is not a branch waiting for a
+feature — it is the guard scope for a live, ruled, unattended path that closes ports with nobody
+watching, and it silently resolves to `Sync`. The ruling is what makes the string round-trip
+load-bearing.
+
 ### The test written for that exact promise asserts an enum's `as_str()`
 
 `tests/a_firewall_teardown_is_a_removal_tests.rs` opens with nineteen lines that diagnose the original
@@ -327,7 +335,20 @@ in the WAL.** It lives in `Transaction::history` (`:149`), in memory, and dies w
 works only when the process is still alive — which is exactly the case where re-running `sync` also
 works. For the case the WAL exists for, `heal` does not roll back at all; it replays forward.
 
-**This is a ruling, not a fix**, and it goes to you in *What I need from you*.
+**Then I checked the register, and the finding changed shape — for the better.** `U41` (ruled owner,
+2026-07-27) settles this: *"An upgrade is compensated by the old version, not by an uninstall… A
+rolled-back removal comes back pinned."* Both arms compensate, by ruling. So reinstating `nano` is
+**not a defect** — it is the owner's answer, and I was about to report a closed decision as a bug.
+
+What is a defect is what happened afterwards. `LX-3`'s fix (commit `e9a6ac4`, 2026-08-07) added
+`reconciling()` and changed the **install** arm to consult the manifest — a deliberate, correct,
+well-argued change that makes rollback stop un-converging the machine. It also **narrows `U41`'s
+ruling on one arm and leaves it standing on the other**, and the register still records `U41` as
+`ANSWERED` with no amendment. `CLAUDE.md` requires a ruling to ship in the commit that answers it;
+the mirror obligation — a commit that *changes behaviour a ruling covers reopens it* — was not met.
+
+So the finding is not "rollback is wrong." It is: **`U41` now has two answers in one function, and
+the register knows about neither.** That is a smaller finding and a more actionable one.
 
 ---
 
@@ -467,8 +488,12 @@ cache, and a torn file is a miss). Consequence: power loss after a sync leaves a
 unit while `registry.json` and the WAL, which went through `persist`, survive. `verbs/plan.rs:669`
 cites the false singleton as proof of a different claim.
 
-**13 · `Transaction::rollback`'s two arms encode different answers to "what does a failed sync leave
-behind"** — **ruling required**, see below.
+**13 · `LX-3` amended a closed ruling on one arm and the register was not told** — `rewrite`
+*(verified against the register)*. `U41` (2026-07-27) ruled that both rollback arms compensate;
+`reconciling()` (commit `e9a6ac4`) changed the install arm to consult the manifest instead, and
+`decisions.md` still records `U41` as `ANSWERED` unamended. Change: re-open `U41` with one sentence
+naming what `LX-3` changed, and rule which arm is now canonical. The code change may well be right —
+that is not what this finding is about.
 
 **14 · The smaller families** — each verified, each a one-liner:
 - `install.sh:9` documents `LINIX_BIN_DIR`; **the variable is read nowhere in the repo.** This is the
@@ -494,6 +519,155 @@ behind"** — **ruling required**, see below.
   `bundle.rs:75`) — and the first documents itself as *"the one place `--dry-run` becomes an editing
   mode, so no caller can decide it twice."* Dry-run is decided five ways across the satellites.
 - `setting.rs:361-378` — removing a `setting:x@scope=system` line resets the **user** key.
+
+---
+
+## Compaction — how to lose 8,000 lines and 98 link units without losing a single capability
+
+**The thesis, first, because it decides whether any of this is worth doing: compaction here is not a
+diet. It is the same act as the fix.** Every finding above is a second copy of something, and the
+second copy is always the one without the reasoning — `appimage.rs`'s missing mutex, `composer`'s
+missing banner-skip, `vscode`'s missing `list_installed`, `guard_scope`'s missing enum. So the
+question "how do I make this smaller" and the question "how do I stop shipping the same bug twice"
+have one answer, and the line count is just the receipt.
+
+Everything below preserves every verb, every backend, every statement kind, every reachable
+behaviour. Counts are measured, not estimated; where I am guessing, it says so.
+
+### A · The registry becomes the table it already is — **~2,400 lines**
+
+`registry.rs` non-test body is 2,765 lines: **46 `register_*` functions, 379 `: None,` lines**, 24
+hand-passed boolean triples that restate data three lines above them, and 22 registrars that spell
+out all 36 fields because `base_config` was written and the older half never converted.
+
+Ship `src/backends/builtin_backends.toml`, `include_str!`'d through `register_custom_backends`.
+**This is not a proposal, it is the pattern four smaller tables in this same directory already
+use** — and `setting_stores.toml:1` states the reason in its own header: *"an adapter mechanism the
+built-ins bypass is one nobody has tested."* The one table with 62 rows is the one that bypasses it.
+
+Capability cost: **zero**, and it is *capability-positive* — the winget/scoop `Upgradable` loss
+(finding 10) becomes unrepresentable, because the capability set is derived from the row rather than
+typed by hand beside it. `onboarder.rs:848-875` already does the derivation correctly for custom rows.
+
+Residue that stays Rust: ~200 lines of genuinely irreducible wiring plus the five shapes a row still
+cannot express (install conditional on a read; argv that is a program, not a template; removal that is
+a filesystem op informed by a query; a `PropertyProbe` reaching *into* JSON; per-package identity that
+includes the version).
+
+### B · The parser half of the data path — **~700 lines**
+
+`ParserSpec` (`onboarder.rs:70-105`) ships, is documented to third parties, is correctly fallible, and
+has **one reference in the tree, which is a comment**. Of ~40 installed/search readers, ~30 are
+expressible as a row today; two more arms (`FixedWidth{header_columns}`, `Tree{depth}`) take it to
+~35. The ten survivors are the interesting ones and stay.
+
+Add one column the current design lacks and this whole class closes: **`fixture`, required.** A parser
+that cannot be registered without bytes from its own tool is the only mechanism that would have
+prevented `ws_name_version` serving eight managers on helm's fixture alone.
+
+Free riders: `parsers/utils.rs` (50 lines, zero callers, containing a proud performance comment about
+a regex hoisted in a function nobody calls) and `parsers/pkgsrc.rs` (74 lines that now delegate to
+`bsd.rs` — the deletion landed halfway).
+
+### C · Three artifact downloaders become one — **~600 lines**
+
+`appimage.rs` is 471 lines whose own test header reads *"its removal is `web.rs`'s removal with the D5
+handoff taken out — same state file, same two deployed paths, same re-insert-on-failure rule."* The
+`remove()` routine is the same ~60 lines in `github.rs`, `web.rs` and `appimage.rs`. `pip_search.rs`
+(86) and `node_registry.rs` (105) are two HTTP search helpers exempted by name from the data ratchet,
+predating the `SearchSource` variant that was added for exactly them.
+
+Capability cost: **zero.** `appimage:`, `web:` and the two searches keep working; finding 8's
+re-download-forever bug dies with the duplicate, because there is then one identity rule.
+
+### D · The test suite: 99 link units → 1, and ~1,550 lines of copied harness — **~2,400 lines**
+
+`tests/` is 24,076 lines across **99 binaries**, each fat-LTO-linked against a 100k-line crate under
+`codegen-units = 1`. **36 of them never call the library API at all** — they only spawn
+`CARGO_BIN_EXE_linix` — and link it for nothing.
+
+- **`tests/main.rs` with `mod a_machine_converges;`** keeps every file, every filename-as-a-sentence,
+  every doc comment, and collapses 99 link units to one. Zero source lines deleted. The suite already
+  paid this cost once and wrote it down: `mock_providers/mod.rs:1-9` records a top-level
+  `mock_providers.rs` becoming *"a 716 KB binary containing zero tests… compiled nineteen times."*
+  The fix moved one file; the structural version moves ninety-nine.
+  *(I did not measure the wall-clock win — no builds were run. The structural claim is that three full
+  compilations of a 448-crate graph happen per CI leg and two of them do not need LTO.)*
+- **`tests/harness/mod.rs`** — the `Fixture` block is written **36 times**, ~25 lines each, and has
+  already drifted three ways. `HOME`/`USERPROFILE` is set in 2 of 36, and the file that sets it records
+  being **red on `ubuntu-latest` and `macos-latest` from the day it was committed**, green only where
+  the checkout happened to sit under `$HOME`. **~850 lines**, and it is the cheapest win in the repo.
+- **`tests/ledger/mod.rs`** — **13 files** carry a const exemption table and each re-implements the
+  same four assertions (every found site is in the table; every entry still names a real site; the
+  reason is longer than N chars; a floor so an empty scan cannot read as clean). One
+  `Ledger::audit(found, entries)` is **~700 lines**, and it would have prevented finding 4 outright,
+  because the helper would own the drive-your-own-predicate-over-planted-inputs step instead of leaving
+  it to be copy-pasted and dropped.
+- **Five subsumed binaries** — `dag_test` (155), `integration_test` (178), `e2e_tests` (216),
+  `shell_lifecycle_tests` (180), `help_map_tests` (162) = **891 lines**. Not blind deletion: fold
+  `dag_test:16-87`'s ordering check and `help_map`'s *every command appears in the map* into their
+  stronger siblings first, then delete. `e2e_tests` already concedes the point in
+  `a_machine_converges_tests.rs:4-6`.
+
+### E · Cross-cutting: one `confirm()`, one `Output` — **~300 lines**
+
+**12 sites** re-type the same three steps (`is_terminal` check → refusal naming `--yes` → `dialoguer`).
+`cleanup.rs:148-162` already *is* that function; it was extracted once and never reused. **25 files**
+read `config.dry_run`, with 17 hand-written `if dry_run { …preview…; return }` branches in `verbs/`
+alone, each writing its own "would" sentence — which is why a 614-line test binary has to exist to
+check they all remembered. `--json` is a per-subcommand `bool` on ten variants with ~15 hand-built
+`serde_json::json!` literals, and a 188-line test binary standing in for the missing
+`enum Output { Human, Json }`.
+
+Compacting these shrinks `dry_run_every_verb_tests.rs` and retires
+`json_output_is_a_document_tests.rs` — a test whose whole job is to be the type that isn't there.
+
+### F · Small, verified, no argument required — **~700 lines**
+
+`retention.rs` (244 lines) opens *"shared by the three histories LiNix keeps"*; two of the three were
+deleted, `select_deletions` has one caller, and `RetentionConfig` now wraps a single field. The
+`gated.rs` block walker (~120 of 208 lines) is the second of five implementations of brace-and-`when`
+handling. `utils/file.rs`'s three dead functions, `Journal::new` (zero callers — the *cause* of the
+733 KB test-pollution bug is still exported), `Journal::removals_of` (written for a call site that
+hand-rolls it instead), the second `Writes` enum, `md5`.
+
+### G · The review apparatus stops being shell — **~300 lines**
+
+Roughly 300 of `harness-logic-test.sh`'s 761 lines enforce invariants over YAML, Markdown and Rust by
+grepping them — gate parity, orphan scripts, function-defined-before-called, CRLF, floor mounts, image
+identity. Those belong beside the 27 Rust gates that already do exactly this, where they fail in
+`cargo test` instead of in CI. *Function defined before called* is ShellCheck `SC2218`, and **two files
+already carry `# shellcheck disable=` directives for a linter that nothing runs.**
+
+The half that lifts shell functions out of the harness and drives them (`:33-405`) is correct shell for
+a correct reason and stays — it is the only technique that tests what CI actually runs.
+
+### The total, honestly
+
+| | lines | capability lost |
+|---|---|---|
+| A registry as data | ~2,400 | none *(negative — closes finding 10 by construction)* |
+| B parser rows | ~700 | none |
+| C one downloader | ~600 | none *(closes finding 8)* |
+| D test harness + ledger + folds | ~2,400 | none *(98 fewer link units; closes finding 4)* |
+| E `confirm()` / `Output` | ~300 | none |
+| F verified dead / second copies | ~700 | none |
+| G shell → Rust | ~300 | none |
+| **total** | **~7,400** | **none** |
+
+Against `src/` at 99,794 and `tests/` at 24,076. **Roughly 6% of the tree, and it is the 6% that
+contains most of this document's findings** — which is the actual argument for doing it. Nothing here
+is "make it smaller because smaller is nicer"; every row is a place where one fact is written twice
+and the second copy has already been observed to be the stale one.
+
+**Sequencing matters more than the total.** Do D's ledger helper and the finding-4 oracle fixes first,
+because the gates you would use to verify A through C are, today, partly claims. Then A, because it is
+the largest and it makes B, C and finding 10 either trivial or impossible-to-reintroduce.
+
+**One thing I will not recommend compacting.** `docs/` is 19,020 lines, of which `decisions.md` is
+7,269 — and having now used the register to correct two of my own findings inside ten minutes
+(`N7`, `U41`), I withdraw any instinct to cut it. It is the only artifact in this repository that
+made a reviewer wrong on the record. `LX-6` already cut what was prose; what is left is load-bearing.
 
 ---
 
@@ -572,6 +746,16 @@ Stated because a review that only reports its survivors is not reporting its met
 - **A reviewer reported `snapshot_restore.rs:351` as an unguarded path that "reverts every managed
   package with no guard."** Wrong. `execute_restore` calls `snapshot_manager.restore(&id)` — a
   whole-filesystem rollback — and takes no package-removal path at all. No removal, no guard needed.
+- **I was one edit away from reporting a closed owner ruling as a defect.** The original draft of
+  finding 13 called `Transaction::rollback`'s removal arm anti-convergent and asked you to rule on it.
+  `U41` (2026-07-27) had already ruled it — *"a rolled-back removal comes back pinned"* — and I only
+  found that because you told me to check `docs/`. The finding survived in a smaller and better form
+  (the register was not amended when `LX-3` changed the other arm), but the version I would have
+  shipped without reading the register was wrong, and it would have been wrong in the most expensive
+  way available: asking the owner to re-decide something he had already decided.
+- **The same check made finding 2 stronger, which is the other half of the lesson.** I looked up `N7`
+  hoping the unattended watch path was report-only, which would have made the dead `"watch"` arm
+  harmless. It is *revert by default*. The register does not only kill findings.
 - **A reviewer reported `harness-logic-test.sh:507-513` as conceding it is superseded by a Rust test
   that was kept anyway — a NO LEGACY violation.** Misread. The comment declares a deliberate division
   of labour: the shell predicate answers for *gate scripts*, job-level parity is
@@ -583,19 +767,23 @@ Stated because a review that only reports its survivors is not reporting its met
 
 ## What I need from you
 
-1. **What does a failed sync leave behind?** (Finding 13.) The install arm says *converged* — keep what
-   succeeded and is still declared. The removal arm says *atomic* — put it back. Both cannot be right,
-   and `readme.md:765` says "Atomic transactions" while `reconciling()` says otherwise. My
-   recommendation is **convergent**: `auto_rollback: false` on the reconciling path, because a partial
-   sync is closer to converged than the state before it, re-running finishes the job, and it is the only
-   one of the two a *killed* process can also honour — which is the failure mode the WAL exists for.
-   That deletes ~180 lines including the whole `Prior` capture and the per-package `info()` before every
-   batch. But it is a behaviour a user notices, so it is yours.
+1. **`U41` needs re-opening, not re-deciding.** (Finding 13.) You ruled on 2026-07-27 that both
+   rollback arms compensate. `LX-3` changed the install arm four days ago and the register was not
+   amended. The question is one sentence: **does `reconciling()` extend to the removal arm, or is the
+   asymmetry deliberate?** My recommendation is that it cannot — a removal's target is by definition
+   absent from the declared set, so there is nothing for that arm to consult — which means the honest
+   options are *keep the asymmetry and write down why*, or *drop `auto_rollback` on the reconciling
+   path entirely* (convergent: a partial sync is closer to converged than the state before it, and it
+   is the only answer a killed process can also honour, which is the failure mode the WAL exists for).
+   The second deletes ~180 lines including the whole `Prior` capture. Either way `U41` gets a line.
 
-2. **Is closing an undeclared port a removal, and does it count against `max_removals`?** This was
-   asked on 2026-08-07 and is still open. Finding 1 cannot be fixed without it: a `Reaping` accumulator
-   makes ten open ports and one `firewall:` line hit the default ceiling of 20 immediately. The
-   hardcoded `0` is currently answering this question by accident.
+2. **Is closing an undeclared port a removal, and does it count against `max_removals`?** I searched
+   the register: `N1`–`N7` settle exclusivity, restoration, SSH lockout, dual ownership and the
+   unattended tick. **None of them asks whether a closed port is countable.** It is not an unanswered
+   decision — it is an unasked one, and it is the only thing blocking finding 1. A `Reaping`
+   accumulator makes ten open ports and one `firewall:` line hit the default ceiling of 20
+   immediately. The hardcoded `0` at `apply/firewall.rs:151` is currently answering it by accident,
+   and `N7`'s *revert by default on an unattended tick* is what makes the accident load-bearing.
 
 3. **What is the next feature?** Half of what makes a design wrong is the change it's about to face, and
    that is not in the repo. If the answer is more statement kinds, finding 5 is where the next bug is:
@@ -634,9 +822,15 @@ Nothing here removes a capability. Items 1–4 are under a day, together.
 7. **The dispatch types** (findings 5 and 11) — `ResourceKind` instead of `&str`, `ExtraKey` instead of
    nine `split_once(':')`. After these, an 11th resource kind costs a compile error instead of a
    `warn!`.
-8. **Then the two structural ones with no deadline and a rising price:** the parser data path (lens 1 —
-   `ParserSpec` has one reference in the tree and it is a comment), and the plan/differ split in
-   `planner.rs`, which is where the co-change signal actually points.
-9. **And the free ones whenever:** `[profile.ci]` without fat LTO, `matrix.target` in the cache key,
-   ShellCheck in CI for the 7,133 lines of shell that already carry its suppression comments, and
-   `LINIX_BIN_DIR` either implemented or deleted from the file users pipe from the internet.
+8. **Amend `U41`** (finding 13) — one sentence in the register naming what `LX-3` changed. Free, and
+   it is the difference between a ruling and a ruling nobody can trust.
+9. **Then compaction D and A, in that order** — the shared test harness and ledger helper first
+   (~2,400 lines, and it is what makes every gate below it trustworthy), then the registry as a TOML
+   table (~2,400 lines, and it closes finding 10 by construction). These two are half the compaction
+   total and they are the two that make the rest cheap.
+10. **Then the structural ones with no deadline and a rising price:** compaction B (the parser data
+    path — `ParserSpec` has one reference in the tree and it is a comment), compaction C, and the
+    plan/differ split in `planner.rs`, which is where the co-change signal actually points.
+11. **And the free ones whenever:** `[profile.ci]` without fat LTO, `matrix.target` in the cache key,
+    ShellCheck in CI for the 7,133 lines of shell that already carry its suppression comments, and
+    `LINIX_BIN_DIR` either implemented or deleted from the file users pipe from the internet.
