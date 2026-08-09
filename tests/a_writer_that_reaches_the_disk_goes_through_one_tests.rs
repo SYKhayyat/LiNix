@@ -19,6 +19,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use crate::ledger::Ledger;
+
 /// The files allowed to hold a rename-into-place of their own, and why.
 ///
 /// Two entries, and they are the two front doors:
@@ -112,38 +114,17 @@ fn repo_root() -> PathBuf {
 fn only_the_two_sanctioned_writers_rename_a_file_into_place() {
     let (found, scanned) = files_that_rename(&repo_root());
 
-    // A scan that reads nothing is not a clean scan.
-    assert!(
-        scanned > 100,
-        "only {scanned} source files were read; the walk is looking in the wrong place"
-    );
-    assert!(
-        !found.is_empty(),
-        "no rename-into-place was found at all, which means the predicate has stopped matching"
-    );
-
-    let allowed: BTreeSet<String> = MAY_RENAME.iter().map(|(f, _)| f.to_string()).collect();
-    let extra: Vec<&String> = found.difference(&allowed).collect();
-    assert!(
-        extra.is_empty(),
-        "these files write to the disk through a rename of their own: {extra:?}\n\
-         Use `utils::file::persist` (the config repo, preview-aware) or \
-         `CommandExecutor::write_atomic`/`write_secret` (the machine, VFS-aware). Both go \
-         through `durable_write`, which flushes and fsyncs before the rename — the three steps \
-         two of the four hand-rolled copies were missing."
-    );
-
-    // And the allowance does not outlive its subject: an entry naming a file that no longer
-    // renames anything is a permission granted to nothing, reading as if it guards something.
-    let stale: Vec<&String> = allowed.difference(&found).collect();
-    assert!(
-        stale.is_empty(),
-        "MAY_RENAME allows {stale:?}, which no longer renames a file into place — drop the entry"
-    );
-
-    for (_, reason) in MAY_RENAME {
-        assert!(reason.len() > 60, "an allowance with no reason is a hole");
-    }
+    Ledger::of("a rename into place of their own", "MAY_RENAME")
+        .pairs(MAY_RENAME)
+        .scanning_at_least(100)
+        .reason_of_at_least(60)
+        .remedy(
+            "Use `utils::file::persist` (the config repo, preview-aware) or \
+             `CommandExecutor::write_atomic`/`write_secret` (the machine, VFS-aware). Both go \
+             through `durable_write`, which flushes and fsyncs before the rename — the three \
+             steps two of the four hand-rolled copies were missing.",
+        )
+        .audit(scanned, &found);
 }
 
 /// **The oracle.** The predicate is driven over planted lines, so a scan that has stopped

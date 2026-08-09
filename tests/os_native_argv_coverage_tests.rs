@@ -18,7 +18,10 @@
 //! registrars on every run and makes a new one fail until someone either gives it a row or
 //! writes down why it cannot have one.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+
+use crate::ledger::{Entry, Ledger};
 
 fn repo_root() -> PathBuf {
     // Compile-time, not the working directory: a test that reads `./src` passes or fails
@@ -182,38 +185,11 @@ fn every_registrar_has_an_argv_row_or_a_written_reason() {
 
     let table = argv_table(&src);
 
-    let mut missing: Vec<String> = Vec::new();
-    for r in &defined {
-        if mentions(table, r) || NO_ROW.iter().any(|n| n.registrar == r) {
-            continue;
-        }
-        missing.push(r.clone());
-    }
-
-    assert!(
-        missing.is_empty(),
-        "these registrars have no row in the argv table and no written reason:\n    {}\n\n\
-         Give each one a row — the table is what makes a typo in an install or remove verb \
-         visible on a platform that cannot run the manager — or add it to NO_ROW with the \
-         reason it cannot have one.",
-        missing.join("\n    ")
-    );
-
-    // An exemption for a registrar that no longer exists is an exemption nobody re-read.
-    let stale: Vec<&str> = NO_ROW
-        .iter()
-        .filter(|n| !defined.iter().any(|d| d == n.registrar))
-        .map(|n| n.registrar)
-        .collect();
-    assert!(
-        stale.is_empty(),
-        "NO_ROW names registrars that no longer exist: {stale:?}"
-    );
-
-    // An exemption for a registrar that HAS a row is a contradiction, and the contradiction
-    // survives silently: the loop above takes the row and never reads the reason. `helm` was
-    // exempt on the grounds that a row "would pass on the remove alone", which stopped being
-    // true the moment rows could carry options — and nothing would have said so.
+    // **Before the ledger, because the ledger's stale check would pre-empt this one with a
+    // vaguer sentence.** A registrar with BOTH a row and an exemption saying it cannot have one
+    // is a contradiction that survives silently: the scan takes the row and never reads the
+    // reason. `helm` was exempt on the grounds that a row "would pass on the remove alone",
+    // which stopped being true the moment rows could carry options, and nothing said so.
     let contradicted: Vec<&str> = NO_ROW
         .iter()
         .filter(|n| mentions(table, n.registrar))
@@ -227,16 +203,23 @@ fn every_registrar_has_an_argv_row_or_a_written_reason() {
          reads as considered."
     );
 
-    // The reason is the exemption. A blank one is a backend nobody looked at wearing the
-    // costume of one somebody did.
-    for n in NO_ROW {
-        assert!(
-            n.why.len() > 40,
-            "{}'s exemption has no reason worth the name: {:?}",
-            n.registrar,
-            n.why
-        );
-    }
+    let rowless: BTreeSet<String> = defined
+        .iter()
+        .filter(|r| !mentions(table, r))
+        .cloned()
+        .collect();
+
+    Ledger::of("a registrar with no row in the argv table", "NO_ROW")
+        .exempting(NO_ROW.iter().map(|n| Entry {
+            site: n.registrar,
+            why: n.why,
+        }))
+        .scanning_at_least(30)
+        .remedy(
+            "Give each one a row — the table is what makes a typo in an install or remove verb \
+             visible on a platform that cannot run the manager.",
+        )
+        .audit(defined.len(), &rowless);
 }
 
 /// A gate that has never failed is a claim, not a check.

@@ -5453,3 +5453,34 @@ The lesson is the one the repository keeps relearning and is worth stating as a 
 technique: **a de-duplication is only safe when the things being merged have been shown to be
 identical, one at a time.** Sixteen functions with the same name and shape are not sixteen copies
 of one function until somebody has read all sixteen.
+
+**V.170 — Why the four assertions had to stop being nine copies, and what stayed behind.**
+
+The bug this prevents is `S48` seen from the supply side. Three gates asserted over a walk whose
+predicate had stopped matching, found nothing, and reported clean — and the reason all three
+were written that way is that the floor is the one assertion of the four you can omit without the
+gate looking wrong. Unexplained-sites and stale-entries both have an obvious failure mode a
+reader imagines while writing them. *The walk read enough files to mean anything* has none: it
+guards a state the author has never seen, so it is the line that does not get typed on copy nine.
+
+Concentrating the four is what makes the omission impossible rather than unlikely, and it is why
+`Ledger::audit` panics on a floor of zero instead of treating it as *no floor requested*. A
+permissive shared helper would be strictly worse than nine copies: it fails nine gates at once,
+and it fails them silently, because a delegated assertion looks identical to a working one at the
+call site. So the helper has an oracle of its own, and each of the four is driven over a planted
+input built to violate it and watched to panic.
+
+**What was deliberately left alone matters as much.** Four tables have the same `&[(&str, &str)]`
+shape and are not exemption tables: one accounts for every mutation site rather than excusing
+any, one lists patterns that must appear exactly once, one is a classification with no scan
+behind it, and one pins its entries to file and line. Converting those would have produced a
+larger diff and a smaller amount of truth. The rule is that a helper is for the assertions that
+are the same, not for the tables that look the same.
+
+**And the assertions a shared helper cannot make stay at the site.** `os_native_argv`'s check
+that an exemption does not contradict a row three lines below it is the `helm` case — exempt
+on the grounds that a row *“would pass on the remove alone”*, which stopped being true
+the moment rows could carry options, with nothing to say so. The ledger's stale check would catch
+it, and would report it as *“no longer has no row”*, which sends the reader to the
+wrong place. So it runs first, with a line saying why. That ordering is the general form: where a
+site knows more than the helper, the site asserts first and the helper cleans up behind it.

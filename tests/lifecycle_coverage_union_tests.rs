@@ -19,6 +19,8 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use crate::ledger::{Entry, Ledger};
+
 fn read(rel: &str) -> String {
     let p: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel);
     std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("cannot read {}: {e}", p.display()))
@@ -276,24 +278,21 @@ fn every_backend_is_reachable_somewhere_or_named_as_unreachable() {
         .filter(|b| !covered.contains(**b))
         .map(|b| b.to_string())
         .collect();
-    let named: BTreeSet<String> = NOWHERE.iter().map(|n| n.backend.to_string()).collect();
 
-    let unexplained: Vec<&String> = uncovered.difference(&named).collect();
-    assert!(
-        unexplained.is_empty(),
-        "these backends have no canary in EITHER harness and no written reason they cannot have \
-         one: {unexplained:?}\n\nQ4: a backend with no real lifecycle in an automated gate is a \
-         release blocker, not a caption. Give it a canary, or add it to NOWHERE with a reason \
-         that is an impossibility rather than a cost."
-    );
-
-    let stale: Vec<&String> = named.difference(&uncovered).collect();
-    assert!(
-        stale.is_empty(),
-        "NOWHERE names backends that ARE reachable now — delete the entry and lower \
-         NOWHERE_CEILING to {}: {stale:?}",
-        uncovered.len()
-    );
+    Ledger::of(
+        "without a canary in EITHER harness",
+        "NOWHERE (and lower NOWHERE_CEILING with it)",
+    )
+    .exempting(NOWHERE.iter().map(|n| Entry {
+        site: n.backend,
+        why: n.why,
+    }))
+    .scanning_at_least(40)
+    .remedy(
+        "Q4: a backend with no real lifecycle in an automated gate is a release blocker, not a \
+         caption. Give it a canary, or write a reason that is an impossibility rather than a cost.",
+    )
+    .audit(UNIVERSE.len(), &uncovered);
 
     assert!(
         uncovered.len() <= NOWHERE_CEILING,
@@ -302,15 +301,11 @@ fn every_backend_is_reachable_somewhere_or_named_as_unreachable() {
     );
 }
 
+/// The half [`Ledger`] cannot check: an exemption for something that is not a backend at all.
+/// Its stale check would report it as "reachable now", which is the opposite of true.
 #[test]
-fn every_exemption_gives_a_reason_and_not_a_cost() {
+fn every_exemption_names_a_backend() {
     for n in NOWHERE {
-        assert!(
-            n.why.len() > 40,
-            "{}'s exemption has no reason worth the name: {:?}",
-            n.backend,
-            n.why
-        );
         assert!(
             UNIVERSE.contains(&n.backend),
             "{} is exempted and is not a backend",

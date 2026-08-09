@@ -18,8 +18,11 @@
 use dashmap::DashMap;
 use linix::core::executor::MockExecutor;
 use linix::core::CommandExecutor;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use crate::ledger::Ledger;
 
 fn coloured() -> String {
     // A bold name, a reset, a CRLF line ending, and a trailing blank line: what a manager
@@ -82,7 +85,7 @@ async fn search_output_hands_the_parser_clean_text() {
 #[test]
 fn no_raw_stdout_read_escapes_the_rule() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut raw: Vec<String> = Vec::new();
+    let mut raw: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut files_seen = 0usize;
 
     visit(&root, &mut |path, src| {
@@ -92,32 +95,23 @@ fn no_raw_stdout_read_escapes_the_rule() {
             .unwrap_or(path)
             .to_string_lossy()
             .replace('\\', "/");
-        raw.extend(raw_reads_in(&rel, src));
+        let hits = raw_reads_in(&rel, src);
+        if !hits.is_empty() {
+            raw.insert(rel, hits);
+        }
     });
 
-    // A scan that reached no files reports nothing raw, which reads exactly like a clean tree.
-    assert!(
-        files_seen > 100,
-        "the scan visited {files_seen} files under src/ — it is not reaching the tree, so its \
-         silence means nothing"
-    );
-
-    assert!(
-        raw.is_empty(),
-        "these read a command's stdout without sanitizing it:\n    {}\n\n\
-         Read through `CommandExecutor::run_output`/`search_output`, which sanitize, or wrap the \
-         read in `crate::utils::text::sanitize`. If the bytes are a FILE rather than a report, \
-         add the site to ALLOWED with the reason — that is the one case where sanitizing is \
-         wrong, because trimming a file changes it.",
-        raw.join("\n    ")
-    );
-
-    for (site, why) in ALLOWED {
-        assert!(
-            why.len() > 40,
-            "{site}'s exemption has no reason worth the name: {why:?}"
-        );
-    }
+    let found: BTreeSet<String> = raw.keys().cloned().collect();
+    Ledger::of("reading a command's stdout without sanitizing it", "ALLOWED")
+        .pairs(ALLOWED)
+        .scanning_at_least(100)
+        .detailing(|site| raw.get(site).map(|lines| lines.join("\n        ")))
+        .remedy(
+            "Read through `CommandExecutor::run_output`/`search_output`, which sanitize, or wrap \
+             the read in `crate::utils::text::sanitize`. If the bytes are a FILE rather than a \
+             report, that is the one case where sanitizing is wrong — trimming a file changes it.",
+        )
+        .audit(files_seen, &found);
 }
 
 /// Does this line read a command's stdout without sanitizing it?
@@ -135,6 +129,10 @@ fn is_raw_stdout_read(line: &str) -> bool {
 }
 
 /// Every unsanitized stdout read in one file, as `path:line: source`.
+///
+/// **`ALLOWED` is not consulted here.** A finding set with the excused files already removed
+/// cannot tell a live exemption from a dead one; that subtraction belongs to [`Ledger`], which
+/// does it in both directions.
 fn raw_reads_in(rel: &str, src: &str) -> Vec<String> {
     let mut raw = Vec::new();
     for (n, line) in src.lines().enumerate() {
@@ -146,11 +144,7 @@ fn raw_reads_in(rel: &str, src: &str) -> Vec<String> {
         if !is_raw_stdout_read(line) {
             continue;
         }
-        let site = format!("{rel}:{}", n + 1);
-        if ALLOWED.iter().any(|(s, _)| site.starts_with(s)) {
-            continue;
-        }
-        raw.push(format!("{site}: {}", line.trim()));
+        raw.push(format!("{rel}:{}: {}", n + 1, line.trim()));
     }
     raw
 }
@@ -234,9 +228,20 @@ fn the_raw_read_scan_can_actually_fail() {
         );
     }
 
-    // And the exemption mechanism itself: the same offender, in the one file ALLOWED excuses.
+    // And the exemption mechanism itself: the same offender, in the one file ALLOWED excuses,
+    // is found by the scan and subtracted by the ledger. Both halves matter — a scan that stops
+    // finding it cannot notice when the exemption goes stale.
+    let excused: BTreeSet<String> = ["src/core/git.rs".to_string()].into_iter().collect();
+    assert_eq!(
+        raw_reads_in("src/core/git.rs", offender).len(),
+        1,
+        "the scan must still see the excused site; ALLOWED subtracts it, the walk does not"
+    );
     assert!(
-        raw_reads_in("src/core/git.rs", offender).is_empty(),
-        "ALLOWED did not excuse the site it names, so the exemption list is not being consulted"
+        Ledger::of("planted", "ALLOWED")
+            .pairs(ALLOWED)
+            .unexplained_in(&excused)
+            .is_empty(),
+        "ALLOWED did not excuse the file it names, so the exemption list is not being consulted"
     );
 }

@@ -23,6 +23,8 @@
 
 use std::collections::BTreeSet;
 
+use crate::ledger::Ledger;
+
 /// Managers whose `upgrade_args` is not an upgrade-everything verb. Each entry is a decision,
 /// and the reason is the whole point of the entry.
 const EXEMPT: &[(&str, &str)] = &[
@@ -78,17 +80,16 @@ fn registers(body: &str, capability: &str) -> bool {
 }
 
 /// The registrations whose config promises an upgrade-all verb and whose builder does not
-/// deliver one — minus the ones a human has explained.
-fn losses(src: &str) -> Vec<String> {
-    let exempt: BTreeSet<&str> = EXEMPT.iter().map(|(name, _)| *name).collect();
+/// deliver one.
+///
+/// **The exemptions are not filtered out here.** A finding set with the excused sites already
+/// removed cannot tell a live exemption from a dead one — that subtraction belongs to
+/// [`Ledger`], which does it in both directions.
+fn losses(src: &str) -> BTreeSet<String> {
     register_fns(src)
         .into_iter()
         .filter(|(_, body)| body.contains("BackendCapabilities::builder"))
-        .filter(|(name, body)| {
-            declares_list(body, "upgrade_args")
-                && !registers(body, "upgradable")
-                && !exempt.contains(name.as_str())
-        })
+        .filter(|(_, body)| declares_list(body, "upgrade_args") && !registers(body, "upgradable"))
         .map(|(name, _)| name)
         .collect()
 }
@@ -105,51 +106,38 @@ fn registry_source() -> String {
 fn a_manager_that_says_how_to_upgrade_everything_is_upgradable() {
     let src = registry_source();
 
-    // A scan over an empty set is not a clean scan. `registry.rs` builds every built-in, and if
-    // this ever finds fewer than a dozen it is reading the wrong file or the wrong shape.
     let scanned = register_fns(&src)
         .into_iter()
         .filter(|(_, body)| body.contains("BackendCapabilities::builder"))
         .count();
-    assert!(
-        scanned >= 15,
-        "only {scanned} registrations were scanned; the extractor has stopped matching"
-    );
 
-    let losses = losses(&src);
-    assert!(
-        losses.is_empty(),
-        "these managers declare an upgrade-all verb and are not registered `Upgradable`, so \
-         `linix upgrade` skips them without saying so: {losses:?}\n\
-         Either add `.with_upgradable(Arc::new(GenericUpgradable {{ core: core.clone() }}))`, \
-         or add the manager to EXEMPT in this file with the sentence explaining why its \
-         `upgrade_args` is not an upgrade-all."
-    );
+    Ledger::of(
+        "declaring an upgrade-all verb without registering `Upgradable`",
+        "EXEMPT",
+    )
+    .pairs(EXEMPT)
+    .scanning_at_least(15)
+    .reason_of_at_least(60)
+    .remedy(
+        "`linix upgrade` skips them without saying so. Add \
+         `.with_upgradable(Arc::new(GenericUpgradable { core: core.clone() }))`.",
+    )
+    .audit(scanned, &losses(&src));
 }
 
-/// Every exemption names a registration that exists and still needs exempting.
+/// The one thing [`Ledger`] cannot know: an exemption naming a registration that is not there.
 ///
-/// An exemption for a manager that has since been registered `Upgradable`, or renamed, is a
-/// line that silences nothing and reads as if it does.
+/// Its stale check would catch a rename too, but it would report it as *"no longer declares an
+/// upgrade-all verb"* — which sends the reader looking at `upgrade_args` for a function that
+/// does not exist.
 #[test]
 fn no_exemption_outlives_the_thing_it_exempts() {
-    let src = registry_source();
-    let fns = register_fns(&src);
+    let fns = register_fns(&registry_source());
     for (name, reason) in EXEMPT {
-        let Some((_, body)) = fns.iter().find(|(n, _)| n == name) else {
-            panic!("EXEMPT names `{name}`, which is not a registration in registry.rs");
-        };
         assert!(
-            declares_list(body, "upgrade_args"),
-            "`{name}` no longer declares `upgrade_args`, so its exemption is dead: {reason}"
-        );
-        assert!(
-            !registers(body, "upgradable"),
-            "`{name}` is registered `Upgradable` now — drop its exemption: {reason}"
-        );
-        assert!(
-            reason.len() > 60,
-            "`{name}`'s exemption has no explanation, which is the thing being exempted"
+            fns.iter().any(|(n, _)| n == name),
+            "EXEMPT names `{name}`, which is not a registration in registry.rs — it was renamed \
+             or deleted, and its exemption now silences nothing: {reason}"
         );
     }
 }
@@ -214,10 +202,10 @@ fn register_not_a_backend(reg: &mut BackendRegistry) {
 ";
     assert_eq!(
         losses(planted),
-        vec![
-            "register_liar".to_string(),
-            "register_from_base".to_string()
-        ],
+        ["register_from_base", "register_liar"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<BTreeSet<String>>(),
         "the scan missed a planted offender, or invented one"
     );
 
@@ -238,17 +226,9 @@ fn register_not_a_backend(reg: &mut BackendRegistry) {
     assert!(registers(&body("register_honest"), "upgradable"));
     assert!(!registers(&body("register_liar"), "upgradable"));
 
-    // And an exemption really does silence one.
-    let exempt: BTreeSet<&str> = ["register_liar"].into_iter().collect();
-    let remaining: Vec<String> = register_fns(planted)
-        .into_iter()
-        .filter(|(_, b)| b.contains("BackendCapabilities::builder"))
-        .filter(|(n, b)| {
-            declares_list(b, "upgrade_args")
-                && !registers(b, "upgradable")
-                && !exempt.contains(n.as_str())
-        })
-        .map(|(n, _)| n)
-        .collect();
+    // And an exemption really does silence one — through the same subtraction the live gate uses.
+    let remaining = Ledger::of("planted", "EXEMPT")
+        .pairs(&[("register_liar", "")])
+        .unexplained_in(&losses(planted));
     assert_eq!(remaining, vec!["register_from_base".to_string()]);
 }

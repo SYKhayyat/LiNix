@@ -30,7 +30,10 @@
 //! and `linix why` searches them for reverse dependencies. Reporting them is the feature.
 //! Planning from them is the bug.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+
+use crate::ledger::Ledger;
 
 /// The files allowed to ask, and what they do with the answer. **An allowlist, not a list of
 /// planning paths**: the seven backends survived five fixes because each fix named the places
@@ -82,6 +85,12 @@ fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
 /// answer nobody asks for changes nothing. Scanning stops at `#[cfg(test)]`, because the fake
 /// backend the planner's own tests use to prove it does *not* ask has to be allowed to answer,
 /// or the instrument fails on itself.
+fn source_file_count() -> usize {
+    let mut files = Vec::new();
+    sources(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
+    files.len()
+}
+
 fn dependency_queries() -> Vec<(String, usize, String)> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
@@ -112,24 +121,28 @@ fn dependency_queries() -> Vec<(String, usize, String)> {
 
 #[test]
 fn nothing_that_plans_asks_a_manager_what_a_package_depends_on() {
-    let allowed: Vec<&str> = REPORTING.iter().map(|(f, _)| *f).collect();
-    let problems: Vec<String> = dependency_queries()
-        .into_iter()
-        .filter(|(file, _, _)| !allowed.contains(&file.as_str()))
-        .map(|(file, line, text)| format!("  {}:{}  {}", file, line, text))
-        .collect();
+    let queries = dependency_queries();
+    let mut sites: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (file, line, text) in &queries {
+        sites
+            .entry(file.clone())
+            .or_default()
+            .push(format!("{line}: {text}"));
+    }
+    let found: BTreeSet<String> = sites.keys().cloned().collect();
 
-    assert!(
-        problems.is_empty(),
-        "a file outside the reporting allowlist is asking a backend for dependencies:\n{}\n\n\
-         Whatever a manager installs alongside what you asked for is that manager's business, \
-         and it does it at install time whether or not LiNix asks first. A name that comes back \
-         from here becomes an install node, which becomes a row in `registry.json` that nothing \
-         declares — and a managed package nothing declares is what `sync` removes (II.7). \
-         Report dependencies; never plan from them. If this call really only reports, add the \
-         file to REPORTING in this test with the sentence saying so.",
-        problems.join("\n")
-    );
+    Ledger::of("asking a backend what a package depends on", "REPORTING")
+        .pairs(REPORTING)
+        .scanning_at_least(100)
+        .detailing(|site| sites.get(site).map(|l| l.join("\n        ")))
+        .remedy(
+            "Whatever a manager installs alongside what you asked for is that manager's \
+             business, and it does it at install time whether or not LiNix asks first. A name \
+             that comes back from here becomes an install node, which becomes a row in \
+             `registry.json` that nothing declares — and a managed package nothing declares is \
+             what `sync` removes (II.7). Report dependencies; never plan from them.",
+        )
+        .audit(source_file_count(), &found);
 }
 
 /// The oracle: the scan must be able to see a query that is really there, or the emptiness
@@ -137,18 +150,6 @@ fn nothing_that_plans_asks_a_manager_what_a_package_depends_on() {
 /// if one ever stops asking, this fails and says so rather than going quiet over a stale entry.
 #[test]
 fn the_scan_can_actually_see_a_dependency_query() {
-    let found = dependency_queries();
-    for (file, why) in REPORTING {
-        assert!(
-            found.iter().any(|(f, _, _)| f == file),
-            "{} is allowlisted for {} and no longer asks for dependencies — either the feature \
-             went away, in which case drop the entry, or the scan is broken and the assertion \
-             above is passing for the wrong reason",
-            file,
-            why
-        );
-    }
-
     assert!(asks_for_dependencies(
         "                    let deps = provider.get_dependencies(&spec.name).await.ok()?;"
     ));

@@ -2945,3 +2945,25 @@ without a null stdin, a prompt hangs CI instead of failing it.
 profile, keeps a free `setup(name)` built on `Fixture::new` — and a bespoke helper keeps its own
 `impl Fixture` block beside the tests that use it, which an inherent impl in any module of the
 crate may do. What is shared is only what was identical.
+
+## II.39 One audit for every exemption table (`S69`, V.170)
+
+**A scanning gate's exemption table is audited by `Ledger::audit` in `tests/ledger/`, not by
+four assertions written out beside it.** The four are: the walk read at least its floor; the
+predicate still matches something; every site found is in the table; every entry in the table is
+still found, and still carries a reason of at least the stated length.
+
+**The floor is required.** `Ledger::audit` panics on a floor of zero. A gate with no floor is a
+gate that passes when its predicate stops matching, which is the failure this rule exists to
+prevent and the one that got written three times when the four assertions were nine copies.
+
+**The exemptions are subtracted by the ledger, never by the walk.** A finding set that arrives
+with the excused sites already removed cannot tell a live exemption from a dead one, because the
+subtraction only runs in one direction. The walk reports what is there; the ledger decides what
+is excused.
+
+**A site's own knowledge stays at the site.** *This exemption contradicts a row three lines
+below it*, *this reason is long and is still a schedule*, *this excused name is not a backend at
+all* — the ledger cannot check any of those, and each stays written out with a line saying
+which failure the shared check would otherwise misreport. Where the order matters, the local
+assertion runs first.

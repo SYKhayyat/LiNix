@@ -23,6 +23,8 @@
 
 use linix::config::grammar::KeywordRole;
 use std::collections::BTreeSet;
+
+use crate::ledger::Ledger;
 use std::path::PathBuf;
 
 /// Compile-time, not the working directory: a test that reads `./docs` passes or fails
@@ -209,28 +211,15 @@ fn every_statement_prefix_has_a_row_in_the_statements_table() {
          months while its own rule sat forty lines below."
     );
 
-    let extra: Vec<&String> = documented
-        .difference(&in_code)
-        .filter(|w| !NOT_A_KEYWORD.iter().any(|(k, _)| *k == w.as_str()))
-        .collect();
-    assert!(
-        extra.is_empty(),
-        "the Statements table demonstrates these `word:` forms and the parser has no keyword \
-         for them:\n    {extra:?}\n\n\
-         Either add the keyword or add the form to NOT_A_KEYWORD with the reason it is not one."
-    );
-
-    for (word, why) in NOT_A_KEYWORD {
-        assert!(
-            documented.contains(*word),
-            "NOT_A_KEYWORD excuses `{word}:`, which the Statements table no longer shows — an \
-             exemption nobody re-read"
-        );
-        assert!(
-            why.len() > 40,
-            "`{word}`'s exemption has no reason worth the name: {why:?}"
-        );
-    }
+    let unbacked: BTreeSet<String> = documented.difference(&in_code).cloned().collect();
+    Ledger::of(
+        "shown in the Statements table with no keyword behind it",
+        "NOT_A_KEYWORD",
+    )
+    .pairs(NOT_A_KEYWORD)
+    .scanning_at_least(10)
+    .remedy("Either add the keyword, or say why the form is not one.")
+    .audit(documented.len(), &unbacked);
 }
 
 /// A gate that cannot fail is a gate nobody has tested.

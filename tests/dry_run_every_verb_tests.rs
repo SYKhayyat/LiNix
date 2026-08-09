@@ -32,9 +32,11 @@
 //! blind spot is not a reason, it is the finding. Both snapshots now walk the whole fixture —
 //! config, data and the working directory — and the three excused verbs are driven.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use crate::ledger::Ledger;
 
 /// One command to check, with the setup that makes it able to do something.
 struct Case {
@@ -573,49 +575,20 @@ fn every_subcommand_is_either_exercised_or_exempted_with_a_reason() {
         }
     }
 
-    // A floor: if this parse stops matching, everything below passes over an empty list.
-    assert!(
-        listed.len() >= 40,
-        "parsed only {} subcommand(s) out of `--help`; this scan has stopped matching it:\n{}",
-        listed.len(),
-        help
-    );
-
     let exercised: Vec<&str> = CASES.iter().map(|c| c.argv[0]).collect();
-    let exempt: Vec<&str> = EXEMPT.iter().map(|(n, _)| *n).collect();
-
-    let unaccounted: Vec<&String> = listed
+    let undriven: BTreeSet<String> = listed
         .iter()
-        .filter(|n| !exercised.contains(&n.as_str()) && !exempt.contains(&n.as_str()))
+        .filter(|n| !exercised.contains(&n.as_str()))
+        .cloned()
         .collect();
-    assert!(
-        unaccounted.is_empty(),
-        "these subcommands are neither driven under --dry-run nor exempted with a reason: \
-         {:?}\n\nAdd a Case, or an EXEMPT entry saying why it cannot be driven here. A verb \
-         added without either is a verb nobody has asked whether --dry-run performs.",
-        unaccounted
-    );
 
-    // The other direction, which is the one E29 was about: an exemption for a command that
-    // does not exist. `undo` sat in two harness exemption lists after being renamed away.
-    let stale: Vec<&str> = exempt
-        .iter()
-        .copied()
-        .filter(|n| !listed.contains(&n.to_string()))
-        .collect();
-    assert!(
-        stale.is_empty(),
-        "EXEMPT names subcommands the binary does not have: {:?}",
-        stale
-    );
-
-    // And no reason may be empty, or the list degenerates into the exemption list it replaced.
-    for (name, reason) in EXEMPT {
-        assert!(
-            reason.len() > 10,
-            "the exemption for `{}` does not say why: {:?}",
-            name,
-            reason
-        );
-    }
+    Ledger::of("a subcommand never driven under `--dry-run`", "EXEMPT")
+        .pairs(EXEMPT)
+        .scanning_at_least(40)
+        .reason_of_at_least(10)
+        .remedy(
+            "Add a Case. A verb added without one is a verb nobody has asked whether --dry-run \
+             performs.",
+        )
+        .audit(listed.len(), &undriven);
 }

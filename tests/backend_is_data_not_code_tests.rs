@@ -40,7 +40,10 @@
 //! So: every backend module is data-driven, or it is named below with the reason it cannot be.
 //! Adding a name is allowed and requires writing the reason. Removing one is the work.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
+
+use crate::ledger::{Entry, Ledger};
 
 /// A backend module that is hand-written Rust rather than a `ManagerConfig`, and why.
 ///
@@ -233,66 +236,30 @@ fn backend_modules() -> Vec<(String, String)> {
 #[test]
 fn every_backend_is_data_or_says_why_not() {
     let modules = backend_modules();
-    // A floor on the SCAN, not a count of the backends. A directory read that returns
-    // nothing passes every assertion below it, and that is the failure this guards. It is
-    // deliberately far under the real number so a conversion never has to edit it — a
-    // threshold that moves on every conversion is one more thing the sweep has to remember.
-    assert!(
-        modules.len() > 10,
-        "found only {} backend modules — the scan is broken, not the code",
-        modules.len()
-    );
+    let hand_written: BTreeSet<String> = modules
+        .iter()
+        .filter(|(_, src)| src.contains("impl BackendCore for"))
+        .map(|(name, _)| name.clone())
+        .collect();
 
-    let mut unexplained: Vec<String> = Vec::new();
-    for (name, src) in &modules {
-        let hand_written = src.contains("impl BackendCore for");
-        let listed = HAND_WRITTEN.iter().any(|h| h.module == name);
-        if hand_written && !listed {
-            unexplained.push(name.clone());
-        }
-    }
-
-    assert!(
-        unexplained.is_empty(),
-        "these backend modules are hand-written Rust with no reason given:\n    {}\n\n\
-         Build the backend from a `ManagerConfig` in registry.rs — adding a backend should be \
-         adding data — or add it to HAND_WRITTEN with what the generic machinery cannot express. \
-         \"Not converted yet\" is not a reason; it is the absence of one.",
-        unexplained.join("\n    ")
-    );
+    Ledger::of("hand-written Rust rather than a data row", "HAND_WRITTEN")
+        .exempting(HAND_WRITTEN.iter().map(|h| Entry {
+            site: h.module,
+            why: h.why,
+        }))
+        .scanning_at_least(10)
+        .reason_of_at_least(60)
+        .remedy(
+            "Build the backend from a `ManagerConfig` — adding a backend should be adding data. \
+             \"Not converted yet\" is not a reason; it is the absence of one.",
+        )
+        .audit(modules.len(), &hand_written);
 }
 
-/// The list may only shrink. An entry for a module that is now data — or one that never
-/// existed — is an exemption nobody re-read, and it is what makes the finish line move away.
-#[test]
-fn the_hand_written_list_has_no_stale_entries() {
-    let modules = backend_modules();
-    let mut stale: Vec<&str> = Vec::new();
-    for h in HAND_WRITTEN {
-        match modules.iter().find(|(n, _)| n == h.module) {
-            None => stale.push(h.module),
-            Some((_, src)) if !src.contains("impl BackendCore for") => stale.push(h.module),
-            Some(_) => {}
-        }
-    }
-    assert!(
-        stale.is_empty(),
-        "HAND_WRITTEN names modules that are gone or are already data-driven: {stale:?}\n\n\
-         Delete the entry. This list is the finish line, and a finish line that keeps entries \
-         it no longer needs never arrives.",
-    );
-}
-
-/// A reason is the exemption. This is the assertion that stops the list becoming a formality.
+/// The assertion [`Ledger`] cannot make: a reason may be long and still be a schedule.
 #[test]
 fn every_reason_says_what_the_generic_machinery_cannot_express() {
     for h in HAND_WRITTEN {
-        assert!(
-            h.why.len() > 60,
-            "{}'s reason has no substance: {:?}",
-            h.module,
-            h.why
-        );
         assert!(
             !h.why.to_lowercase().contains("not converted yet")
                 || h.why.contains("What blocks it")

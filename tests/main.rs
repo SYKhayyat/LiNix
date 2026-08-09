@@ -29,6 +29,10 @@ mod mock_providers;
 /// own header for what the three ways were and why the union is the correct one.
 mod harness;
 
+/// The four assertions every scanning gate makes about its own exemption table. Nine files
+/// wrote them out by hand and three of the nine were missing the one that matters.
+mod ledger;
+
 mod a_config_travels_between_machines_tests;
 mod a_configured_capability_is_a_registered_one_tests;
 mod a_firewall_teardown_is_a_removal_tests;
@@ -40,6 +44,7 @@ mod a_shim_runs_what_its_line_named_tests;
 mod a_writer_that_reaches_the_disk_goes_through_one_tests;
 mod absent_marker_coverage_tests;
 mod adapter_tables_share_one_mechanism_tests;
+mod an_exemption_table_is_audited_the_same_way_tests;
 mod an_option_list_survives_the_seam_tests;
 mod argv_drift_tests;
 mod automation_lifecycle_tests;
