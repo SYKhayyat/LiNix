@@ -188,6 +188,19 @@ pub trait Queryable: Send + Sync {
     /// one thing that can change it is a mutating command, and `CommandExecutor::run` forgets
     /// these when one finishes.
     async fn list_installed(&self) -> Result<Vec<Package>> {
+        Ok((*self.installed_listing().await?).clone())
+    }
+
+    /// The same listing, as a shared handle rather than a copy.
+    ///
+    /// **Use this when the answer is a lookup.** `info` is asked once per declared package and
+    /// almost every implementation of it is list-then-find; taking an owned `Vec` there clones
+    /// the whole listing to read one row out of it. Measured on a 256-line winget config against
+    /// a 280-package listing: ~71,680 `Package` clones for 256 answers.
+    ///
+    /// `list_installed` still exists and still returns an owned `Vec`, because plenty of callers
+    /// genuinely consume the listing — this is the read-only door, not a replacement.
+    async fn installed_listing(&self) -> Result<std::sync::Arc<Vec<Package>>> {
         let (memo, key) = self.installed_cache();
         memo.once(key, self.fetch_installed()).await
     }

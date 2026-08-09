@@ -798,13 +798,20 @@ impl<'a> ChangePlanner<'a> {
         runnable
     }
 
-    fn apply_scope_filtering(
+    /// **Borrowed, not cloned, when there is nothing to filter.** The unscoped case is the
+    /// whole-machine sync — the common one — and it used to deep-clone the entire desired map in
+    /// order to hand back exactly what it was given. At 298 declarations that is a map, a `Vec`
+    /// per backend and a `PackageSpec` per line, allocated to change nothing.
+    ///
+    /// `Cow`, so the scoped case still owns its filtered map and the caller does not have to
+    /// know which one it got.
+    fn apply_scope_filtering<'d>(
         &self,
-        desired: &HashMap<String, Vec<PackageSpec>>,
+        desired: &'d HashMap<String, Vec<PackageSpec>>,
         scope: Option<&Scope>,
-    ) -> HashMap<String, Vec<PackageSpec>> {
+    ) -> std::borrow::Cow<'d, HashMap<String, Vec<PackageSpec>>> {
         let Some(scope) = scope else {
-            return desired.clone();
+            return std::borrow::Cow::Borrowed(desired);
         };
         let wanted = match scope {
             Scope::Profile(p) => format!("profile:{}", p),
@@ -821,7 +828,7 @@ impl<'a> ChangePlanner<'a> {
                 filtered.insert(backend.clone(), matched);
             }
         }
-        filtered
+        std::borrow::Cow::Owned(filtered)
     }
 
     /// Whether a package's `__scopes` tag holds this exact scope.

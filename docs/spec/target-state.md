@@ -2898,3 +2898,18 @@ resolving them again per match makes the cost of an answer scale with the answer
 **A comment justifying a check must be true, or the check dies with it.** Three source scans were
 justified by "`verbs/` is private to the binary" — it is `pub mod verbs;` — and a scan resting on
 a false reason is one the next reader deletes.
+
+## II.36 A listing is shared, and a lookup keeps its matching rules (`S65`, V.167)
+
+**The once-per-run installed listing is handed out as `Arc<Vec<Package>>`.** `Queryable::info` is
+asked once per declared package and is list-then-find in thirteen backends; taking an owned `Vec`
+there clones the whole listing to read one row.
+
+**A cheaper answer that skips a matching rule is a wrong answer.** `info` is where each manager's
+name rules live — choco and winget are case-insensitive, winget accepts a bare moniker for a
+vendor-qualified id, go matches a module path by its trailing segment — and where the properties
+`@channel` and `@classic` drift on come from. Replacing the call with a map lookup deletes all of
+that; sharing the listing deletes only the copying.
+
+**A whole-collection clone that filters nothing is not a filter.** The unscoped plan is the
+common case and it borrowed nothing.

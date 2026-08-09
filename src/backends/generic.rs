@@ -1260,7 +1260,7 @@ impl Queryable for GenericQueryable {
     }
 
     async fn info(&self, name: &str) -> Result<Option<Package>> {
-        let all = self.list_installed().await?;
+        let all = self.installed_listing().await?;
         // Windows package managers use CASE-INSENSITIVE ids, but their list output frequently
         // returns a different casing than the install id: choco installs "wget" yet lists the
         // Title "Wget", so a case-sensitive `p.name == name` misses it and the remove is
@@ -1272,15 +1272,18 @@ impl Queryable for GenericQueryable {
         let b = self.core.name.as_str();
         let ci = matches!(b, "choco" | "scoop" | "winget");
         let winget = b == "winget";
-        let found = all.into_iter().find(|p| {
-            p.name == name
-                || (ci && p.name.eq_ignore_ascii_case(name))
-                || (winget
-                    && p.name
-                        .rsplit('.')
-                        .next()
-                        .is_some_and(|s| s.eq_ignore_ascii_case(name)))
-        });
+        let found = all
+            .iter()
+            .find(|p| {
+                p.name == name
+                    || (ci && p.name.eq_ignore_ascii_case(name))
+                    || (winget
+                        && p.name
+                            .rsplit('.')
+                            .next()
+                            .is_some_and(|s| s.eq_ignore_ascii_case(name)))
+            })
+            .cloned();
         let Some(mut pkg) = found else {
             return Ok(None);
         };

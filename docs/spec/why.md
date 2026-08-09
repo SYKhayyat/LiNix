@@ -5304,3 +5304,60 @@ source scans justify themselves with *"`verbs/` is private to the binary"*. It i
 right technique — the claim is about *every* call site, and calling one proves nothing about the
 other forty — but they were resting on a reason that is false, and a check with a false reason is
 the one the next careful reader deletes. Fixing the reason is what keeps the check.
+
+---
+
+**V.167 — Why the listing is shared and the lookup is not moved.**
+*(Rule in II.36. Fixed 2026-08-09, `S65`.)*
+
+The review measured this one correctly and prescribed the wrong fix, and the difference is worth
+writing down because the wrong fix is the obvious one.
+
+**The measurement.** `installed_sets` builds `HashMap<backend, HashSet<name>>` once per backend
+for the `absent:` loop, and `identify_needed_actions` then throws it away and calls
+`q.info(&spec.name)` per declared spec. Thirteen backends implement `info` as list-then-find, and
+`InstalledListings::once` returned an owned `Vec<Package>` — so each of those calls cloned the
+whole listing. On a 256-line winget config against a 280-package listing: **~71,680 `Package`
+clones and 256 mutex acquisitions, to answer 256 questions**.
+
+**The prescription** was to have `installed_sets` return `HashMap<name, Package>` and have
+`spec_is_missing` look packages up in it. That deletes the clones by deleting the call — and with
+it, everything the call was doing:
+
+- `generic.rs::info` matches choco, scoop and winget **case-insensitively**, because "choco
+  installs `wget` yet lists the Title `Wget`" — its own comment, and its own bug, fixed once
+  already. It also accepts winget's bare moniker (`jq`) for a vendor-qualified id (`jqlang.jq`).
+- `go.rs::info` matches a module path by its trailing binary segment, so `fzf` finds
+  `github.com/junegunn/fzf`.
+- `spec_is_missing` reads `properties["channel"]` and `properties["classic"]` for `@channel` and
+  `@classic` drift. Both come from `snap info`; `snap list` carries neither.
+
+A map keyed by the listed name answers none of those. Every `winget:jq` declaration would read as
+absent, schedule an install, and winget would report it already installed — on every sync, for
+ever. That is the exact failure class three separate entries in this file already record.
+
+**So the clone was the cost, not the call.** The memo holds `Arc<Vec<Package>>`, `info` borrows
+it, and one `Package` is cloned instead of two hundred and eighty. `list_installed` still returns
+an owned `Vec` for the callers that genuinely consume one; `installed_listing` is a new door
+rather than a migration, which is why thirteen backends changed by two lines each and no matching
+rule moved.
+
+**What was scoped and not taken, with reasons**, so the next reader does not re-derive them:
+
+- **`guard::essential_names` runs twice per removal command, unmemoised**, a subprocess per
+  backend, under a comment calling it cheap. The finding is right and the fix is not a memo: the
+  essential set is derived from the installed database, so a cache needs the invalidation
+  `InstalledListings` already has and a home that respects it. Caching a stale essential list into
+  a removal decision is the worst thing in this program to get wrong, and picking the home is a
+  design decision rather than a line.
+- **`go.rs` and `psresource.rs` spawn one subprocess per item** where the tool takes a list.
+  Batching them changes argv, and argv changes in this repo are settled by capturing real output
+  in a container, not by reasoning — twice now.
+- **`[profile.ci]` with `lto = false`** would stop 99 test binaries each taking a fat-LTO link.
+  It also changes the flag both release scripts must pass, which `grade6_gate_parity` compares,
+  and buys CI wall-clock rather than anything a user sees.
+- **Three sites download an unbounded response body into RAM** (`github.rs`, `web.rs`,
+  `appimage.rs`) with no `content-length` check and no cap. Streaming is the same code shape, but
+  a cap is a number a user meets as a refusal, and `core/download.rs` has scheme policy and
+  checksum policy precisely because those were rulings. **This one is a ruling too**, and it is
+  raised rather than picked.

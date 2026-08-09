@@ -211,10 +211,11 @@ impl Queryable for ZfsQueryable {
     }
     async fn info(&self, name: &str) -> Result<Option<Package>> {
         Ok(self
-            .list_installed()
+            .installed_listing()
             .await?
-            .into_iter()
-            .find(|p| p.name == name))
+            .iter()
+            .find(|p| p.name == name)
+            .cloned())
     }
 }
 
@@ -510,10 +511,11 @@ impl Queryable for LvmQueryable {
     }
     async fn info(&self, name: &str) -> Result<Option<Package>> {
         Ok(self
-            .list_installed()
+            .installed_listing()
             .await?
-            .into_iter()
-            .find(|p| p.name == name))
+            .iter()
+            .find(|p| p.name == name)
+            .cloned())
     }
 }
 

@@ -122,7 +122,11 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        # `matrix.target` is in the key because it is in the path on the very next line.
+        # Without it `macos-13` (x86_64) and `macos-latest` (aarch64) share one entry, and
+        # `actions/cache` does not save on an exact-key hit — so whichever Apple target
+        # loses the race rebuilds cold on every run, permanently.
+        key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-cargo-
 

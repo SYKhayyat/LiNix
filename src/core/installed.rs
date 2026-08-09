@@ -28,7 +28,12 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 /// One manager's listing, and whether it has been fetched yet.
-type Slot = Arc<tokio::sync::Mutex<Option<Vec<Package>>>>;
+/// The listing itself is behind an `Arc` as well as the slot: **`once` is asked per
+/// package, not per backend**, and every hit used to clone the whole `Vec<Package>` out.
+/// Measured on a 256-line winget config against a 280-package listing, that is ~71,680
+/// `Package` clones to answer 256 questions.
+type Listing = Arc<Vec<Package>>;
+type Slot = Arc<tokio::sync::Mutex<Option<Listing>>>;
 
 /// A listing as it sits on disk, with the moment it was taken.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -179,7 +184,10 @@ impl InstalledListings {
     /// The slot's lock is held across the fetch on purpose: two concurrent askers must produce
     /// one subprocess, not two. Different managers hold different slots, so this never
     /// serialises the fan-out across backends.
-    pub async fn once<F>(&self, backend: &str, fetch: F) -> Result<Vec<Package>>
+    /// Returns a shared handle. A caller that needs to own the packages clones it — which is
+    /// what [`Queryable::list_installed`] does — and a caller that only wants to look one name up
+    /// does not have to.
+    pub async fn once<F>(&self, backend: &str, fetch: F) -> Result<Listing>
     where
         F: Future<Output = Result<Vec<Package>>>,
     {
@@ -195,16 +203,18 @@ impl InstalledListings {
         // The disk layer is consulted inside the slot lock, so two concurrent askers still
         // produce one read rather than two — the same reason the fetch is in here.
         if let Some(on_disk) = self.read_from_disk(backend) {
-            *slot = Some(on_disk.clone());
-            return Ok(on_disk);
+            let handle: Listing = Arc::new(on_disk);
+            *slot = Some(handle.clone());
+            return Ok(handle);
         }
         // A failure is not cached: a manager that could not answer this time may answer next
         // time, and remembering "it errored" would turn one transient failure into the run's
         // permanent verdict.
         let fresh = fetch.await?;
         self.to_disk(backend, &fresh);
-        *slot = Some(fresh.clone());
-        Ok(fresh)
+        let handle: Listing = Arc::new(fresh);
+        *slot = Some(handle.clone());
+        Ok(handle)
     }
 
     /// Forget everything. Called after any mutating command, because that is the only thing
@@ -350,7 +360,7 @@ mod tests {
 
         // On: the second run answers from disk without reaching the manager.
         let calls = AtomicUsize::new(0);
-        let mut seen = Vec::new();
+        let mut seen: std::sync::Arc<Vec<Package>> = Default::default();
         for _ in 0..3 {
             let run = InstalledListings::with_ttl(600);
             seen = run

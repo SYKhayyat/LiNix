@@ -205,10 +205,11 @@ impl Queryable for VscodeQueryable {
     /// prints the publisher's canonical casing, so a manifest that spells `ms-python.Python`
     /// must still resolve to the installed row.
     async fn info(&self, name: &str) -> Result<Option<Package>> {
-        let all = self.list_installed().await?;
+        let all = self.installed_listing().await?;
         Ok(all
-            .into_iter()
+            .iter()
             .find(|p| p.name == name || p.name.eq_ignore_ascii_case(name))
+            .cloned()
             .map(|mut p| {
                 if let Some((publisher, _)) = p.name.split_once('.') {
                     p.properties

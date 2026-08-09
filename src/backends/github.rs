@@ -1075,8 +1075,8 @@ impl Queryable for GithubQueryable {
     }
 
     async fn info(&self, name: &str) -> Result<Option<Package>> {
-        let all = self.list_installed().await?;
-        Ok(all.into_iter().find(|p| p.name == name))
+        let all = self.installed_listing().await?;
+        Ok(all.iter().find(|p| p.name == name).cloned())
     }
 
     async fn owned_system_packages(&self) -> Vec<(String, String)> {

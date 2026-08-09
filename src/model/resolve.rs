@@ -818,7 +818,16 @@ impl<'a> Resolver<'a> {
         let mut merged: BTreeMap<String, Entry> = BTreeMap::new();
         let mut out = DesiredState::default();
 
-        for (stmt, origin, gates) in reached.statements.iter().cloned() {
+        // Moved out, not `iter().cloned()`: the whole configuration was being deep-cloned so the
+        // loop could own each statement, and `reached` owns them already. The half that is read
+        // after this loop is `scopes` — `of()` touches nothing else — so the two are separated
+        // here and only the statements are consumed.
+        let Reached { statements, scopes } = reached;
+        let reached = Reached {
+            statements: Vec::new(),
+            scopes,
+        };
+        for (stmt, origin, gates) in statements {
             let (decl, present) = match stmt {
                 Statement::Package(d) => (d, true),
                 Statement::Absent(d) => (d, false),

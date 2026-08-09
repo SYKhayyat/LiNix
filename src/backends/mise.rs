@@ -191,8 +191,8 @@ impl Queryable for MiseQueryable {
     /// The catalogue answers a different question — *could this be installed?* — and nothing
     /// asks that here. `info` consults the installed set and nothing else.
     async fn info(&self, name: &str) -> Result<Option<Package>> {
-        let all = self.list_installed().await?;
-        if let Some(mut p) = all.into_iter().find(|p| p.name == name) {
+        let all = self.installed_listing().await?;
+        if let Some(mut p) = all.iter().find(|p| p.name == name).cloned() {
             let version = p.version.as_deref().unwrap_or("unknown").to_string();
             let install_path = self
                 .core
