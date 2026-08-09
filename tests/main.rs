@@ -25,6 +25,10 @@
 /// `mod mock_providers;` and each got its own copy.
 mod mock_providers;
 
+/// The `Fixture` sixteen files wrote out by hand, three of them differently — see the module's
+/// own header for what the three ways were and why the union is the correct one.
+mod harness;
+
 mod a_config_travels_between_machines_tests;
 mod a_configured_capability_is_a_registered_one_tests;
 mod a_firewall_teardown_is_a_removal_tests;

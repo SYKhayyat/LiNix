@@ -2930,3 +2930,18 @@ they disagree. Without that check this arrangement is a way to lose a test silen
 worse than any link time it saves.
 
 **Run one file with `cargo test --test suite <module>::`.** The module path is the filename.
+
+## II.38 A test process sees the fixture and nothing else (`S68`, V.169)
+
+**One `Fixture`, in `tests/harness/`.** It sets `current_dir`, `LINIX_CONFIG_DIR`,
+`LINIX_DATA_DIR`, `HOME` and `USERPROFILE` into the fixture root, and closes stdin.
+
+Every one of those is there because a copy that omitted it was measuring the developer's machine:
+without `HOME`, a `link:` target under `~` writes to their real dotfiles; without `current_dir`,
+the binary runs in the repository root where a stray `linix.txt` is a manifest the product reads;
+without a null stdin, a prompt hangs CI instead of failing it.
+
+**Per-file setup stays per-file.** A test that needs a `tree/` directory, or `use extras` in the
+profile, keeps a free `setup(name)` built on `Fixture::new` — and a bespoke helper keeps its own
+`impl Fixture` block beside the tests that use it, which an inherent impl in any module of the
+crate may do. What is shared is only what was identical.

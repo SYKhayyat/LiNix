@@ -19,72 +19,15 @@
 //!   converged, because "the machine matches your files" over something nobody looked at is
 //!   precisely the sentence this finding is about.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
 
-struct Fixture {
-    root: PathBuf,
-}
+use crate::harness::{decl, Fixture};
 
-impl Fixture {
-    fn new(name: &str) -> Self {
-        let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join("dest")).unwrap();
-        let f = Self { root };
-        let (out, code) = f.run(&["init"]);
-        assert_eq!(code, 0, "the fixture's own `init` failed:\n{out}");
-        std::fs::create_dir_all(f.cfg().join("dotfiles")).unwrap();
-        f
-    }
-
-    fn cfg(&self) -> PathBuf {
-        self.root.join("config")
-    }
-
-    fn run(&self, args: &[&str]) -> (String, i32) {
-        let out = Command::new(env!("CARGO_BIN_EXE_linix"))
-            .args(args)
-            .current_dir(&self.root)
-            .env("LINIX_CONFIG_DIR", self.cfg())
-            .env("LINIX_DATA_DIR", self.root.join("data"))
-            .stdin(std::process::Stdio::null())
-            .output()
-            .expect("the binary should run");
-        (
-            format!(
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            ),
-            out.status.code().unwrap_or(-1),
-        )
-    }
-
-    /// Forward slashes: the grammar reads `\` as an escape, so a raw Windows path in a module
-    /// does not survive the parse.
-    fn decl(p: &Path) -> String {
-        p.to_string_lossy().replace('\\', "/")
-    }
-
-    fn write_module(&self, body: &str) {
-        std::fs::write(self.cfg().join("modules/starter.txt"), body).unwrap();
-    }
-
-    /// Pre-seed the applied-extras ledger, so a test can put the model in the "already applied"
-    /// state without depending on whether this host can really enable a service.
-    fn seed_ledger(&self, keys: &[&str]) {
-        let locks = self.cfg().join("locks");
-        std::fs::create_dir_all(&locks).unwrap();
-        let body = format!(
-            "applied = [{}]\n",
-            keys.iter()
-                .map(|k| format!("{:?}", k))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        std::fs::write(locks.join("extras.toml"), body).unwrap();
-    }
+/// The shared root, plus what these tests need in it.
+fn setup(name: &str) -> Fixture {
+    let f = Fixture::new(name);
+    std::fs::create_dir_all(f.root.join("dest")).unwrap();
+    std::fs::create_dir_all(f.cfg().join("dotfiles")).unwrap();
+    f
 }
 
 /// One declaration of every kind that lives in a module, and the ledger key each produces.
@@ -104,11 +47,11 @@ fn declarations(f: &Fixture) -> (String, Vec<String>) {
          service:linix-test-svc @enabled=false\n\
          setting:org.linix.test/key @value=1\n\
          shim:linix-test-shim\n",
-        Fixture::decl(&src),
-        Fixture::decl(&dst)
+        decl(&src),
+        decl(&dst)
     );
     let mut keys = vec![
-        format!("link:{}", Fixture::decl(&dst)),
+        format!("link:{}", decl(&dst)),
         "service:linix-test-svc".to_string(),
         "setting:org.linix.test/key".to_string(),
         "shim:linix-test-shim".to_string(),
@@ -143,7 +86,7 @@ fn repo_backend(f: &Fixture) -> Option<String> {
 /// user reads before touching anything both have to say so.
 #[test]
 fn every_kind_of_undeclared_resource_is_reported_by_check_and_frozen_by_plan() {
-    let f = Fixture::new("resource-family-place");
+    let f = setup("resource-family-place");
     let (module, keys) = declarations(&f);
     f.write_module(&module);
 
@@ -194,7 +137,7 @@ fn every_kind_of_undeclared_resource_is_reported_by_check_and_frozen_by_plan() {
 /// `plan` is where the refusal's own text tells the user to look.
 #[test]
 fn every_kind_of_undeclared_resource_is_reported_as_a_teardown() {
-    let f = Fixture::new("resource-family-undo");
+    let f = setup("resource-family-undo");
     let (_, keys) = declarations(&f);
     let borrowed: Vec<&str> = keys.iter().map(String::as_str).collect();
     f.seed_ledger(&borrowed);
@@ -234,14 +177,14 @@ fn every_kind_of_undeclared_resource_is_reported_as_a_teardown() {
 /// implementation that simply called everything drift.
 #[test]
 fn a_resource_that_is_applied_and_present_is_not_reported_as_drift() {
-    let f = Fixture::new("resource-family-converged");
+    let f = setup("resource-family-converged");
     let src = f.cfg().join("dotfiles").join("f1");
     std::fs::write(&src, "content\n").unwrap();
     let dst = f.root.join("dest").join("f1");
     f.write_module(&format!(
         "link:{} @target={}\n",
-        Fixture::decl(&src),
-        Fixture::decl(&dst)
+        decl(&src),
+        decl(&dst)
     ));
 
     let (out, code) = f.run(&["sync", "-y"]);
@@ -277,7 +220,7 @@ fn a_resource_that_is_applied_and_present_is_not_reported_as_drift() {
 /// "in effect" for every kind LiNix cannot probe would pass every other test in this file.
 #[test]
 fn a_resource_that_cannot_be_read_back_is_named_rather_than_assumed() {
-    let f = Fixture::new("resource-family-unverifiable");
+    let f = setup("resource-family-unverifiable");
     f.write_module("setting:org.linix.test/key @value=1\n");
     f.seed_ledger(&["setting:org.linix.test/key"]);
 

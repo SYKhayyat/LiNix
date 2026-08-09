@@ -35,45 +35,15 @@
 //! `link:` is the mildest member of the family — the source stays in the config repo, so the
 //! bytes are recoverable. `service:`, `setting:` and `shim:` have no such net.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 
-struct Fixture {
-    root: PathBuf,
-}
+use crate::harness::Fixture;
 
-impl Fixture {
-    fn new(name: &str) -> Self {
-        let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join("dest")).unwrap();
-        let f = Self { root };
-        let (out, code) = f.run(&["init"]);
-        assert_eq!(code, 0, "the fixture's own `init` failed:\n{out}");
-        f
-    }
-
-    fn cfg(&self) -> PathBuf {
-        self.root.join("config")
-    }
-
-    fn run(&self, args: &[&str]) -> (String, i32) {
-        let out = Command::new(env!("CARGO_BIN_EXE_linix"))
-            .args(args)
-            .env("LINIX_CONFIG_DIR", self.cfg())
-            .env("LINIX_DATA_DIR", self.root.join("data"))
-            .stdin(std::process::Stdio::null())
-            .output()
-            .expect("the binary should run");
-        (
-            format!(
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            ),
-            out.status.code().unwrap_or(-1),
-        )
-    }
+/// The shared root, plus what these tests need in it.
+fn setup(name: &str) -> Fixture {
+    let f = Fixture::new(name);
+    std::fs::create_dir_all(f.root.join("dest")).unwrap();
+    f
 }
 
 /// Forward slashes: the grammar reads `\` as an escape, and a Windows path written raw into a
@@ -84,7 +54,7 @@ fn decl(p: &Path) -> String {
 
 #[test]
 fn undeclaring_managed_extras_goes_through_the_removal_guard() {
-    let f = Fixture::new("extras-guard");
+    let f = setup("extras-guard");
     let sources = f.cfg().join("dotfiles");
     std::fs::create_dir_all(&sources).unwrap();
 
@@ -153,7 +123,7 @@ fn undeclaring_managed_extras_goes_through_the_removal_guard() {
 /// Even before the guard, a deletion the user cannot see coming is the wrong shape.
 #[test]
 fn a_sync_that_tears_down_extras_says_so_before_it_does_it() {
-    let f = Fixture::new("extras-visible");
+    let f = setup("extras-visible");
     let sources = f.cfg().join("dotfiles");
     std::fs::create_dir_all(&sources).unwrap();
 

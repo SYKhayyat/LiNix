@@ -39,53 +39,18 @@
 //! This is G-1's third failure — "the removal is invisible; nothing in `plan`, `--dry-run` or
 //! the summary names it" — with the `--dry-run` half fixed and the `plan` half still live.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
 
-struct Fixture {
-    root: PathBuf,
+use crate::harness::{decl, Fixture};
+
+/// The shared root, plus what these tests need in it.
+fn setup(name: &str) -> Fixture {
+    let f = Fixture::new(name);
+    std::fs::create_dir_all(f.root.join("dest")).unwrap();
+    f
 }
 
 impl Fixture {
-    fn new(name: &str) -> Self {
-        let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join("dest")).unwrap();
-        let f = Self { root };
-        let (out, code) = f.run(&["init"]);
-        assert_eq!(code, 0, "the fixture's own `init` failed:\n{out}");
-        f
-    }
-
-    fn cfg(&self) -> PathBuf {
-        self.root.join("config")
-    }
-
-    fn run(&self, args: &[&str]) -> (String, i32) {
-        let out = Command::new(env!("CARGO_BIN_EXE_linix"))
-            .args(args)
-            .current_dir(&self.root)
-            .env("LINIX_CONFIG_DIR", self.cfg())
-            .env("LINIX_DATA_DIR", self.root.join("data"))
-            .stdin(std::process::Stdio::null())
-            .output()
-            .expect("the binary should run");
-        (
-            format!(
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            ),
-            out.status.code().unwrap_or(-1),
-        )
-    }
-
-    /// Forward slashes: the grammar reads `\` as an escape, so a raw Windows path in a module
-    /// does not survive the parse.
-    fn decl(p: &Path) -> String {
-        p.to_string_lossy().replace('\\', "/")
-    }
-
     /// Declare `n` `link:` lines and return their targets.
     fn declare_links(&self, n: usize) -> Vec<PathBuf> {
         let sources = self.cfg().join("dotfiles");
@@ -98,8 +63,8 @@ impl Fixture {
             std::fs::write(&src, format!("content-{i}\n")).unwrap();
             module.push_str(&format!(
                 "link:{} @target={}\n",
-                Self::decl(&src),
-                Self::decl(&dst)
+                decl(&src),
+                decl(&dst)
             ));
             targets.push(dst);
         }
@@ -112,7 +77,7 @@ impl Fixture {
 /// "nothing to see" over changes to the filesystem.
 #[test]
 fn plan_names_the_extras_it_would_place() {
-    let f = Fixture::new("grade2-plan-place");
+    let f = setup("grade2-plan-place");
     let targets = f.declare_links(3);
 
     // Control: the same model, through the preview that does work, so a green run cannot be
@@ -163,7 +128,7 @@ fn plan_names_the_extras_it_would_place() {
 /// user to run `linix plan` to "see exactly what would be undone", and `plan` shows nothing.
 #[test]
 fn plan_names_the_extras_it_would_tear_down() {
-    let f = Fixture::new("grade2-plan-teardown");
+    let f = setup("grade2-plan-teardown");
     let targets = f.declare_links(3);
 
     let (out, code) = f.run(&["sync", "-y"]);

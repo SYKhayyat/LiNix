@@ -38,52 +38,23 @@
 //! — undeclaring a dotfile — and explains itself with a sentence about package names. A preview
 //! that is wrong in the harmless direction is the same code that is wrong in the other.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
 
-struct Fixture {
-    root: PathBuf,
+use crate::harness::Fixture;
+
+/// The shared root, plus what these tests need in it.
+fn setup(name: &str) -> Fixture {
+    let f = Fixture::new(name);
+    std::fs::create_dir_all(f.root.join("src")).unwrap();
+    std::fs::create_dir_all(f.root.join("dest")).unwrap();
+    let profile = f.cfg().join("profiles").join("Main");
+    let mut p = std::fs::read_to_string(&profile).unwrap();
+    p.push_str("\nuse extras\n");
+    std::fs::write(&profile, p).unwrap();
+    f
 }
 
 impl Fixture {
-    fn new(name: &str) -> Self {
-        let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join("src")).unwrap();
-        std::fs::create_dir_all(root.join("dest")).unwrap();
-        let f = Self { root };
-        let (out, code) = f.run(&["init"]);
-        assert_eq!(code, 0, "the fixture's own `init` failed:\n{out}");
-        let profile = f.cfg().join("profiles").join("Main");
-        let mut p = std::fs::read_to_string(&profile).unwrap();
-        p.push_str("\nuse extras\n");
-        std::fs::write(&profile, p).unwrap();
-        f
-    }
-
-    fn cfg(&self) -> PathBuf {
-        self.root.join("config")
-    }
-
-    fn run(&self, args: &[&str]) -> (String, i32) {
-        let out = Command::new(env!("CARGO_BIN_EXE_linix"))
-            .args(args)
-            .current_dir(&self.root)
-            .env("LINIX_CONFIG_DIR", self.cfg())
-            .env("LINIX_DATA_DIR", self.root.join("data"))
-            .stdin(std::process::Stdio::null())
-            .output()
-            .expect("the binary should run");
-        (
-            format!(
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            ),
-            out.status.code().unwrap_or(-1),
-        )
-    }
-
     /// `n` `link:` lines, placed for real, then undeclared — the state a user reaches by deleting
     /// lines from a module.
     fn placed_then_undeclared(&self, n: usize) -> Vec<PathBuf> {
@@ -114,7 +85,7 @@ impl Fixture {
 
 #[test]
 fn plan_does_not_predict_a_refusal_apply_will_not_make() {
-    let f = Fixture::new("grade3-plan-guard-kind");
+    let f = setup("grade3-plan-guard-kind");
     let targets = f.placed_then_undeclared(3);
 
     let (plan_out, plan_code) = f.run(&["plan"]);
@@ -149,7 +120,7 @@ fn plan_does_not_predict_a_refusal_apply_will_not_make() {
 /// will.
 #[test]
 fn plan_and_sync_agree_about_a_resource_teardown() {
-    let f = Fixture::new("grade3-plan-vs-sync");
+    let f = setup("grade3-plan-vs-sync");
     let targets = f.placed_then_undeclared(3);
 
     let (plan_out, _) = f.run(&["plan"]);
@@ -176,7 +147,7 @@ fn plan_and_sync_agree_about_a_resource_teardown() {
 /// reporting an unwritable package name.
 #[test]
 fn a_resource_is_never_explained_as_an_unwritable_package_name() {
-    let f = Fixture::new("grade3-plan-guard-reason");
+    let f = setup("grade3-plan-guard-reason");
     f.placed_then_undeclared(3);
     let (plan_out, _) = f.run(&["plan"]);
     assert!(

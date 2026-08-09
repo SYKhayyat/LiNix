@@ -52,52 +52,8 @@
 //! was a D. The rule the fix has to satisfy: **a read command answers about the machine, and two
 //! read commands never contradict each other about it.**
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::Instant;
 
-struct Fixture {
-    root: PathBuf,
-}
-
-impl Fixture {
-    fn new(name: &str) -> Self {
-        let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        let f = Self { root };
-        let (out, code) = f.run(&["init"]);
-        assert_eq!(code, 0, "the fixture's own `init` failed:\n{out}");
-        f
-    }
-
-    fn run(&self, args: &[&str]) -> (String, i32) {
-        self.timed(args).0
-    }
-
-    fn timed(&self, args: &[&str]) -> ((String, i32), u128) {
-        let started = Instant::now();
-        let out = Command::new(env!("CARGO_BIN_EXE_linix"))
-            .args(args)
-            .env("LINIX_CONFIG_DIR", self.root.join("config"))
-            .env("LINIX_DATA_DIR", self.root.join("data"))
-            .stdin(std::process::Stdio::null())
-            .output()
-            .expect("the binary should run");
-        let ms = started.elapsed().as_millis();
-        (
-            (
-                format!(
-                    "{}{}",
-                    String::from_utf8_lossy(&out.stdout),
-                    String::from_utf8_lossy(&out.stderr)
-                ),
-                out.status.code().unwrap_or(-1),
-            ),
-            ms,
-        )
-    }
-}
+use crate::harness::Fixture;
 
 /// H-2. One question — "is `nosuchbackend` a manager?" — answered three ways by one binary.
 #[test]

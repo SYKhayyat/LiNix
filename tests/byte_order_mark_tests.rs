@@ -19,55 +19,10 @@
 //! **Every file, not the one that was reported.** A rule that covered `modules/` only would send
 //! the next user to the same message from `priority`, which is exactly where the advice points.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
 
 const BOM: &str = "\u{feff}";
 
-struct Fixture {
-    root: PathBuf,
-}
-
-impl Fixture {
-    fn new(name: &str) -> Self {
-        let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        let f = Self { root };
-        let (out, code) = f.run(&["init"]);
-        assert_eq!(code, 0, "the fixture's own `init` failed:\n{out}");
-        f
-    }
-
-    fn cfg(&self) -> PathBuf {
-        self.root.join("config")
-    }
-
-    fn write(&self, rel: &str, body: &str) {
-        let p = self.cfg().join(rel);
-        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-        std::fs::write(p, body).unwrap();
-    }
-
-    fn run(&self, args: &[&str]) -> (String, i32) {
-        let out = Command::new(env!("CARGO_BIN_EXE_linix"))
-            .args(args)
-            .current_dir(&self.root)
-            .env("LINIX_CONFIG_DIR", self.cfg())
-            .env("LINIX_DATA_DIR", self.root.join("data"))
-            .stdin(std::process::Stdio::null())
-            .output()
-            .expect("the binary should run");
-        (
-            format!(
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            ),
-            out.status.code().unwrap_or(-1),
-        )
-    }
-}
+use crate::harness::Fixture;
 
 /// The reported case: the module carries the mark.
 #[test]

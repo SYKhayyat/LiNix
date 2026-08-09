@@ -23,31 +23,10 @@ use linix::core::hook_lock::{exec_id, hash_script, HookLedger};
 use linix::core::journal::{ActionStatus, JournalAction, JournalEntry};
 use linix::core::LockFile;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-struct Fixture {
-    root: PathBuf,
-}
+use crate::harness::Fixture;
 
 impl Fixture {
-    fn new(name: &str) -> Self {
-        let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        let f = Self { root };
-        let (out, code) = f.run(&["init"]);
-        assert_eq!(code, 0, "the fixture's own `init` failed:\n{out}");
-        f
-    }
-
-    fn cfg(&self) -> PathBuf {
-        self.root.join("config")
-    }
-
-    fn data(&self) -> PathBuf {
-        self.root.join("data")
-    }
-
     fn journal(&self) -> PathBuf {
         self.data().join("journal.jsonl")
     }
@@ -92,27 +71,6 @@ impl Fixture {
             format!("{}\n", serde_json::to_string(&entry).unwrap()),
         )
         .unwrap();
-    }
-
-    fn run(&self, args: &[&str]) -> (String, i32) {
-        let out = Command::new(env!("CARGO_BIN_EXE_linix"))
-            .args(args)
-            .current_dir(&self.root)
-            .env("LINIX_CONFIG_DIR", self.cfg())
-            .env("LINIX_DATA_DIR", self.data())
-            .env("HOME", &self.root)
-            .env("USERPROFILE", &self.root)
-            .stdin(std::process::Stdio::null())
-            .output()
-            .expect("the binary should run");
-        (
-            format!(
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            ),
-            out.status.code().unwrap_or(-1),
-        )
     }
 }
 

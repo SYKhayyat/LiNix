@@ -21,42 +21,10 @@
 //! Driven end to end against the real binary in a disposable config and data directory, because
 //! the defect is in what reaches a file descriptor and no unit test of a formatter can see that.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
 
-struct Fixture {
-    root: PathBuf,
-}
+use crate::harness::Fixture;
 
 impl Fixture {
-    fn new(name: &str) -> Self {
-        let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        let f = Self { root };
-        let (out, _, code) = f.run(&["init"]);
-        assert_eq!(code, 0, "the fixture's own `init` failed:\n{out}");
-        f
-    }
-
-    /// (stdout, stderr, exit code) — kept apart, since the whole finding is which one a message
-    /// went to.
-    fn run(&self, args: &[&str]) -> (String, String, i32) {
-        let out = Command::new(env!("CARGO_BIN_EXE_linix"))
-            .args(args)
-            .current_dir(&self.root)
-            .env("LINIX_CONFIG_DIR", self.root.join("config"))
-            .env("LINIX_DATA_DIR", self.root.join("data"))
-            .stdin(std::process::Stdio::null())
-            .output()
-            .expect("the binary should run");
-        (
-            String::from_utf8_lossy(&out.stdout).into_owned(),
-            String::from_utf8_lossy(&out.stderr).into_owned(),
-            out.status.code().unwrap_or(-1),
-        )
-    }
-
     fn module(&self, contents: &str) {
         let m = self.root.join("config").join("modules").join("starter.txt");
         std::fs::create_dir_all(m.parent().unwrap()).unwrap();
@@ -86,7 +54,7 @@ fn sync_dry_run_json_answers_a_converged_machine_with_a_document() {
     // Nothing declared: the plan is empty, which is the branch that returns above the report.
     f.module("");
 
-    let (stdout, stderr, _) = f.run(&["--dry-run", "sync", "--json"]);
+    let (stdout, stderr, _) = f.run_split(&["--dry-run", "sync", "--json"]);
     let doc = parsed("sync --dry-run --json", &stdout);
 
     assert!(
@@ -116,7 +84,7 @@ fn sync_dry_run_json_answers_a_drifted_machine_with_a_document() {
     let f = Fixture::new("json-doc-sync-drifted");
     f.module("github:sharkdp/hexyl\n");
 
-    let (stdout, _, _) = f.run(&["--dry-run", "sync", "--json"]);
+    let (stdout, _, _) = f.run_split(&["--dry-run", "sync", "--json"]);
     let doc = parsed("sync --dry-run --json", &stdout);
 
     assert_eq!(
@@ -133,7 +101,7 @@ fn check_json_is_a_document_even_when_the_config_does_not_resolve() {
     // `Adopter::discover` reach for the note that used to go to stdout.
     f.module("use nothing-by-this-name\n");
 
-    let (stdout, _, _) = f.run(&["check", "--json"]);
+    let (stdout, _, _) = f.run_split(&["check", "--json"]);
     let doc = parsed("check --json", &stdout);
 
     assert!(
@@ -154,7 +122,7 @@ fn check_json_carries_its_numbers_beside_its_sentences() {
     let f = Fixture::new("json-doc-check-counts");
     f.module("github:sharkdp/hexyl\n");
 
-    let (stdout, _, _) = f.run(&["check", "--json"]);
+    let (stdout, _, _) = f.run_split(&["check", "--json"]);
     let doc = parsed("check --json", &stdout);
     let sections = doc.as_array().expect("an array of sections");
 

@@ -57,8 +57,7 @@
 //! into a resource. The next key added to `PACKAGE_OPTION_KEYS` still has to declare which side
 //! it is on.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
 
 fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -146,67 +145,15 @@ fn every_option_with_a_machine_effect_converges_somewhere() {
     );
 }
 
-/// The other end of the same defect, stated as behaviour: what the module says **today** is what
-/// decides whether the stand-in exists. Driven through the shipped binary, not the source.
-struct Fixture {
-    root: PathBuf,
-}
+use crate::harness::Fixture;
 
-impl Fixture {
-    fn new(name: &str) -> Self {
-        let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        let f = Self { root };
-        let (out, code) = f.run(&["init"]);
-        assert_eq!(code, 0, "the fixture's own `init` failed:\n{out}");
-        // One backend, so the model resolves the same way on every host and no run is at the
-        // mercy of what this box happens to have installed (G-11's shape).
-        std::fs::write(f.cfg().join("priority"), "cargo\n").unwrap();
-        f
-    }
-
-    fn cfg(&self) -> PathBuf {
-        self.root.join("config")
-    }
-
-    fn run(&self, args: &[&str]) -> (String, i32) {
-        let out = Command::new(env!("CARGO_BIN_EXE_linix"))
-            .args(args)
-            .current_dir(&self.root)
-            .env("LINIX_CONFIG_DIR", self.cfg())
-            .env("LINIX_DATA_DIR", self.root.join("data"))
-            .stdin(std::process::Stdio::null())
-            .output()
-            .expect("the binary should run");
-        (
-            format!(
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            ),
-            out.status.code().unwrap_or(-1),
-        )
-    }
-
-    fn write_module(&self, body: &str) {
-        std::fs::write(self.cfg().join("modules/starter.txt"), body).unwrap();
-    }
-
-    /// Pre-seed the applied-extras ledger, so the withdrawal case can be put in the
-    /// "already applied" state without installing anything.
-    fn seed_ledger(&self, keys: &[&str]) {
-        let locks = self.cfg().join("locks");
-        std::fs::create_dir_all(&locks).unwrap();
-        let body = format!(
-            "applied = [{}]\n",
-            keys.iter()
-                .map(|k| format!("{:?}", k))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        std::fs::write(locks.join("extras.toml"), body).unwrap();
-    }
+/// The shared root, plus what these tests need in it.
+fn setup(name: &str) -> Fixture {
+    let f = Fixture::new(name);
+    // One backend, so the model resolves the same way on every host and no run is at the
+    // mercy of what this box happens to have installed (G-11's shape).
+    std::fs::write(f.cfg().join("priority"), "cargo\n").unwrap();
+    f
 }
 
 const CANARY: &str = "linix-shim-canary";
@@ -230,7 +177,7 @@ fn declares_a_shim(eval_json: &str) -> bool {
 
 #[test]
 fn adding_the_option_declares_the_stand_in_and_withdrawing_it_takes_it_back() {
-    let f = Fixture::new("grade6-shim-edit");
+    let f = setup("grade6-shim-edit");
 
     // Step 2: the option is added to a line that is already there.
     f.write_module(&format!("cargo:{CANARY}@shim=true\n"));
@@ -268,7 +215,7 @@ fn adding_the_option_declares_the_stand_in_and_withdrawing_it_takes_it_back() {
 /// `@sandbox` is the same promise plus confinement, and it was broken in exactly the same way.
 #[test]
 fn sandbox_carries_the_stand_in_too() {
-    let f = Fixture::new("grade6-sandbox-edit");
+    let f = setup("grade6-sandbox-edit");
     f.write_module(&format!("cargo:{CANARY}@sandbox=true\n"));
     let (out, code) = f.run(&["eval"]);
     assert_eq!(code, 0, "`eval` failed:\n{out}");

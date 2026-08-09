@@ -27,60 +27,35 @@
 //! unconditional. `ExtrasManager::in_effect` already answers "is this resource in place?" — the
 //! probe `check` and `plan` were given in round 3 — and the loop that places them never asks.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
 
-struct Fixture {
-    root: PathBuf,
+use crate::harness::Fixture;
+
+/// The shared root, plus what these tests need in it.
+fn setup(name: &str) -> Fixture {
+    let f = Fixture::new(name);
+    std::fs::create_dir_all(f.root.join("src")).unwrap();
+    std::fs::create_dir_all(f.root.join("dest")).unwrap();
+    let profile = f.cfg().join("profiles").join("Main");
+    let mut p = std::fs::read_to_string(&profile).unwrap();
+    p.push_str("\nuse extras\n");
+    std::fs::write(&profile, p).unwrap();
+
+    let mut lines = String::new();
+    for i in 0..3 {
+        let src = f.root.join("src").join(format!("s{i}"));
+        let dest = f.root.join("dest").join(format!("s{i}"));
+        std::fs::write(&src, format!("content-{i}\n")).unwrap();
+        lines.push_str(&format!(
+            "link:{} @target={}\n",
+            src.display().to_string().replace('\\', "/"),
+            dest.display().to_string().replace('\\', "/")
+        ));
+    }
+    std::fs::write(f.cfg().join("modules").join("extras.txt"), lines).unwrap();
+    f
 }
 
 impl Fixture {
-    /// **The fixture root is handed to the child as its home directory** (see `run`), and that is
-    /// not incidental. `link:` placement asks before writing a target outside the home directory
-    /// (`backends/link.rs:80`, `dirs::home_dir()`), and this fixture's targets are wherever the
-    /// checkout happens to be. On the machine it was written on that is `C:\Users\Administrator\…`
-    /// — inside home, so all three files were placed and the test passed. In a container at
-    /// `/src`, and on any runner that checks out elsewhere, the first sync placed nothing and the
-    /// control fired. **It was red on ubuntu-latest and macos-latest from the day it was
-    /// committed**: the S33 shape ("passes wherever a global git identity exists") with a
-    /// different environmental accident, and mine.
-    ///
-    /// Pointing `HOME` at the fixture makes the targets inside home *by construction* rather than
-    /// by luck, on every host. The behaviour under test is unchanged, and was re-verified by hand
-    /// in a Linux container before this was touched: three consecutive syncs leave three files,
-    /// `already up to date`, and no `.linix-backup`.
-    fn new(name: &str) -> Self {
-        let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join("src")).unwrap();
-        std::fs::create_dir_all(root.join("dest")).unwrap();
-        let f = Self { root };
-        let (out, code) = f.run(&["init"]);
-        assert_eq!(code, 0, "the fixture's own `init` failed:\n{out}");
-        let profile = f.cfg().join("profiles").join("Main");
-        let mut p = std::fs::read_to_string(&profile).unwrap();
-        p.push_str("\nuse extras\n");
-        std::fs::write(&profile, p).unwrap();
-
-        let mut lines = String::new();
-        for i in 0..3 {
-            let src = f.root.join("src").join(format!("s{i}"));
-            let dest = f.root.join("dest").join(format!("s{i}"));
-            std::fs::write(&src, format!("content-{i}\n")).unwrap();
-            lines.push_str(&format!(
-                "link:{} @target={}\n",
-                src.display().to_string().replace('\\', "/"),
-                dest.display().to_string().replace('\\', "/")
-            ));
-        }
-        std::fs::write(f.cfg().join("modules").join("extras.txt"), lines).unwrap();
-        f
-    }
-
-    fn cfg(&self) -> PathBuf {
-        self.root.join("config")
-    }
-
     fn dest_listing(&self) -> Vec<String> {
         let mut names: Vec<String> = std::fs::read_dir(self.root.join("dest"))
             .unwrap()
@@ -103,35 +78,11 @@ impl Fixture {
             })
             .collect()
     }
-
-    fn run(&self, args: &[&str]) -> (String, i32) {
-        let out = Command::new(env!("CARGO_BIN_EXE_linix"))
-            .args(args)
-            .current_dir(&self.root)
-            .env("LINIX_CONFIG_DIR", self.cfg())
-            .env("LINIX_DATA_DIR", self.root.join("data"))
-            // The fixture IS the home directory, so every `@target=` below it is inside home on
-            // any host. Without this the test only passed where the checkout happened to sit
-            // under the user's home — see `new`.
-            .env("HOME", &self.root)
-            .env("USERPROFILE", &self.root)
-            .stdin(std::process::Stdio::null())
-            .output()
-            .expect("the binary should run");
-        (
-            format!(
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            ),
-            out.status.code().unwrap_or(-1),
-        )
-    }
 }
 
 #[test]
 fn a_second_sync_leaves_no_backup_of_linixs_own_file() {
-    let f = Fixture::new("grade3-resource-idempotency");
+    let f = setup("grade3-resource-idempotency");
 
     let (first, code) = f.run(&["sync", "-y"]);
     assert_eq!(code, 0, "{first}");
@@ -166,7 +117,7 @@ fn a_second_sync_leaves_no_backup_of_linixs_own_file() {
 /// message, and every platform has them.
 #[test]
 fn a_second_sync_does_not_re_place_what_is_already_in_place() {
-    let f = Fixture::new("grade3-resource-work");
+    let f = setup("grade3-resource-work");
     let (first, _) = f.run(&["sync", "-y"]);
     assert_eq!(
         f.dest_listing(),

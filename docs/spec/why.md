@@ -5414,3 +5414,42 @@ exactly that. As their own binaries those two files never referenced anything th
 unit it is always loaded. Both lines say `format!` now, which is what they meant; the point worth
 keeping is that **a per-file binary can compile code that the same code cannot compile beside its
 neighbours**, and that is a fragility the merge removed rather than one it introduced.
+
+---
+
+**V.169 — Why sixteen copies is worse than the lines suggest, and what the merge nearly cost.**
+*(Rule in II.38. Fixed 2026-08-09, `S68`.)*
+
+Twenty-five lines written sixteen times is four hundred lines, which is the cheap way to describe
+it and the wrong one. **The expensive part is that no two copies agreed**, and the disagreements
+were all in the direction of *less isolation*:
+
+- **`current_dir`: 3 of 16.** The other thirteen ran `linix` with the test harness's working
+  directory — the repository root. LiNix reads `linix.txt` from the working directory as a
+  project-local shell manifest, so those thirteen were one stray file away from behaving
+  differently, and would have blamed the product.
+- **`HOME`/`USERPROFILE`: 3 of 16.** The other thirteen let `~` resolve to the machine's real home
+  directory. A test that declares `link:… @target=~/.vimrc` and runs `sync` was writing to the
+  developer's actual dotfiles. It passed anyway — because the assertion was about what LiNix did,
+  not about where — and on CI it passed or failed depending on whether the checkout happened to
+  sit under `$HOME`.
+- **`cfg()`: 11 of 16.** The five without it wrote `root.join("config")` at each call site, which
+  is not a bug and is how the other two started.
+
+The union is not a compromise here: **every one of the three is correct in the strong direction,
+and the copies that had it are the ones that were right.** A test process that can see the
+developer's home directory is a test whose result is about that machine.
+
+**What the merge nearly cost, and how it was caught.** The first conversion dropped each file's
+`new` on the grounds that it was shared boilerplate. Five of them were not: they created `tree/`,
+`src/` and `dest/` directories, appended `use extras` to the generated profile, and seeded link
+declarations before the first assertion. Deleting that would have left five files whose tests
+still compiled, still ran, and no longer tested what they were named after — **the exact failure
+this change exists to prevent, committed by the change itself**. It was caught by diffing every
+removed `new` against the shared one before running anything, and those five keep a free
+`setup(name)` built on `Fixture::new`.
+
+The lesson is the one the repository keeps relearning and is worth stating as a rule of the
+technique: **a de-duplication is only safe when the things being merged have been shown to be
+identical, one at a time.** Sixteen functions with the same name and shape are not sixteen copies
+of one function until somebody has read all sixteen.

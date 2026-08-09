@@ -23,37 +23,30 @@
 //! halves broke together.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-struct Fixture {
-    root: PathBuf,
+use crate::harness::Fixture;
+
+/// The shared root, plus what these tests need in it.
+fn setup(name: &str) -> Fixture {
+    let f = Fixture::new(name);
+    std::fs::create_dir_all(f.root.join("tree")).unwrap();
+    std::fs::create_dir_all(f.root.join("single")).unwrap();
+    std::fs::create_dir_all(f.root.join("dest")).unwrap();
+    let profile = f.cfg().join("profiles").join("Main");
+    let mut p = std::fs::read_to_string(&profile).unwrap();
+    p.push_str("\nuse extras\n");
+    std::fs::write(&profile, p).unwrap();
+
+    std::fs::write(f.root.join("tree").join("by_tree"), "managed\n").unwrap();
+    std::fs::write(f.root.join("single").join("by_link"), "managed\n").unwrap();
+    f.declare_both();
+    f
 }
 
 /// A tree with one file, and a `link:` line naming a second file with the same content — the
 /// same job stated the two ways. The fixture root is the child's `HOME`, so every destination is
 /// inside home by construction rather than by where the checkout happens to sit.
 impl Fixture {
-    fn new(name: &str) -> Self {
-        let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join("tree")).unwrap();
-        std::fs::create_dir_all(root.join("single")).unwrap();
-        std::fs::create_dir_all(root.join("dest")).unwrap();
-
-        let f = Self { root };
-        let (out, code) = f.run(&["init"]);
-        assert_eq!(code, 0, "the fixture's own `init` failed:\n{out}");
-        let profile = f.cfg().join("profiles").join("Main");
-        let mut p = std::fs::read_to_string(&profile).unwrap();
-        p.push_str("\nuse extras\n");
-        std::fs::write(&profile, p).unwrap();
-
-        std::fs::write(f.root.join("tree").join("by_tree"), "managed\n").unwrap();
-        std::fs::write(f.root.join("single").join("by_link"), "managed\n").unwrap();
-        f.declare_both();
-        f
-    }
-
     fn slash(p: &Path) -> String {
         p.display().to_string().replace('\\', "/")
     }
@@ -80,10 +73,6 @@ impl Fixture {
         std::fs::write(self.cfg().join("modules").join("extras.txt"), lines).unwrap();
     }
 
-    fn cfg(&self) -> PathBuf {
-        self.root.join("config")
-    }
-
     fn dest(&self, name: &str) -> PathBuf {
         self.root.join("dest").join(name)
     }
@@ -100,27 +89,6 @@ impl Fixture {
     fn backup_of(&self, name: &str) -> Option<String> {
         std::fs::read_to_string(format!("{}.linix-backup", self.dest(name).display())).ok()
     }
-
-    fn run(&self, args: &[&str]) -> (String, i32) {
-        let out = Command::new(env!("CARGO_BIN_EXE_linix"))
-            .args(args)
-            .current_dir(&self.root)
-            .env("LINIX_CONFIG_DIR", self.cfg())
-            .env("LINIX_DATA_DIR", self.root.join("data"))
-            .env("HOME", &self.root)
-            .env("USERPROFILE", &self.root)
-            .stdin(std::process::Stdio::null())
-            .output()
-            .expect("the binary should run");
-        (
-            format!(
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            ),
-            out.status.code().unwrap_or(-1),
-        )
-    }
 }
 
 /// T6, asked of both statements: a file the user already had is preserved before LiNix takes the
@@ -131,7 +99,7 @@ impl Fixture {
 /// on the same run with the same flag.
 #[test]
 fn a_users_existing_file_is_preserved_by_both_statements() {
-    let f = Fixture::new("dotfiles-preserves-the-original");
+    let f = setup("dotfiles-preserves-the-original");
 
     // Two files the user wrote by hand, one at each destination.
     std::fs::write(f.dest("by_tree"), "the user wrote this\n").unwrap();
@@ -177,7 +145,7 @@ fn a_users_existing_file_is_preserved_by_both_statements() {
 /// line stays declared, so it is the control for "this sync ran and the teardown was reached".
 #[test]
 fn deleting_the_declaration_undoes_it_and_restores_what_was_there() {
-    let f = Fixture::new("dotfiles-teardown");
+    let f = setup("dotfiles-teardown");
 
     std::fs::write(f.dest("by_tree"), "the user wrote this\n").unwrap();
     let (out, code) = f.run(&["sync", "-y", "--replace-existing"]);
@@ -221,7 +189,7 @@ fn deleting_the_declaration_undoes_it_and_restores_what_was_there() {
 /// specified a row per placed file rather than a row per tree.
 #[test]
 fn a_file_deleted_from_the_tree_leaves_the_machine() {
-    let f = Fixture::new("dotfiles-file-departs");
+    let f = setup("dotfiles-file-departs");
 
     std::fs::write(f.root.join("tree").join("second"), "also managed\n").unwrap();
     let (out, code) = f.run(&["sync", "-y"]);
