@@ -4800,3 +4800,52 @@ worse than returning nothing.
 **And it returns `Option`, not `Value::Null`.** The whole failure above is a caller that could
 not tell "I did not understand this" from "there is nothing here". A reader that hands back
 `Null` for both makes that distinction unavailable to everyone downstream.
+
+---
+
+**V.158 — Why the shared helper was the one with the weak rule, and six copies had the strong one.**
+*(Rule in II.27. Fixed 2026-08-09, `S54`.)*
+
+`LX-1` is the repo's own name for the mistake: *a parser that did not understand the output
+answering "the machine is empty"*. The type that fixes it, `Unrecognised`, is one of the
+best-documented things in the codebase, and the function that decides which answer to give —
+`or_unrecognised` — carries a paragraph explaining that an empty candidate list is a real answer
+and a populated one that yielded nothing is not.
+
+**Then a JSON escape hatch was added to it, for a real reason, and it took the check with it.**
+`pipx list --json` on an empty machine prints a sentence and then four lines of JSON. Those four
+lines are not prose by the general rule and not package rows either, so the line count called
+them "unread" and `linix list` warned about pipx on every run of a clean box. Measured on a real
+Windows machine, 2026-08-07. The fix was: *if the output contains a parseable JSON document,
+return `Ok`.*
+
+Which is correct for the case it was written for and catastrophic one step to the left.
+**`Ok(found)` — where `found` is empty — was returned for any output holding a parseable
+document, whether or not the reader had extracted a single package from it.** npm renaming
+`dependencies`, pip capitalising `name`: still valid JSON, still parses, still reads as a machine
+with nothing installed. Five backends reach that arm — npm, pnpm, pip, pipx, composer — and they
+were precisely the ones the check no longer protected.
+
+**Six sites elsewhere in the repo already had the right rule.** conda (twice), dotnet, pixi,
+winget, scoop and the custom-backend onboarder each wrote `if found.is_empty() &&
+!container.is_empty() { … }` by hand, several with excellent comments about why the two answers
+must not share a return value. That is the shape of the problem: the correct rule copied six
+times, and the shared function everyone else called holding the weak one. The five backends that
+did the right thing — reuse — got the worse behaviour.
+
+**And a length alone could not have expressed it.** `Some(0)` and `None` are different answers:
+the container was there and empty, or the container was not there. Every one of the six
+hand-rolled copies could only ask the first question, because it had already `let Some(arr) = …
+else { return unreadable }`-ed its way past the second. Folding them into one helper made the
+distinction a parameter, so the case each copy handled separately is now the same case.
+
+**The line-count fallback survives, for the `None` branch only.** A refusal that says "0 line(s)
+this parser does not recognise" about a screenful of output reads as a bug in the refusal, so
+when there is no entry count to report it falls back to counting the non-blank lines — which is
+exactly what all five private `unreadable` helpers did, and the reason they existed.
+
+**What was deleted:** five private `unreadable`/`export_unreadable` builders, seven literal
+`found.is_empty() && !container.is_empty()` guards, and the `candidates[start..].join("\n")`
+full-output copy the escape hatch made on every pipx and yarn listing. The tests that pinned the
+pipx and yarn empty cases still pass — through the container check now, which is the reading that
+was meant.

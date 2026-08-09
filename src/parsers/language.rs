@@ -13,6 +13,10 @@ use serde_json::Value;
 ///
 /// It also closes the tenth, which was the widest: `_ => vec![]` answered *the machine is
 /// empty* for a backend nobody had written a reader for.
+///
+/// **The `--json` readers make the judgement themselves and return early**, because a line count
+/// is the wrong question to ask of a document: see [`crate::parsers::or_unrecognised_json`]. The
+/// rest fall through to the line-counting rule below.
 pub fn parse_installed(backend: &str, output: &str) -> ParseResult {
     let clean = sanitize(output);
     if clean.is_empty() {
@@ -20,14 +24,14 @@ pub fn parse_installed(backend: &str, output: &str) -> ParseResult {
     }
 
     let found = match backend {
-        "npm" | "pnpm" => parse_npm_style_json(&clean, backend),
+        "npm" | "pnpm" => return parse_npm_style_json(&clean, backend),
         // `bun pm ls -g` prints an ASCII tree (a header path line + "├── name@ver"
         // rows), NOT npm's `--json` object — routing it through the JSON parser
         // silently returned nothing, which broke list AND made `info`/`remove`
         // no-ops (remove is gated on `info`), leaving stale manifest entries.
         "bun" => parse_bun_list(&clean),
-        "pip" => parse_pip_json(&clean),
-        "pipx" => parse_pipx_json(&clean),
+        "pip" => return parse_pip_json(&clean),
+        "pipx" => return parse_pipx_json(&clean),
         "cargo" => parse_cargo_list(&clean),
         // yarn brackets every command with its own chrome — `yarn global v1.22.22` on the way in
         // and `Done in 0.67s.` on the way out — so an EMPTY global install still prints two
@@ -51,7 +55,7 @@ pub fn parse_installed(backend: &str, output: &str) -> ParseResult {
             );
         }
         "gem" => parse_gem_list(&clean),
-        "composer" => parse_composer_json(&clean),
+        "composer" => return parse_composer_json(&clean),
         "go" => parse_go_list(&clean),
         other => {
             return Err(Unrecognised {
@@ -79,15 +83,23 @@ pub fn parse_search(backend: &str, output: &str) -> Vec<Package> {
 /// `{"dependencies": {...}}`, but `pnpm ls -g --json` emits an ARRAY of such objects
 /// (`[{"dependencies": {...}}]`) — so normalize to a list of entries and pull each one's
 /// dependency map, or pnpm's global packages parse as empty.
-fn parse_npm_style_json(output: &str, backend: &str) -> Vec<Package> {
-    let json = crate::parsers::json_document(output).unwrap_or_default();
+///
+/// **`dependencies` absent is not `dependencies` empty.** npm renaming that key is the shape of
+/// a format change, and it must not read as a machine with nothing installed — so the container
+/// is `None` when no entry carried the map at all, and `Some(0)` when one did and it was empty.
+fn parse_npm_style_json(output: &str, backend: &str) -> ParseResult {
+    let Some(json) = crate::parsers::json_document(output) else {
+        return crate::parsers::or_unrecognised_json(backend, vec![], None, "not JSON", output);
+    };
     let mut res = vec![];
     let entries: Vec<&Value> = match &json {
         Value::Array(items) => items.iter().collect(),
         other => vec![other],
     };
+    let mut declared = None;
     for entry in entries {
         if let Some(deps) = entry.get("dependencies").and_then(|d| d.as_object()) {
+            *declared.get_or_insert(0) += deps.len();
             for (name, val) in deps {
                 let version = val
                     .get("version")
@@ -97,28 +109,49 @@ fn parse_npm_style_json(output: &str, backend: &str) -> Vec<Package> {
             }
         }
     }
-    res
+    crate::parsers::or_unrecognised_json(
+        backend,
+        res,
+        declared,
+        "JSON with no `dependencies` object",
+        output,
+    )
 }
 
 /// Parses the flat JSON array output of `pip list --format=json`.
-fn parse_pip_json(output: &str) -> Vec<Package> {
-    let json = crate::parsers::json_document(output).unwrap_or_default();
-    json.as_array()
-        .unwrap_or(&vec![])
-        .iter()
-        .filter_map(|p| {
-            let name = p.get("name")?.as_str()?;
-            let ver = p.get("version")?.as_str()?;
-            Some(Package::with_version(name, ver, "pip"))
+fn parse_pip_json(output: &str) -> ParseResult {
+    let Some(json) = crate::parsers::json_document(output) else {
+        return crate::parsers::or_unrecognised_json("pip", vec![], None, "not JSON", output);
+    };
+    let entries = json.as_array();
+    let found = entries
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|p| {
+                    let name = p.get("name")?.as_str()?;
+                    let ver = p.get("version")?.as_str()?;
+                    Some(Package::with_version(name, ver, "pip"))
+                })
+                .collect()
         })
-        .collect()
+        .unwrap_or_default();
+    crate::parsers::or_unrecognised_json(
+        "pip",
+        found,
+        entries.map(Vec::len),
+        "JSON, but not the array `pip list --format=json` returns",
+        output,
+    )
 }
 
 /// Parses the complex JSON object of `pipx list --json`.
-fn parse_pipx_json(output: &str) -> Vec<Package> {
-    let json = crate::parsers::json_document(output).unwrap_or_default();
+fn parse_pipx_json(output: &str) -> ParseResult {
+    let Some(json) = crate::parsers::json_document(output) else {
+        return crate::parsers::or_unrecognised_json("pipx", vec![], None, "not JSON", output);
+    };
+    let venvs = json.get("venvs").and_then(|v| v.as_object());
     let mut res = vec![];
-    if let Some(venvs) = json.get("venvs").and_then(|v| v.as_object()) {
+    if let Some(venvs) = venvs {
         for (name, data) in venvs {
             // `package_version`, which is what pipx calls it. Reading `version` — a key that
             // schema does not have — gave every pipx package the version `unknown`, on every
@@ -137,7 +170,13 @@ fn parse_pipx_json(output: &str) -> Vec<Package> {
             ));
         }
     }
-    res
+    crate::parsers::or_unrecognised_json(
+        "pipx",
+        res,
+        venvs.map(serde_json::Map::len),
+        "JSON with no `venvs` object",
+        output,
+    )
 }
 
 /// Parses the formatted text list of `cargo install --list`.
@@ -268,19 +307,26 @@ fn parse_gem_list(output: &str) -> Vec<Package> {
 }
 
 /// Parses the JSON output of `composer global show --format=json`.
-fn parse_composer_json(output: &str) -> Vec<Package> {
-    let json = crate::parsers::json_document(output).unwrap_or_default();
+fn parse_composer_json(output: &str) -> ParseResult {
+    let Some(json) = crate::parsers::json_document(output) else {
+        return crate::parsers::or_unrecognised_json("composer", vec![], None, "not JSON", output);
+    };
+    let installed = json.get("installed").and_then(|i| i.as_array());
     let mut res = vec![];
-    if let Some(installed) = json.get("installed").and_then(|i| i.as_array()) {
-        for pkg in installed {
-            let name = pkg.get("name").and_then(|n| n.as_str()).unwrap_or("");
-            let version = pkg.get("version").and_then(|v| v.as_str()).unwrap_or("");
-            if !name.is_empty() {
-                res.push(Package::with_version(name, version, "composer"));
-            }
+    for pkg in installed.into_iter().flatten() {
+        let name = pkg.get("name").and_then(|n| n.as_str()).unwrap_or("");
+        let version = pkg.get("version").and_then(|v| v.as_str()).unwrap_or("");
+        if !name.is_empty() {
+            res.push(Package::with_version(name, version, "composer"));
         }
     }
-    res
+    crate::parsers::or_unrecognised_json(
+        "composer",
+        res,
+        installed.map(Vec::len),
+        "JSON with no `installed` array",
+        output,
+    )
 }
 
 /// Parses simple binary names from Go-related outputs.
@@ -807,12 +853,80 @@ Done in 0.67s.
         assert_eq!(pkgs[0].version.as_deref(), Some("5.4.5"));
     }
 
-    /// The check that keeps the JSON short-circuit honest: a document that does NOT parse is
-    /// still unread, however many braces it opens with.
+    /// A document that does NOT parse is still unread, however many braces it opens with.
     #[test]
     fn broken_json_is_still_unreadable() {
-        assert!(parse_installed("pipx", "{
-  \"venvs\": {
-").is_err());
+        assert!(parse_installed("pipx", "{\n  \"venvs\": {\n").is_err());
+    }
+
+    /// **The container is what the judgement is made against, and `absent` is not `empty`.**
+    ///
+    /// This is the case `or_unrecognised`'s JSON arm used to wave through: it returned
+    /// `Ok(found)` — empty — for *anything* whose output contained a parseable JSON document,
+    /// regardless of whether the reader had extracted a single package from it. So npm renaming
+    /// `dependencies`, or pip capitalising `name`, was a silently empty machine: install
+    /// everything, own nothing. Five backends reached that arm and were the unprotected ones,
+    /// while six sites elsewhere in the repo hand-rolled the correct rule.
+    #[test]
+    fn a_renamed_container_is_a_format_change_and_not_an_empty_machine() {
+        // npm, with `dependencies` renamed. Valid JSON, parses perfectly, means nothing to us.
+        let renamed = r#"{"name":"root","packages":{"typescript":{"version":"5.4.5"}}}"#;
+        let err = parse_installed("npm", renamed).expect_err("a renamed container is a change");
+        assert_eq!(err.backend, "npm");
+        assert!(
+            err.sample.contains("dependencies"),
+            "the refusal must name the key it went looking for: {}",
+            err.sample
+        );
+
+        // pnpm's array-of-objects shape, same rename.
+        assert!(parse_installed("pnpm", &format!("[{renamed}]")).is_err());
+
+        // pipx, with `venvs` renamed.
+        assert!(parse_installed("pipx", r#"{"pipx_spec_version":"0.1","envs":{}}"#).is_err());
+
+        // composer, with `installed` renamed — under its banner, so both fixes are in play.
+        assert!(parse_installed(
+            "composer",
+            concat!(
+                "Changed current directory to /root/.composer\n",
+                r#"{"packages":[{"name":"psr/log","version":"1.1.4"}]}"#,
+                "\n"
+            )
+        )
+        .is_err());
+    }
+
+    /// The other half of the same judgement: entries present, none of them readable.
+    #[test]
+    fn entries_that_yield_no_package_are_a_format_change_too() {
+        // pip capitalising `name`, which is the doc's own example.
+        let err = parse_installed("pip", r#"[{"Name":"black","Version":"24.1.0"}]"#)
+            .expect_err("an array of entries none of which read is a change");
+        assert_eq!(err.backend, "pip");
+        assert_eq!(err.data_lines, 1, "the count is of entries, not of lines");
+
+        // npm with the map present and its values shaped differently is NOT this case — the key
+        // is the name, so those still read. The case that fails is the map being gone, above.
+        assert!(parse_installed("npm", r#"{"dependencies":{"tsc":{}}}"#).is_ok());
+    }
+
+    /// And an empty container of every shape is still an empty machine.
+    #[test]
+    fn an_empty_container_is_empty_for_every_json_backend() {
+        for (backend, empty) in [
+            ("npm", r#"{"dependencies":{}}"#),
+            ("pnpm", r#"[{"dependencies":{}}]"#),
+            ("pip", "[]"),
+            ("pipx", r#"{"pipx_spec_version":"0.1","venvs":{}}"#),
+            ("composer", r#"{"installed":[]}"#),
+        ] {
+            assert_eq!(
+                parse_installed(backend, empty)
+                    .unwrap_or_else(|e| panic!("{backend} read an empty machine as unread: {e}")),
+                Vec::new(),
+                "{backend}"
+            );
+        }
     }
 }

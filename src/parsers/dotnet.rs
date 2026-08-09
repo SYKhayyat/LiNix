@@ -94,21 +94,19 @@ mod tests {
 /// that failure precisely and calls it `Q40` reproduced; the parser it hands the bytes to went
 /// on reproducing it.
 pub fn parse_dotnet_list_json(output: &str) -> ParseResult {
-    let unreadable = |what: &str| {
-        Err(crate::parsers::Unrecognised {
-            backend: "dotnet".into(),
-            data_lines: output.lines().filter(|l| !l.trim().is_empty()).count(),
-            sample: format!("{what}: {}", output.trim().chars().take(100).collect::<String>()),
-        })
+    let Some(doc) = crate::parsers::json_document(output) else {
+        return crate::parsers::or_unrecognised_json(
+            "dotnet",
+            vec![],
+            None,
+            "not JSON — most likely a usage message from an SDK without the flag",
+            output,
+        );
     };
-    let Ok(doc) = serde_json::from_str::<serde_json::Value>(output) else {
-        return unreadable("not JSON — most likely a usage message from an SDK without the flag");
-    };
-    let Some(items) = doc.get("data").and_then(|d| d.as_array()) else {
-        return unreadable("JSON, but with no `data` array");
-    };
+    let items = doc.get("data").and_then(|d| d.as_array());
     let found = items
-        .iter()
+        .into_iter()
+        .flatten()
         .filter_map(|t| {
             let id = t.get("packageId")?.as_str()?.trim();
             if id.is_empty() {
@@ -127,11 +125,14 @@ pub fn parse_dotnet_list_json(output: &str) -> ParseResult {
         .collect::<Vec<_>>();
     // An empty `data` array is dotnet saying no global tools are installed, which is true on
     // most machines. A populated one none of whose entries carried a `packageId` is a schema
-    // change, and the two must not share a return value.
-    if found.is_empty() && !items.is_empty() {
-        return unreadable("a `data` array, none of whose entries carry a `packageId`");
-    }
-    Ok(found)
+    // change, and an absent one is another; none of the three may share a return value.
+    crate::parsers::or_unrecognised_json(
+        "dotnet",
+        found,
+        items.map(Vec::len),
+        "JSON with no `data` array, or a `data` array none of whose entries carry a `packageId`",
+        output,
+    )
 }
 
 #[cfg(test)]

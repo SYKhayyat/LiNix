@@ -2669,3 +2669,31 @@ above and a summary below are both survivable — and both are real: composer pr
 unparseable bytes reports nothing installed, which plans every declaration as a fresh install and
 drops every removal — the `LX-1` failure again, one layer up. `json_document` returns `Option`
 precisely so the caller has to say which of the two it means.
+
+## II.27 A structured answer is judged by its container, not by its line count (`S54`, V.158)
+
+**Every `--json` reader answers through `parsers::or_unrecognised_json`, and hands it the
+container it went looking for:**
+
+- **`Some(0)`** — the shape was found and holds nothing. That is a machine with none of these,
+  which is true and common. `Ok(vec![])`.
+- **`Some(n)`, nothing read** — `n` entries the reader could not get a name out of. A schema
+  change. Refuse.
+- **`None`** — the shape was not there at all, which includes the output not being a document.
+  A schema change. Refuse.
+
+**`None` and `Some(0)` are different answers and must be spelled differently.** A reader that
+reports "no entries" when the key it wanted was renamed has turned a format change into an empty
+machine, and `sync` answers an empty machine by installing every declaration and dropping every
+removal.
+
+**`or_unrecognised` is for text listings only.** Counting lines of a document asks a question
+about a shape that has no lines, and the arm added to paper over that made the answer
+unconditionally `Ok` for anything containing parseable JSON — which disabled `LX-1` for every
+backend that reached it.
+
+**One implementation, and it is the shared one.** Five files carried a private `unreadable`
+helper building the same `Unrecognised` by hand, and seven sites carried the
+`found.is_empty() && !container.is_empty()` literal. The correct rule living in six copies while
+the shared helper held the weak one is how the five backends using the shared helper became the
+unprotected ones.

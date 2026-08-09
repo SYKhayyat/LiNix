@@ -5,20 +5,8 @@
 //! candidate builds (ascending, so the last entry is the newest).
 
 use crate::core::Package;
-use crate::parsers::{ParseResult, Unrecognised};
+use crate::parsers::{or_unrecognised_json, ParseResult};
 use crate::utils::text::sanitize;
-
-/// `serde_json::from_str(..).unwrap_or_default()` gives `Value::Null`, and every accessor below
-/// then answers `None`, and every `unwrap_or_default()` after that gives the empty vector — so
-/// output that is not JSON at all arrived as *"this environment has no packages"*. Three
-/// functions in this file spelled it that way. This is what they say instead.
-fn unreadable(what: &str, output: &str) -> Unrecognised {
-    Unrecognised {
-        backend: "conda".into(),
-        data_lines: output.lines().filter(|l| !l.trim().is_empty()).count(),
-        sample: format!("{what}: {}", output.trim().chars().take(100).collect::<String>()),
-    }
-}
 
 /// Parses `conda env export -n <env> --from-history --json` — the packages a person
 /// actually asked for, as opposed to the environment's full solved closure.
@@ -34,13 +22,12 @@ fn unreadable(what: &str, output: &str) -> Unrecognised {
 pub fn parse_conda_history(output: &str) -> ParseResult {
     let clean = sanitize(output);
     let Some(json) = crate::parsers::json_document(&clean) else {
-        return Err(unreadable("not JSON", &clean));
+        return or_unrecognised_json("conda", vec![], None, "not JSON", &clean);
     };
-    let Some(deps) = json.get("dependencies").and_then(|d| d.as_array()) else {
-        return Err(unreadable("JSON with no `dependencies` array", &clean));
-    };
+    let deps = json.get("dependencies").and_then(|d| d.as_array());
     let found: Vec<Package> = deps
-        .iter()
+        .into_iter()
+        .flatten()
         .filter_map(|d| {
             let spec = d.as_str()?;
             let name = spec
@@ -51,37 +38,42 @@ pub fn parse_conda_history(output: &str) -> ParseResult {
         })
         .collect();
     // An empty `dependencies` is an environment nobody asked anything of, which is real. A
-    // populated one that yielded no name is a match-spec shape this does not read.
-    if found.is_empty() && !deps.is_empty() {
-        return Err(unreadable(
-            "a `dependencies` array of match-specs none of which yielded a name",
-            &clean,
-        ));
-    }
-    Ok(found)
+    // populated one that yielded no name is a match-spec shape this does not read, and an
+    // absent one is a schema change.
+    or_unrecognised_json(
+        "conda",
+        found,
+        deps.map(Vec::len),
+        "JSON whose `dependencies` array is missing, or holds match-specs none of which \
+         yielded a name",
+        &clean,
+    )
 }
 
 /// Parses `conda list -n <env> --json` — an array of `{ "name", "version", ... }`.
 pub fn parse_conda_list(output: &str) -> ParseResult {
     let clean = sanitize(output);
     let Some(json) = crate::parsers::json_document(&clean) else {
-        return Err(unreadable("not JSON", &clean));
+        return or_unrecognised_json("conda", vec![], None, "not JSON", &clean);
     };
-    let Some(arr) = json.as_array() else {
-        return Err(unreadable("JSON, but not the array `conda list` returns", &clean));
-    };
+    let arr = json.as_array();
     let found: Vec<Package> = arr
-        .iter()
+        .into_iter()
+        .flatten()
         .filter_map(|p| {
             let name = p.get("name")?.as_str()?;
             let ver = p.get("version").and_then(|v| v.as_str()).unwrap_or("");
             Some(Package::with_version(name, ver, "conda"))
         })
         .collect();
-    if found.is_empty() && !arr.is_empty() {
-        return Err(unreadable("an array of entries, none carrying a `name`", &clean));
-    }
-    Ok(found)
+    or_unrecognised_json(
+        "conda",
+        found,
+        arr.map(Vec::len),
+        "JSON that is not the array `conda list` returns, or an array of entries none \
+         carrying a `name`",
+        &clean,
+    )
 }
 
 /// Parses `conda search <query> --json` — an object mapping each matching package

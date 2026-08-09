@@ -127,13 +127,8 @@ impl ParserSpec {
     /// U2's claim is that a custom backend is a first-class peer of a built-in. This is part of
     /// paying for that claim.
     pub fn parse(&self, output: &str, backend: &str) -> crate::parsers::ParseResult {
-        let unreadable = |what: String| {
-            Err(crate::parsers::Unrecognised {
-                backend: backend.to_string(),
-                data_lines: output.lines().filter(|l| !l.trim().is_empty()).count(),
-                sample: format!("{what}: {}", output.trim().chars().take(100).collect::<String>()),
-            })
-        };
+        let unreadable =
+            |what: String| crate::parsers::or_unrecognised_json(backend, vec![], None, &what, output);
 
         match self {
             ParserSpec::Lines { skip_prefixes } => {
@@ -197,7 +192,7 @@ impl ParserSpec {
                 name_key,
                 version_key,
             } => {
-                let Ok(json) = serde_json::from_str::<Value>(&sanitize(output)) else {
+                let Some(json) = crate::parsers::json_document(&sanitize(output)) else {
                     return unreadable("not JSON".into());
                 };
                 let node = match array_path {
@@ -212,13 +207,13 @@ impl ParserSpec {
                         .iter()
                         .filter_map(|item| json_package(item, name_key, version_key, backend))
                         .collect();
-                    if found.is_empty() && !arr.is_empty() {
-                        return unreadable(format!(
-                            "an array of {} entries, none carrying `{name_key}`",
-                            arr.len()
-                        ));
-                    }
-                    Ok(found)
+                    crate::parsers::or_unrecognised_json(
+                        backend,
+                        found,
+                        Some(arr.len()),
+                        &format!("an array of entries, none carrying `{name_key}`"),
+                        output,
+                    )
                 } else if let Some(obj) = node.as_object() {
                     // Object shape: keys are the package names.
                     Ok(obj.keys().map(|k| Package::new(k, backend)).collect())

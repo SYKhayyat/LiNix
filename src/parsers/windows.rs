@@ -363,23 +363,15 @@ fn parse_scoop_search(output: &str) -> Vec<Package> {
 /// readers in this file, not the least: the usage message an older winget or scoop prints in
 /// answer to a flag it does not have was being read as a machine with nothing installed. Both
 /// used to open with two `return Vec::new()` guards spelling exactly that.
-fn export_unreadable(backend: &'static str, what: &str, json: &str) -> Unrecognised {
-    Unrecognised {
-        backend: backend.to_string(),
-        data_lines: json.lines().filter(|l| !l.trim().is_empty()).count(),
-        sample: format!("{what}: {}", json.trim().chars().take(100).collect::<String>()),
-    }
-}
 pub fn parse_winget_export(json: &str) -> ParseResult {
-    let Ok(doc) = serde_json::from_str::<serde_json::Value>(json) else {
-        return Err(export_unreadable("winget", "not JSON", json));
+    let Some(doc) = crate::parsers::json_document(json) else {
+        return crate::parsers::or_unrecognised_json("winget", vec![], None, "not JSON", json);
     };
-    let Some(sources) = doc.get("Sources").and_then(|s| s.as_array()) else {
-        return Err(export_unreadable("winget", "JSON with no `Sources` array", json));
-    };
+    let sources = doc.get("Sources").and_then(|s| s.as_array());
     let mut seen = std::collections::HashSet::new();
     let found: Vec<Package> = sources
-        .iter()
+        .into_iter()
+        .flatten()
         .filter_map(|s| s.get("Packages")?.as_array())
         .flatten()
         .filter_map(|p| p.get("PackageIdentifier")?.as_str())
@@ -391,19 +383,22 @@ pub fn parse_winget_export(json: &str) -> ParseResult {
         .map(|id| Package::new(id, "winget"))
         .collect();
     // `Sources` present and empty is a machine with nothing exported, which is real. Sources
-    // that carry packages none of which had a `PackageIdentifier` is a schema change.
-    let had_entries = sources
-        .iter()
-        .filter_map(|s| s.get("Packages")?.as_array())
-        .any(|a| !a.is_empty());
-    if found.is_empty() && had_entries {
-        return Err(export_unreadable(
-            "winget",
-            "packages, none carrying a `PackageIdentifier`",
-            json,
-        ));
-    }
-    Ok(found)
+    // that carry packages none of which had a `PackageIdentifier` is a schema change, and no
+    // `Sources` key at all is another. The count is of the packages, not of the sources: a
+    // source list holding one empty source is still a machine with nothing exported.
+    let entries = sources.map(|s| {
+        s.iter()
+            .filter_map(|s| s.get("Packages")?.as_array())
+            .map(Vec::len)
+            .sum()
+    });
+    crate::parsers::or_unrecognised_json(
+        "winget",
+        found,
+        entries,
+        "JSON with no `Sources` array, or packages none carrying a `PackageIdentifier`",
+        json,
+    )
 }
 
 #[cfg(test)]
@@ -781,14 +776,13 @@ mod export_tests {
 /// JSON says the same thing in named fields — which is the point — but only if it is asked the
 /// same questions.
 pub fn parse_scoop_export(json: &str) -> ParseResult {
-    let Ok(doc) = serde_json::from_str::<serde_json::Value>(json) else {
-        return Err(export_unreadable("scoop", "not JSON", json));
+    let Some(doc) = crate::parsers::json_document(json) else {
+        return crate::parsers::or_unrecognised_json("scoop", vec![], None, "not JSON", json);
     };
-    let Some(apps) = doc.get("apps").and_then(|a| a.as_array()) else {
-        return Err(export_unreadable("scoop", "JSON with no `apps` array", json));
-    };
+    let apps = doc.get("apps").and_then(|a| a.as_array());
     let found: Vec<Package> = apps
-        .iter()
+        .into_iter()
+        .flatten()
         .filter_map(|a| {
             let name = a.get("Name")?.as_str()?.trim();
             if name.is_empty() {
@@ -819,27 +813,34 @@ pub fn parse_scoop_export(json: &str) -> ParseResult {
     // none readable is not — though note this reader also *deliberately* drops failed and
     // half-installed rows, so a machine whose every app is in one of those states reports as
     // empty. That is the correct answer: none of them is installed.
-    let usable = apps.iter().any(|a| {
-        let failed = a
-            .get("Info")
-            .and_then(|i| i.as_str())
-            .unwrap_or("")
-            .to_ascii_lowercase()
-            .contains("failed");
-        let versioned = a
-            .get("Version")
-            .and_then(|v| v.as_str())
-            .is_some_and(|v| !v.trim().is_empty());
-        !failed && versioned
+    //
+    // So the container this is judged against is the count of *usable* apps, not of all of
+    // them — an export of nothing but failed installs has zero entries to read, not several
+    // that went unread.
+    let usable = apps.map(|apps| {
+        apps.iter()
+            .filter(|a| {
+                let failed = a
+                    .get("Info")
+                    .and_then(|i| i.as_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase()
+                    .contains("failed");
+                let versioned = a
+                    .get("Version")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|v| !v.trim().is_empty());
+                !failed && versioned
+            })
+            .count()
     });
-    if found.is_empty() && usable {
-        return Err(export_unreadable(
-            "scoop",
-            "apps that should have read, none carrying a `Name`",
-            json,
-        ));
-    }
-    Ok(found)
+    crate::parsers::or_unrecognised_json(
+        "scoop",
+        found,
+        usable,
+        "JSON with no `apps` array, or apps that should have read, none carrying a `Name`",
+        json,
+    )
 }
 
 #[cfg(test)]

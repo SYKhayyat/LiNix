@@ -785,21 +785,13 @@ mod pixi_real_output_tests {
 /// negotiated `--json` path, so the version of pixi that does not have the flag is precisely
 /// the one whose usage message would have been read as an empty machine.
 pub fn pixi_list_json(output: &str, backend: &str) -> ParseResult {
-    let unreadable = |what: &str| {
-        Err(crate::parsers::Unrecognised {
-            backend: backend.to_string(),
-            data_lines: output.lines().filter(|l| !l.trim().is_empty()).count(),
-            sample: format!("{what}: {}", output.trim().chars().take(100).collect::<String>()),
-        })
+    let Some(doc) = crate::parsers::json_document(output) else {
+        return crate::parsers::or_unrecognised_json(backend, vec![], None, "not JSON", output);
     };
-    let Ok(envs) = serde_json::from_str::<serde_json::Value>(output) else {
-        return unreadable("not JSON");
-    };
-    let Some(envs) = envs.as_array() else {
-        return unreadable("JSON, but not the array of environments this reads");
-    };
+    let envs = doc.as_array();
     let found = envs
-        .iter()
+        .into_iter()
+        .flatten()
         .filter_map(|env| {
             let name = env.get("name")?.as_str()?.trim();
             if name.is_empty() {
@@ -823,11 +815,16 @@ pub fn pixi_list_json(output: &str, backend: &str) -> ParseResult {
         })
         .collect::<Vec<_>>();
     // An empty array is pixi saying it has no global environments, which is a real answer. A
-    // non-empty array none of whose entries carried a usable `name` is a schema change.
-    if found.is_empty() && !envs.is_empty() {
-        return unreadable("an array of environments, none of them carrying a `name`");
-    }
-    Ok(found)
+    // non-empty array none of whose entries carried a usable `name` is a schema change, and so
+    // is a document that is not the array at all.
+    crate::parsers::or_unrecognised_json(
+        backend,
+        found,
+        envs.map(Vec::len),
+        "JSON that is not the array of environments this reads, or an array of environments \
+         none of them carrying a `name`",
+        output,
+    )
 }
 
 #[cfg(test)]

@@ -146,35 +146,60 @@ pub fn data_lines(clean: &str) -> Vec<&str> {
 /// Passing an empty `candidates` therefore always succeeds, which is deliberate: a manager that
 /// prints only a header when it has nothing has told the truth, and a parser that called that
 /// drift would refuse to run on a clean box.
+///
+/// **This is for text listings. A `--json` reader must use [`or_unrecognised_json`]** — counting
+/// lines of a structured answer asks the wrong question, and the arm that used to paper over
+/// that here made the answer *unconditionally* `Ok` for anything that parsed as JSON, which
+/// disabled the check for the five backends that reached it.
 pub fn or_unrecognised(backend: &str, found: Vec<Package>, candidates: &[&str]) -> ParseResult {
     if !found.is_empty() || candidates.is_empty() {
         return Ok(found);
-    }
-    // **A document that parses is a document that was read.** `pipx list --json` on an empty
-    // machine prints `nothing has been installed with pipx` and then
-    // `{"pipx_spec_version": "0.1", "venvs": {}}` — four lines of JSON that are not prose and
-    // not package rows, so the line count said "unread" about an answer the reader understood
-    // perfectly. Measured on a real Windows box, 2026-08-07, where `linix list` warned about
-    // pipx on every run.
-    //
-    // Line-counting is the right default for text listings and the wrong one for a structured
-    // answer: the question there is whether the shape parsed, and if it did, empty is empty.
-    // From the first line that opens a document, not from the top: pipx prints its sentence
-    // above the JSON, and that sentence is not prose by the general rule — no trailing full
-    // stop, so nothing else would have dropped it.
-    if let Some(start) = candidates
-        .iter()
-        .position(|l| l.trim_start().starts_with(['{', '[']))
-    {
-        let joined = candidates[start..].join("\n");
-        if serde_json::from_str::<serde_json::Value>(joined.trim()).is_ok() {
-            return Ok(found);
-        }
     }
     Err(Unrecognised {
         backend: backend.to_string(),
         data_lines: candidates.len(),
         sample: candidates[0].trim().chars().take(120).collect(),
+    })
+}
+
+/// The same judgement for a structured answer, where the question is the container and not the
+/// lines.
+///
+/// `container` is how many entries the document offered this reader — `Some(n)` when the shape
+/// was found, `None` when it was not there at all. The three answers it separates:
+///
+/// - **`Some(0)`** — the manager says the machine has none. `pipx list --json` on an empty box
+///   prints `{"pipx_spec_version": "0.1", "venvs": {}}`, and that is a true and common answer.
+/// - **`Some(n)` with nothing read** — `n` entries the reader could not get a name out of. That
+///   is a schema change: npm renaming `dependencies`, pip capitalising `name`. Refuse.
+/// - **`None`** — the document did not have the shape at all, which includes not being a
+///   document. Refuse. This is the case a length alone cannot express, and the one that made
+///   `Some(0)` too tempting to write as `0`.
+///
+/// **Reading an unrecognised shape as an empty machine installs everything and owns nothing**:
+/// every declaration becomes an install, every removal is dropped, and nothing in the run
+/// believes anything failed.
+pub fn or_unrecognised_json(
+    backend: &str,
+    found: Vec<Package>,
+    container: Option<usize>,
+    what: &str,
+    output: &str,
+) -> ParseResult {
+    if !found.is_empty() || container == Some(0) {
+        return Ok(found);
+    }
+    Err(Unrecognised {
+        backend: backend.to_string(),
+        // A shape that was never found has no entry count, so fall back to the size of the
+        // answer — a refusal that says "0 lines" about a screenful of output reads as a bug in
+        // the refusal.
+        data_lines: container
+            .unwrap_or_else(|| output.lines().filter(|l| !l.trim().is_empty()).count()),
+        sample: format!(
+            "{what}: {}",
+            output.trim().chars().take(100).collect::<String>()
+        ),
     })
 }
 
@@ -283,6 +308,41 @@ mod tests {
         r#"{"installed":[{"name":"psr/log","version":"1.1.4"}]}"#,
         "\n"
     );
+
+    /// The three answers a structured reader has to keep apart, asserted as three.
+    ///
+    /// The arm this replaces lived inside `or_unrecognised` and returned `Ok(found)` — empty —
+    /// for anything whose output held a parseable JSON document, whether or not the reader had
+    /// got a single package out of it. That is `Some(n)` and `None` both collapsed into
+    /// `Some(0)`, which is the collapse the whole `LX-1` type exists to prevent.
+    #[test]
+    fn the_container_says_which_of_the_three_answers_this_is() {
+        let pkg = || vec![Package::new("jq", "test")];
+
+        // Read something: always fine, whatever the container said.
+        assert!(or_unrecognised_json("test", pkg(), Some(9), "what", "out").is_ok());
+        assert!(or_unrecognised_json("test", pkg(), None, "what", "out").is_ok());
+
+        // An empty container is an empty machine, which is a true and common answer.
+        assert_eq!(
+            or_unrecognised_json("test", vec![], Some(0), "what", "out").expect("empty is empty"),
+            vec![]
+        );
+
+        // Entries offered, none read: a schema change.
+        let err = or_unrecognised_json("test", vec![], Some(4), "no `name` in any entry", "out")
+            .expect_err("four unread entries is not an empty machine");
+        assert_eq!(err.data_lines, 4, "the count is of entries, not of lines");
+        assert!(err.sample.starts_with("no `name` in any entry"));
+
+        // No container at all: also a schema change, and the one a length cannot express.
+        let err = or_unrecognised_json("test", vec![], None, "no `data` key", "a\nb\n\nc\n")
+            .expect_err("a missing container is not an empty machine");
+        assert_eq!(
+            err.data_lines, 3,
+            "with no entry count to report, the refusal falls back to the size of the answer"
+        );
+    }
 
     /// composer prints `Changed current directory to /root/.composer` ahead of every global
     /// command, and a `--json` reader that starts at byte zero reads that as a syntax error and
