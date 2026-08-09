@@ -8,8 +8,7 @@
 // All hermetic via the shared TestKernel (MockExecutor + temp sandbox); OS-independent,
 // so these also exercise the relevant paths on Linux at CI time.
 
-mod mock_providers;
-use mock_providers::TestKernel;
+use crate::mock_providers::TestKernel;
 
 use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope, Scope};
 use linix::app::sync::resolver::StateResolver;

@@ -9,8 +9,7 @@ use linix::core::hook_lock::{exec_id, hash_script, HookLedger};
 use linix::core::ExecLedger;
 use linix::core::LockFile;
 
-mod mock_providers;
-use mock_providers::TestKernel;
+use crate::mock_providers::TestKernel;
 
 /// Write a module declaring one `exec:` line, plus the script it names.
 async fn declare_exec(kernel: &TestKernel, line: &str, script_rel: &str, body: &str) {

@@ -4,8 +4,7 @@ use petgraph::stable_graph::StableDiGraph;
 use std::collections::HashMap;
 
 // Import our authoritative A+ Test Infrastructure
-mod mock_providers;
-use mock_providers::TestKernel;
+use crate::mock_providers::TestKernel;
 
 /// Verifies that the LiNix Transaction engine executes nodes in the
 /// correct topological order while respecting parallel dependencies.

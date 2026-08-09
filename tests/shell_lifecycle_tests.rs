@@ -4,8 +4,7 @@ use linix::core::executor::DryRunOutput;
 use linix::core::PackageSpec;
 use tokio::fs;
 
-mod mock_providers;
-use mock_providers::TestKernel;
+use crate::mock_providers::TestKernel;
 
 // ============================================================================
 // The ephemeral shell (`linix shell`): packages live for the session and go on exit.

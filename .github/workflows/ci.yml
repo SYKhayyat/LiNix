@@ -146,7 +146,7 @@ jobs:
     # of every command LiNix runs. `cargo test` already includes this file; it is named as its
     # own step so a regression is legible in the job list instead of buried in 1,300 results.
     - name: Terminal (pty) behaviour
-      run: cargo test --release --target ${{ matrix.target }} --test pty_tests
+      run: cargo test --release --target ${{ matrix.target }} --test suite pty_tests::
       if: matrix.os == 'ubuntu-latest'
 
     - name: Check formatting

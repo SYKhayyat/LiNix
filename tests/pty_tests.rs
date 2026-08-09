@@ -8,7 +8,6 @@
 //!
 //! The manager is a stub on `PATH`, so this proves the plumbing without needing a real apt.
 
-#![cfg(target_os = "linux")]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

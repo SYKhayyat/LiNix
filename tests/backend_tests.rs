@@ -7,8 +7,7 @@ use std::time::Duration;
 use tokio::time::timeout;
 
 // Import our exhaustive A+ Test Infrastructure
-mod mock_providers;
-use mock_providers::TestKernel;
+use crate::mock_providers::TestKernel;
 
 // ============================================================================
 // BACKEND TEST HARNESS

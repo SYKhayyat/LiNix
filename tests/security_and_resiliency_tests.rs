@@ -6,8 +6,7 @@ use linix::core::executor::DryRunOutput;
 use linix::core::{Error, GraphAction, Transaction, TransactionConfig, Validator};
 use std::collections::HashMap;
 
-mod mock_providers;
-use mock_providers::{create_dummy_spec, TestKernel};
+use crate::mock_providers::{create_dummy_spec, TestKernel};
 
 // ============================================================================
 // SECURITY VALIDATION TESTS (Validator Layer)

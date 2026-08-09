@@ -9,8 +9,7 @@
 //! with nowhere to keep data. It does not need to. The config that declared the shim is the same
 //! config the shim process loads on its way in, and it still says what the source is.
 
-mod mock_providers;
-use mock_providers::TestKernel;
+use crate::mock_providers::TestKernel;
 
 /// Write a module the active profile uses, so its lines reach the resolved model.
 async fn declare(kernel: &TestKernel, lines: &str) {

@@ -14,8 +14,7 @@
 use linix::core::{GraphAction, PackageSpec, Transaction, TransactionConfig};
 use petgraph::stable_graph::StableDiGraph;
 
-mod mock_providers;
-use mock_providers::TestKernel;
+use crate::mock_providers::TestKernel;
 
 fn spec(backend: &str, name: &str, requires: &[&str]) -> PackageSpec {
     PackageSpec {

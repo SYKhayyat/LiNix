@@ -6,8 +6,7 @@ use linix::core::{Error, GraphAction, PackageSpec, Transaction, TransactionConfi
 use std::collections::HashMap;
 
 // Import our authoritative A+ Test Infrastructure
-mod mock_providers;
-use mock_providers::TestKernel;
+use crate::mock_providers::TestKernel;
 
 /// S11: hermeticity is now structural, not remembered — a `TestKernel` isolates BOTH the
 /// config root and the data root (registry/snapshots/journal) inside its sandbox, so no test

@@ -16,8 +16,7 @@ use linix::app::sync::resolver::StateResolver;
 use linix::core::ManagedPackage;
 use tokio::fs;
 
-mod mock_providers;
-use mock_providers::TestKernel;
+use crate::mock_providers::TestKernel;
 
 /// A manager that is in `priority`, is a name LiNix knows, and is not on this host.
 ///

@@ -25,8 +25,7 @@ use linix::app::sync::resolver::StateResolver;
 use linix::core::executor::{DryRunOutput, MockExecutor};
 use tokio::fs;
 
-mod mock_providers;
-use mock_providers::TestKernel;
+use crate::mock_providers::TestKernel;
 
 fn answer(mock: &MockExecutor, cmd: &str, stdout: &str) {
     mock.set_response(

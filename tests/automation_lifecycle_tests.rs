@@ -1,8 +1,7 @@
 use linix::core::SnapshotManager;
 
 // Import our exhaustive A+ Test Infrastructure
-mod mock_providers;
-use mock_providers::{MockSnapshotProvider, TestKernel};
+use crate::mock_providers::{MockSnapshotProvider, TestKernel};
 
 // ============================================================================
 // FEATURE 2: SNAPSHOT LIFECYCLE (PHYSICAL PRUNING)

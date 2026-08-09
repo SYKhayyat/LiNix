@@ -6,8 +6,7 @@ use std::collections::HashMap;
 use tokio::fs;
 
 // Import our exhaustive A+ Test Infrastructure
-mod mock_providers;
-use mock_providers::TestKernel;
+use crate::mock_providers::TestKernel;
 
 // ============================================================================
 // MODULES: `use` and recursive expansion

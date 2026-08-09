@@ -5361,3 +5361,56 @@ rule moved.
   a cap is a number a user meets as a refusal, and `core/download.rs` has scheme policy and
   checksum policy precisely because those were rulings. **This one is a ruling too**, and it is
   raised rather than picked.
+
+---
+
+**V.168 — Why one test target, and what merging them found.**
+*(Rule in II.37. Fixed 2026-08-09, `S67`.)*
+
+**The repository had already diagnosed this, in writing, at one-hundredth of the scale.**
+`mock_providers/mod.rs` opens:
+
+> *"Cargo auto-discovers every `tests/*.rs` as its own test target, so at the top level this
+> became a 716 KB binary containing **zero tests**, linked with `lto = true` and
+> `codegen-units = 1`, and its 312 lines were compiled nineteen times."*
+
+Correct, and fixed — by moving one file into a directory. What nobody then asked is why the same
+sentence is not true of the other hundred files, because it is: each is linked against a
+100k-line crate and a 448-crate graph, and **36 of them never call the library API at all**. They
+spawn `CARGO_BIN_EXE_linix` and read its output; the library they link is dead weight in every
+one.
+
+**The number that made it undeniable was not a benchmark.** `target/` reached **194 GB** and
+filled a 944 GB disk, and `rustc` died mid-build with `IO failure on output stream: no space on
+device`. After the merge it is **19 GB**.
+
+**`autotests = false` rather than moving files into a subdirectory**, which is the other way to
+do this. Moving them would rewrite every `include_str!("fixtures/…")` and `include_str!(
+"../src/…")` path in the suite and lose the one-file-one-sentence naming at a glance in `ls`.
+Turning off auto-discovery costs one line in `Cargo.toml` and one `mod` per file, and every file
+stays exactly where it was.
+
+**The cost is real and is why the guard exists.** With auto-discovery off, a test file nobody adds
+to `tests/main.rs` is a file that never runs, and it looks exactly like a file that passes.
+`every_test_file_is_in_the_suite` reads the directory, reads the module list, and fails on the
+difference. That check is the whole justification for the arrangement — this repository has
+S-entries for four separate ways of losing a check silently, and adding a fifth to save link time
+would be a poor trade.
+
+**Two things had to change, and both are improvements.**
+
+*The inner attributes.* `grader_shim_exit_code_tests.rs` and `pty_tests.rs` open with
+`#![cfg(windows)]` and `#![cfg(target_os = "linux")]`, which cannot survive a file becoming a
+module. On the `mod` line the gate is strictly stronger: the module is not compiled at all
+off-platform, where before it was compiled to nothing.
+
+*The two lines that only compiled by accident.* `dry_run_every_verb_tests.rs:541` and
+`grade6_gate_parity_sees_whole_jobs_tests.rs:53` used `String + &String` and
+`String + &Cow<str>`. The first is ordinarily legal via deref coercion — **unless another crate
+in the compilation unit adds a second `Add` impl for `String`, which makes the target type
+ambiguous and stops coercion being attempted.** `rhai` depends on `smartstring`, which does
+exactly that. As their own binaries those two files never referenced anything that pulled
+`smartstring`'s metadata in, so the impl was never loaded and the coercion went through. In one
+unit it is always loaded. Both lines say `format!` now, which is what they meant; the point worth
+keeping is that **a per-file binary can compile code that the same code cannot compile beside its
+neighbours**, and that is a fragility the merge removed rather than one it introduced.

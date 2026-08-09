@@ -5,8 +5,7 @@ use linix::core::{GraphAction, PackageSpec, Transaction, TransactionConfig};
 use tokio::fs;
 
 // Import our authoritative A+ Test Infrastructure
-mod mock_providers;
-use mock_providers::TestKernel;
+use crate::mock_providers::TestKernel;
 
 // ============================================================================
 // E2E LOGIC TESTS: DECLARATIVE SYNC FLOW

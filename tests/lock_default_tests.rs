@@ -15,8 +15,7 @@
 
 use linix::app::sync::resolver::StateResolver;
 
-mod mock_providers;
-use mock_providers::TestKernel;
+use crate::mock_providers::TestKernel;
 
 /// Write a lock recording `brew:ripgrep` at an old version, plus a module declaring it.
 async fn declare(kernel: &TestKernel, module_line: &str, locked_version: Option<&str>) {

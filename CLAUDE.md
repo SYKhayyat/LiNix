@@ -92,6 +92,13 @@ One reported symptom, two live siblings.
 `cargo build --all-targets` → `cargo test --no-fail-fast` → `cargo clippy --all-targets`. Report
 honestly: unverified is not done, and a skipped step is a said-so, not a done.
 
-**`--no-fail-fast`, always.** There are 66 test binaries; without it, one failure in the lib
-abandons the other 65 and the run tells you about one defect out of however many there are. Both
-release scripts and CI already pass it — this line was the only place that did not.
+**`--no-fail-fast`, always.** Without it, cargo stops at the first test *target* that fails, so a
+failure in the lib abandons the whole integration suite and the run tells you about one defect out
+of however many there are. Both release scripts and CI already pass it — this line was the only
+place that did not.
+
+**The integration suite is one target, `suite`, listed module by module in `tests/main.rs`.**
+Cargo does not auto-discover `tests/*.rs` (`autotests = false`), so **a new test file does not run
+until it is a `mod` in that file** — `every_test_file_is_in_the_suite` fails when the two
+disagree, which is the only reason the arrangement is safe. To run one file:
+`cargo test --test suite <module_name>::`.

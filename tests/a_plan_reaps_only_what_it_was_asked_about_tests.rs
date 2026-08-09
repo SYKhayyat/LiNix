@@ -20,8 +20,7 @@
 // Every assertion has a control beside it that removes the fix and watches the count come back.
 // A "no removals were planned" test passes just as well when nothing was planned at all.
 
-mod mock_providers;
-use mock_providers::TestKernel;
+use crate::mock_providers::TestKernel;
 
 use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope, Scope};
 use linix::app::sync::resolver::StateResolver;

@@ -2913,3 +2913,20 @@ that; sharing the listing deletes only the copying.
 
 **A whole-collection clone that filters nothing is not a filter.** The unscoped plan is the
 common case and it borrowed nothing.
+
+## II.37 The integration suite is one target, and the list is checked (`S67`, V.168)
+
+**`autotests = false`, and `tests/main.rs` names every file as a module.** Cargo claims each
+`tests/*.rs` as its own binary otherwise, and each is linked against the whole crate — 101 of
+them, 36 of which never call the library API at all.
+
+**Nothing moves to earn that.** Every file keeps its path, its name and its doc comment; only the
+declaration site changes. A file gated by an inner `#![cfg(...)]` carries the gate on its `mod`
+line, where it also stops the module being compiled off-platform at all.
+
+**A file that is not in the list does not run**, which is the one real cost — so
+`every_test_file_is_in_the_suite` compares the directory against the module list and fails when
+they disagree. Without that check this arrangement is a way to lose a test silently, which is
+worse than any link time it saves.
+
+**Run one file with `cargo test --test suite <module>::`.** The module path is the filename.

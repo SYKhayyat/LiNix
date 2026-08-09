@@ -5,8 +5,7 @@ use linix::core::GraphAction;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-mod mock_providers;
-use mock_providers::TestKernel;
+use crate::mock_providers::TestKernel;
 
 fn get_now_ts() -> u64 {
     SystemTime::now()

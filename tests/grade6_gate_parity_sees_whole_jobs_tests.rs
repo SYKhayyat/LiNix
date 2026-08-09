@@ -49,8 +49,13 @@ fn read(p: &Path) -> String {
 }
 
 fn local_gates() -> String {
-    read(&repo().join("scripts/release-check.sh"))
-        + &read(&repo().join("scripts/release-check.ps1"))
+    // `format!`, not `+` — see the note in `dry_run_every_verb_tests`: `smartstring`'s
+    // `impl Add<SmartString<_>> for String` makes `String + &String` ambiguous.
+    format!(
+        "{}{}",
+        read(&repo().join("scripts/release-check.sh")),
+        read(&repo().join("scripts/release-check.ps1"))
+    )
 }
 
 /// `cargo test` is the single most important gate in the repo. CI runs it one way and the local

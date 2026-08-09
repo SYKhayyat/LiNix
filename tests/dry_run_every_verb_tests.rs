@@ -537,8 +537,15 @@ fn every_subcommand_is_either_exercised_or_exempted_with_a_reason() {
         .arg("--help")
         .output()
         .expect("the binary should run");
-    let help =
-        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    // `format!`, not `+`. `rhai` pulls in `smartstring`, which adds
+    // `impl Add<SmartString<_>> for String` — so `String + &_` is ambiguous the moment that
+    // crate's impls are loaded into the compilation unit, and deref coercion stops being
+    // attempted. As its own binary this file happened never to load them.
+    let help = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     // The `Commands:` block, one name per line at two spaces of indent.
     let mut listed: Vec<String> = Vec::new();

@@ -16,8 +16,7 @@ use linix::core::executor::DryRunOutput;
 use linix::core::{GraphAction, PackageSpec};
 use std::collections::HashMap;
 
-mod mock_providers;
-use mock_providers::TestKernel;
+use crate::mock_providers::TestKernel;
 
 const TEN_GIB: u64 = 10 * (1 << 30);
 
