@@ -2967,3 +2967,34 @@ below it*, *this reason is long and is still a schedule*, *this excused name is 
 all* — the ledger cannot check any of those, and each stays written out with a line saying
 which failure the shared check would otherwise misreport. Where the order matters, the local
 assertion runs first.
+
+## II.40 A backend whose only Rust was a parser name is a row (`S71`, V.171)
+
+**A built-in backend is a row in `src/backends/builtin_backends.toml` unless it needs something
+a row cannot hold.** The five things a row cannot hold are listed in that file's own header;
+everything else — argv, flags, root, exclusivity, version pins, repos, OS, capabilities — is
+data, and was always data.
+
+**A row names its readers; it does not describe them twice.** `reads`, `searches`,
+`outdated_reads`, `machine_list_reads`, `essential_reads` and `depends_reads` name a function in
+`src/parsers/named.rs`. Each resolver answers to one field — `outdated_reads` goes through
+`probe`, `essential_reads` through `names` — and a name that resolves under the wrong one is a
+row that loads and reads nothing. A named reader wins over a described `parser`; both is a row
+that said the same thing twice, and the named one has a fixture behind it.
+
+**A reader name that resolves to nothing is a defect, not a default.** The fields are `Option`
+and `None` legally means *fall back to the described parser*, so nothing about a typo is
+detectable at load. `every_row_can_read_what_it_asks_for` is the only thing between a misspelling
+and a backend that reports an empty machine.
+
+**A row with `search_args` and a named `reads` names a `searches`.** `NamedParser` substitutes
+an empty-vector closure otherwise, and the capability is still advertised.
+
+**Rows register before hand-written registrations**, so a name held by both is decided in favour
+of the Rust, and `no_backend_is_both_a_row_and_a_registrar` fails rather than letting the order
+of two calls decide it silently.
+
+**Becoming a row does not end argv coverage.** Every row has a case in `argv_cases()`, checked
+by `every_row_has_an_argv_row` — the other half of
+`every_registrar_has_an_argv_row_or_a_written_reason`, which scans for registrars and cannot see
+a row.

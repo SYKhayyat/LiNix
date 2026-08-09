@@ -7,6 +7,7 @@ pub mod dotnet;
 pub mod ecosystem;
 pub mod language;
 pub mod macos;
+pub mod named;
 pub mod pacman;
 pub mod pkgsrc;
 pub mod utils;

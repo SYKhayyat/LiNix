@@ -7,8 +7,7 @@ use crate::backends::generic::{
 use crate::backends::generic::{ExportFormat, MachineListing, ManualFormat, OutdatedProbe};
 use crate::backends::generic::{
     GenericBackendCore, GenericInstallable, GenericQueryable, GenericRepoManager,
-    GenericSearchable, GenericUpgradable, ManagerConfig, ManualListing, PropertyProbe,
-    SearchSource, VersionPin,
+    GenericSearchable, GenericUpgradable, ManagerConfig, ManualListing, SearchSource, VersionPin,
 };
 use crate::backends::pip_search::PipSearchable;
 use crate::config::Config;
@@ -134,14 +133,15 @@ pub async fn create_default_registry(
         register_macports(&mut reg, &executor);
     }
 
+    // --- Everything that is a row in `builtin_backends.toml` ---
+    //
+    // Registered FIRST so a hand-written registration below is the one that survives a
+    // collision, and `no_backend_is_both_a_row_and_a_registrar` in the suite fails when there
+    // is one — a name in both places would otherwise be decided by the order of two calls.
+    crate::backends::onboarder::register_builtin_backends(&mut reg, &executor);
+
     // --- Cross-platform & specialized backends (each module owns its registration) ---
     crate::backends::brew::register(&mut reg, &executor, config);
-    register_cargo(&mut reg, &executor);
-    register_pipx(&mut reg, &executor);
-    register_uv(&mut reg, &executor);
-    register_npm(&mut reg, &executor);
-    register_pnpm(&mut reg, &executor);
-    register_yarn(&mut reg, &executor);
     crate::backends::mise::register(&mut reg, &executor, config);
     crate::backends::github::register(&mut reg, &executor, config);
     crate::backends::web::register(&mut reg, &executor, config);
@@ -170,31 +170,8 @@ pub async fn create_default_registry(
     register_pkg_add_openbsd(&mut reg, &executor);
     register_dotnet(&mut reg, &executor);
 
-    // --- Ecosystem backends (generic, config-driven; cross-platform, runtime-gated) ---
-    register_composer(&mut reg, &executor);
-    register_opam(&mut reg, &executor);
-    register_luarocks(&mut reg, &executor);
-    register_nimble(&mut reg, &executor);
-    register_pixi(&mut reg, &executor);
-    register_spack(&mut reg, &executor);
-    register_mix(&mut reg, &executor);
-    register_helm(&mut reg, &executor);
-    register_cabal(&mut reg, &executor);
-    register_stack(&mut reg, &executor);
-    register_asdf(&mut reg, &executor);
-
     // --- Ecosystem backends implemented as dedicated modules (subcommand binary / fs) ---
     crate::backends::go::register(&mut reg, &executor, config);
-    register_pubdart(&mut reg, &executor);
-    register_krew(&mut reg, &executor);
-
-    // --- Linux-distro ecosystem backends (Gentoo, Guix, Solus, Slackware) ---
-    if cfg!(target_os = "linux") {
-        register_guix(&mut reg, &executor);
-        register_emerge(&mut reg, &executor);
-        register_eopkg(&mut reg, &executor);
-        register_slackpkg(&mut reg, &executor);
-    }
 
     // --- User-defined backends (the onboarder). Loaded last so a custom definition
     // can never silently shadow a built-in; collisions are skipped with a warning. ---
@@ -1921,495 +1898,6 @@ fn register_generic(
     reg.register(Arc::new(builder.build()));
 }
 
-/// PHP / Packagist (`composer global ...`). Cross-platform; gated by the `composer` binary.
-fn register_composer(reg: &mut BackendRegistry, executor: &CommandExecutor) {
-    let mut cfg = base_config("composer");
-    // `composer global show` lists the whole solved tree. `--direct` would report just
-    // the requested packages, but no test image covers composer, so decline to adopt
-    // rather than ship an unverified guess.
-    cfg.manual = ManualListing::Unsupported;
-    cfg.version_pin = Some(VersionPin::Inline("{name}:{version}".into()));
-    cfg.install_args = vec!["global".into(), "require".into()];
-    cfg.remove_args = vec!["global".into(), "remove".into()];
-    cfg.list_args = vec!["global".into(), "show".into(), "--format=json".into()];
-    cfg.search_args = vec!["global".into(), "search".into(), "--format=json".into()];
-    // composer prints `Changed current directory to ...` ahead of the JSON, which the
-    // parser steps past — a strict parse would report nothing outdated on every machine.
-    cfg.outdated = Some(OutdatedProbe {
-        binary: None,
-        args: vec!["global".into(), "outdated".into(), "--format=json".into()],
-        parse: std::sync::Arc::new(crate::parsers::language::parse_composer_outdated),
-        silence_is_none: false,
-    });
-    cfg.upgrade_args = vec!["global".into(), "update".into()];
-    // composer keeps every downloaded package archive under `~/.composer/cache`.
-    cfg.clean_cache = Some(CacheClean {
-        binary: None,
-        args: vec!["clear-cache".into()],
-    });
-    let core = Arc::new(GenericBackendCore {
-        name: "composer".into(),
-        executor: executor.duplicate(),
-        config: cfg,
-        parser: Arc::new(LambdaParser {
-            installed_fn: |o| crate::parsers::language::parse_installed("composer", o),
-            search_fn: |o| crate::parsers::language::parse_search("composer", o),
-        }),
-    });
-    register_generic(reg, core, true, true, true);
-}
-
-/// OCaml (`opam`). Cross-platform; gated by the `opam` binary.
-fn register_opam(reg: &mut BackendRegistry, executor: &CommandExecutor) {
-    let mut cfg = base_config("opam");
-    // opam installs dependencies as packages. `opam list --installed --roots` reports
-    // the root (explicitly-installed) set and would be the right wiring; unverified here,
-    // so adopt nothing.
-    cfg.manual = ManualListing::Unsupported;
-    cfg.version_pin = Some(VersionPin::Inline("{name}.{version}".into()));
-    cfg.install_args = vec!["install".into(), "-y".into()];
-    cfg.remove_args = vec!["remove".into(), "-y".into()];
-    cfg.list_args = vec!["list".into(), "--installed".into(), "--short".into()];
-    cfg.search_args = vec!["search".into(), "--short".into()];
-    cfg.upgrade_args = vec!["upgrade".into(), "-y".into()];
-    // `opam clean` removes downloaded archives and build logs, never a switch's
-    // installed packages — which is the line X.3 draws between a cache and a removal.
-    cfg.clean_cache = Some(CacheClean {
-        binary: None,
-        args: vec!["clean".into()],
-    });
-    let core = Arc::new(GenericBackendCore {
-        name: "opam".into(),
-        executor: executor.duplicate(),
-        config: cfg,
-        parser: Arc::new(LambdaParser {
-            installed_fn: |o| crate::parsers::ecosystem::names_only(o, "opam"),
-            search_fn: |o| crate::parsers::ecosystem::names_only(o, "opam").unwrap_or_default(),
-        }),
-    });
-    register_generic(reg, core, true, true, true);
-}
-
-/// Lua (`luarocks`). Cross-platform; gated by the `luarocks` binary. Version is a trailing
-/// positional (`luarocks install <pkg> <version>`).
-fn register_luarocks(reg: &mut BackendRegistry, executor: &CommandExecutor) {
-    let mut cfg = base_config("luarocks");
-    // luarocks installs a rock's dependencies alongside it and records no explicit
-    // marker to tell them apart.
-    cfg.manual = ManualListing::Unsupported;
-    // The version is a bare operand, not an option: `luarocks install --` answers
-    // `Error: missing argument 'rock'` over usage `<rock> [<version>]`, and
-    // `luarocks install -- <rock> <version>` is identical to the same line without the
-    // terminator (measured, `tools` image 2026-08-04). So the terminator stays on both the
-    // pinned and the unpinned path, which is the whole point of saying `after` rather than
-    // reaching for a variant named after flags.
-    cfg.version_pin = Some(VersionPin::after(vec!["{version}".into()]));
-    cfg.install_args = vec!["install".into()];
-    cfg.remove_args = vec!["remove".into()];
-    cfg.list_args = vec!["list".into(), "--porcelain".into()];
-    cfg.search_args = vec!["search".into(), "--porcelain".into()];
-    let core = Arc::new(GenericBackendCore {
-        name: "luarocks".into(),
-        executor: executor.duplicate(),
-        config: cfg,
-        parser: Arc::new(LambdaParser {
-            installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "luarocks"),
-            search_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "luarocks").unwrap_or_default(),
-        }),
-    });
-    register_generic(reg, core, true, true, false);
-}
-
-/// Nim (`nimble`). Cross-platform; gated by the `nimble` binary. No CLI search/upgrade-all.
-fn register_nimble(reg: &mut BackendRegistry, executor: &CommandExecutor) {
-    let mut cfg = base_config("nimble");
-    // nimble installs dependencies and `list --installed` reports them all.
-    cfg.manual = ManualListing::Unsupported;
-    cfg.version_pin = Some(VersionPin::Inline("{name}@{version}".into()));
-    cfg.install_args = vec!["install".into(), "-y".into()];
-    cfg.remove_args = vec!["uninstall".into(), "-y".into()];
-    cfg.list_args = vec!["list".into(), "--installed".into()];
-    let core = Arc::new(GenericBackendCore {
-        name: "nimble".into(),
-        executor: executor.duplicate(),
-        config: cfg,
-        parser: Arc::new(LambdaParser {
-            installed_fn: |o| crate::parsers::ecosystem::nimble_list(o, "nimble"),
-            search_fn: |_| vec![],
-        }),
-    });
-    register_generic(reg, core, true, false, false);
-}
-
-/// pixi global environments (`pixi global ...`). Cross-platform; gated by the `pixi` binary.
-fn register_pixi(reg: &mut BackendRegistry, executor: &CommandExecutor) {
-    let mut cfg = base_config("pixi");
-    // `pixi global` installs one requested tool per entry; dependencies live inside each
-    // tool's own environment and are never listed here.
-    cfg.manual = ManualListing::AllInstalled;
-    cfg.version_pin = Some(VersionPin::Inline("{name}={version}".into()));
-    cfg.install_args = vec!["global".into(), "install".into()];
-    // pixi removes a global TOOL with `global uninstall`; `global remove` deletes a package
-    // from an environment and requires `--environment`, so it errors on a bare tool name.
-    cfg.remove_args = vec!["global".into(), "uninstall".into()];
-    cfg.list_args = vec!["global".into(), "list".into()];
-    // pixi prints its listing as a box-drawing tree; `--json` is the same answer already
-    // parsed. Recent pixi only, hence the negotiation rather than a straight swap.
-    cfg.machine_list = Some(MachineListing {
-        binary: None,
-        args: vec!["global".into(), "list".into(), "--json".into()],
-        parse: std::sync::Arc::new(|o: &str| crate::parsers::ecosystem::pixi_list_json(o, "pixi")),
-    });
-    cfg.search_args = vec!["search".into()];
-    // `global upgrade-all` was removed upstream; pixi 0.73 answers it with "This command has
-    // been removed, please use `pixi global update` instead". A plan-smoke passed it the whole
-    // time, because constructing an argv proves nothing about whether the argv exists.
-    cfg.upgrade_args = vec!["global".into(), "update".into()];
-    let core = Arc::new(GenericBackendCore {
-        name: "pixi".into(),
-        executor: executor.duplicate(),
-        config: cfg,
-        parser: Arc::new(LambdaParser {
-            installed_fn: |o| crate::parsers::ecosystem::pixi_list(o, "pixi"),
-            search_fn: |o| crate::parsers::ecosystem::pixi_search(o, "pixi"),
-        }),
-    });
-    register_generic(reg, core, true, true, true);
-}
-
-/// Spack HPC package manager (`spack`). Cross-platform; gated by the `spack` binary.
-fn register_spack(reg: &mut BackendRegistry, executor: &CommandExecutor) {
-    let mut cfg = base_config("spack");
-    // spack installs dependencies as first-class packages, so `spack find` is the whole
-    // closure. `spack find --explicit` is the right answer; unverified here.
-    cfg.manual = ManualListing::Unsupported;
-    cfg.version_pin = Some(VersionPin::Inline("{name}@{version}".into()));
-    cfg.install_args = vec!["install".into()];
-    cfg.remove_args = vec!["uninstall".into(), "-y".into()];
-    cfg.list_args = vec!["find".into(), "--format".into(), "{name} {version}".into()];
-    cfg.search_args = vec!["list".into()];
-    let core = Arc::new(GenericBackendCore {
-        name: "spack".into(),
-        executor: executor.duplicate(),
-        config: cfg,
-        parser: Arc::new(LambdaParser {
-            installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "spack"),
-            search_fn: |o| crate::parsers::ecosystem::names_only(o, "spack").unwrap_or_default(),
-        }),
-    });
-    register_generic(reg, core, true, true, false);
-}
-
-/// Elixir/Hex archives (`mix archive.*`). Cross-platform; gated by the `mix` binary. This is
-/// the global-archive surface of the Elixir ecosystem; project-scoped hex deps are out of
-/// scope. No CLI search/upgrade-all.
-fn register_mix(reg: &mut BackendRegistry, executor: &CommandExecutor) {
-    let mut cfg = base_config("mix");
-    // Mix archives are installed one by one, on request.
-    cfg.manual = ManualListing::AllInstalled;
-    // The version is a bare positional after the name: `mix archive.install hex phx_new 1.6.16`.
-    // Not optional in practice — an archive declares which Elixir it supports, so on Elixir
-    // 1.14 the newest `phx_new` fetches, builds and then refuses to run, and pinning is the
-    // only way to install one at all (measured, `tools` image 2026-07-29).
-    cfg.version_pin = Some(VersionPin::after(vec!["{version}".into()]));
-    cfg.install_args = vec!["archive.install".into(), "hex".into(), "--force".into()];
-    // `--force` on the removal too, and this is not symmetry for its own sake: measured, a
-    // bare `mix archive.uninstall phx_new` with no terminal prints `Are you sure…? [Yn]`,
-    // takes the empty answer, **exits 0 and leaves the archive installed**. LiNix reported a
-    // removal that did not happen — the scoop-exit-0 shape (E7), one manager over.
-    cfg.remove_args = vec!["archive.uninstall".into(), "--force".into()];
-    cfg.list_args = vec!["archive".into()];
-    let core = Arc::new(GenericBackendCore {
-        name: "mix".into(),
-        executor: executor.duplicate(),
-        config: cfg,
-        parser: Arc::new(LambdaParser {
-            installed_fn: |o| crate::parsers::ecosystem::mix_archive(o, "mix"),
-            search_fn: |_| vec![],
-        }),
-    });
-    register_generic(reg, core, true, false, false);
-}
-
-/// Helm plugins (`helm plugin ...`). Cross-platform; gated by the `helm` binary. (Chart
-/// releases are a different concept and out of scope here.) No plugin search.
-///
-/// A declaration is `helm:NAME@url=SOURCE`: helm installs a plugin from a URL but lists and
-/// uninstalls it by the name in its `plugin.yaml`, so naming the URL would install a plugin
-/// LiNix could never remove or recognise again (U39).
-fn register_helm(reg: &mut BackendRegistry, executor: &CommandExecutor) {
-    let mut cfg = base_config("helm");
-    // Helm plugins are installed individually and pull in no plugin dependencies.
-    cfg.manual = ManualListing::AllInstalled;
-    cfg.install_source_option =
-        crate::backends::capability::install_source_key("helm").map(Into::into);
-    cfg.install_args = vec!["plugin".into(), "install".into()];
-    cfg.remove_args = vec!["plugin".into(), "uninstall".into()];
-    cfg.list_args = vec!["plugin".into(), "list".into()];
-    let core = Arc::new(GenericBackendCore {
-        name: "helm".into(),
-        executor: executor.duplicate(),
-        config: cfg,
-        parser: Arc::new(LambdaParser {
-            installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "helm"),
-            search_fn: |_| vec![],
-        }),
-    });
-    register_generic(reg, core, true, false, false);
-}
-
-/// Haskell (`cabal`). Cross-platform; gated by the `cabal` binary. cabal has no uninstall
-/// verb, so `remove_args` is empty → removal reports Unsupported (see GenericInstallable).
-fn register_cabal(reg: &mut BackendRegistry, executor: &CommandExecutor) {
-    let mut cfg = base_config("cabal");
-    // cabal installs a package's dependency closure into the store and lists it back.
-    cfg.manual = ManualListing::Unsupported;
-    cfg.version_pin = Some(VersionPin::Inline("{name}-{version}".into()));
-    cfg.install_args = vec!["install".into()];
-    cfg.remove_args = vec![]; // no uninstall verb
-    cfg.list_args = vec![
-        "list".into(),
-        "--installed".into(),
-        "--simple-output".into(),
-    ];
-    cfg.search_args = vec!["list".into(), "--simple-output".into()];
-    let core = Arc::new(GenericBackendCore {
-        name: "cabal".into(),
-        executor: executor.duplicate(),
-        config: cfg,
-        parser: Arc::new(LambdaParser {
-            installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "cabal"),
-            search_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "cabal").unwrap_or_default(),
-        }),
-    });
-    register_generic(reg, core, true, true, false);
-}
-
-/// Haskell (`stack`). Cross-platform; gated by the `stack` binary. Like cabal it has no
-/// uninstall verb (empty `remove_args` → Unsupported) and no reliable global install list.
-fn register_stack(reg: &mut BackendRegistry, executor: &CommandExecutor) {
-    let mut cfg = base_config("stack");
-    // stack resolves and installs dependencies; nothing distinguishes them on listing.
-    cfg.manual = ManualListing::Unsupported;
-    cfg.version_pin = Some(VersionPin::Inline("{name}-{version}".into()));
-    cfg.install_args = vec!["install".into()];
-    cfg.remove_args = vec![]; // no uninstall verb
-    let core = Arc::new(GenericBackendCore {
-        name: "stack".into(),
-        executor: executor.duplicate(),
-        config: cfg,
-        parser: Arc::new(crate::parsers::CannotList("stack")),
-    });
-    register_generic(reg, core, false, false, false);
-}
-
-/// asdf version manager (`asdf`). Cross-platform; gated by the `asdf` binary. A tool/plugin
-/// is the "package"; installing pins a version via the trailing positional.
-/// The three Node managers, which spell one shape three ways.
-///
-/// They were three modules totalling 757 non-test lines, ~85% identical once renamed, with
-/// `global_argv` defined three separate times — npm's and pnpm's copies character-for-character
-/// the same. What actually differs is four things, and all four are data: the global flag
-/// (`-g` vs a `global` verb), the install verb (`install` vs `add`), the remove verb
-/// (`uninstall` vs `remove`), and where the manager keeps what it installed.
-///
-/// None of them has a usable CLI search — npm's is slow and output-unstable, pnpm has none, and
-/// yarn removed its own in Berry — and all three resolve from the npm registry, which is why
-/// `node_registry.rs` already existed and why three backends reached into it. That is
-/// `SearchSource::NpmRegistry` now.
-///
-/// Upgrading is re-installing each global package, for all three.
-fn register_npm(reg: &mut BackendRegistry, executor: &CommandExecutor) {
-    let mut cfg = base_config("npm");
-    cfg.manual = ManualListing::AllInstalled;
-    cfg.version_pin = Some(VersionPin::Inline("{name}@{version}".into()));
-    cfg.install_args = vec!["install".into(), "-g".into()];
-    cfg.remove_args = vec!["uninstall".into(), "-g".into()];
-    cfg.list_args = vec![
-        "list".into(),
-        "-g".into(),
-        "--depth=0".into(),
-        "--json".into(),
-    ];
-    cfg.upgrade_reinstall_args = Some(cfg.install_args.clone());
-    cfg.search_source = SearchSource::NpmRegistry;
-    // `npm outdated` exits non-zero when it FINDS something, so this is read
-    // through `run_output` rather than a status-checked reader.
-    cfg.outdated = Some(OutdatedProbe {
-        binary: None,
-        args: vec!["outdated".into(), "-g".into(), "--json".into()],
-        parse: std::sync::Arc::new(|o: &str| {
-            crate::parsers::language::parse_npm_outdated(o, "npm")
-        }),
-        silence_is_none: false,
-    });
-    // `npm prefix -g` reports the PREFIX, not the module directory, and the layout below it
-    // differs by OS: POSIX puts modules under `lib/node_modules`, Windows directly under
-    // `node_modules`. Getting this wrong yields a path that does not exist.
-    cfg.property_probes = vec![PropertyProbe {
-        property: "install_path".into(),
-        args: vec!["prefix".into(), "-g".into()],
-        template: if cfg!(windows) {
-            "{base}/node_modules/{name}".into()
-        } else {
-            "{base}/lib/node_modules/{name}".into()
-        },
-    }];
-    // `npm cache clean` refuses without `--force`; the flag is npm asking whether you
-    // meant it, not a way to make it try harder.
-    cfg.clean_cache = Some(CacheClean {
-        binary: None,
-        args: vec!["cache".into(), "clean".into(), "--force".into()],
-    });
-    let core = Arc::new(GenericBackendCore {
-        name: "npm".into(),
-        executor: executor.duplicate(),
-        config: cfg,
-        parser: Arc::new(LambdaParser {
-            installed_fn: |o| crate::parsers::language::parse_installed("npm", o),
-            search_fn: |_| vec![],
-        }),
-    });
-    register_generic(reg, core, true, true, true);
-}
-
-fn register_pnpm(reg: &mut BackendRegistry, executor: &CommandExecutor) {
-    let mut cfg = base_config("pnpm");
-    cfg.manual = ManualListing::AllInstalled;
-    cfg.version_pin = Some(VersionPin::Inline("{name}@{version}".into()));
-    cfg.install_args = vec!["add".into(), "-g".into()];
-    cfg.remove_args = vec!["remove".into(), "-g".into()];
-    cfg.list_args = vec![
-        "list".into(),
-        "-g".into(),
-        "--depth=0".into(),
-        "--json".into(),
-    ];
-    cfg.upgrade_reinstall_args = Some(cfg.install_args.clone());
-    cfg.search_source = SearchSource::NpmRegistry;
-    // `npm outdated` exits non-zero when it FINDS something, so this is read
-    // through `run_output` rather than a status-checked reader.
-    cfg.outdated = Some(OutdatedProbe {
-        binary: None,
-        args: vec!["outdated".into(), "-g".into(), "--json".into()],
-        parse: std::sync::Arc::new(|o: &str| {
-            crate::parsers::language::parse_npm_outdated(o, "pnpm")
-        }),
-        silence_is_none: false,
-    });
-    // `pnpm root -g` already IS the global node_modules directory, so the package folder is
-    // `<root>/<name>`; appending another `node_modules` yields a path that does not exist.
-    cfg.property_probes = vec![
-        PropertyProbe {
-            property: "install_path".into(),
-            args: vec!["root".into(), "-g".into()],
-            template: "{base}/{name}".into(),
-        },
-        PropertyProbe {
-            property: "bin_path".into(),
-            args: vec!["bin".into(), "-g".into()],
-            template: "{base}".into(),
-        },
-    ];
-    // pnpm's content-addressable store, minus what is still referenced.
-    cfg.clean_cache = Some(CacheClean {
-        binary: None,
-        args: vec!["store".into(), "prune".into()],
-    });
-    let core = Arc::new(GenericBackendCore {
-        name: "pnpm".into(),
-        executor: executor.duplicate(),
-        config: cfg,
-        parser: Arc::new(LambdaParser {
-            // `pnpm list -g --json` returns an ARRAY of project objects where npm returns one
-            // bare object. The shared parser handles both; parsing pnpm as npm yields nothing.
-            installed_fn: |o| crate::parsers::language::parse_installed("pnpm", o),
-            search_fn: |_| vec![],
-        }),
-    });
-    register_generic(reg, core, true, true, true);
-}
-
-fn register_yarn(reg: &mut BackendRegistry, executor: &CommandExecutor) {
-    let mut cfg = base_config("yarn");
-    cfg.manual = ManualListing::AllInstalled;
-    cfg.version_pin = Some(VersionPin::Inline("{name}@{version}".into()));
-    // yarn 1 spells global as a leading verb rather than a flag.
-    cfg.install_args = vec!["global".into(), "add".into()];
-    cfg.remove_args = vec!["global".into(), "remove".into()];
-    // Not `--json`: yarn 1's JSON stream reports the *binaries* a global package installed
-    // (`{"type":"bins-catj","items":["catj"]}`) and never the package, so the one line that
-    // names it is the plain output's. Measured on a host with `catj` installed.
-    cfg.list_args = vec!["global".into(), "list".into()];
-    cfg.upgrade_reinstall_args = Some(cfg.install_args.clone());
-    cfg.search_source = SearchSource::NpmRegistry;
-    // `yarn global dir` returns the folder CONTAINING node_modules, unlike `pnpm root -g`.
-    cfg.property_probes = vec![
-        PropertyProbe {
-            property: "install_path".into(),
-            args: vec!["global".into(), "dir".into()],
-            template: "{base}/node_modules/{name}".into(),
-        },
-        PropertyProbe {
-            property: "bin_path".into(),
-            args: vec!["global".into(), "bin".into()],
-            template: "{base}".into(),
-        },
-    ];
-    // `yarn cache clean` with no package name empties the whole cache, in Classic and
-    // in Berry.
-    cfg.clean_cache = Some(CacheClean {
-        binary: None,
-        args: vec!["cache".into(), "clean".into()],
-    });
-    let core = Arc::new(GenericBackendCore {
-        name: "yarn".into(),
-        executor: executor.duplicate(),
-        config: cfg,
-        parser: Arc::new(LambdaParser {
-            installed_fn: |o| crate::parsers::language::parse_installed("yarn", o),
-            search_fn: |_| vec![],
-        }),
-    });
-    register_generic(reg, core, true, true, true);
-}
-
-/// Rust / crates.io. Was 298 non-test lines.
-///
-/// The one thing worth carrying over: **`cargo install foo` on an already-installed foo
-/// declines and exits 0.** Upgrading has to say `--force`, which is why
-/// `upgrade_reinstall_args` carries args of its own instead of being a boolean — a boolean
-/// would have upgraded cargo by asking it to do nothing, and reported success.
-fn register_cargo(reg: &mut BackendRegistry, executor: &CommandExecutor) {
-    let mut cfg = base_config("cargo");
-    // `cargo install --list` reports exactly what was asked for; crates.io dependencies are
-    // compiled in, never installed as separate entries.
-    cfg.manual = ManualListing::AllInstalled;
-    // `--version` is an option of `install`, not of the crate name, so it goes ahead of the
-    // terminator and the name stays protected behind it.
-    cfg.version_pin = Some(VersionPin::Before(vec![
-        "--version".into(),
-        "{version}".into(),
-    ]));
-    cfg.install_args = vec!["install".into()];
-    cfg.remove_args = vec!["uninstall".into()];
-    cfg.list_args = vec!["install".into(), "--list".into()];
-    cfg.search_args = vec!["search".into()];
-    cfg.upgrade_reinstall_args = Some(vec!["install".into(), "--force".into()]);
-    let core = Arc::new(GenericBackendCore {
-        name: "cargo".into(),
-        executor: executor.duplicate(),
-        config: cfg,
-        parser: Arc::new(LambdaParser {
-            // `cargo install --list` indents each crate's binaries beneath it; a column parser
-            // would read those indented lines as package names.
-            installed_fn: |o| crate::parsers::language::parse_installed("cargo", o),
-            search_fn: |o| crate::parsers::language::parse_search("cargo", o),
-        }),
-    });
-    register_generic(reg, core, true, true, true);
-}
-
 /// Python applications in their own venvs. Was 193 non-test lines, of which the only part
 /// outside this table was asking pipx where a venv lives.
 /// conda — **the backend that made the data path able to say "this argv depends on a setting".**
@@ -2489,287 +1977,54 @@ fn register_conda(reg: &mut BackendRegistry, executor: &CommandExecutor, cfg_src
     register_generic(reg, core, true, true, true);
 }
 
-fn register_pipx(reg: &mut BackendRegistry, executor: &CommandExecutor) {
-    let mut cfg = base_config("pipx");
-    // pipx installs one requested application per entry; its dependencies live inside that
-    // application's venv and are never listed here.
-    cfg.manual = ManualListing::AllInstalled;
-    // pipx takes a pip requirement spec.
-    cfg.version_pin = Some(VersionPin::Inline("{name}=={version}".into()));
-    cfg.install_args = vec!["install".into()];
-    cfg.remove_args = vec!["uninstall".into()];
-    cfg.list_args = vec!["list".into(), "--json".into()];
-    cfg.upgrade_args = vec!["upgrade-all".into()];
-    cfg.property_probes = vec![PropertyProbe {
-        property: "install_path".into(),
-        args: vec!["environment".into(), "--value".into(), "PIPX_HOME".into()],
-        template: "{base}/venvs/{name}".into(),
-    }];
-    let core = Arc::new(GenericBackendCore {
-        name: "pipx".into(),
-        executor: executor.duplicate(),
-        config: cfg,
-        parser: Arc::new(LambdaParser {
-            installed_fn: |o| crate::parsers::language::parse_installed("pipx", o),
-            search_fn: |_| vec![],
-        }),
-    });
-    register_generic(reg, core, true, false, true);
-}
-
-/// uv's tool installs. Was 214 non-test lines.
-fn register_uv(reg: &mut BackendRegistry, executor: &CommandExecutor) {
-    let mut cfg = base_config("uv");
-    // `uv tool list` reports installed tools only; there are no implicit or dependency tools
-    // to tell apart.
-    cfg.manual = ManualListing::AllInstalled;
-    cfg.version_pin = Some(VersionPin::Inline("{name}=={version}".into()));
-    cfg.install_args = vec!["tool".into(), "install".into()];
-    cfg.remove_args = vec!["tool".into(), "uninstall".into()];
-    cfg.list_args = vec!["tool".into(), "list".into()];
-    cfg.upgrade_args = vec!["tool".into(), "upgrade".into(), "--all".into()];
-    cfg.property_probes = vec![PropertyProbe {
-        property: "install_path".into(),
-        args: vec!["tool".into(), "dir".into()],
-        template: "{base}/{name}".into(),
-    }];
-    // uv keeps wheels and source distributions under its own cache directory.
-    cfg.clean_cache = Some(CacheClean {
-        binary: None,
-        args: vec!["cache".into(), "clean".into()],
-    });
-    let core = Arc::new(GenericBackendCore {
-        name: "uv".into(),
-        executor: executor.duplicate(),
-        config: cfg,
-        parser: Arc::new(LambdaParser {
-            installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "uv"),
-            search_fn: |_| vec![],
-        }),
-    });
-    register_generic(reg, core, true, false, true);
-}
-
-/// krew, the kubectl plugin manager. Its verbs are subcommands of `kubectl`.
-///
-/// Was 193 lines of hand-written Rust. The one thing that file knew and this table did not is
-/// its availability check: krew is a *plugin*, so `kubectl` alone is not enough — a host with
-/// kubectl and no krew reported READY and then failed every command with `unknown command
-/// "krew"`, including `linix update`, which refreshes every backend at once. That is
-/// `extra_probes` now, so the next plugin-shaped manager inherits the fix rather than
-/// rediscovering it.
-fn register_krew(reg: &mut BackendRegistry, executor: &CommandExecutor) {
-    let mut cfg = base_config("krew");
-    cfg.binary = Some("kubectl".into());
-    cfg.extra_probes = Some(vec!["kubectl-krew".into()]);
-    // Every krew plugin is one somebody asked for; krew installs no dependencies.
-    cfg.manual = ManualListing::AllInstalled;
-    // krew installs the index's current version and has no per-install version pin.
-    cfg.install_args = vec!["krew".into(), "install".into()];
-    cfg.remove_args = vec!["krew".into(), "uninstall".into()];
-    cfg.list_args = vec!["krew".into(), "list".into()];
-    cfg.search_args = vec!["krew".into(), "search".into()];
-    cfg.upgrade_args = vec!["krew".into(), "upgrade".into()];
-    cfg.update_args = Some(vec!["krew".into(), "update".into()]);
-    let core = Arc::new(GenericBackendCore {
-        name: "krew".into(),
-        executor: executor.duplicate(),
-        config: cfg,
-        parser: Arc::new(LambdaParser {
-            // `kubectl krew list` prints `PLUGIN  VERSION` (older versions: bare names);
-            // `search` prints `NAME  DESCRIPTION  INSTALLED`, so only the first column is a name.
-            installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "krew"),
-            search_fn: |o| crate::parsers::ecosystem::names_only(o, "krew").unwrap_or_default(),
-        }),
-    });
-    register_generic(reg, core, true, true, true);
-}
-
-/// Dart / pub, reached through `dart pub global`.
-///
-/// Was 197 lines. Nothing in it was outside the table: two-word verbs under a different binary.
-fn register_pubdart(reg: &mut BackendRegistry, executor: &CommandExecutor) {
-    let mut cfg = base_config("pub");
-    cfg.binary = Some("dart".into());
-    // `dart pub global list` reports exactly what was activated — all user-chosen.
-    cfg.manual = ManualListing::AllInstalled;
-    // pub pins with a trailing positional version (`activate <pkg> <version>`) — an operand,
-    // so the `--` terminator stays in front of both it and the name.
-    cfg.version_pin = Some(VersionPin::after(vec!["{version}".into()]));
-    cfg.install_args = vec!["pub".into(), "global".into(), "activate".into()];
-    cfg.remove_args = vec!["pub".into(), "global".into(), "deactivate".into()];
-    cfg.list_args = vec!["pub".into(), "global".into(), "list".into()];
-    // pub.dev has no upgrade-all verb: re-activating each package unpinned is the upgrade.
-    cfg.upgrade_reinstall_args = Some(cfg.install_args.clone());
-    let core = Arc::new(GenericBackendCore {
-        name: "pub".into(),
-        executor: executor.duplicate(),
-        config: cfg,
-        parser: Arc::new(LambdaParser {
-            installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "pub"),
-            search_fn: |_| vec![],
-        }),
-    });
-    // Upgradable, not searchable: pub.dev has no CLI search, and upgrade is the re-activate
-    // loop above rather than a verb.
-    register_generic(reg, core, true, false, true);
-}
-
-fn register_asdf(reg: &mut BackendRegistry, executor: &CommandExecutor) {
-    let mut cfg = base_config("asdf");
-    // asdf lists the tool versions someone explicitly installed; it has no dep concept.
-    cfg.manual = ManualListing::AllInstalled;
-    // asdf refuses to install without a version, so an unpinned line asks for `latest`.
-    // Removal needs none: measured, `asdf uninstall nodejs` returns 0 and the version leaves
-    // `asdf list`.
-    cfg.version_pin = Some(VersionPin::after_required(
-        vec!["{version}".into()],
-        "latest",
-    ));
-    cfg.install_args = vec!["install".into()];
-    cfg.remove_args = vec!["uninstall".into()];
-    cfg.list_args = vec!["list".into()];
-    let core = Arc::new(GenericBackendCore {
-        name: "asdf".into(),
-        executor: executor.duplicate(),
-        config: cfg,
-        parser: Arc::new(LambdaParser {
-            installed_fn: |o| crate::parsers::ecosystem::asdf_list(o, "asdf"),
-            search_fn: |_| vec![],
-        }),
-    });
-    register_generic(reg, core, true, false, false);
-}
-
-/// GNU Guix (`guix`). Linux-only; gated by the `guix` binary. Per-user, no root needed.
-fn register_guix(reg: &mut BackendRegistry, executor: &CommandExecutor) {
-    let mut cfg = base_config("guix");
-    // `guix package -I` lists the profile's manifest — what was explicitly installed —
-    // not the store closure behind it.
-    cfg.manual = ManualListing::AllInstalled;
-    cfg.version_pin = Some(VersionPin::Inline("{name}@{version}".into()));
-    cfg.install_args = vec!["install".into()];
-    cfg.remove_args = vec!["remove".into()];
-    cfg.list_args = vec!["package".into(), "-I".into()];
-    cfg.search_args = vec!["search".into()];
-    cfg.upgrade_args = vec!["upgrade".into()];
-    let core = Arc::new(GenericBackendCore {
-        name: "guix".into(),
-        executor: executor.duplicate(),
-        config: cfg,
-        parser: Arc::new(LambdaParser {
-            installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "guix"),
-            search_fn: |o| crate::parsers::ecosystem::guix_search(o, "guix"),
-        }),
-    });
-    register_generic(reg, core, true, true, true);
-}
-
-/// Gentoo Portage (`emerge`). Linux-only; gated by the `emerge` binary. Installed packages
-/// are listed via `qlist -I` (portage-utils). Needs root and serializes (Portage locks).
-fn register_emerge(reg: &mut BackendRegistry, executor: &CommandExecutor) {
-    let mut cfg = base_config("emerge");
-    // Portage's @world file (/var/lib/portage/world) is the explicit set; `emerge -I`
-    // lists the whole tree (306 packages vs an empty world on the gentoo test image).
-    // Wiring the world file is the right fix; until it is verified, adopt nothing.
-    cfg.manual = ManualListing::Unsupported;
-    cfg.install_args = vec!["--ask=n".into(), "--quiet".into()];
-    cfg.remove_args = vec!["--unmerge".into(), "--ask=n".into()];
-    cfg.list_binary = Some("qlist".into());
-    cfg.list_args = vec!["-I".into()];
-    cfg.search_args = vec!["--search".into()];
-    cfg.upgrade_args = vec![
-        "--update".into(),
-        "--deep".into(),
-        "--newuse".into(),
-        "--ask=n".into(),
-        "@world".into(),
-    ];
-    cfg.needs_root = true;
-    cfg.is_exclusive = true;
-    let core = Arc::new(GenericBackendCore {
-        name: "emerge".into(),
-        executor: executor.duplicate(),
-        config: cfg,
-        parser: Arc::new(LambdaParser {
-            installed_fn: |o| crate::parsers::ecosystem::names_only(o, "emerge"),
-            search_fn: |o| crate::parsers::ecosystem::emerge_search(o, "emerge"),
-        }),
-    });
-    register_generic(reg, core, true, true, true);
-}
-
-/// Solus eopkg (`eopkg`). Linux-only; gated by the `eopkg` binary. Needs root, serializes.
-fn register_eopkg(reg: &mut BackendRegistry, executor: &CommandExecutor) {
-    let mut cfg = base_config("eopkg");
-    // eopkg installs dependencies and `list-installed` reports them all.
-    cfg.manual = ManualListing::Unsupported;
-    cfg.install_args = vec!["install".into(), "-y".into()];
-    cfg.remove_args = vec!["remove".into(), "-y".into()];
-    cfg.list_args = vec!["list-installed".into()];
-    cfg.search_args = vec!["search".into()];
-    cfg.upgrade_args = vec!["upgrade".into(), "-y".into()];
-    cfg.needs_root = true;
-    cfg.is_exclusive = true;
-    // Solus keeps fetched `.eopkg` archives in `/var/cache/eopkg/packages`.
-    cfg.clean_cache = Some(CacheClean {
-        binary: None,
-        args: vec!["delete-cache".into()],
-    });
-    let core = Arc::new(GenericBackendCore {
-        name: "eopkg".into(),
-        executor: executor.duplicate(),
-        config: cfg,
-        parser: Arc::new(LambdaParser {
-            installed_fn: |o| crate::parsers::ecosystem::eopkg_list(o, "eopkg"),
-            search_fn: |o| crate::parsers::ecosystem::eopkg_list(o, "eopkg").unwrap_or_default(),
-        }),
-    });
-    register_generic(reg, core, true, true, true);
-}
-
-/// Slackware slackpkg (`slackpkg`). Linux-only; gated by the `slackpkg` binary. Installed
-/// packages are read from `/var/log/packages`. Needs root, serializes.
-fn register_slackpkg(reg: &mut BackendRegistry, executor: &CommandExecutor) {
-    let mut cfg = base_config("slackpkg");
-    // Slackware does no dependency resolution: every installed package was chosen.
-    cfg.manual = ManualListing::AllInstalled;
-    cfg.install_args = vec![
-        "-batch=on".into(),
-        "-default_answer=y".into(),
-        "install".into(),
-    ];
-    cfg.remove_args = vec![
-        "-batch=on".into(),
-        "-default_answer=y".into(),
-        "remove".into(),
-    ];
-    cfg.list_binary = Some("ls".into());
-    cfg.list_args = vec!["-1".into(), "/var/log/packages".into()];
-    cfg.search_args = vec!["search".into()];
-    cfg.upgrade_args = vec![
-        "-batch=on".into(),
-        "-default_answer=y".into(),
-        "upgrade-all".into(),
-    ];
-    cfg.needs_root = true;
-    cfg.is_exclusive = true;
-    let core = Arc::new(GenericBackendCore {
-        name: "slackpkg".into(),
-        executor: executor.duplicate(),
-        config: cfg,
-        parser: Arc::new(LambdaParser {
-            installed_fn: |o| crate::parsers::ecosystem::slackpkg_installed(o, "slackpkg"),
-            search_fn: |o| crate::parsers::ecosystem::slackpkg_search(o, "slackpkg"),
-        }),
-    });
-    register_generic(reg, core, true, true, true);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::app::LuaHooks;
+
+    /// **A row reached by name, where a registrar was reached by symbol.**
+    ///
+    /// These tests drive one backend's argv at a time and took a
+    /// `fn(&mut BackendRegistry, &CommandExecutor)`. The backends below are rows in
+    /// `builtin_backends.toml` now, so the symbol they named is gone and the row is what
+    /// stands in — same registration path, same capabilities, reached by the name the row
+    /// carries. Every argv assertion below is unchanged, which is the point of doing it this
+    /// way rather than deleting the assertions with the functions.
+    macro_rules! rows_as_registrars {
+        ($($fn_name:ident => $row:literal),* $(,)?) => {
+            $(
+                fn $fn_name(reg: &mut BackendRegistry, exec: &CommandExecutor) {
+                    crate::backends::onboarder::register_builtin_row(reg, exec, $row);
+                }
+            )*
+        };
+    }
+
+    rows_as_registrars! {
+        register_asdf => "asdf",
+        register_cabal => "cabal",
+        register_cargo => "cargo",
+        register_composer => "composer",
+        register_emerge => "emerge",
+        register_eopkg => "eopkg",
+        register_guix => "guix",
+        register_helm => "helm",
+        register_krew => "krew",
+        register_luarocks => "luarocks",
+        register_mix => "mix",
+        register_nimble => "nimble",
+        register_npm => "npm",
+        register_opam => "opam",
+        register_pipx => "pipx",
+        register_pixi => "pixi",
+        register_pnpm => "pnpm",
+        register_pubdart => "pub",
+        register_slackpkg => "slackpkg",
+        register_spack => "spack",
+        register_stack => "stack",
+        register_uv => "uv",
+        register_yarn => "yarn",
+    }
 
     async fn build_registry() -> BackendRegistry {
         let exec = CommandExecutor::new(true, false);

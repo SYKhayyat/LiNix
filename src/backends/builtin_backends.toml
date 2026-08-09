@@ -1,0 +1,444 @@
+# The backends LiNix ships with, as ROWS IN THE SAME TABLE a user adds a row to — parsed by the
+# same loader, wired by the same `build_capabilities`, reading with the same named readers.
+# `setting_stores.toml` states the reason in its own header: an adapter mechanism the built-ins
+# bypass is one nobody has tested, and this was the table with sixty rows doing the bypassing.
+#
+# A row is `[[backend]]`. Every field is the one `adapters/backends.toml` documents; nothing here
+# is a built-in-only escape hatch, which is the point — U2 says a custom backend is a first-class
+# peer of a built-in, and a peer is what the same file makes it.
+#
+# `reads` / `searches` name a reader in `src/parsers/named.rs`, each of which is a function with a
+# fixture behind it. `[backend.parser]` describes a shape instead, and is what a user writes for a
+# manager LiNix has never seen. A row may use either; a row with `list_args` and neither is caught
+# by `every_row_can_read_what_it_asks_for` in the suite, because a listing nobody can parse reads
+# as an empty machine and `sync` answers that by installing everything.
+#
+# `os` restricts a row to one platform. It is read through `AdapterRow::applies_to`, like every
+# other table's, so a Windows row is visible to a Linux build and can be asserted there.
+#
+# WHAT IS NOT HERE, and why. Five shapes a row cannot hold, each carrying a closure that reaches
+# into a manager's own answer:
+#
+#   * an install conditional on a read (`snap`'s `@classic`, `flatpak`'s `@channel`);
+#   * argv that is a program rather than a template (`nix`, `go`, `storage`);
+#   * a removal that is a filesystem operation informed by a query (`appimage`, `web`, `github`);
+#   * a `PropertyProbe` reaching INTO JSON rather than taking a command's whole stdout;
+#   * per-package identity that includes the version (`asdf`'s tool@version, kept in Rust for
+#     its `after_required` pin only — see below, it IS a row).
+#
+# Those stay in `registry.rs` and in their own modules, and the list of which is asserted by
+# `backend_is_data_not_code_tests.rs`, whose exemption table carries the reason for each.
+
+
+# ---------------------------------------------------------------------------------------------
+# Language and ecosystem managers. Cross-platform: gated by their binary being on PATH, not by
+# the OS, which is why none of these carries `os =`.
+# ---------------------------------------------------------------------------------------------
+
+# PHP / Packagist.
+[[backend]]
+name = "composer"
+install_args = ["global", "require"]
+remove_args = ["global", "remove"]
+list_args = ["global", "show", "--format=json"]
+search_args = ["global", "search", "--format=json"]
+upgrade_args = ["global", "update"]
+reads = "language"
+searches = "language"
+# composer prints `Changed current directory to …` ahead of the JSON, which the reader steps
+# past — a strict parse would report nothing outdated on every machine.
+outdated_args = ["global", "outdated", "--format=json"]
+outdated_reads = "composer_outdated"
+# composer keeps every downloaded package archive under `~/.composer/cache`.
+clean_cache_args = ["clear-cache"]
+version_pin = { kind = "inline", template = "{name}:{version}" }
+# `composer global show` lists the whole solved tree. `--direct` would report just the requested
+# packages, but no test image covers composer, so decline to adopt rather than ship a guess.
+
+# OCaml.
+[[backend]]
+name = "opam"
+install_args = ["install", "-y"]
+remove_args = ["remove", "-y"]
+list_args = ["list", "--installed", "--short"]
+search_args = ["search", "--short"]
+upgrade_args = ["upgrade", "-y"]
+reads = "names_only"
+searches = "names_only"
+# `opam clean` removes downloaded archives and build logs, never a switch's installed packages —
+# which is the line X.3 draws between a cache and a removal.
+clean_cache_args = ["clean"]
+version_pin = { kind = "inline", template = "{name}.{version}" }
+# opam installs dependencies as packages; `--roots` would be the right wiring, unverified here.
+
+# Lua.
+[[backend]]
+name = "luarocks"
+install_args = ["install"]
+remove_args = ["remove"]
+list_args = ["list", "--porcelain"]
+search_args = ["search", "--porcelain"]
+reads = "ws_name_version"
+searches = "ws_name_version"
+# The version is a bare operand, not an option: `luarocks install --` answers `Error: missing
+# argument 'rock'`, and `luarocks install -- <rock> <version>` is identical to the same line
+# without the terminator (measured, `tools` image 2026-08-04). So the terminator stays on both
+# the pinned and the unpinned path, which is why this says `After` rather than naming a flag.
+version_pin = { kind = "after", args = ["{version}"] }
+
+# Nim. No CLI search, no upgrade-all.
+[[backend]]
+name = "nimble"
+install_args = ["install", "-y"]
+remove_args = ["uninstall", "-y"]
+list_args = ["list", "--installed"]
+reads = "nimble"
+version_pin = { kind = "inline", template = "{name}@{version}" }
+
+# pixi global environments.
+[[backend]]
+name = "pixi"
+install_args = ["global", "install"]
+# pixi removes a global TOOL with `global uninstall`; `global remove` deletes a package from an
+# environment and requires `--environment`, so it errors on a bare tool name.
+remove_args = ["global", "uninstall"]
+list_args = ["global", "list"]
+search_args = ["search"]
+# `global upgrade-all` was removed upstream; pixi 0.73 answers it with "This command has been
+# removed, please use `pixi global update` instead". A plan-smoke passed it the whole time,
+# because constructing an argv proves nothing about whether the argv exists.
+upgrade_args = ["global", "update"]
+reads = "pixi"
+searches = "pixi"
+# pixi prints its listing as a box-drawing tree; `--json` is the same answer already parsed.
+# Recent pixi only, hence the negotiation rather than a straight swap.
+machine_list_args = ["global", "list", "--json"]
+machine_list_reads = "pixi_json"
+manual = "all_installed"
+version_pin = { kind = "inline", template = "{name}={version}" }
+
+# Spack, for HPC.
+[[backend]]
+name = "spack"
+install_args = ["install"]
+remove_args = ["uninstall", "-y"]
+list_args = ["find", "--format", "{name} {version}"]
+search_args = ["list"]
+# Two different readers, which is why `reads` and `searches` are separate fields: `spack find`
+# prints `name version` and `spack list` prints bare names.
+reads = "ws_name_version"
+searches = "names_only"
+version_pin = { kind = "inline", template = "{name}@{version}" }
+
+# Elixir/Hex archives. The global-archive surface; project-scoped hex deps are out of scope.
+[[backend]]
+name = "mix"
+install_args = ["archive.install", "hex", "--force"]
+# `--force` on the removal too, and not for symmetry: measured, a bare `mix archive.uninstall
+# phx_new` with no terminal prints `Are you sure…? [Yn]`, takes the empty answer, EXITS 0 and
+# leaves the archive installed. LiNix reported a removal that did not happen — the scoop-exit-0
+# shape (E7), one manager over.
+remove_args = ["archive.uninstall", "--force"]
+list_args = ["archive"]
+reads = "mix_archive"
+manual = "all_installed"
+# The version is a bare positional after the name. Not optional in practice — an archive declares
+# which Elixir it supports, so on Elixir 1.14 the newest `phx_new` fetches, builds and then
+# refuses to run, and pinning is the only way to install one at all (measured, 2026-07-29).
+version_pin = { kind = "after", args = ["{version}"] }
+
+# Helm plugins. Chart releases are a different concept and out of scope.
+#
+# A declaration is `helm:NAME@url=SOURCE`: helm installs a plugin from a URL but lists and
+# uninstalls it by the name in its `plugin.yaml`, so naming the URL would install a plugin LiNix
+# could never remove or recognise again (U39).
+[[backend]]
+name = "helm"
+install_args = ["plugin", "install"]
+remove_args = ["plugin", "uninstall"]
+list_args = ["plugin", "list"]
+reads = "ws_name_version"
+manual = "all_installed"
+install_source_option = "url"
+
+# Haskell / cabal. No uninstall verb, so `remove_args` is empty and removal reports Unsupported.
+[[backend]]
+name = "cabal"
+install_args = ["install"]
+list_args = ["list", "--installed", "--simple-output"]
+search_args = ["list", "--simple-output"]
+reads = "ws_name_version"
+searches = "ws_name_version"
+version_pin = { kind = "inline", template = "{name}-{version}" }
+
+# Haskell / stack. Like cabal it has no uninstall verb, and no reliable global install list —
+# `cannot_list` is an ERROR rather than an empty vector, because "this machine has nothing" is a
+# fact the planner acts on and "this question cannot be asked" is not.
+[[backend]]
+name = "stack"
+install_args = ["install"]
+reads = "cannot_list"
+version_pin = { kind = "inline", template = "{name}-{version}" }
+
+# The three Node managers, which spell one shape three ways: the global flag (`-g` vs a `global`
+# verb), the install verb, the remove verb, and where each keeps what it installed. None has a
+# usable CLI search — npm's is slow and output-unstable, pnpm has none, yarn removed its own in
+# Berry — and all three resolve from the npm registry, which is `search_source`. Upgrading is
+# re-installing each global package, for all three.
+[[backend]]
+name = "npm"
+install_args = ["install", "-g"]
+remove_args = ["uninstall", "-g"]
+list_args = ["list", "-g", "--depth=0", "--json"]
+upgrade_reinstall_args = ["install", "-g"]
+search_source = "npm_registry"
+reads = "language"
+# `npm outdated` exits non-zero when it FINDS something, so this is read through `run_output`
+# rather than a status-checked reader.
+outdated_args = ["outdated", "-g", "--json"]
+outdated_reads = "npm_outdated"
+# `npm cache clean` refuses without `--force`; the flag is npm asking whether you meant it, not a
+# way to make it try harder.
+clean_cache_args = ["cache", "clean", "--force"]
+manual = "all_installed"
+version_pin = { kind = "inline", template = "{name}@{version}" }
+# `npm prefix -g` reports the PREFIX, not the module directory, and the layout below it differs
+# by OS. Getting this wrong yields a path that does not exist.
+[[backend.property_probes]]
+property = "install_path"
+args = ["prefix", "-g"]
+template = "{base}/lib/node_modules/{name}"
+windows_template = "{base}/node_modules/{name}"
+
+[[backend]]
+name = "pnpm"
+install_args = ["add", "-g"]
+remove_args = ["remove", "-g"]
+list_args = ["list", "-g", "--depth=0", "--json"]
+upgrade_reinstall_args = ["add", "-g"]
+search_source = "npm_registry"
+# `pnpm list -g --json` returns an ARRAY of project objects where npm returns one bare object.
+# The shared reader handles both; parsing pnpm as npm yields nothing.
+reads = "language"
+outdated_args = ["outdated", "-g", "--json"]
+outdated_reads = "npm_outdated"
+# pnpm's content-addressable store, minus what is still referenced.
+clean_cache_args = ["store", "prune"]
+manual = "all_installed"
+version_pin = { kind = "inline", template = "{name}@{version}" }
+# `pnpm root -g` already IS the global node_modules directory, so the package folder is
+# `<root>/<name>`; appending another `node_modules` yields a path that does not exist.
+[[backend.property_probes]]
+property = "install_path"
+args = ["root", "-g"]
+template = "{base}/{name}"
+[[backend.property_probes]]
+property = "bin_path"
+args = ["bin", "-g"]
+template = "{base}"
+
+[[backend]]
+name = "yarn"
+# yarn 1 spells global as a leading verb rather than a flag.
+install_args = ["global", "add"]
+remove_args = ["global", "remove"]
+# Not `--json`: yarn 1's JSON stream reports the BINARIES a global package installed
+# (`{"type":"bins-catj","items":["catj"]}`) and never the package, so the one line that names it
+# is the plain output's. Measured on a host with `catj` installed.
+list_args = ["global", "list"]
+upgrade_reinstall_args = ["global", "add"]
+search_source = "npm_registry"
+reads = "language"
+# `yarn cache clean` with no package name empties the whole cache, in Classic and in Berry.
+clean_cache_args = ["cache", "clean"]
+manual = "all_installed"
+version_pin = { kind = "inline", template = "{name}@{version}" }
+# `yarn global dir` returns the folder CONTAINING node_modules, unlike `pnpm root -g`.
+[[backend.property_probes]]
+property = "install_path"
+args = ["global", "dir"]
+template = "{base}/node_modules/{name}"
+[[backend.property_probes]]
+property = "bin_path"
+args = ["global", "bin"]
+template = "{base}"
+
+# Rust / crates.io.
+#
+# The one thing worth carrying: `cargo install foo` on an already-installed foo declines and exits
+# 0. Upgrading has to say `--force`, which is why `upgrade_reinstall_args` carries args of its own
+# instead of being a boolean — a boolean would have upgraded cargo by asking it to do nothing, and
+# reported success.
+[[backend]]
+name = "cargo"
+install_args = ["install"]
+remove_args = ["uninstall"]
+list_args = ["install", "--list"]
+search_args = ["search"]
+upgrade_reinstall_args = ["install", "--force"]
+# `cargo install --list` indents each crate's binaries beneath it; a column reader would take
+# those indented lines as package names.
+reads = "language"
+searches = "language"
+manual = "all_installed"
+# `--version` is an option of `install`, not of the crate name, so it goes ahead of the terminator
+# and the name stays protected behind it.
+version_pin = { kind = "before", args = ["--version", "{version}"] }
+
+# Python applications in their own venvs.
+[[backend]]
+name = "pipx"
+install_args = ["install"]
+remove_args = ["uninstall"]
+list_args = ["list", "--json"]
+upgrade_args = ["upgrade-all"]
+reads = "language"
+manual = "all_installed"
+version_pin = { kind = "inline", template = "{name}=={version}" }
+[[backend.property_probes]]
+property = "install_path"
+args = ["environment", "--value", "PIPX_HOME"]
+template = "{base}/venvs/{name}"
+
+# uv's tool installs.
+[[backend]]
+name = "uv"
+install_args = ["tool", "install"]
+remove_args = ["tool", "uninstall"]
+list_args = ["tool", "list"]
+upgrade_args = ["tool", "upgrade", "--all"]
+reads = "ws_name_version"
+# uv keeps wheels and source distributions under its own cache directory.
+clean_cache_args = ["cache", "clean"]
+manual = "all_installed"
+version_pin = { kind = "inline", template = "{name}=={version}" }
+[[backend.property_probes]]
+property = "install_path"
+args = ["tool", "dir"]
+template = "{base}/{name}"
+
+# krew, the kubectl plugin manager. Its verbs are subcommands of `kubectl`.
+#
+# `extra_probes` is the thing 193 lines of hand-written Rust knew and the table did not: krew is a
+# PLUGIN, so `kubectl` alone is not enough. A host with kubectl and no krew reported READY and
+# then failed every command with `unknown command "krew"` — including `linix update`, which
+# refreshes every backend at once.
+[[backend]]
+name = "krew"
+binary = "kubectl"
+extra_probes = ["kubectl-krew"]
+install_args = ["krew", "install"]
+remove_args = ["krew", "uninstall"]
+list_args = ["krew", "list"]
+search_args = ["krew", "search"]
+upgrade_args = ["krew", "upgrade"]
+update_args = ["krew", "update"]
+# `kubectl krew list` prints `PLUGIN  VERSION` (older versions: bare names); `search` prints
+# `NAME  DESCRIPTION  INSTALLED`, so only the first column is a name.
+reads = "ws_name_version"
+searches = "names_only"
+manual = "all_installed"
+# krew installs the index's current version and has no per-install version pin.
+
+# Dart / pub, reached through `dart pub global`.
+[[backend]]
+name = "pub"
+binary = "dart"
+install_args = ["pub", "global", "activate"]
+remove_args = ["pub", "global", "deactivate"]
+list_args = ["pub", "global", "list"]
+# pub.dev has no upgrade-all verb: re-activating each package unpinned is the upgrade. Upgradable
+# without being searchable — pub.dev has no CLI search.
+upgrade_reinstall_args = ["pub", "global", "activate"]
+reads = "ws_name_version"
+manual = "all_installed"
+# pub pins with a trailing positional version — an operand, so `--` stays in front of both it and
+# the name.
+version_pin = { kind = "after", args = ["{version}"] }
+
+# asdf version manager. A tool/plugin is the "package"; installing pins a version.
+[[backend]]
+name = "asdf"
+install_args = ["install"]
+remove_args = ["uninstall"]
+list_args = ["list"]
+reads = "asdf"
+manual = "all_installed"
+# asdf refuses to install without a version, so an unpinned line asks for `latest`. Removal needs
+# none: measured, `asdf uninstall nodejs` returns 0 and the version leaves `asdf list`.
+version_pin = { kind = "after", args = ["{version}"], unpinned = "latest" }
+
+
+# ---------------------------------------------------------------------------------------------
+# Linux distribution managers that are pure argv. The rest of the Linux family — apt, dnf,
+# pacman, apk, zypper, xbps — carry an orphan dry-run, a dependency probe or an essential-set
+# reader whose parsers ARE rows too; they are here for the same reason the others are.
+# ---------------------------------------------------------------------------------------------
+
+# GNU Guix. Per-user, no root needed.
+[[backend]]
+name = "guix"
+os = "linux"
+install_args = ["install"]
+remove_args = ["remove"]
+# `guix package -I` lists the profile's manifest — what was explicitly installed — not the store
+# closure behind it.
+list_args = ["package", "-I"]
+search_args = ["search"]
+upgrade_args = ["upgrade"]
+reads = "ws_name_version"
+searches = "guix"
+manual = "all_installed"
+version_pin = { kind = "inline", template = "{name}@{version}" }
+
+# Gentoo Portage. Installed packages come from `qlist -I` (portage-utils).
+[[backend]]
+name = "emerge"
+os = "linux"
+install_args = ["--ask=n", "--quiet"]
+remove_args = ["--unmerge", "--ask=n"]
+list_binary = "qlist"
+list_args = ["-I"]
+search_args = ["--search"]
+upgrade_args = ["--update", "--deep", "--newuse", "--ask=n", "@world"]
+reads = "names_only"
+searches = "emerge"
+needs_root = true
+is_exclusive = true
+# Portage's @world file is the explicit set; `emerge -I` lists the whole tree (306 packages vs an
+# empty world on the gentoo test image). Wiring the world file is the right fix; until it is
+# verified, adopt nothing.
+
+# Solus eopkg.
+[[backend]]
+name = "eopkg"
+os = "linux"
+install_args = ["install", "-y"]
+remove_args = ["remove", "-y"]
+list_args = ["list-installed"]
+search_args = ["search"]
+upgrade_args = ["upgrade", "-y"]
+reads = "eopkg"
+searches = "eopkg"
+needs_root = true
+is_exclusive = true
+# Solus keeps fetched `.eopkg` archives in `/var/cache/eopkg/packages`.
+clean_cache_args = ["delete-cache"]
+# eopkg installs dependencies and `list-installed` reports them all, so adopt nothing.
+
+# Slackware slackpkg. Installed packages are read from `/var/log/packages`.
+[[backend]]
+name = "slackpkg"
+os = "linux"
+install_args = ["-batch=on", "-default_answer=y", "install"]
+remove_args = ["-batch=on", "-default_answer=y", "remove"]
+list_binary = "ls"
+list_args = ["-1", "/var/log/packages"]
+search_args = ["search"]
+upgrade_args = ["-batch=on", "-default_answer=y", "upgrade-all"]
+reads = "slackpkg"
+searches = "slackpkg"
+needs_root = true
+is_exclusive = true
+# Slackware does no dependency resolution: every installed package was chosen.
+manual = "all_installed"

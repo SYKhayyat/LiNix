@@ -386,6 +386,66 @@ pub struct CustomBackendDef {
     /// How to parse `search` output (defaults to the same as `parser`).
     pub search_parser: Option<ParserSpec>,
 
+    // --- Naming a reader that already exists, instead of describing one. ---
+    //
+    // `parser`/`search_parser` describe a shape. These name one of the readers in
+    // `crate::parsers::named`, each of which is a function with a fixture behind it. The two
+    // are alternatives and `reads` wins: a row that says both has said the same thing twice
+    // and the named one is the tested one.
+    //
+    // This is what lets a built-in be a row. Sixty backends' argv were always data; what kept
+    // them in Rust was that `ws_name_version` is a function and a `[[backend]]` entry had no
+    // way to say its name.
+    /// A reader from `crate::parsers::named` for the installed listing.
+    pub reads: Option<String>,
+    /// A reader for the catalogue. Absent with `search_args` present is a load error, not a
+    /// default: guessing here is how a manager comes to report an empty catalogue.
+    pub searches: Option<String>,
+    /// A reader for `outdated_args`.
+    pub outdated_reads: Option<String>,
+    /// A reader for `machine_list_args`.
+    pub machine_list_reads: Option<String>,
+    /// A reader for `essential_args` — a listing of bare names the removal guard must never
+    /// touch.
+    pub essential_reads: Option<String>,
+    /// A reader for `depends_args`. Absent falls back to the labelled-report reader every
+    /// `Key: value` manager shares, which is what a custom row without one gets.
+    pub depends_reads: Option<String>,
+    /// Binary for `depends_args`, when dependencies are reported by a separate program.
+    pub depends_binary: Option<String>,
+
+    /// The one OS this row is registered on. Absent means every OS, which is right for a
+    /// language manager and wrong for `apt`.
+    pub os: Option<String>,
+
+    /// `upgrade_args` is an upgrade-*all*, so this backend gets `Upgradable`.
+    ///
+    /// Derived from `upgrade_args` being non-empty, and overridable because the derivation is
+    /// wrong twice: `pip install --upgrade` takes package names and fails without them, and
+    /// `bun upgrade` upgrades the bun runtime rather than the packages bun installed. Both
+    /// have an `upgrade_args` and neither has an upgrade-all — `S58` is the entry recording
+    /// what registering them anyway would have done.
+    pub upgrades_all: Option<bool>,
+
+    /// The option that installs from a local file or URL rather than from the catalogue.
+    pub install_source_option: Option<String>,
+    /// Args that upgrade one package by reinstalling it, where the manager has no in-place
+    /// upgrade verb.
+    pub upgrade_reinstall_args: Option<Vec<String>>,
+    /// Whether `repo_list_args` prints columns or a per-name detail query is needed.
+    pub repo_list_shape: Option<RepoListShapeDef>,
+    /// Where `search` gets its answers: the manager's own command, or a registry over HTTP.
+    pub search_source: Option<SearchSourceDef>,
+    /// Programs that must ALSO be on `PATH` before this backend counts as available.
+    ///
+    /// For a manager that is a plugin of another: `kubectl` alone is not krew, and a host with
+    /// kubectl and no krew reported READY and then failed every command — including
+    /// `linix update`, which refreshes every backend at once.
+    pub extra_probes: Option<Vec<String>>,
+    /// Paths `linix info` reports, each read out of the manager rather than guessed.
+    #[serde(default)]
+    pub property_probes: Vec<PropertyProbeDef>,
+
     /// Take the name even if something already holds it — a built-in included (Q6).
     ///
     /// Default `false`, and that default is the security property: a definition cannot take
@@ -456,6 +516,9 @@ pub struct CustomBackendDef {
     pub outdated_parser: Option<ParserSpec>,
     /// Binary for `outdated_args`, when updates are reported by a separate program.
     pub outdated_binary: Option<String>,
+    /// Whether this manager prints nothing when nothing is outdated, rather than a header.
+    #[serde(default)]
+    pub outdated_silence_is_none: bool,
 
     /// A machine-readable listing to prefer over `list_args`, where this manager has one and
     /// might be too old to (`Q43`). It is *asked for*, and a manager that refuses is read from
@@ -468,6 +531,94 @@ pub struct CustomBackendDef {
     pub machine_list_parser: Option<ParserSpec>,
     /// Binary for `machine_list_args`, when the machine format comes from a separate program.
     pub machine_list_binary: Option<String>,
+}
+
+impl crate::core::adapter::AdapterRow for CustomBackendDef {
+    const WHAT: &'static str = "backend definition";
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn only_on(&self) -> Option<&str> {
+        self.os.as_deref()
+    }
+
+    // `why_unusable` is deliberately the default. What makes a definition unusable is already
+    // decided by `register_custom_backends` — an invalid name, a binary that is not a command,
+    // a collision without `overrides` — and each of those refusals names the field it is
+    // about. A second copy here would be the two-of-everything this table exists to end.
+}
+
+/// TOML mirror of [`crate::backends::generic::PropertyProbe`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct PropertyProbeDef {
+    pub property: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// `{base}` and `{name}` substituted.
+    pub template: String,
+    /// The template on Windows, where a manager lays its tree out differently.
+    ///
+    /// npm is the one: `npm prefix -g` reports the *prefix*, and POSIX puts modules under
+    /// `lib/node_modules` while Windows puts them directly under `node_modules`. One row with
+    /// two templates, rather than two rows differing in one string.
+    pub windows_template: Option<String>,
+}
+
+impl From<PropertyProbeDef> for crate::backends::generic::PropertyProbe {
+    fn from(d: PropertyProbeDef) -> Self {
+        crate::backends::generic::PropertyProbe {
+            property: d.property,
+            args: d.args,
+            template: match d.windows_template {
+                Some(w) if cfg!(windows) => w,
+                _ => d.template,
+            },
+        }
+    }
+}
+
+/// TOML mirror of [`crate::backends::generic::RepoListing`].
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepoListShapeDef {
+    /// One row per repository, name and source in the first two columns.
+    Columns,
+    /// Bare names, and the source is a second question about one of them. `{name}` is the
+    /// repository.
+    NamesThenDetail { detail_args: Vec<String> },
+}
+
+impl From<RepoListShapeDef> for RepoListing {
+    fn from(d: RepoListShapeDef) -> Self {
+        match d {
+            RepoListShapeDef::Columns => RepoListing::Columns,
+            RepoListShapeDef::NamesThenDetail { detail_args } => {
+                RepoListing::NamesThenDetail(detail_args)
+            }
+        }
+    }
+}
+
+/// TOML mirror of [`crate::backends::generic::SearchSource`].
+#[derive(Debug, Clone, Copy, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchSourceDef {
+    /// Run `search_args` and read stdout.
+    #[default]
+    Command,
+    /// Query the public npm registry over HTTP.
+    NpmRegistry,
+}
+
+impl From<SearchSourceDef> for SearchSource {
+    fn from(d: SearchSourceDef) -> Self {
+        match d {
+            SearchSourceDef::Command => SearchSource::Command,
+            SearchSourceDef::NpmRegistry => SearchSource::NpmRegistry,
+        }
+    }
 }
 
 /// TOML mirror of [`crate::backends::generic::OrphanDryRun`].
@@ -659,6 +810,51 @@ fn unapproved(path: &Path, content: &str, locks_dir: &Path) -> Option<String> {
     crate::core::hook_lock::adapter_refusal(path, content, locks_dir)
 }
 
+/// The backends LiNix ships with, as rows in the table a user adds a row to.
+///
+/// **An adapter mechanism the built-ins bypass is one nobody has tested** — `setting_stores.toml`
+/// states that in its own header, and the one table with sixty rows was the one bypassing it.
+/// These rows go through the same deserialiser, the same [`build_capabilities`], the same
+/// capability derivation and the same named readers as anything in a user's
+/// `adapters/backends.toml`. What is not the same is the approval: this file is compiled into
+/// the binary, so there is no II.12 question to ask about it.
+pub const BUILTIN_TABLE: &str = include_str!("builtin_backends.toml");
+
+/// The shipped table, parsed. Separate from registration so a test can read the rows without
+/// building an executor.
+pub fn builtin_rows() -> Vec<CustomBackendDef> {
+    let parsed: CustomBackendsFile = toml::from_str(BUILTIN_TABLE)
+        .expect("builtin_backends.toml is compiled in and parsed by a test in this module");
+    parsed.backend
+}
+
+/// Registers every shipped row this OS runs.
+///
+/// The OS gate is the row's own `os =`, read through [`AdapterRow`] like every other table's,
+/// rather than `cfg!(target_os = …)` around the call — so a Windows row is *visible* to a Linux
+/// build and can be asserted there. Four copies of this filter read `std::env::consts::OS`
+/// directly, which is why the trait takes the OS as a parameter.
+pub fn register_builtin_backends(reg: &mut BackendRegistry, exec: &CommandExecutor) -> usize {
+    let rows: Vec<CustomBackendDef> = builtin_rows()
+        .into_iter()
+        .filter(crate::core::adapter::AdapterRow::applies_here)
+        .collect();
+    register_custom_backends(reg, exec, rows)
+}
+
+/// Registers the one shipped row called `name`, whatever OS it says it is for.
+///
+/// The OS gate is skipped deliberately: this is how a test drives a single backend's argv, and
+/// asserting apt's install line on Windows is the entire reason `applies_to` takes the OS as a
+/// parameter rather than reading it.
+pub fn register_builtin_row(reg: &mut BackendRegistry, exec: &CommandExecutor, name: &str) {
+    let row = builtin_rows()
+        .into_iter()
+        .find(|r| r.name == name)
+        .unwrap_or_else(|| panic!("`{name}` is not a row in builtin_backends.toml"));
+    register_custom_backends(reg, exec, vec![row]);
+}
+
 /// Registers a set of already-parsed definitions. Invalid names and collisions with an
 /// existing (built-in or earlier custom) backend are skipped with a warning.
 pub fn register_custom_backends(
@@ -712,11 +908,19 @@ pub fn register_custom_backends(
 /// Turns one definition into a fully-wired [`BackendCapabilities`] over the generic
 /// backend machinery. Capabilities are attached only for the operations the definition
 /// actually specifies (e.g. no `search_args` ⇒ not searchable).
-fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendCapabilities {
+pub(crate) fn build_capabilities(
+    def: CustomBackendDef,
+    exec: &CommandExecutor,
+) -> BackendCapabilities {
     let has_install = !def.install_args.is_empty();
     let has_list = !def.list_args.is_empty();
     let has_search = !def.search_args.is_empty();
-    let has_upgrade = !def.upgrade_args.is_empty();
+    // Derived from either way a manager can upgrade everything: its own upgrade-all verb, or
+    // re-installing each package where it has none. Overridable because the derivation is
+    // wrong for the two managers whose upgrade verb takes names (`S58`).
+    let has_upgrade = def
+        .upgrades_all
+        .unwrap_or(!def.upgrade_args.is_empty() || def.upgrade_reinstall_args.is_some());
 
     // Built before `def.parser` is consumed below. A reader closes over the spec and the
     // backend name, which is why these are `PackageReader`s and not `fn` pointers: a custom
@@ -732,6 +936,10 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
             .or_else(|| def.parser.clone())
             .unwrap_or_default();
         let name = backend_name.clone();
+        let named = def
+            .outdated_reads
+            .as_deref()
+            .and_then(crate::parsers::named::probe);
         crate::backends::generic::OutdatedProbe {
             binary: def.outdated_binary.as_deref().map(expand_binary),
             args,
@@ -739,8 +947,11 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
             // the common answer and a safe one — unlike an *installed* listing, whose emptiness
             // the planner answers by installing everything. `MachineListing` above keeps the
             // failure; this drops it on purpose.
-            parse: Arc::new(move |o: &str| spec.parse(o, &name).unwrap_or_default()),
-            silence_is_none: false,
+            parse: match named {
+                Some(f) => Arc::new(move |o: &str| f(o, &name)),
+                None => Arc::new(move |o: &str| spec.parse(o, &name).unwrap_or_default()),
+            },
+            silence_is_none: def.outdated_silence_is_none,
         }
     });
     // No `or(parser)` fallback here, deliberately. The point of a machine format is that it is
@@ -750,12 +961,29 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
         def.machine_list_args.clone(),
         def.machine_list_parser.clone(),
     ) {
-        (Some(args), Some(spec)) => {
+        (Some(args), spec)
+            if spec.is_some()
+                || def
+                    .machine_list_reads
+                    .as_deref()
+                    .and_then(crate::parsers::named::installed)
+                    .is_some() =>
+        {
             let name = backend_name.clone();
+            let named = def
+                .machine_list_reads
+                .as_deref()
+                .and_then(crate::parsers::named::installed);
             Some(crate::backends::generic::MachineListing {
                 binary: def.machine_list_binary.as_deref().map(expand_binary),
                 args,
-                parse: Arc::new(move |o: &str| spec.parse(o, &name)),
+                parse: match named {
+                    Some(f) => Arc::new(move |o: &str| f(o, &name)),
+                    None => {
+                        let spec = spec.expect("the guard above guarantees one of the two");
+                        Arc::new(move |o: &str| spec.parse(o, &name))
+                    }
+                },
             })
         }
         (Some(_), None) => {
@@ -768,10 +996,26 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
         _ => None,
     };
 
-    let parser = ConfiguredParser {
-        backend: def.name.clone(),
-        installed: def.parser.clone().unwrap_or_default(),
-        search: def.search_parser.or(def.parser).unwrap_or_default(),
+    // A named reader wins over a described one. Both is not an error — it is a row that said
+    // the same thing twice — and the named one is the one with a fixture behind it.
+    let parser: Arc<dyn OutputParser> = match def
+        .reads
+        .as_deref()
+        .and_then(crate::parsers::named::installed)
+    {
+        Some(reads) => Arc::new(crate::parsers::named::NamedParser::new(
+            &def.name,
+            reads,
+            def.searches.as_deref().and_then(crate::parsers::named::search),
+            def.essential_reads
+                .as_deref()
+                .and_then(crate::parsers::named::names),
+        )),
+        None => Arc::new(ConfiguredParser {
+            backend: def.name.clone(),
+            installed: def.parser.clone().unwrap_or_default(),
+            search: def.search_parser.or(def.parser).unwrap_or_default(),
+        }),
     };
 
     let config = ManagerConfig {
@@ -804,16 +1048,27 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
         repo_binary: def.repo_binary,
         repo_list_binary: def.repo_list_binary,
         repo_remove_binary: def.repo_remove_binary,
-        // A custom row states its listing as columns; a per-name detail query is a second
-        // command, and no `adapters/backends.toml` has asked for one.
-        repo_list_shape: RepoListing::Columns,
-        depends: def.depends_args.map(|args| DependsProbe {
-            binary: None,
-            args,
-            // The shape every `Key: value` report shares. A custom row's manager is unknown
-            // here, and this is the parser that reads the two labelled layouts apt and zypper
-            // print without reading a description's prose as a package.
-            parse: Arc::new(crate::backends::generic::parse_dependency_output),
+        repo_list_shape: def
+            .repo_list_shape
+            .map(Into::into)
+            .unwrap_or(RepoListing::Columns),
+        depends: def.depends_args.map(|args| {
+            let named = def
+                .depends_reads
+                .as_deref()
+                .and_then(crate::parsers::named::names);
+            let backend = def.name.clone();
+            DependsProbe {
+                binary: def.depends_binary.as_deref().map(expand_binary),
+                args,
+                // Absent, the shape every `Key: value` report shares: a custom row's manager
+                // is unknown here, and this is the reader that takes the two labelled layouts
+                // apt and zypper print without reading a description's prose as a package.
+                parse: match named {
+                    Some(f) => Arc::new(move |o: &str| f(o, &backend)),
+                    None => Arc::new(crate::backends::generic::parse_dependency_output),
+                },
+            }
         }),
         clean_cache: def.clean_cache_args.map(|args| CacheClean {
             binary: def.clean_cache_binary,
@@ -822,20 +1077,28 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
         version_pin: def.version_pin.map(Into::into),
         needs_root: def.needs_root,
         is_exclusive: def.is_exclusive,
-        install_source_option: None,
-        extra_probes: None,
-        upgrade_reinstall_args: None,
-        property_probes: Vec::new(),
+        install_source_option: def.install_source_option,
+        extra_probes: def.extra_probes,
+        upgrade_reinstall_args: def.upgrade_reinstall_args,
+        property_probes: def.property_probes.into_iter().map(Into::into).collect(),
         machine_list,
         outdated,
-        search_source: SearchSource::Command,
+        search_source: def
+            .search_source
+            .map(Into::into)
+            .unwrap_or(SearchSource::Command),
     };
 
     let core = Arc::new(GenericBackendCore {
-        name: def.name,
-        executor: exec.duplicate(),
+        name: def.name.clone(),
+        // The manager's exit policy, which is keyed on the name and defaults for a name it
+        // does not know — so a row for `apt` gets apt's, and a row for something new gets the
+        // default rather than nothing.
+        executor: exec
+            .duplicate()
+            .with_exit_policy(crate::core::exit_policy::for_manager(&def.name)),
         config,
-        parser: Arc::new(parser),
+        parser,
     });
 
     let mut builder =
@@ -846,13 +1109,18 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
     if has_list {
         builder = builder.with_queryable(Arc::new(GenericQueryable { core: core.clone() }));
     }
-    // Searchable carries two different things: `search`, and the manager's own "what has
-    // an update" verb (`Q44`). A definition may declare the second without the first — a
-    // corporate manager that lists updates but has no catalogue to search is an ordinary
-    // shape — and gating on `search_args` alone meant its updates were silently never
-    // reported. `search` itself still refuses below when it was never configured, so this
-    // does not turn "not configured" into "no results".
-    if has_search || core.config.outdated.is_some() {
+    // Searchable carries three things: `search`, the manager's own "what has an update" verb
+    // (`Q44`), and a catalogue reached over HTTP instead of through the binary. A definition
+    // may declare any of the three without the others — a corporate manager that lists updates
+    // but has no catalogue to search is an ordinary shape, and the three Node managers search
+    // the npm registry with no `search_args` at all, npm's own CLI search being slow and
+    // output-unstable. Gating on `search_args` alone silenced both. `search` itself still
+    // refuses below when it was never configured, so this does not turn "not configured" into
+    // "no results".
+    if has_search
+        || core.config.outdated.is_some()
+        || core.config.search_source != SearchSource::Command
+    {
         builder = builder.with_searchable(Arc::new(GenericSearchable { core: core.clone() }));
     }
     if has_upgrade {

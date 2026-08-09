@@ -5484,3 +5484,44 @@ the moment rows could carry options, with nothing to say so. The ledger's stale 
 it, and would report it as *“no longer has no row”*, which sends the reader to the
 wrong place. So it runs first, with a line saying why. That ordering is the general form: where a
 site knows more than the helper, the site asserts first and the helper cleans up behind it.
+
+**V.171 — Why one field kept thirty others in Rust, and what a row can now get wrong.**
+
+Twenty-three backends were already data and nobody could act on it. `fn register_yarn` opened
+with `ManagerConfig { name: "yarn".into(), install_args: vec!["global".into(), "add".into()], … }`
+and closed forty lines later having said nothing a `[[backend]]` row could not say — except in
+one field. `parser` takes a `ParserSpec`, which *describes* a shape; the listing yarn prints
+needs `ws_name_version`, which is a *function*. A TOML row had no way to write a function's name,
+so the parser field forced the whole registration into Rust, and once it was in Rust the argv
+went with it. Multiply by twenty-three and that is 782 lines of struct literal justified by one
+missing indirection.
+
+`src/parsers/named.rs` is that indirection: a name-to-function-pointer resolver, one per call
+site in `build_capabilities`, over readers that already existed and were already tested. Nothing
+about the parsers changed. What changed is that a row can now say which one it wants.
+
+**A row can be wrong in ways a function could not, and that is the real cost of the trade.** The
+compiler checked `parser: Arc::new(ws_name_version)`; it cannot check `reads = "ws_name_version"`.
+Worse, the field is an `Option` whose `None` has a meaning — *use the described parser* — so a
+misspelling is not a load error, not a warning, and not a panic. It is a backend that registers,
+advertises `Queryable`, runs its listing command, parses it with one-bare-name-per-line, and
+reports a machine where every installed package is either missing or misnamed. That is Q40's
+class exactly, arriving through a door Q40's fix did not cover, and it is why the gate for it
+holds a floor on the number of readers it found: a scan that stopped seeing the fields would pass
+as loudly as a correct one.
+
+The same shape repeats three more times, each with a `None` that means something reasonable and
+therefore hides something wrong. `searches` absent means *this manager has no catalogue*, which
+is true for `krew` and a silent lie for anything with `search_args`. `parser` absent means *one
+name per line*, which is a real shape and the wrong answer for every manager that prints a
+version. `install_source_option` absent means *installs by name only*, which the grammar
+independently believes or disbelieves in `capability::install_source_key` — and when the two
+disagree the user either gets a refusal for a line the backend could have run, or an accepted
+line whose source is dropped on the floor. Four `None`s, four gates, each watched to fail on a
+planted defect before it was believed.
+
+**Registration order is a decision, not an accident.** Rows go in first so that a hand-written
+registration overwrites one, which is the safe direction: the Rust is the more specific thing and
+the thing more likely to exist for a reason. But *safe direction* is not the same as *fine*, and
+a name held in both places is two of everything by definition. The gate refuses it rather than
+letting the order of two calls quietly pick a winner.

@@ -36,6 +36,7 @@ mod harness;
 /// wrote them out by hand and three of the nine were missing the one that matters.
 mod ledger;
 
+mod a_backend_is_a_row_tests;
 mod a_batch_of_installs_is_one_command_tests;
 mod a_config_travels_between_machines_tests;
 mod a_configured_capability_is_a_registered_one_tests;

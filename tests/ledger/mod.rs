@@ -41,6 +41,10 @@ impl<'a> From<&'a (&'a str, &'a str)> for Entry<'a> {
     }
 }
 
+/// Extra evidence a site can supply about one of its own findings — the offending line, the
+/// argv, whatever the gate knows and the ledger cannot. `None` means it has nothing to add.
+type Detail<'a> = Box<dyn Fn(&str) -> Option<String> + 'a>;
+
 /// A scanning gate's exemption table, and the four assertions that keep it honest.
 pub struct Ledger<'a> {
     subject: &'a str,
@@ -49,7 +53,7 @@ pub struct Ledger<'a> {
     floor: usize,
     min_reason: usize,
     remedy: &'a str,
-    detail: Option<Box<dyn Fn(&str) -> Option<String> + 'a>>,
+    detail: Option<Detail<'a>>,
 }
 
 impl<'a> Ledger<'a> {
