@@ -4983,3 +4983,56 @@ Both dispatches are exhaustive with no catch-all, and the arms that do nothing s
 does not have — a file written by a newer LiNix, an edit by hand — is now kept and reported
 instead of being silently dropped. Forgetting a row is the one outcome that cannot be undone: the
 resource stays on the machine with nothing recording that LiNix owns it.
+
+---
+
+**V.161 — Why the ledger key is a type, and why five of the nine "hand-rolled readers" were fine.**
+*(Rule in II.30. Fixed 2026-08-09, `S57`.)*
+
+The review that raised this counted nine places re-splitting `Statement::key()` on `:` and called
+them nine instances of one bug. **They are not.** Reading them one at a time turns up two
+different key spaces wearing the same punctuation, and that — not the count — is the finding:
+
+- **`kind:subject`**, an extras-ledger key. `service:nginx`, `repo:apt:ppa:x/y`,
+  `link:/home/u/.vimrc`. Three sites: `extras_lock::split_key`, `guard::extra_removal_pairs`,
+  and `apply/extras::in_effect`.
+- **`backend:name`**, a package key. `apt:jq`. Five sites: `core/state::is_held`,
+  `model/resolve::same_package`, `verbs/cleanup`'s OS-essential filter, `verbs/plan::scoped_by`
+  (a *third* space again — the lock-file ledger's `adapters:backends.toml`), and
+  `verbs/packages::handle_info`.
+
+Four of the five package-key sites are correct and stay: they split a key their own module
+formatted, in a space where the prefix really is a backend. `state::is_held` even documents why
+it compares halves in place instead of formatting a key — one heap allocation per declaration,
+inside the planner's fan-out. `scoped_by` is about a different ledger entirely.
+
+The fifth was a real instance of the repo's own rule — *one parser for `backend:name`, and
+anything that splits on `:` and trusts the prefix is a bug*. `handle_info`'s "not installed"
+message built its `linix search …` hint with `package.rsplit(':').next()`, which for
+`web:https://example/x.deb` yields `//example/x.deb`: a suggested command nobody can run. It goes
+through the grammar now.
+
+**So the finding is the extras space, and there the type is the fix.** `ExtraKey` is the only
+thing that formats a `kind:subject` string and the only thing that parses one. Two properties
+fall out that no amount of careful splitting could give:
+
+- **The producer and the reader are one construction.** `link_key` existed already, precisely
+  because a `dotfiles:` tree asks the same question from the other end and *"must produce the
+  same string or a teardown searches for a row nothing wrote"*. That was one string built in two
+  places with a comment holding them together; it is now one constructor.
+- **The split point is stated once.** At the **first** colon, because a `repo:` subject carries
+  its own. Every hand-rolled reader used `split_once`, so they all agreed — but nothing said why,
+  and `handle_info`'s `rsplit` is what the disagreement looks like when it happens.
+
+**`extra_key` no longer builds from `Statement::key()`.** It builds from `kind()` and
+`subject()`. `key()` is documented as the display form of a line; that it happens to equal
+`kind:subject` for the keyword statements is a coincidence two functions were relying on, in a
+file that already documents the one place it deliberately departs from `key()` (a `link:` is
+keyed by its destination, not its source).
+
+**The on-disk format did not change**, and the ledger still deserialises as strings rather than
+as parsed keys. That is deliberate: parsing at load would make one unreadable row — a file
+written by a newer LiNix, a hand edit — fail the whole file, and `S56` had just established that
+forgetting a row is the one outcome that cannot be undone. Parsing at the point of use lets the
+row be reported and kept, and lets the guard go on counting and protecting it, because the guard
+does not dispatch on kind and only the kind is unknown.

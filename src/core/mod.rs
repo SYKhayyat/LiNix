@@ -66,7 +66,7 @@ pub use artifact_lock::{verify_set, ArtifactLedger, ArtifactLock};
 pub use bare_lock::BareLock;
 pub use exec_lock::{Ceiling, ExecLedger};
 pub use exit::Exit;
-pub use extras_lock::{extra_key, ExtrasLedger};
+pub use extras_lock::{extra_key, ExtraKey, ExtrasLedger};
 pub use regex_lock::RegexLock;
 
 pub use state::{ManagedPackage, StateRegistry};

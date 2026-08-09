@@ -2754,3 +2754,29 @@ indistinguishable at the call site — which is the entire failure this rule pre
 
 **A ledger key whose kind this build does not have is kept, not dropped.** It is left in place,
 reported, and re-offered next run. Forgetting a row is the one outcome that cannot be undone.
+
+## II.30 `<kind>:<subject>` has one producer and one reader, and it is a type (`S57`, V.161)
+
+**`ExtraKey { kind: ResourceKind, subject: String }` is the extras-ledger key.** `Display` writes
+it, `FromStr` reads it, and the ledger on disk is a set of exactly those strings. Nothing else
+formats one and nothing else splits one.
+
+**The split is at the FIRST colon and the subject is not split again.** A `repo:` subject is
+itself `backend:spec`, and that inner structure belongs to the repo backend. One type splitting
+one string twice is how the second reader gets it wrong.
+
+**`Statement::key()` is the display form of a line, not a wire format.** It produces two key
+spaces — `backend:name` for a package, `kind:subject` for a keyword — and its type does not say
+which. A reader that splits it on `:` and trusts the prefix reads `apt:jq` as the kind `apt`.
+The extras ledger therefore builds its key from `kind()` and `subject()`, not from `key()`: that
+the two agree today is true, and is not a promise anybody made.
+
+**And the package half of that hazard already has its one parser** — the grammar
+(`config/grammar/`, reached through `split_removal_target`). Anything that splits a package spec
+on `:` by hand is a bug, including a `rsplit` that takes the tail: `web:https://x/y.deb` has
+three colons and the last one is inside the URL.
+
+**A row this build cannot parse is kept, reported, and re-offered.** The ledger deserialises as
+strings and parses per row where it is used, so one unreadable row does not fail the file — and
+the guard still counts and protects it, because only its *kind* is unknown and the guard does
+not dispatch on kind.

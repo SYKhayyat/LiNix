@@ -105,7 +105,7 @@ impl Dotfiles<'_> {
     /// Returns each tree with what it would place, so one walk answers the preview, the
     /// collision check and the apply. Walking three times would be three chances to disagree.
     pub fn plan(&self, state: &crate::model::DesiredState) -> Result<Vec<Tree>> {
-        use crate::core::extras_lock::{link_key, ExtrasLedger};
+        use crate::core::extras_lock::{ExtraKey, ExtrasLedger};
         use crate::core::LockFile;
 
         // What LiNix has recorded placing. Asked once for every tree, because it is the
@@ -143,8 +143,9 @@ impl Dotfiles<'_> {
             // previous sync recorded, and a symlink still counts for a tree placed before the
             // row existed. Narrowing this to the ledger alone would turn every such
             // destination into a fresh U23 refusal on the sync after an upgrade.
-            let owned =
-                |p: &std::path::Path| p.is_symlink() || placed.applied().contains(&link_key(p));
+            let owned = |p: &std::path::Path| {
+                p.is_symlink() || placed.applied().contains(&ExtraKey::link(p).to_string())
+            };
             let plan = crate::model::dotfiles::plan(
                 &root,
                 &target,

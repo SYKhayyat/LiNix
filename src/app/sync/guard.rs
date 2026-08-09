@@ -849,14 +849,18 @@ pub async fn enforce_deliberate(
 }
 
 /// Split an extras-ledger key (`link:/home/u/.vimrc`, `repo:apt:ppa:x/y`) into the
-/// `(kind, id)` pair the guard inspects. A key with no `:` cannot name a kind, so it is
-/// carried through under an empty kind rather than dropped — the guard must never silently
-/// stop covering something it could not parse.
+/// `(kind, id)` pair the guard inspects.
+///
+/// **A key this build cannot parse is carried through under an empty kind rather than dropped.**
+/// The guard must never silently stop covering something it could not read: an unreadable row
+/// still names a thing on the machine, and the count and the protection rules both still apply
+/// to it. Only the *kind* is unknown, and the guard does not dispatch on kind.
 pub fn extra_removal_pairs(keys: &[String]) -> Vec<(String, String)> {
+    use crate::core::extras_lock::ExtraKey;
     keys.iter()
-        .map(|k| match k.split_once(':') {
-            Some((kind, id)) => (kind.to_string(), id.to_string()),
-            None => (String::new(), k.clone()),
+        .map(|k| match k.parse::<ExtraKey>() {
+            Ok(key) => (key.kind.to_string(), key.subject),
+            Err(()) => (String::new(), k.clone()),
         })
         .collect()
 }

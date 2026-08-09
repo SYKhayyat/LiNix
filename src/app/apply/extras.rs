@@ -108,12 +108,13 @@ impl Extras<'_> {
         // By key, so a line declared twice is one entry and the order is the file's — the same
         // set `declared_extras` builds, carrying the statement each key came from because the
         // probe needs the source a `link:` was written from.
-        let by_key: std::collections::BTreeMap<String, &Statement> = state
-            .extras
-            .iter()
-            .chain(trees.iter())
-            .filter_map(|(s, _)| crate::core::extras_lock::extra_key(s).map(|k| (k, s)))
-            .collect();
+        let by_key: std::collections::BTreeMap<crate::core::extras_lock::ExtraKey, &Statement> =
+            state
+                .extras
+                .iter()
+                .chain(trees.iter())
+                .filter_map(|(s, _)| crate::core::extras_lock::extra_key(s).map(|k| (k, s)))
+                .collect();
         for (key, stmt) in by_key {
             // The probe first and the ledger only after it. `Dependents::apply` has never
             // consulted the ledger — it skips whatever the probe reports in effect — so a
@@ -124,7 +125,9 @@ impl Extras<'_> {
             // The record still answers the case nothing can be asked about: a resource this
             // machine cannot be queried for has been applied, or it has not, and only one of
             // those is work.
-            match in_effect(self.config, self.registry, stmt, &key).await {
+            let answer = in_effect(self.config, self.registry, stmt, &key).await;
+            let key = key.to_string();
+            match answer {
                 Some(true) => {}
                 Some(false) => changes.place.push(key),
                 None if !ledger.applied().contains(&key) => changes.place.push(key),
@@ -149,7 +152,7 @@ impl Extras<'_> {
         state: &crate::model::DesiredState,
         scope: guard::GuardScope,
     ) -> Result<usize> {
-        use crate::core::extras_lock::{split_key, ExtrasLedger};
+        use crate::core::extras_lock::{ExtraKey, ExtrasLedger};
 
         let trees = self.tree_links(state)?;
         let declared = declared_extras(state.extras.iter().chain(trees.iter()));
@@ -208,11 +211,7 @@ impl Extras<'_> {
             // A key whose kind the grammar does not have is a ledger row LiNix cannot act on.
             // Skipped rather than dropped — `still_applied` keeps it, so the next sync reports
             // it again instead of quietly forgetting a resource that is still in effect.
-            let Some((kind, id)) = split_key(key).and_then(|(k, id)| {
-                k.parse::<crate::config::grammar::ResourceKind>()
-                    .ok()
-                    .map(|k| (k, id))
-            }) else {
+            let Ok(parsed) = key.parse::<ExtraKey>() else {
                 warn!(
                     "`{}` is in the extras ledger under a kind this build does not have; it is \
                      left in place and kept on the ledger.",
@@ -230,7 +229,7 @@ impl Extras<'_> {
                 // the wrong place to learn that an invariant was wrong.
                 continue;
             };
-            if let Err(e) = self.undo_extra(kind, id, reaped).await {
+            if let Err(e) = self.undo_extra(parsed.kind, &parsed.subject, reaped).await {
                 warn!(
                     "could not undo `{}` ({}); it is still in place and the next sync will \
                      try again.",
@@ -360,14 +359,12 @@ pub(crate) async fn in_effect(
     config: &std::sync::Arc<crate::config::Config>,
     registry: &crate::backends::BackendRegistry,
     stmt: &crate::config::grammar::Statement,
-    key: &str,
+    key: &crate::core::extras_lock::ExtraKey,
 ) -> Option<bool> {
     use crate::config::grammar::{ResourceKind as K, Statement};
-    use crate::core::extras_lock::split_key;
 
-    let (kind, id) = split_key(key)?;
-    let kind: K = kind.parse().ok()?;
-    match kind {
+    let id = key.subject.as_str();
+    match key.kind {
         // A running service is a state the init can be asked about, and asking costs one
         // cached listing for the whole run. Left unasked, every `service:` line was
         // `unverifiable` — which places — so adopting a machine's 150 running services made
@@ -458,6 +455,7 @@ fn declared_extras<'a>(
 ) -> std::collections::BTreeSet<String> {
     statements
         .filter_map(|(s, _)| crate::core::extras_lock::extra_key(s))
+        .map(|k| k.to_string())
         .collect()
 }
 

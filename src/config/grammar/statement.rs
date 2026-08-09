@@ -3757,7 +3757,7 @@ mod firewall_tests {
     fn a_firewall_rule_is_an_extra_with_a_teardown_key() {
         let stmt = pv("firewall:22/tcp").unwrap();
         assert_eq!(
-            crate::core::extra_key(&stmt).as_deref(),
+            crate::core::extra_key(&stmt).map(|k| k.to_string()).as_deref(),
             Some("firewall:22/tcp")
         );
     }

@@ -94,11 +94,19 @@ fn a_links_ledger_key_is_its_destination_not_its_source() {
     let key = extra_key(&Statement::Link("dotfiles/gitconfig".into(), opts)).unwrap();
 
     let want = super::link::resolve_target("~/.gitconfig").unwrap();
-    assert_eq!(key, format!("link:{}", want.display()));
+    assert_eq!(key.kind, crate::config::grammar::ResourceKind::Link);
+    assert_eq!(key.subject, want.display().to_string());
+    assert_eq!(key.to_string(), format!("link:{}", want.display()));
     assert!(
-        !key.contains("dotfiles/gitconfig"),
+        !key.subject.contains("dotfiles/gitconfig"),
         "the undo would be handed the source file: {}",
         key
+    );
+    // And the round trip, which is the property the ledger depends on: what is written is what
+    // is read back.
+    assert_eq!(
+        key.to_string().parse::<crate::core::extras_lock::ExtraKey>(),
+        Ok(key)
     );
 }
 

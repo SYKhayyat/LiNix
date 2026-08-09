@@ -905,11 +905,17 @@ pub async fn handle_info(app: &App, package: &str) -> Result<()> {
         // "no such package", which is a different and usually false claim — `linix search
         // ripgrep` finds it on crates.io while `info cargo:ripgrep` says this. Say which
         // question was asked, and name the command that answers the other one.
+        // The bare name comes from the grammar, not from `rsplit(':')`. There is one parser for
+        // `backend:name` and a hand-rolled split is a bug by the same rule that made it one:
+        // `web:https://example/x.deb` has three colons and the last of them is inside the URL,
+        // so the suffix after it is `//example/x.deb` — a `linix search` line nobody can use.
+        let (_, bare) = crate::config::parser::split_removal_target(package, |b| {
+            app.registry.get(b).is_some()
+        });
         println!(
             "'{}' is not installed on this machine, so there is nothing to describe.\n  \
              `linix search {}` looks for it in the managers you use.",
-            package,
-            package.rsplit(':').next().unwrap_or(package)
+            package, bare
         );
         return Ok(());
     };

@@ -15,17 +15,80 @@
 //! Pure: the ledger, the key, and the diff. Executing an undo (disabling a service, deleting
 //! a shim) is the caller's job.
 
-use crate::config::grammar::Statement;
+use crate::config::grammar::{ResourceKind, Statement};
 use crate::core::ledger::LockFile;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+/// The identity of one applied extra: **what kind of thing it is, and which one**.
+///
+/// `Statement::key()` produces two different key spaces and its type does not say which. A
+/// package statement keys `backend:name`; a keyword statement keys `kind:subject`. The hazard is
+/// named in `Statement::kind`'s own doc comment — *"re-splitting `key` on `:` … would read
+/// `apt:jq` as the kind `apt`"* — and it was still being re-split, by hand, in three places that
+/// deal in extras keys and by five more that deal in package keys and must not be confused with
+/// them.
+///
+/// This is the extras half, as one type. It is **the only producer and the only reader** of a
+/// `<kind>:<subject>` string: `Display` writes it, [`FromStr`](std::str::FromStr) reads it, and
+/// the ledger on disk is a set of those strings.
+///
+/// **Parsed at the boundary, not at load.** The ledger deserialises as strings and each row is
+/// parsed where it is used, so one unreadable row — a file written by a newer LiNix, an edit by
+/// hand — is reported and kept rather than failing the whole file. Forgetting a row is the one
+/// outcome that cannot be undone.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ExtraKey {
+    pub kind: ResourceKind,
+    /// Everything after the keyword, verbatim. A `repo:` subject is itself `backend:spec`, which
+    /// is why this is not split further here: that inner structure is the repo backend's, and
+    /// splitting it twice in one type is how the second reader gets it wrong.
+    pub subject: String,
+}
+
+impl ExtraKey {
+    pub fn new(kind: ResourceKind, subject: impl Into<String>) -> Self {
+        Self {
+            kind,
+            subject: subject.into(),
+        }
+    }
+
+    /// The ledger key of a file LiNix placed, from its destination.
+    ///
+    /// A second caller asks this question from the other end: a `dotfiles:` tree has the
+    /// destination in hand and needs to know whether the ledger already claims it. That question
+    /// and [`extra_key`]'s `link:` arm must produce the same string or a teardown searches for a
+    /// row nothing wrote, so there is one constructor and that arm calls it.
+    pub fn link(destination: &Path) -> Self {
+        Self::new(ResourceKind::Link, destination.display().to_string())
+    }
+}
+
+impl std::fmt::Display for ExtraKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.kind, self.subject)
+    }
+}
+
+impl std::str::FromStr for ExtraKey {
+    type Err = ();
+
+    /// `service:nginx` → `(Service, "nginx")`; `repo:apt:ppa:x/y` → `(Repo, "apt:ppa:x/y")`.
+    /// Split at the **first** colon: the kind is one keyword and everything after it belongs to
+    /// the subject, including a `repo:` subject's own colons.
+    fn from_str(s: &str) -> std::result::Result<Self, ()> {
+        let (kind, subject) = s.split_once(':').ok_or(())?;
+        Ok(Self::new(kind.parse()?, subject))
+    }
+}
+
 /// The stable identity of an applied extra, `<kind>:<id>`. Parseable back into an undo action
 /// (see `Extras::reconcile`), and stable across runs so the same declaration always keys
 /// the same ledger entry. Returns `None` for statements that are not applied extras (packages,
 /// set-math, `use`) — those are tracked elsewhere or not at all.
-pub fn extra_key(stmt: &Statement) -> Option<String> {
+pub fn extra_key(stmt: &Statement) -> Option<ExtraKey> {
     match stmt {
         // A link is keyed by its DESTINATION, not by its source — the one place this ledger
         // departs from [`Statement::key`]. The undo has to remove what LiNix wrote, and by the
@@ -36,8 +99,8 @@ pub fn extra_key(stmt: &Statement) -> Option<String> {
         Statement::Link(name, opts) => Some(
             opts.one("target")
                 .and_then(|t| crate::backends::link::resolve_target(t).ok())
-                .map(|p| link_key(&p))
-                .unwrap_or_else(|| format!("link:{}", name)),
+                .map(|p| ExtraKey::link(&p))
+                .unwrap_or_else(|| ExtraKey::new(ResourceKind::Link, name)),
         ),
         // `exec:` is deliberately NOT an extra. Extras are nouns whose teardown undoes what
         // they put in place; a verb has no such inverse, and a script that succeeds makes its
@@ -55,25 +118,13 @@ pub fn extra_key(stmt: &Statement) -> Option<String> {
         Statement::Exec(..) | Statement::Generate(..) | Statement::Dotfiles(..) => None,
         // Everything else with a keyword is a noun with an inverse: deleting a `firewall:` line
         // closes the port (N5), deleting a `service:` line disables the service.
-        _ => stmt.kind().map(|_| stmt.key()),
+        //
+        // Built from the kind and the subject rather than from `Statement::key()`, so the key
+        // this ledger writes and the key it reads back are one construction. `key()` is
+        // documented as the *display* form of a line; that the two agree for these kinds is
+        // true and is not a promise anybody made.
+        _ => Some(ExtraKey::new(stmt.kind()?, stmt.subject()?)),
     }
-}
-
-/// The ledger key of a file LiNix placed, from its destination.
-///
-/// A second caller asks this question from the other end: a `dotfiles:` tree has the
-/// destination in hand and needs to know whether the ledger already claims it. That question
-/// and [`extra_key`]'s `link:` arm must produce the same string or a teardown searches for a
-/// row nothing wrote, so there is one function and the arm above calls it.
-pub fn link_key(destination: &Path) -> String {
-    format!("link:{}", destination.display())
-}
-
-/// A drifted extra, split into what it is and what to act on: `service:nginx` → `("service",
-/// "nginx")`, `repo:apt:ppa:x/y` → `("repo", "apt:ppa:x/y")`. The kind picks the undo; the
-/// rest is that undo's argument.
-pub fn split_key(key: &str) -> Option<(&str, &str)> {
-    key.split_once(':')
 }
 
 /// `locks/extras.toml`: the set of extra keys the last successful sync put in place. A
@@ -123,27 +174,54 @@ mod tests {
         keys.iter().map(|s| s.to_string()).collect()
     }
 
+    fn shown(stmt: Statement) -> Option<String> {
+        extra_key(&stmt).map(|k| k.to_string())
+    }
+
     #[test]
     fn keys_are_stable_and_parseable_per_kind() {
         assert_eq!(
-            extra_key(&Statement::Shim("rg".into(), Options::default())).as_deref(),
+            shown(Statement::Shim("rg".into(), Options::default())).as_deref(),
             Some("shim:rg")
         );
         assert_eq!(
-            extra_key(&Statement::Service("nginx".into(), Options::default())).as_deref(),
+            shown(Statement::Service("nginx".into(), Options::default())).as_deref(),
             Some("service:nginx")
         );
         assert_eq!(
-            extra_key(&Statement::Repo {
+            shown(Statement::Repo {
                 backend: "apt".into(),
                 spec: "ppa:x/y".into()
             })
             .as_deref(),
             Some("repo:apt:ppa:x/y")
         );
-        // A repo key splits into kind + (backend:spec) so the undo gets the whole target.
-        assert_eq!(split_key("repo:apt:ppa:x/y"), Some(("repo", "apt:ppa:x/y")));
-        assert_eq!(split_key("service:nginx"), Some(("service", "nginx")));
+    }
+
+    /// **What is written is what is read back.** The ledger is a set of these strings on disk,
+    /// so `Display` and `FromStr` being inverses is the whole of its wire format.
+    ///
+    /// A `repo:` subject carries its own colons, which is why the split is at the FIRST one and
+    /// why the subject is not split again here: `repo:apt:ppa:x/y` must hand the undo
+    /// `apt:ppa:x/y`, whole.
+    #[test]
+    fn a_key_round_trips_through_the_string_the_ledger_stores() {
+        for (text, kind, subject) in [
+            ("service:nginx", ResourceKind::Service, "nginx"),
+            ("repo:apt:ppa:x/y", ResourceKind::Repo, "apt:ppa:x/y"),
+            ("link:/home/u/.vimrc", ResourceKind::Link, "/home/u/.vimrc"),
+            ("firewall:22/tcp", ResourceKind::Firewall, "22/tcp"),
+        ] {
+            let parsed: ExtraKey = text.parse().unwrap_or_else(|_| panic!("`{text}` parses"));
+            assert_eq!(parsed, ExtraKey::new(kind, subject));
+            assert_eq!(parsed.to_string(), text);
+        }
+
+        // A package key is not an extras key, which is the confusion `Statement::kind`'s own
+        // doc comment warns about: re-splitting on `:` would read `apt:jq` as the kind `apt`.
+        assert_eq!("apt:jq".parse::<ExtraKey>(), Err(()));
+        // And a bare word names no kind at all.
+        assert_eq!("nginx".parse::<ExtraKey>(), Err(()));
     }
 
     /// **Every key this ledger can write names a kind the teardown can dispatch on.**
@@ -154,7 +232,6 @@ mod tests {
     /// at the rest, and the shrug reported the undo as done.
     #[test]
     fn every_ledger_key_names_a_kind_the_teardown_can_dispatch_on() {
-        use crate::config::grammar::ResourceKind;
         let o = Options::default;
         let statements = [
             Statement::Shim("rg".into(), o()),
@@ -170,12 +247,13 @@ mod tests {
         ];
         for stmt in &statements {
             let key = extra_key(stmt).unwrap_or_else(|| panic!("{stmt:?} produced no key"));
-            let (kind, _) = split_key(&key).unwrap_or_else(|| panic!("`{key}` has no kind"));
-            let parsed: ResourceKind = kind
+            let parsed: ExtraKey = key
+                .to_string()
                 .parse()
-                .unwrap_or_else(|_| panic!("`{key}` opens with `{kind}`, which is not a keyword"));
+                .unwrap_or_else(|_| panic!("`{key}` does not read back as a key"));
+            assert_eq!(parsed, key, "`{key}` does not survive its own round trip");
             assert_eq!(
-                Some(parsed),
+                Some(key.kind),
                 stmt.kind(),
                 "`{key}` names a different kind than the statement it came from"
             );
