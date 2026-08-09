@@ -5075,8 +5075,8 @@ was fixed instead, which stopped a run backing up its own copy every sync under 
 
 ## Z1
 
-**Status: OPEN.** Raised by the readiness audit, 2026-08-03 (`AU12`). Not blocking: nothing in
-the tree reads it. Blocking for *distribution*, which is a different question and the one that
+**Status: ANSWERED** (owner, 2026-08-09). Raised by the readiness audit, 2026-08-03 (`AU12`).
+When raised it was not blocking, because nothing in the tree read it. Blocking for *distribution*, which is a different question and the one that
 matters — `scripts/install.sh` and `linix self-upgrade` both hand this program to other people.
 
 **Z1 — Under what licence is LiNix published?** There is no `LICENSE` file at the repo root and
@@ -5094,6 +5094,27 @@ needs every contributor's agreement.
 are `MIT OR Apache-2.0` (the Rust ecosystem default, permissive) and `GPL-3.0-or-later` (the
 package-manager tradition — dpkg, dnf, pacman). No recommendation is offered here, because a
 recommendation on this one is a decision wearing a suggestion's clothes.
+
+**RULED (owner, 2026-08-09): `MIT OR Apache-2.0`.**
+
+The Rust ecosystem's default pair, and the reason it is a pair rather than a preference: MIT is
+the shortest permissive licence anyone will actually read, and Apache-2.0 carries the explicit
+patent grant a company's lawyer looks for. A user takes whichever they can accept. The other
+answer on the table — `GPL-3.0-or-later`, the package-manager tradition — was not chosen; LiNix
+is a tool people run rather than a library they link, and the copyleft it buys costs the
+easy-adoption story the install script exists for.
+
+**Shipped with the ruling:**
+
+- `LICENSE-MIT` and `LICENSE-APACHE` at the repo root, both stamped `2026 LiNix Contributors`.
+- `license = "MIT OR Apache-2.0"` in `Cargo.toml`, and `publish = false` **deleted** — it was
+  there only because crates.io refuses a package with no `license` key, which was a statement of
+  today's truth rather than a preference, and today's truth changed.
+- `deny.toml`'s `private = { ignore = true }` **deleted**. It existed so that gate would not
+  answer this question by implication; both halves of the expression are already in its `allow`
+  list, so LiNix's own crate now answers the same licence gate every dependency does.
+- A `## Licence` section in `readme.md`, saying which file is which and that contributions come
+  in under the same terms.
 
 ---
 

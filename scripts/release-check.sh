@@ -66,9 +66,29 @@ else
     info "cargo-deny not installed (cargo install cargo-deny --locked); CI runs it regardless"
 fi
 
+# The `shell` CI job. Two files in this repo were already writing `# shellcheck disable=`
+# directives for a linter nothing ran, which is a suppression addressed to nobody — and the
+# harnesses that decide pass/fail for every backend are shell, where a quoting bug is a wrong
+# verdict. Soft here for the same reason cargo-deny is: an install a contributor may not have.
+echo "-> shellcheck (scripts/*.sh, docker/**/*.sh)"
+if command -v shellcheck >/dev/null 2>&1; then
+    # shellcheck disable=SC2046  # word-splitting the file list is the point
+    if shellcheck -S warning $(ls scripts/*.sh docker/*/*.sh 2>/dev/null); then
+        pass "shellcheck: clean"
+    else fail "shellcheck: findings - see above"; fi
+else
+    info "shellcheck not installed (apt/brew install shellcheck); CI runs it regardless"
+fi
+
 echo "-> cargo check on the declared MSRV"
 MSRV="$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)"
-if rustup toolchain list 2>/dev/null | grep -q "^$MSRV"; then
+# The guard the `.ps1` twin has and this did not. An empty `$MSRV` — `rust-version` renamed,
+# moved, or quoted differently — makes the test below `grep -q "^"`, which matches every line of
+# `rustup toolchain list`, so the check reports GO having run `cargo +"" check`. A gate that
+# passes hardest when its input is missing is the shape this script exists to catch elsewhere.
+if [ -z "$MSRV" ]; then
+    fail "could not read rust-version from Cargo.toml — the MSRV check cannot run"
+elif rustup toolchain list 2>/dev/null | grep -q "^$MSRV"; then
     if cargo "+$MSRV" check --all-targets --locked; then pass "builds on the declared MSRV ($MSRV)"
     else fail "does NOT build on rust-version = $MSRV — raise it deliberately or fix the use"; fi
 else

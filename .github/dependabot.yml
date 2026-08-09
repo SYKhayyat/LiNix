@@ -4,7 +4,7 @@
 # This is what proposes the upgrade that fixes it, and what keeps the tree from drifting so far
 # behind that the fix is a rewrite.
 #
-# Weekly, grouped: 380 transitive dependencies opening individual pull requests is a stream
+# Weekly, grouped: 448 transitive dependencies opening individual pull requests is a stream
 # nobody reads, and a gate nobody reads is a gate that does not exist — which is the failure this
 # repo has already been caught by in `--help`, in `is_removal_call`, and in the mock's default.
 version: 2

@@ -1011,3 +1011,12 @@ four sources won with `linix path --explain`.
 `docs/SPEC.md` is the source of truth for design — the map, with the parts themselves under
 `docs/spec/`; `docs/spec/decisions.md` is every open question. `CLAUDE.md` is the working
 agreement. Verify with `cargo build --all-targets`, `cargo test`, `cargo clippy --all-targets`.
+
+## Licence
+
+LiNix is dual-licensed under **MIT** ([`LICENSE-MIT`](LICENSE-MIT)) **or Apache-2.0**
+([`LICENSE-APACHE`](LICENSE-APACHE)), at your option — the Rust ecosystem's default pair. MIT is
+the shortest permissive licence anyone will actually read; Apache-2.0 carries the explicit patent
+grant a company's lawyer looks for. Take whichever you can accept.
+
+Contributions are accepted under the same terms, as `Apache-2.0` §5 states for its half.

@@ -2851,3 +2851,30 @@ packages, and an `uninstall` was typed by a person.
 stays removed after a failed transaction. **Generations and snapshots are the durable
 put-it-back** — a restore point is taken before every sync — and a durable `Prior` in the WAL is
 deferred, not rejected (`U41`).
+
+## II.34 The shipping surface is checked like the program is (`S61`, `S62`, V.165)
+
+**Every environment variable a bootstrap script documents is one it reads, and every one it
+reads is one it documents.** `install.sh` and `install.ps1` are piped from the internet: their
+header list is the whole interface, and a name in it that nothing reads is a promise, not a
+comment.
+
+**A gate whose input is missing must fail, not pass.** `grep -q "^$MSRV"` with an empty `$MSRV`
+matches every line. Any check built from an interpolated value tests the value first.
+
+**One number, one place.** A count of anything — crates, backends, refusals — is derived where
+it can be and corrected everywhere when it cannot. Six files claiming three different dependency
+counts is the failure a 226-line script was already written to prevent for a different number.
+
+**A suppression is addressed to a tool that runs.** A `# shellcheck disable=` in a repository
+with no shellcheck is a comment shaped like a gate. Either the linter runs — in CI, and softly
+in both release scripts, so a developer meets it before a red push — or the directive goes.
+
+**A release path is rehearsed before the release.** The job that publishes runs on
+`workflow_dispatch` too, downloading the same artifacts and asserting the same files exist,
+stopping before it publishes. A path whose first execution is the thing it exists for is
+untested by construction.
+
+**LiNix is `MIT OR Apache-2.0`** (`Z1`). Both files are at the root, the SPDX expression is in
+`Cargo.toml`, and LiNix's own crate answers the same `cargo deny` licence gate as every
+dependency.

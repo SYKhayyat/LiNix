@@ -207,6 +207,11 @@ fn every_ci_job_has_something_local_that_runs_it() {
         // the line and can act on it, which is the whole of what this predicate asks.
         ("supply-chain", "cargo deny check"),
         ("msrv", "rust-version"),
+        // Added with the job (`S61`), and soft locally for the third time and the same reason:
+        // `shellcheck` is an install a contributor may not have. The two `# shellcheck disable=`
+        // directives already in the tree are what made the absence of the job legible — a
+        // suppression addressed to a linter nothing runs.
+        ("shell", "shellcheck"),
     ];
     let drives_nothing = ["release"];
 

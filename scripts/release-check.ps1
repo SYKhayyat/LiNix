@@ -94,6 +94,18 @@ if (Get-Command cargo-deny -ErrorAction SilentlyContinue) {
     Info "cargo-deny not installed (cargo install cargo-deny --locked); CI runs it regardless"
 }
 
+# The `shell` CI job, run locally where the tool exists. Twin of the same block in
+# release-check.sh - change one, change the other.
+Write-Host "-> shellcheck (scripts/*.sh, docker/**/*.sh)"
+if (Get-Command shellcheck -ErrorAction SilentlyContinue) {
+    $shellScripts = @(Get-ChildItem -Path 'scripts' -Filter '*.sh' -File) +
+                    @(Get-ChildItem -Path 'docker' -Filter '*.sh' -File -Recurse)
+    shellcheck -S warning @($shellScripts.FullName)
+    if ($LASTEXITCODE -eq 0) { Pass "shellcheck: clean" } else { Fail "shellcheck: findings - see above" }
+} else {
+    Info "shellcheck not installed (scoop install shellcheck); CI runs it regardless"
+}
+
 Write-Host "-> cargo check on the declared MSRV"
 $msrvLine = Select-String -Path "Cargo.toml" -Pattern '^rust-version' | Select-Object -First 1
 $msrv = if ($null -ne $msrvLine) { ($msrvLine.Line -split '"')[1] } else { $null }

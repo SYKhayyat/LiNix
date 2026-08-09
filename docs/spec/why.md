@@ -5200,3 +5200,64 @@ reinstall of declared packages, split in two only so the `Remove` and the `Insta
 and an `uninstall` was typed by a person rather than derived from a manifest. A scope added later
 does not compile until it says which it is, because inheriting `true` here means inheriting *a
 failed run may leave your software deleted*.
+
+---
+
+**V.165 — Why the shipping surface accumulated six of these, and what they have in common.**
+*(Rule in II.34. Fixed 2026-08-09, `S61`; licence ruled as `Z1`, `S62`.)*
+
+None of the six is hard. That is the point of collecting them under one reason: they are all in
+the part of the repository that **nothing else in the repository checks**, and each of them
+survived exactly as long as it took somebody to read the file rather than run it.
+
+**Two of them are the same variable failure, in both directions.** `install.sh`'s header list is
+the entire interface of a script users pipe from a URL — there is no `--help`, no man page, and
+nobody clones the repo to read the body. It listed `LINIX_BIN_DIR`, which appeared nowhere else
+in the tree, and omitted `LINIX_REF`, which both installers read and both comment at length.
+A promise nothing keeps and a feature nobody is told about, in the same eight lines.
+
+`LINIX_BIN_DIR` is **wired in rather than deleted**, and the wiring is the interesting part:
+cargo cannot be told "install the binary here", only "install under this root, which means
+`$root/bin`". So a directory ending in `bin` becomes a `--root` of its parent, and anything else
+gets a staged install and a copy. Computing that is three lines; demanding the user compute it
+would be documenting a variable that means something other than what it says, which is where
+this started.
+
+**One is a gate that passes hardest when its input is missing.** `grep -q "^$MSRV"` with an empty
+`$MSRV` is `grep -q "^"`, which matches every line of any input — so a `Cargo.toml` whose
+`rust-version` had been renamed, moved or requoted would make `release-check.sh` report GO after
+running `cargo +"" check`. The `.ps1` twin had the explicit emptiness guard. Same file, same
+week, two authors, one of them thought about it: the twin-divergence shape `CLAUDE.md` is about,
+and the reason both scripts now say *"change one, change the other"* in every block that exists
+twice.
+
+**One is a number tracked by hand in six places.** `Cargo.lock` holds 448 crates; four files said
+380 and two said 452. This repository contains a 226-line script written because *two* files
+tracked one number by hand. The count is prose here rather than an assertion, which is why it
+drifted — and correcting it is worth the line only because each of those six sentences is an
+argument that depends on the number being roughly right.
+
+**One is a suppression addressed to nobody.** Two files carry `# shellcheck disable=SC2086`. No
+shellcheck ran anywhere: not in CI, not in either release script, not in a pre-commit hook. So
+those two directives were comments shaped like gates, and eleven shell scripts went unlinted —
+including `docker/integration/run.sh` and `harness-logic-test.sh`, which **decide pass or fail
+for every backend on every distro**. A quoting bug in a harness is not a broken script; it is a
+wrong verdict about the product, reported as a green tick. The linter runs now: hard in CI, soft
+in both release scripts so a developer meets it before a red push, at `-S warning` because a gate
+switched on over existing code and arriving red on cosmetics is a gate somebody disables in
+week one.
+
+**And one is a path whose first execution would have been the thing it exists for.** The
+`release` job triggers on `refs/tags/v*`, and no tag has ever been pushed. Every other job in
+that file has run hundreds of times; this one has run zero, and it is the single step between a
+green build and a stranger downloading a binary. It gained `workflow_dispatch`: the same
+download, an assertion that the artifacts are actually there — which the tagged path never makes,
+because `action-gh-release` only fails on an empty glob *after* the tag exists and the release is
+half-made — and then a stop, publishing nothing. One job, one path, one `if`.
+
+**The licence (`Z1`, `S62`) is not one of the six**; it is a ruling, and it is here because it is
+the last thing between this repository and other people having a right to the copy the install
+script gives them. Two placeholders went with it, and both were honest while they stood:
+`publish = false`, which said *crates.io would refuse this anyway*, and `deny.toml`'s
+`private = { ignore = true }`, which existed so a lint config would not answer the owner's legal
+question by implication. Neither has anything left to stand for.

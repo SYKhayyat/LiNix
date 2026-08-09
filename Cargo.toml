@@ -10,10 +10,12 @@ edition = "2021"
 # change needs it to, deliberately and in a commit that says why; it does not drift.
 rust-version = "1.89"
 authors = ["LiNix Contributors"]
-# Not publishable until `Z1` (the licence) is ruled: crates.io refuses a package with no `license`
-# key, so this states today's truth rather than a preference. It is also what lets `deny.toml`
-# skip the licence check on our own crate without answering `Z1` by implication.
-publish = false
+# `Z1`, ruled by the owner 2026-08-09. The Rust ecosystem's default pair, and the reason it is a
+# pair: MIT is the shortest permissive licence anyone will read, and Apache-2.0 carries the
+# explicit patent grant a company's lawyer looks for. A user takes whichever they can accept.
+# `LICENSE-MIT` and `LICENSE-APACHE` are both at the repo root; the SPDX expression is what
+# crates.io and `cargo deny` read.
+license = "MIT OR Apache-2.0"
 description = "Universal Mission-Critical Package Manager with DAG-based parallel execution"
 
 [dependencies]

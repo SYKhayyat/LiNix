@@ -19,7 +19,7 @@ env:
 jobs:
   # **The supply-chain gate this repo had none of.**
   #
-  # A tool whose pitch is "be careful what gets installed on your machine" shipped 380 unaudited
+  # A tool whose pitch is "be careful what gets installed on your machine" shipped 448 unaudited
   # transitive dependencies — `ring` and `reqwest` among them — with no mechanism that would ever
   # tell it about a RUSTSEC advisory. First in the file and first to run, because a dependency
   # with a known hole is a fact about every job below it.
@@ -61,6 +61,24 @@ jobs:
       with:
         toolchain: ${{ steps.msrv.outputs.version }}
     - run: cargo check --all-targets --locked
+
+  # **The linter two files were already writing directives for.** `docker/integration/run.sh` and
+  # `scripts/harness-mutation-test.sh` each carry a `# shellcheck disable=SC2086`, which is a
+  # suppression addressed to a tool nothing in this repository ran — so the two lines were
+  # decoration and every other shell defect in eleven scripts was unmeasured. The harnesses that
+  # decide pass/fail for every backend are shell; a quoting bug in one of them is a wrong verdict.
+  #
+  # `-S warning` rather than the default `style`: this is a gate being switched on over existing
+  # code, and a gate that arrives red on cosmetics is a gate somebody disables in week one.
+  shell:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: shellcheck
+      run: |
+        shopt -s globstar nullglob
+        shellcheck -S warning scripts/*.sh docker/**/*.sh
 
   build:
     name: Build for ${{ matrix.target }}
@@ -153,19 +171,40 @@ jobs:
           target/${{ matrix.target }}/release/linix.exe
         if-no-files-found: ignore
 
+  # **This job had never run.** Its only trigger is a `v*` tag and no tag has been pushed, so the
+  # one step between a green build and a user downloading a binary is the single least-tested
+  # thing in the repository — and the first time it runs will be the release. `install.sh` falls
+  # back to compiling 448 crates on a stranger's laptop precisely because there is nothing here
+  # to download yet.
+  #
+  # `workflow_dispatch` gives it a rehearsal: dispatched, it downloads the same artifacts, asserts
+  # the same files are present, and stops without publishing. Tagged, it publishes. One job, one
+  # path, and the difference is a single `if`.
   release:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Download all artifacts
       uses: actions/download-artifact@v4
-    
+
+    # The assertion the tagged path never makes because `action-gh-release` fails on its own if
+    # the glob is empty — by which point the tag exists and the release is half-made. Here it is
+    # a check, before anything is published, on every dispatch.
+    - name: The binaries the release would publish are present
+      run: |
+        set -eu
+        found=$(find . -path './linix-*/linix' -o -path './linix-*/linix.exe' | sort)
+        echo "$found"
+        test -n "$found" || { echo "no artifacts matched linix-*/linix[.exe]" >&2; exit 1; }
+        test "$(echo "$found" | wc -l)" -ge 3           || { echo "expected one binary per build target" >&2; exit 1; }
+
     - name: Create Release
+      if: startsWith(github.ref, 'refs/tags/v')
       uses: softprops/action-gh-release@v1
       with:
         files: |
@@ -174,6 +213,10 @@ jobs:
         generate_release_notes: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Dry run - nothing published
+      if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+      run: echo "artifacts verified; push a v* tag to publish them."
 
   # The real integration matrix (IV.2): the fast half runs on every change, so a change that
   # breaks a manager's install/list/remove is caught here and not months later on someone's

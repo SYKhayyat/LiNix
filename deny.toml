@@ -46,16 +46,14 @@ allow = [
 # a dependency that starts carrying one should stop the build until a person looks.
 confidence-threshold = 0.8
 
-# LiNix's own licence is `Z1`, and `Z1` is OPEN — it is the owner's to answer and this file must
-# not answer it by implication. `publish = false` in `Cargo.toml` is what makes this apply, and it
-# states today's truth: with no `license` key crates.io refuses the package anyway. **When `Z1` is
-# ruled, `publish = false` goes and so do these three lines** — the gate should check our licence
-# the moment we have one.
-private = { ignore = true }
+# `Z1` is ruled: LiNix is `MIT OR Apache-2.0`, both of which are in the allow list above, so this
+# crate answers the same gate every dependency does. The exemption that stood here while the
+# licence was unruled is gone — it existed so this file would not answer the owner's question by
+# implication, and there is nothing left to imply.
 
 [bans]
 # Two versions of the same crate is a build paying for both. `warn` rather than `deny` on purpose:
-# this tree has 380 transitive dependencies and duplicate versions are usually somebody else's
+# this tree has 448 transitive dependencies and duplicate versions are usually somebody else's
 # choice, so the honest setting is one that reports rather than one that gets exempted into
 # uselessness.
 multiple-versions = "warn"

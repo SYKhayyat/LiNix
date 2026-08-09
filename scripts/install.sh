@@ -6,11 +6,17 @@
 # It installs the `linix` binary, runs a health check, and offers to adopt the packages
 # already on this machine into a LiNix manifest. Override defaults with env vars:
 #   LINIX_REPO      git source           (default: the SYKhayyat/LiNix repo)
+#   LINIX_REF       tag or branch        (default: the newest release tag)
 #   LINIX_BIN_DIR   install location     (default: cargo's bin dir)
 #   LINIX_NO_ADOPT  set to skip the `adopt` prompt
+#
+# Every name in that list is read below. It documented `LINIX_BIN_DIR`, which nothing read, and
+# omitted `LINIX_REF`, which everything did — in the file users pipe from the internet, where the
+# list is the only interface anyone sees.
 set -eu
 
 REPO="${LINIX_REPO:-https://github.com/SYKhayyat/LiNix}"
+BIN_DIR="${LINIX_BIN_DIR:-}"
 
 say() { printf '\033[1;36mlinix\033[0m %s\n' "$1"; }
 err() { printf '\033[1;31mlinix\033[0m %s\n' "$1" >&2; }
@@ -50,19 +56,47 @@ fi
 # /dev/null and, on *any* non-zero exit, a second run without it — described in the comment as
 # "fall back if the lock is unavailable". `Cargo.lock` is tracked in this repository, so the
 # case the fallback named cannot happen; what it actually caught was a network blip or a
-# compile error, and its response was to resolve 452 dependencies fresh, with the reason
+# compile error, and its response was to resolve 448 dependencies fresh, with the reason
 # hidden. That is a supply-chain downgrade triggered by bad wifi, in the script a user pipes
 # from the web.
 #
 # `--tag` only when there is one: `cargo install --git X --tag ""` is not the same command.
+#
+# `--root` when the caller named a directory. cargo installs into `$root/bin`, so a
+# `LINIX_BIN_DIR` of `/usr/local/bin` is a root of `/usr/local` — computed here rather than
+# demanded of the user, who was told this variable names the install location.
+set -- --git "$REPO" --locked
+# An `if`, not `[ -n "$REF" ] && set -- …`: under `set -e` a trailing `&&` list whose test fails
+# is a failing command, so the no-tag path would have exited here.
 if [ -n "$REF" ]; then
-  cargo install --git "$REPO" --tag "$REF" --locked
-else
-  cargo install --git "$REPO" --locked
+  set -- "$@" --tag "$REF"
 fi
-
-# cargo installs into ~/.cargo/bin; make sure the user can find it.
-CARGO_BIN="${CARGO_HOME:-$HOME/.cargo}/bin"
+if [ -n "$BIN_DIR" ]; then
+  case "$BIN_DIR" in
+    */bin) ROOT="${BIN_DIR%/bin}" ;;
+    # Any other directory: cargo cannot be told to use it directly, so install under a root
+    # beside it and move the binary. Saying nothing and installing somewhere else would be the
+    # variable documented-but-unread all over again.
+    *) ROOT="" ;;
+  esac
+  if [ -n "$ROOT" ]; then
+    cargo install "$@" --root "$ROOT"
+    CARGO_BIN="$BIN_DIR"
+  else
+    STAGE="$(mktemp -d)"
+    cargo install "$@" --root "$STAGE"
+    mkdir -p "$BIN_DIR"
+    cp "$STAGE/bin/linix" "$BIN_DIR/linix"
+    chmod 755 "$BIN_DIR/linix"
+    rm -rf "$STAGE"
+    CARGO_BIN="$BIN_DIR"
+    say "installed to $BIN_DIR (LINIX_BIN_DIR)"
+  fi
+else
+  cargo install "$@"
+  # cargo installs into ~/.cargo/bin; make sure the user can find it.
+  CARGO_BIN="${CARGO_HOME:-$HOME/.cargo}/bin"
+fi
 # The shell caches where it found a name. Upgrading over an older `linix` on PATH leaves the
 # cache pointing at the binary that was just replaced, and every line below would then run
 # the old one — including the health check that is supposed to vouch for the new.

@@ -3,7 +3,16 @@
 #   irm https://raw.githubusercontent.com/SYKhayyat/LiNix/HEAD/scripts/install.ps1 | iex
 #
 # Installs the `linix` binary, runs a health check, and offers to adopt the packages already
-# on this machine. Override with env vars: $env:LINIX_REPO, $env:LINIX_NO_ADOPT.
+# on this machine. Override with env vars:
+#   $env:LINIX_REPO      git source        (default: the SYKhayyat/LiNix repo)
+#   $env:LINIX_REF       tag or branch     (default: the newest release tag)
+#   $env:LINIX_BIN_DIR   install location  (default: cargo's bin dir)
+#   $env:LINIX_NO_ADOPT  set to skip the `adopt` prompt
+#
+# Every name in that list is read below, and the twin's list says the same four. LINIX_REF was
+# read by both scripts and documented by neither; LINIX_BIN_DIR was documented by one and read
+# by neither - in the two files users pipe from the internet, where the list is the only
+# interface anyone sees.
 $ErrorActionPreference = 'Stop'
 
 $repo = if ($env:LINIX_REPO) { $env:LINIX_REPO } else { 'https://github.com/SYKhayyat/LiNix' }
@@ -47,15 +56,33 @@ if (-not $ref) {
 
 # `--locked`, and no fallback. The retry without it was described as covering an unavailable
 # lockfile; `Cargo.lock` is tracked in this repository, so what it actually covered was a
-# network blip or a compile error, answered by resolving 452 dependencies fresh. Twin of the
+# network blip or a compile error, answered by resolving 448 dependencies fresh. Twin of the
 # same three lines in install.sh - change one, change the other.
+#
+# `--root` when the caller named a directory. cargo installs into "$root\bin", so a
+# LINIX_BIN_DIR that already ends in `bin` is that directory's parent; anything else gets a
+# staged install and a copy, because cargo cannot be pointed at an arbitrary folder. Computed
+# here rather than demanded of the user, who was told this variable names the install location -
+# and who, until now, was told that by a script that never read it.
+$binDir = $env:LINIX_BIN_DIR
+$stage = $null
+$cargoArgs = @('install', '--git', $repo, '--locked')
+if ($ref) { $cargoArgs += @('--tag', $ref) }
+if ($binDir) {
+    $trimmed = $binDir.TrimEnd('\', '/')
+    if ((Split-Path -Leaf $trimmed) -eq 'bin') {
+        $cargoArgs += @('--root', (Split-Path -Parent $trimmed))
+    } else {
+        $stage = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
+        $cargoArgs += @('--root', $stage)
+    }
+}
 if ($ref) {
     Say "building and installing $ref from $repo (this can take a minute)..."
-    cargo install --git $repo --tag $ref --locked
 } else {
     Say "building and installing from $repo (this can take a minute)..."
-    cargo install --git $repo --locked
 }
+& cargo @cargoArgs
 # `Err` prints and returns - every other use of it here is a warning the script carries on
 # past. A failed build is not one of those, so this exits: continuing would run the health
 # check against whatever `linix` was already on PATH and report the old binary as the new one.
@@ -64,7 +91,17 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-$cargoBin = if ($env:CARGO_HOME) { Join-Path $env:CARGO_HOME 'bin' } else { Join-Path $HOME '.cargo\bin' }
+if ($stage) {
+    New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+    Copy-Item (Join-Path $stage 'bin\linix.exe') (Join-Path $binDir 'linix.exe') -Force
+    Remove-Item -Recurse -Force $stage
+    Say "installed to $binDir (LINIX_BIN_DIR)"
+}
+
+$cargoBin =
+    if ($binDir) { $binDir }
+    elseif ($env:CARGO_HOME) { Join-Path $env:CARGO_HOME 'bin' }
+    else { Join-Path $HOME '.cargo\bin' }
 # The binary just installed, by path, in preference to whatever `linix` resolves to on this
 # session's PATH — that could be an older install elsewhere, and the health check below is
 # supposed to vouch for the one this script produced.
