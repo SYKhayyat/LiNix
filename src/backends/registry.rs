@@ -9,7 +9,6 @@ use crate::backends::generic::{
     GenericBackendCore, GenericInstallable, GenericQueryable, GenericRepoManager,
     GenericSearchable, GenericUpgradable, ManagerConfig, ManualListing, SearchSource, VersionPin,
 };
-use crate::backends::pip_search::PipSearchable;
 use crate::config::Config;
 use crate::core::{BackendCapabilities, CommandExecutor};
 use crate::parsers::windows;
@@ -1270,7 +1269,10 @@ fn register_pip(reg: &mut BackendRegistry, executor: &CommandExecutor) {
                 parse: std::sync::Arc::new(crate::parsers::language::parse_pip_outdated),
                 silence_is_none: false,
             }),
-            search_source: SearchSource::Command,
+            // PyPI over HTTP, because `pip search` is gone. Declared here rather than bolted
+            // on as a bespoke `Searchable`, so it is the same mechanism `npm_registry` uses
+            // and a row can ask for it.
+            search_source: SearchSource::PyPi,
         },
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::language::parse_installed("pip", o),
@@ -1282,7 +1284,7 @@ fn register_pip(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         BackendCapabilities::builder(core.clone())
             .with_installable(Arc::new(GenericInstallable { core: core.clone() }))
             .with_queryable(Arc::new(GenericQueryable { core: core.clone() }))
-            .with_searchable(Arc::new(PipSearchable))
+            .with_searchable(Arc::new(GenericSearchable { core: core.clone() }))
             .with_metadata_provider(core.clone())
             .build(),
     ));

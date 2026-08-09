@@ -1,3 +1,4 @@
+use crate::backends::artifact::teardown::{still_installed, tear_down, Deployed};
 use crate::backends::artifact::{
     self, default_formats, system_pkg, ArtifactOptions, Asset as ArtifactAsset, AssetPattern,
     Entry as ArchiveEntry, Format, FormatOrder, Platform, Request as SelectRequest,
@@ -988,49 +989,30 @@ impl Installable for GithubInstallable {
         let mut failures = Vec::new();
         for name in names {
             if let Some(pkg) = state.remove(name) {
-                let mut errors = Vec::new();
-                // D5: an artifact a system manager owns is removed *through* that manager, by the
-                // name it was recorded under — a file delete would leave the package in apt/rpm's
-                // database, drift no `sync` could see.
+                // One release can deploy several artifacts, which is the only way this record
+                // differs from `web:`'s and `appimage:`'s — so it folds several into one
+                // `Deployed` instead of building one per record.
+                let mut deployed = Deployed::default();
                 for art in &pkg.artifacts {
-                    if let (Some(installer), Some(system_package)) =
-                        (art.installed_by.as_deref(), art.system_package.as_deref())
-                    {
-                        match system_pkg::remove_argv(installer, system_package) {
-                            Ok(argv) => {
-                                let (prog, args) =
-                                    argv.split_first().expect("a remove argv is never empty");
-                                let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-                                if let Err(e) = self.core.executor.run(prog, &refs, true).await {
-                                    errors.push(format!(
-                                        "{} -e {}: {}",
-                                        installer, system_package, e
-                                    ));
-                                }
-                            }
-                            Err(e) => errors.push(e.to_string()),
-                        }
-                    }
+                    deployed = deployed
+                        .owned(art.installed_by.as_deref(), art.system_package.as_deref())
+                        .maybe_path(art.bin_path.as_ref())
+                        .cached(&art.asset);
                 }
-                for bp in pkg.artifacts.iter().filter_map(|a| a.bin_path.as_ref()) {
-                    if let Err(e) = crate::utils::remove_deployed_path(bp).await {
-                        errors.push(e);
-                    }
-                }
-                if let Err(e) = crate::utils::remove_deployed_path(&pkg.install_path).await {
-                    errors.push(e);
-                }
+                let deployed = deployed.path(&pkg.install_path);
+                let errors = tear_down(
+                    &deployed,
+                    &self.core.executor,
+                    self.core.clean_cache_on_remove,
+                    &self.core.cache_dirs,
+                )
+                .await;
                 if errors.is_empty() {
                     // The lock describes what is installed. Leaving the entry behind would
                     // pin a future install to an artifact chosen for a declaration that is
                     // gone.
                     ledger.forget(name);
                     info!("removed {}", name);
-                    if self.core.clean_cache_on_remove {
-                        for asset in pkg.artifacts.iter().map(|a| a.asset.as_str()) {
-                            crate::model::cache::clean_cached(asset, &self.core.cache_dirs).await;
-                        }
-                    }
                 } else {
                     // The binary is still on disk and still on PATH. Dropping it from state
                     // anyway would make it drift no `sync` can see, so put the record back.
@@ -1042,11 +1024,7 @@ impl Installable for GithubInstallable {
         self.core.save_state_internal(&state).await?;
         ledger.save(&self.core.locks_file)?;
         if !failures.is_empty() {
-            return Err(Error::Other(format!(
-                "could not remove {} GitHub package(s), still installed: {}",
-                failures.len(),
-                failures.join(", ")
-            )));
+            return Err(still_installed("GitHub package", &failures));
         }
         Ok(())
     }

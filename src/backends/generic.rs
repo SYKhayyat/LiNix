@@ -1454,6 +1454,13 @@ pub enum SearchSource {
     Command,
     /// Query the public npm registry over HTTP, tagging results with this backend's name.
     NpmRegistry,
+    /// Look the exact name up on PyPI over HTTP.
+    ///
+    /// pip's own `search` was disabled upstream — PyPI withdrew the XML-RPC endpoint over
+    /// abuse — and there is no public full-text replacement, so this is name resolution rather
+    /// than discovery. That is a smaller answer than a real search and still this backend's
+    /// search; answering "not configured" instead would refuse a question pip can answer.
+    PyPi,
 }
 
 pub struct GenericSearchable {
@@ -1463,9 +1470,15 @@ pub struct GenericSearchable {
 #[async_trait]
 impl Searchable for GenericSearchable {
     async fn search(&self, query: &str) -> Result<Vec<Package>> {
-        if self.core.config.search_source == SearchSource::NpmRegistry {
-            return crate::backends::node_registry::registry_search(query, &self.core.name, 25)
-                .await;
+        match self.core.config.search_source {
+            SearchSource::NpmRegistry => {
+                return crate::backends::node_registry::registry_search(query, &self.core.name, 25)
+                    .await
+            }
+            SearchSource::PyPi => {
+                return crate::backends::pip_search::registry_search(query, &self.core.name).await
+            }
+            SearchSource::Command => {}
         }
         let bin = self
             .core

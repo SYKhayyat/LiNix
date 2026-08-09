@@ -290,11 +290,12 @@ fn parse_gem_list(output: &str) -> Vec<Package> {
         .filter(|l| !l.is_empty() && !l.starts_with("***"))
         .filter_map(|line| {
             let (name, rest) = line.split_once(' ')?;
-            let ver = rest
-                .trim()
-                .trim_matches(|c| c == '(' || c == ')')
-                .split(',')
-                .next()?;
+            // The bracket rule is `parsers::utils`'s, not a second copy of it. The fallback is
+            // the old behaviour for a line without them: a wrong version is drift, a dropped
+            // package is a removal.
+            let inside = crate::parsers::utils::extract_version_bracketed(rest.trim())
+                .unwrap_or_else(|| rest.trim().to_string());
+            let ver = inside.split(',').next()?;
             // `bundler (default: 4.0.10)` — RubyGems marks the gems that ship with Ruby,
             // and the marker is not part of the version. Kept as one, `linix list` printed
             // `default: 4.0.10` in its version column: an `@version=` can never match it,

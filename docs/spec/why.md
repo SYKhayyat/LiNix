@@ -5525,3 +5525,120 @@ registration overwrites one, which is the safe direction: the Rust is the more s
 the thing more likely to exist for a reason. But *safe direction* is not the same as *fine*, and
 a name held in both places is two of everything by definition. The gate refuses it rather than
 letting the order of two calls quietly pick a winner.
+
+**V.172 — Why a fixture is a required column, and what asking the containers cost.**
+
+The claim under `ws_name_version` was that cabal, spack, pub, krew, helm, guix, luarocks and uv
+print the same shape. It had one piece of evidence: `NAME VERSION` / `foo 1.2.3` /
+`bar 0.1.0 some-desc`, three lines somebody typed, labelled `helm`. Seven managers were being
+read through a parser nobody had shown their output to, and the tests were green the whole time,
+because a test written from the same imagination as the parser agrees with it by construction.
+
+An afternoon of containers produced four defects. None of them is subtle once you have the bytes,
+and none of them is findable without: `uv` prints its executables under each tool, `cabal` writes
+configuration chatter to stdout, `nimble 2` changed its version record, and a header-only listing
+was refused rather than answered. That ratio — four defects, zero found by reading the code
+first — is the argument for the column. A parser is a claim about a program somebody else wrote,
+and the only evidence that settles it is what that program printed.
+
+**Why `source` and why a ratchet.** The failure mode this replaces is not *no fixture*, it is
+*a fixture that looks like evidence*. Bytes reconstructed from a README are the same characters
+as bytes captured from a tool and carry none of the authority, so the difference has to be
+written down or it does not exist. Seven of the twenty-two are reconstructions today. The ceiling
+is not a budget for more; it is the number that has to go down, and there is nowhere in the gate
+to record *"I raised it"* that does not read as what it is.
+
+**Why the fixture runs through `parser_for` and not through its own resolution.** A check that
+re-derived which reader a row uses would be testing the re-derivation. `build_capabilities` calls
+`parser_for`; so does the fixture gate; the object the bytes go through is the object the machine
+goes through.
+
+**Why the header fix went into `is_noise_line`.** Ten readers each wrote `if is_header_token(name)
+{ return None }` inside their `filter_map`, which removes the header from the *packages* and
+leaves it in the *candidates* — and `or_unrecognised`'s whole rule is that candidates yielding
+nothing is a refusal. So ten readers agreed that a header is not a package and all ten still
+refused a listing that was only a header. The judgement had to move to where the candidates are
+chosen, which is the one place all ten pass through. Fixing it in `ws_name_version` alone would
+have fixed helm and left the other nine.
+
+**Why the two dead helpers were wired rather than deleted.** `parsers/utils.rs` had no callers,
+and both of its functions had hand-rolled equivalents elsewhere — which is not dead code, it is
+*two of everything with one copy asleep*. `split_columns` became the `quoted` option on
+`ParserSpec::Columns`, a shape a user's row genuinely could not express for a Windows manager
+that prints `"7.3.4 (x64)"`; `extract_version_bracketed` replaced `trim_matches('(' | ')')` in
+mas and gem. Both callers kept a fallback to their old behaviour on a line with no brackets,
+deliberately: extracting returns `None` there, `None` would drop the package, and a dropped
+package is a removal while a wrong version is only drift.
+
+**V.173 — Why the three downloaders' removal had to be one, and why the wording gained a clause.**
+
+The duplication was not suspected, it was *documented*: `appimage.rs`'s test header describes
+its own removal as `web.rs`'s with the D5 handoff taken out, same state file, same two deployed
+paths, same re-insert-on-failure rule. A comment that accurate about a copy is a comment that has
+given up on removing it.
+
+What makes this worth merging rather than tolerating is the last of those four steps. **Putting
+the record back when a delete fails is the non-obvious one**, and it is the one whose absence is
+invisible: the removal reports failure, the state file says the thing is gone, and every
+subsequent run agrees with the state file. All three had it. Three copies of a subtle rule is
+three chances for the fourth downloader to be written without it, which is the shape of every
+family bug in this repo.
+
+**The cache ordering was a real difference, not a cosmetic one.** Two of the three cleaned the
+cache inside the success branch and one had the branch nested differently; the shared function
+makes *success first* structural. A cache dropped beside a file that would not delete costs a
+re-download and buys nothing.
+
+**Why the sentence says both halves.** `github:` and `appimage:` said *still installed*; `web:`
+said *still on disk*. Choosing one would have silently downgraded a message a user reads at
+exactly the moment something went wrong — and neither is complete: a `.deb` handed to dpkg is in
+a package database *and* on the filesystem. Saying both costs four words and loses nothing that
+any of the three used to report. Two web tests pinned the old wording and were updated; that they
+existed is why the change is a considered one rather than an accident.
+
+**Why the identity rule needed a gate and not a comment.** It already had a comment — a good one,
+naming `btrfs:` and `web:` as the same shape and explaining exactly what went wrong. The comment
+did not stop the bug from being possible again, because nothing runs a comment. What the gate
+adds is that it was watched to fail: the basename bug was planted back into `fetch_installed` and
+the test caught it, which is the only evidence that a green run means anything.
+
+**Why PyPI became a variant.** `PipSearchable` and `node_registry` are the same idea — this
+backend's search is an HTTP call — and one of them had a `SearchSource` variant while the other
+was a struct bolted onto one registration. That asymmetry is what U2 is about: a user's row could
+say `search_source = "npm_registry"` and could not say `"pypi"`, for no reason except which of
+the two got written second. The parser did not change; it stopped hard-coding `pip` as the tag,
+so the backend that asked is the backend the answer is labelled with.
+
+**V.174 — Why one confirm, and why the third answer is an argument.**
+
+The three steps were not worth merging on their own. Six copies of *check a flag, check a
+terminal, call dialoguer* is ten lines of duplication and nothing more. What made it worth doing
+is that the six were not the same: **each had decided, separately, what happens when there is no
+terminal**, and two of the answers were opposites.
+
+Refusing is right for a rebuild — a run that would have asked before removing software and
+cannot ask must stop. Declining is right for bootstrap — *there is no package manager and nobody
+to approve installing one* should not fail the sync, it should skip the offer. Both are correct;
+neither is a default; and a copy that has not thought about it produces `dialoguer`'s bare
+`IO error: not a terminal` attached to a run that was about to change the machine, which is what
+`snapshot_restore`'s gallery did. Making the answer an argument means the question cannot be
+skipped: `Unattended` has no default variant, so a seventh call site has to say which it is.
+
+**Why the sentences stay at the call site.** A shared refusal message would have to be generic,
+and a generic refusal is the failure mode this repo has a rule about: it names no verb, no flag
+and no way forward. The shared part is the machinery; the sentence is the site's.
+
+**Why the prompt gate's floor came down instead of the gate being deleted.** It scans for
+`.interact()` and demands an `is_terminal` above it, and merging six sites into one took its
+count below its own floor — the exact shape of failure it was built to catch, arriving from the
+good direction. Lowering the floor without replacing the coverage would be losing the check to a
+refactor, so `only_one_place_asks_for_a_yes_or_no` came with it. *There is one confirm* is
+strictly stronger than *every confirm is guarded*: the first makes the second true by
+construction, and it also catches the copy that is guarded correctly and still decides the third
+answer for itself.
+
+**Why the refusal gate learned a second constructor rather than being worked around.** After the
+merge, the six sites write `Unattended::Refuse("Refusing to …")` and none of them constructs an
+`Error::Refused` within the gate's eight-line window. Rewording the messages to dodge the scan
+would have been a lie; teaching it that `Unattended::Refuse` becomes `Error::Refused` is true,
+and the module carries a test that proves it by matching the variant rather than the text.

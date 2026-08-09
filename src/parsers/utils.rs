@@ -47,4 +47,36 @@ mod tests {
         assert_eq!(cols.len(), 3);
         assert_eq!(cols[1], "7.3.4 (x64)");
     }
+
+    /// A line with nothing quoted must split exactly as whitespace splitting would, or the
+    /// `quoted = true` option would be a behaviour change for every row that set it.
+    #[test]
+    fn an_unquoted_line_splits_the_ordinary_way() {
+        for line in ["git 2.40.0 installed", "  ripgrep\t13.0.0  ", "solo"] {
+            let mine: Vec<String> = split_columns(line);
+            let theirs: Vec<&str> = line.split_whitespace().collect();
+            assert_eq!(mine, theirs, "{line:?}");
+        }
+    }
+
+    /// Both bracket shapes, because the pattern accepts both and only one has a caller today.
+    #[test]
+    fn a_version_is_taken_from_either_bracket() {
+        assert_eq!(extract_version_bracketed("Xcode (14.3.1)").as_deref(), Some("14.3.1"));
+        assert_eq!(extract_version_bracketed("pkg [1.2.3]").as_deref(), Some("1.2.3"));
+        assert_eq!(
+            extract_version_bracketed("bundler (default: 4.0.10)").as_deref(),
+            Some("default: 4.0.10")
+        );
+    }
+
+    /// The whole reason the two callers extract instead of trimming: a trim on a line with no
+    /// brackets hands the line back, and the caller writes it down as a version.
+    #[test]
+    fn a_line_with_no_brackets_has_no_version_rather_than_all_of_it() {
+        assert_eq!(extract_version_bracketed("Xcode 14.3.1"), None);
+        assert_eq!(extract_version_bracketed(""), None);
+        // An opening bracket alone is not a bracketed run.
+        assert_eq!(extract_version_bracketed("pkg (14.3.1"), None);
+    }
 }

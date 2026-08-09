@@ -138,26 +138,23 @@ impl Prereqs<'_> {
             crate::would_print!("a real run would ask before running that.");
             return;
         }
-        if !self.config.yes {
-            if !std::io::stdin().is_terminal() {
-                println!(
-                    "Not asking in a non-interactive shell — run it yourself, or re-run with \
-                     `--yes` to have LiNix run it."
-                );
-                return;
-            }
-            let proceed = dialoguer::Confirm::new()
-                .with_prompt("Run that now?")
-                .default(false)
-                .interact()
-                .unwrap_or(false);
-            if !proceed {
+        let proceed = crate::core::prompt::confirm(
+            self.config.yes,
+            "Run that now?",
+            crate::core::prompt::Unattended::Decline(
+                "Not asking in a non-interactive shell — run it yourself, or re-run with \
+                 `--yes` to have LiNix run it.",
+            ),
+        )
+        .unwrap_or(false);
+        if !proceed {
+            if std::io::stdin().is_terminal() {
                 println!(
                     "Left it alone. `{}` installs will fail until it is set up.",
                     manager
                 );
-                return;
             }
+            return;
         }
 
         let cmd = row.run_command(name);

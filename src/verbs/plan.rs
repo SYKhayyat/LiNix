@@ -407,24 +407,18 @@ pub async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Result<()> {
                 println!(
                     "WARNING: the system/manifests have drifted since this plan was captured."
                 );
-                use std::io::IsTerminal;
-                // `unwrap_or(false)` alone aborts safely with nobody at the keyboard, and says
-                // only "Aborted" — naming neither the reason nor `--yes`. Found by the test
-                // that enumerates prompts from the source; no review had reported it.
-                if !std::io::stdin().is_terminal() {
-                    return Err(crate::core::Error::Refused(
+                // Refuse rather than decline: aborting quietly says only "Aborted", naming
+                // neither the reason nor `--yes`. Found by the test that enumerates prompts
+                // from the source; no review had reported it.
+                let proceed = crate::core::prompt::confirm(
+                    false,
+                    "Apply the captured plan anyway?",
+                    crate::core::prompt::Unattended::Refuse(
                         "The captured plan no longer matches this machine, and there is no \
                          terminal to confirm on. Re-run with --yes to apply it anyway, or \
-                         `linix plan` to capture a fresh one."
-                            .to_string(),
-                    )
-                    .into());
-                }
-                let proceed = dialoguer::Confirm::new()
-                    .with_prompt("Apply the captured plan anyway?")
-                    .default(false)
-                    .interact()
-                    .unwrap_or(false);
+                         `linix plan` to capture a fresh one.",
+                    ),
+                )?;
                 if !proceed {
                     println!("Aborted. Run `linix plan` to capture a fresh plan.");
                     return Ok(());

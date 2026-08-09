@@ -1,3 +1,4 @@
+use crate::backends::artifact::teardown::{still_installed, tear_down, Deployed};
 use crate::core::{
     BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
     Queryable, Result,
@@ -234,22 +235,21 @@ impl Installable for AppImageInstallable {
         for name in names {
             if let Some(info) = state.remove(name) {
                 debug!("AppImage: Removing local files for {}", name);
-                let mut errors = Vec::new();
-                if let Err(e) = crate::utils::remove_deployed_path(&info.local_path).await {
-                    errors.push(e);
-                }
-                // A download-only AppImage was never linked, so there is no PATH entry to drop.
-                if !info.symlink_path.is_empty() {
-                    if let Err(e) = crate::utils::remove_deployed_path(&info.symlink_path).await {
-                        errors.push(e);
-                    }
-                }
+                // A download-only AppImage was never linked, so `symlink_path` is empty and
+                // there is no PATH entry to drop — which `Deployed::path` already knows.
+                let deployed = Deployed::default()
+                    .path(&info.local_path)
+                    .path(&info.symlink_path)
+                    .cached_url(&info.url);
+                let errors = tear_down(
+                    &deployed,
+                    &self.core.executor,
+                    self.core.clean_cache_on_remove,
+                    &self.core.cache_dirs,
+                )
+                .await;
                 if errors.is_empty() {
                     info!("AppImage: Removed {}", name);
-                    if self.core.clean_cache_on_remove {
-                        let basename = info.url.split('/').next_back().unwrap_or("");
-                        crate::model::cache::clean_cached(basename, &self.core.cache_dirs).await;
-                    }
                 } else {
                     state.insert(name.clone(), info);
                     failures.push(format!("{}: {}", name, errors.join("; ")));
@@ -261,11 +261,7 @@ impl Installable for AppImageInstallable {
 
         self.core.save_state(&state).await?;
         if !failures.is_empty() {
-            return Err(Error::Other(format!(
-                "could not remove {} AppImage(s), still installed: {}",
-                failures.len(),
-                failures.join(", ")
-            )));
+            return Err(still_installed("AppImage", &failures));
         }
         Ok(())
     }

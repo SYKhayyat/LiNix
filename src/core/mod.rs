@@ -20,6 +20,7 @@ pub mod latency;
 pub mod ledger;
 pub mod manager;
 pub mod package;
+pub mod prompt;
 pub mod ratelimiter;
 pub mod regex_lock;
 pub mod rhai_stdlib;

@@ -1,3 +1,4 @@
+use crate::backends::artifact::teardown::{still_installed, tear_down, Deployed};
 use crate::backends::artifact::{system_pkg, Format};
 use crate::core::{
     security::verify_checksum, BackendCore, CommandExecutor, Error, Installable, MetadataProvider,
@@ -355,40 +356,23 @@ impl Installable for WebInstallable {
         let mut failures = Vec::new();
         for url in urls {
             if let Some(entry) = state.remove(url) {
-                let mut errors = Vec::new();
-                // D5: a resource a system manager owns is removed *through* that manager.
-                if let (Some(installer), Some(system_package)) = (
-                    entry.installed_by.as_deref(),
-                    entry.system_package.as_deref(),
-                ) {
-                    match system_pkg::remove_argv(installer, system_package) {
-                        Ok(argv) => {
-                            let (prog, args) =
-                                argv.split_first().expect("a remove argv is never empty");
-                            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-                            if let Err(e) = self.core.executor.run(prog, &refs, true).await {
-                                errors.push(format!("{} {}: {}", installer, system_package, e));
-                            }
-                        }
-                        Err(e) => errors.push(e.to_string()),
-                    }
-                }
-                if let Some(ref l) = entry.bin_link {
-                    if let Err(e) = crate::utils::remove_deployed_path(l).await {
-                        errors.push(e);
-                    }
-                }
-                if !entry.local_path.is_empty() {
-                    if let Err(e) = crate::utils::remove_deployed_path(&entry.local_path).await {
-                        errors.push(e);
-                    }
-                }
+                let deployed = Deployed::default()
+                    .owned(
+                        entry.installed_by.as_deref(),
+                        entry.system_package.as_deref(),
+                    )
+                    .maybe_path(entry.bin_link.as_ref())
+                    .path(&entry.local_path)
+                    .cached_url(url);
+                let errors = tear_down(
+                    &deployed,
+                    &self.core.executor,
+                    self.core.clean_cache_on_remove,
+                    &self.core.cache_dirs,
+                )
+                .await;
                 if errors.is_empty() {
                     info!("Web: Removed resource: {}", url);
-                    if self.core.clean_cache_on_remove {
-                        let basename = url.split('/').next_back().unwrap_or("");
-                        crate::model::cache::clean_cached(basename, &self.core.cache_dirs).await;
-                    }
                 } else {
                     // The file is still on disk and still on PATH. Dropping it from state
                     // anyway would make it drift no `sync` can see, so put the record back.
@@ -399,11 +383,7 @@ impl Installable for WebInstallable {
         }
         self.core.save_state(&state).await?;
         if !failures.is_empty() {
-            return Err(Error::Other(format!(
-                "could not remove {} web resource(s), still on disk: {}",
-                failures.len(),
-                failures.join(", ")
-            )));
+            return Err(still_installed("web resource", &failures));
         }
         Ok(())
     }

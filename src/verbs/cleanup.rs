@@ -147,19 +147,13 @@ async fn execute_removals_through_the_engine(
 }
 
 pub fn confirm_orphan_removal(app: &App) -> Result<bool> {
-    if app.config.yes {
-        return Ok(true);
-    }
-    use std::io::IsTerminal;
-    if !std::io::stdin().is_terminal() {
-        return Err(crate::core::Error::Refused(
-            "Refusing to remove orphans without confirmation in a non-interactive shell. Re-run with --yes to proceed, or --dry-run to preview."
-        .to_string()).into());
-    }
-    Ok(dialoguer::Confirm::new()
-        .with_prompt("Remove these packages?")
-        .default(false)
-        .interact()?)
+    Ok(crate::core::prompt::confirm(
+        app.config.yes,
+        "Remove these packages?",
+        crate::core::prompt::Unattended::Refuse(
+            "Refusing to remove orphans without confirmation in a non-interactive shell. Re-run with --yes to proceed, or --dry-run to preview.",
+        ),
+    )?)
 }
 
 /// `clean-cache` — downloaded archives and build caches (X.3 levels 1–2). Removes no installed

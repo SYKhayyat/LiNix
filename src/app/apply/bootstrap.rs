@@ -78,26 +78,24 @@ impl Bootstrap<'_> {
                 crate::would_print!("a real run would ask before running that.");
                 continue;
             }
-            if !self.config.yes {
-                if !std::io::stdin().is_terminal() {
-                    // Never in an unattended run: an installer that arrives with a pulled repo
-                    // and executes because nobody was there to say no is the whole risk.
-                    println!(
-                        "Not asking in a non-interactive shell — run `linix sync` yourself, or \
-                         install `{}` by hand.",
-                        manager
-                    );
-                    continue;
-                }
-                let proceed = dialoguer::Confirm::new()
-                    .with_prompt(format!("Run that to install {}?", manager))
-                    .default(false)
-                    .interact()
-                    .unwrap_or(false);
-                if !proceed {
+            // Declines rather than refuses: an unattended run is better off without the
+            // installer than failed over it. Never runs it unasked — an installer that arrives
+            // with a pulled repo and executes because nobody was there to say no is the risk.
+            let unattended = format!(
+                "Not asking in a non-interactive shell — run `linix sync` yourself, or install \
+                 `{manager}` by hand."
+            );
+            let proceed = crate::core::prompt::confirm(
+                self.config.yes,
+                &format!("Run that to install {manager}?"),
+                crate::core::prompt::Unattended::Decline(&unattended),
+            )
+            .unwrap_or(false);
+            if !proceed {
+                if std::io::stdin().is_terminal() {
                     println!("Left `{}` alone.", manager);
-                    continue;
                 }
+                continue;
             }
 
             let (program, args) = row.run.split_first().expect("a usable row has a command");

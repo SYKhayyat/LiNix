@@ -282,6 +282,96 @@ fn every_row_has_an_argv_row() {
     );
 }
 
+// ---------------------------------------------------------------------------------------------
+// The fixture column: a row that reads a manager carries the bytes that manager printed.
+// ---------------------------------------------------------------------------------------------
+
+/// How many rows may still say `UNVERIFIED` in their fixture's `source`.
+///
+/// **A ratchet, not a budget.** It starts at the number of managers that had no image to hand on
+/// the day the column was added, and the only legal edit to this line is downward. An unverified
+/// fixture is bytes somebody typed from an upstream README: better than the seven hand-typed
+/// words that served eight managers before it, and not the same thing as evidence.
+const UNVERIFIED_CEILING: usize = 7;
+
+#[test]
+fn every_row_that_reads_a_listing_carries_its_manager_s_bytes() {
+    let mut bare: Vec<String> = Vec::new();
+    for def in &rows() {
+        if def.list_args.is_empty() {
+            continue;
+        }
+        match &def.fixture {
+            None => bare.push(def.name.clone()),
+            Some(f) if f.list.is_none() => bare.push(format!("{} (fixture with no `list`)", def.name)),
+            Some(f) if f.source.trim().is_empty() => {
+                bare.push(format!("{} (fixture with no `source`)", def.name))
+            }
+            Some(_) => {}
+        }
+    }
+    assert!(
+        bare.is_empty(),
+        "these rows can list and carry no bytes their manager printed: {bare:?}\n\nA reader is a \
+         claim about a tool and only the tool's output settles it. `ws_name_version` served eight \
+         managers on seven words typed by hand and labelled `helm`; the `[backend.fixture]` block \
+         is what stops the ninth. Capture the output, paste it into `list`, write what it should \
+         read as into `expect`, and say in `source` where it came from."
+    );
+}
+
+#[test]
+fn every_fixture_reads_the_way_its_row_says_it_does() {
+    let rows = rows();
+    let mut checked = 0usize;
+    let mut wrong: Vec<String> = Vec::new();
+    for def in &rows {
+        if def.fixture.is_some() {
+            checked += 1;
+            wrong.extend(linix::backends::onboarder::fixture_disagreements(def));
+        }
+    }
+    // Content before the floor, deliberately. A run that found nine fixtures and a real
+    // disagreement should say which manager disagrees, not "only nine fixtures".
+    assert!(
+        wrong.is_empty(),
+        "these managers print something this build reads differently from what the row \
+         claims:\n  {}\n\nOn the installed side that gap is the whole bug: a listing read as \
+         empty is a machine `sync` answers by installing everything declared.",
+        wrong.join("\n  ")
+    );
+    assert!(
+        checked >= FLOOR,
+        "only {checked} rows carry a fixture — the scan found nothing to check, which passes \
+         every assertion above it"
+    );
+}
+
+#[test]
+fn the_number_of_fixtures_nobody_captured_only_falls() {
+    let rows = rows();
+    let unverified: Vec<String> = rows
+        .iter()
+        .filter_map(|d| {
+            let f = d.fixture.as_ref()?;
+            (!f.is_verified()).then(|| d.name.clone())
+        })
+        .collect();
+    assert!(
+        unverified.len() <= UNVERIFIED_CEILING,
+        "{} rows carry a fixture whose `source` says UNVERIFIED, and the ceiling is \
+         {UNVERIFIED_CEILING}: {unverified:?}. Raising the ceiling is not a fix — run the manager \
+         and paste what it printed.",
+        unverified.len()
+    );
+    assert!(
+        unverified.len() >= UNVERIFIED_CEILING || UNVERIFIED_CEILING == 0,
+        "only {} rows are still unverified but the ceiling says {UNVERIFIED_CEILING} — lower the \
+         constant in this file so the next one that slips is caught",
+        unverified.len()
+    );
+}
+
 /// A row that says `os = "linux"` is registered on Linux and nowhere else, through
 /// `AdapterRow::applies_here` — the same gate every other adapter table goes through.
 #[test]

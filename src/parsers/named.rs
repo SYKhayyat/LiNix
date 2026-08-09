@@ -45,6 +45,7 @@ pub fn installed(name: &str) -> Option<Installed> {
     let f: Installed = match name {
         "apt" => |o, _| apt::parse_list(o),
         "asdf" => ecosystem::asdf_list,
+        "cabal" => ecosystem::cabal_list,
         "conda" => |o, _| conda::parse_conda_list(o),
         "conda_history" => |o, _| conda::parse_conda_history(o),
         "dash_version_list" => common::parse_dash_version_list,
@@ -67,6 +68,7 @@ pub fn installed(name: &str) -> Option<Installed> {
         "scoop_export" => |o, _| windows::parse_scoop_export(o),
         "simple_list" => common::parse_simple_list,
         "slackpkg" => ecosystem::slackpkg_installed,
+        "uv_tool_list" => ecosystem::uv_tool_list,
         "windows" => |o, b| windows::parse_installed(b, o),
         "winget_export" => |o, _| windows::parse_winget_export(o),
         "ws_name_version" => ecosystem::ws_name_version,
@@ -155,6 +157,7 @@ pub fn names(name: &str) -> Option<Names> {
 pub const INSTALLED_NAMES: &[&str] = &[
     "apt",
     "asdf",
+    "cabal",
     "cannot_list",
     "conda",
     "conda_history",
@@ -178,6 +181,7 @@ pub const INSTALLED_NAMES: &[&str] = &[
     "scoop_export",
     "simple_list",
     "slackpkg",
+    "uv_tool_list",
     "windows",
     "winget_export",
     "ws_name_version",

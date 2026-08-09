@@ -77,23 +77,18 @@ impl Dotfiles<'_> {
             return Ok(());
         }
 
-        use std::io::IsTerminal;
-        if !std::io::stdin().is_terminal() {
-            return Err(Error::Refused(format!(
+        let ok = crate::core::prompt::confirm(
+            false,
+            "Place these files?",
+            crate::core::prompt::Unattended::Refuse(&format!(
                 "refusing to place {} file(s) outside your home directory without \
                  confirmation in a non-interactive shell.\n\n\
                  What to do:\n  \
                  linix check         see every destination first\n  \
                  linix sync --yes    place them",
                 targets.len()
-            )));
-        }
-
-        let ok = dialoguer::Confirm::new()
-            .with_prompt("Place these files?")
-            .default(false)
-            .interact()
-            .map_err(|e| Error::Other(format!("could not ask for confirmation: {}", e)))?;
+            )),
+        )?;
         if ok {
             Ok(())
         } else {

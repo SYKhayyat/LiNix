@@ -40,6 +40,7 @@ mod a_backend_is_a_row_tests;
 mod a_batch_of_installs_is_one_command_tests;
 mod a_config_travels_between_machines_tests;
 mod a_configured_capability_is_a_registered_one_tests;
+mod a_downloaded_artifact_is_named_by_its_key_tests;
 mod a_firewall_teardown_is_a_removal_tests;
 mod a_machine_converges_tests;
 mod a_parser_can_say_it_did_not_understand_tests;

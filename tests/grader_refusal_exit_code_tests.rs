@@ -321,7 +321,12 @@ fn every_site_that_says_it_is_refusing_is_built_as_a_refusal() {
             found += 1;
             let file = path.file_name().unwrap_or_default().to_string_lossy();
             let from = i.saturating_sub(8);
-            if lines[from..=i].join("\n").contains("Error::Refused") {
+            let nearby = lines[from..=i].join("\n");
+            // `Unattended::Refuse` is the second way to build one, and it is a real one:
+            // `core::prompt::confirm` is the only thing that reads it and turns it into
+            // `Error::Refused` — asserted by `a_refusing_prompt_with_nobody_there_refuses_by_name`
+            // in that module, which matches on the variant rather than on the message.
+            if nearby.contains("Error::Refused") || nearby.contains("Unattended::Refuse") {
                 continue;
             }
 

@@ -11,6 +11,7 @@ pub mod pattern;
 pub mod platform;
 pub mod select;
 pub mod system_pkg;
+pub mod teardown;
 
 #[cfg(test)]
 mod real_releases_test;

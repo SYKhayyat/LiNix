@@ -11,6 +11,11 @@
 //! missing line, and a list of known prompts is exactly what the previous audit had — it
 //! enumerated the prompts someone remembered. A new `.interact()` added tomorrow joins this
 //! test automatically, and that is the only property that stops the class from coming back.
+//!
+//! **Six of the eleven were the same prompt.** They are `core::prompt::confirm` now, which is
+//! guarded once and by construction, so this scan sees fewer sites than it used to — and the
+//! floor below moved down to match. `only_one_place_asks_for_a_yes_or_no` is what replaces the
+//! coverage: a scan that guards N sites is worth less than a rule that says there is one.
 
 use std::path::{Path, PathBuf};
 
@@ -76,16 +81,64 @@ fn every_interactive_prompt_refuses_when_there_is_no_terminal() {
     // Without this the test passes on a tree where the scan matched nothing at all — the
     // shape of check this file exists to replace.
     assert!(
-        found >= 8,
+        found >= 5,
         "the prompt scan found only {found} prompts; it has stopped matching the code it audits"
     );
 
     assert!(
         unguarded.is_empty(),
         "these prompts will hang or die with `IO error: not a terminal` instead of refusing \
-         with something a user can act on:\n  {}\n\nThe pattern to copy is in \
-         src/verbs/cleanup.rs: check `std::io::stdin().is_terminal()` and return \
-         `Error::Refused` naming the flag that proceeds without asking.",
+         with something a user can act on:\n  {}\n\nFor a yes/no question the answer is \
+         `core::prompt::confirm`, which already does this. For anything else, check \
+         `std::io::stdin().is_terminal()` and return `Error::Refused` naming the flag that \
+         proceeds without asking.",
         unguarded.join("\n  ")
+    );
+}
+
+/// **One yes/no prompt in the program**, which is a stronger thing to check than *every yes/no
+/// prompt is guarded*.
+///
+/// The three steps a confirm needs — honour `--yes`, notice there is no terminal, default to no
+/// — were written out six times, and the interesting one is the second: a confirm has three
+/// outcomes and each copy decided the third for itself. `snapshot_restore`'s gallery decided it
+/// by not deciding. A seventh copy is how that comes back, so there is no seventh copy.
+#[test]
+fn only_one_place_asks_for_a_yes_or_no() {
+    let mut sites: Vec<String> = Vec::new();
+    let mut scanned = 0usize;
+    for path in sources() {
+        scanned += 1;
+        let body = std::fs::read_to_string(&path).unwrap_or_default();
+        for (i, line) in body.lines().enumerate() {
+            // A comment naming the type is not a second prompt — and this module's own header
+            // names it, which is the first thing this scan found.
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            if line.contains("dialoguer::Confirm") || line.contains("Confirm::new()") {
+                sites.push(format!(
+                    "{}:{}",
+                    path.file_name().unwrap_or_default().to_string_lossy(),
+                    i + 1
+                ));
+            }
+        }
+    }
+    assert!(
+        scanned > 50,
+        "the scan read only {scanned} source files; it is not reading the tree"
+    );
+    assert_eq!(
+        sites.len(),
+        1,
+        "a yes/no prompt is built in {} places: {sites:?}. `core::prompt::confirm` is the one \
+         that knows what to do when nobody is there to answer; a second one is a second answer \
+         to that question.",
+        sites.len()
+    );
+    assert!(
+        sites[0].starts_with("prompt.rs:"),
+        "the one confirm moved out of `core::prompt`: {sites:?}"
     );
 }

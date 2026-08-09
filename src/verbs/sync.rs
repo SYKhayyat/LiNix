@@ -429,20 +429,15 @@ pub async fn handle_rebuild(
         return Ok(());
     }
 
-    if !app.config.yes {
-        use std::io::IsTerminal;
-        if !std::io::stdin().is_terminal() {
-            return Err(crate::core::Error::Refused(
-                "Refusing to rebuild without confirmation in a non-interactive shell. Re-run with --yes, or --dry-run to preview."
-            .to_string()).into());
-        }
-        let proceed = dialoguer::Confirm::new()
-            .with_prompt("Remove and reinstall these packages?")
-            .default(false)
-            .interact()?;
-        if !proceed {
-            return Ok(());
-        }
+    let proceed = crate::core::prompt::confirm(
+        app.config.yes,
+        "Remove and reinstall these packages?",
+        crate::core::prompt::Unattended::Refuse(
+            "Refusing to rebuild without confirmation in a non-interactive shell. Re-run with --yes, or --dry-run to preview.",
+        ),
+    )?;
+    if !proceed {
+        return Ok(());
     }
 
     // K3: a rebuild removes before it installs, so a failed reinstall leaves the machine

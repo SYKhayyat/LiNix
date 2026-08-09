@@ -25,11 +25,19 @@ fn is_header_token(tok: &str) -> bool {
     (tok.len() >= 2 && tok.chars().all(|c| c.is_ascii_uppercase()))
 }
 
-/// True for a decorative / non-data line: empty, a tree connector, a dashed separator, or
-/// a bracketed status banner.
+/// True for a decorative / non-data line: empty, a tree connector, a dashed separator, a
+/// bracketed status banner, or a table header.
+///
+/// **The header belongs here and not in each reader's `filter_map`.** Ten readers dropped a
+/// header row from the *packages* while leaving it in the *candidates*, and `or_unrecognised`
+/// reads a non-empty candidate list that yielded nothing as *"I could not understand this"*. So
+/// `helm plugin list` on a cluster with no plugins — which prints exactly
+/// `NAME\tVERSION\tDESCRIPTION` and nothing else — was refused as unreadable rather than
+/// answered as empty, and every verb that needs the installed set refused with it.
 fn is_noise_line(line: &str) -> bool {
     let t = line.trim();
     t.is_empty()
+        || t.split_whitespace().next().is_some_and(is_header_token)
         || t.starts_with('#')
         || t.chars()
             .all(|c| matches!(c, '-' | '=' | '─' | '│' | '├' | '└' | ' '))
@@ -104,6 +112,79 @@ pub fn ws_name_version(output: &str, backend: &str) -> ParseResult {
             }
             match parts.next() {
                 Some(ver) => Some(Package::with_version(name, ver, backend)),
+                None => Some(Package::new(name, backend)),
+            }
+        })
+        .collect();
+    or_unrecognised(backend, found, &candidates)
+}
+
+/// `cabal list --installed --simple-output`, which is `ws_name_version` plus the chatter cabal
+/// writes to **stdout** when it has no config file yet.
+///
+/// ```text
+/// Config file path source is default config file.
+/// Config file not found: /root/.config/cabal/config
+/// Writing default configuration to /root/.config/cabal/config
+/// Cabal 3.10.3.0
+/// ```
+///
+/// Read as `name version` those three lines are the packages `Config@file`, `Config@file` and
+/// `Writing@default`, and the first two collide on a name — so a container's first `cabal list`
+/// reported three packages nobody installed, ahead of the thirty-eight that were real.
+///
+/// Haskell versions are PVP: dot-separated integers, always. A second column that does not start
+/// with a digit is therefore not a version, and the line it is on is not a package.
+pub fn cabal_list(output: &str, backend: &str) -> ParseResult {
+    let clean = sanitize(output);
+    let candidates: Vec<&str> = clean.lines().filter(|l| !is_noise_line(l)).collect();
+    let found = candidates
+        .iter()
+        .filter_map(|l| {
+            let mut parts = l.split_whitespace();
+            let name = parts.next()?;
+            if is_header_token(name) {
+                return None;
+            }
+            let ver = parts.next()?;
+            ver.starts_with(|c: char| c.is_ascii_digit())
+                .then(|| Package::with_version(name, ver, backend))
+        })
+        .collect();
+    or_unrecognised(backend, found, &candidates)
+}
+
+/// `uv tool list`, which is one `name vVERSION` line per tool followed by one `- executable`
+/// line per command that tool exposes.
+///
+/// ```text
+/// ruff v0.16.2
+/// - ruff
+/// ```
+///
+/// Read as `ws_name_version` the second line is a package named `-` at version `ruff`, and every
+/// uv machine reports twice as many packages as it has. The `v` goes too: uv prints it, nobody
+/// writes it, and `uv:ruff@0.16.2` would never match a recorded `v0.16.2`.
+pub fn uv_tool_list(output: &str, backend: &str) -> ParseResult {
+    let clean = sanitize(output);
+    let candidates: Vec<&str> = clean
+        .lines()
+        .filter(|l| !is_noise_line(l) && !l.trim_start().starts_with("- "))
+        .collect();
+    let found = candidates
+        .iter()
+        .filter_map(|l| {
+            let mut parts = l.split_whitespace();
+            let name = parts.next()?;
+            if is_header_token(name) {
+                return None;
+            }
+            match parts.next() {
+                Some(ver) => Some(Package::with_version(
+                    name,
+                    ver.strip_prefix('v').unwrap_or(ver),
+                    backend,
+                )),
                 None => Some(Package::new(name, backend)),
             }
         })
@@ -215,8 +296,19 @@ pub fn slackpkg_search(output: &str, backend: &str) -> Vec<Package> {
         .collect()
 }
 
-/// nimble `list --installed`: `  pkgname  [1.0.0, 0.9.0]`. Name is the first token; the
-/// version is the first entry inside the brackets.
+/// nimble `list --installed`. Name is the first token; the version is the first entry inside
+/// the brackets, in either of the two layouts nimble has shipped.
+///
+/// Nimble 0.13 printed a bare version list, `pkgname  [1.0.0, 0.9.0]`. Nimble 2 prints a record
+/// per version instead:
+///
+/// ```text
+/// nimpy  [(version: 0.2.1, checksum: 22173fb24ce9ca9d1c1db63fe15bdfb14e69c76a)]
+/// ```
+///
+/// Taking the first comma-separated field of that yields `(version: 0.2.1`, which is what this
+/// build recorded as nimpy's version until a container was asked. A pin can never match it and
+/// `linix list` prints it verbatim.
 pub fn nimble_list(output: &str, backend: &str) -> ParseResult {
     let clean = sanitize(output);
     let candidates: Vec<&str> = clean.lines().filter(|l| !is_noise_line(l)).collect();
@@ -230,7 +322,16 @@ pub fn nimble_list(output: &str, backend: &str) -> ParseResult {
             }
             if let (Some(open), Some(close)) = (t.find('['), t.find(']')) {
                 if close > open + 1 {
-                    let ver = t[open + 1..close].split(',').next().unwrap_or("").trim();
+                    let first = t[open + 1..close].split(',').next().unwrap_or("");
+                    // `(version: 0.2.1` in the record layout, `1.0.0` in the bare one. The
+                    // label is what differs; the value is after the last colon either way.
+                    let ver = first
+                        .rsplit(':')
+                        .next()
+                        .unwrap_or(first)
+                        .trim()
+                        .trim_start_matches('(')
+                        .trim();
                     if !ver.is_empty() {
                         return Some(Package::with_version(name, ver, backend));
                     }
@@ -413,6 +514,73 @@ mod tests {
         assert_eq!(pkgs[0].version.as_deref(), Some("1.2.3"));
         assert_eq!(pkgs[1].name, "bar");
         assert_eq!(pkgs[0].backend, "helm");
+    }
+
+    /// **The family, not the finding.** `helm plugin list` with no plugins prints its header
+    /// and stops, and every reader in this module dropped the header from the packages while
+    /// leaving it in the candidates — so `or_unrecognised` saw one data line yielding nothing
+    /// and refused the whole listing. A manager with nothing installed is not a manager nobody
+    /// can read, and the two answers send the planner in opposite directions.
+    ///
+    /// One case per reader that takes a header, because the fix is in `is_noise_line` and a
+    /// reader that stops calling it would go back to refusing.
+    #[test]
+    fn a_listing_that_is_only_a_header_is_empty_rather_than_unreadable() {
+        /// A backend, the reader its row names, and a listing of nothing but a header.
+        type HeaderCase = (&'static str, fn(&str, &str) -> ParseResult, &'static str);
+        let cases: [HeaderCase; 6] = [
+            ("helm", ws_name_version, "NAME\tVERSION\tDESCRIPTION\n"),
+            ("krew", names_only, "PLUGIN\n"),
+            ("cabal", cabal_list, "Package Version\n"),
+            ("uv", uv_tool_list, "NAME VERSION\n"),
+            ("nimble", nimble_list, "Name Version\n"),
+            ("eopkg", eopkg_list, "Package - Description\n"),
+        ];
+        for (backend, reader, header) in cases {
+            let pkgs = reader(header, backend)
+                .unwrap_or_else(|e| panic!("{backend}: a bare header was refused — {e:?}"));
+            assert!(pkgs.is_empty(), "{backend}: read {pkgs:?} out of a header row");
+        }
+    }
+
+    /// Real bytes, and the whole reason `cabal_list` exists: a container's first `cabal list`
+    /// writes three lines of configuration chatter to **stdout** ahead of the packages.
+    #[test]
+    fn cabal_reads_past_the_chatter_of_a_first_run() {
+        let out = "Config file path source is default config file.\n\
+                   Config file not found: /root/.config/cabal/config\n\
+                   Writing default configuration to /root/.config/cabal/config\n\
+                   Cabal 3.10.3.0\n\
+                   array 0.5.8.0\n";
+        let pkgs = cabal_list(out, "cabal").expect("this is what haskell:9.6 printed");
+        assert_eq!(pkgs.len(), 2);
+        assert_eq!(pkgs[0].name, "Cabal");
+        assert_eq!(pkgs[1].version.as_deref(), Some("0.5.8.0"));
+    }
+
+    /// The executables a uv tool exposes are indented under it and are not tools.
+    #[test]
+    fn a_uv_tool_s_executables_are_not_packages() {
+        let pkgs = uv_tool_list("ruff v0.16.2\n- ruff\n- ruff-lsp\n", "uv")
+            .expect("this is what `uv tool list` printed");
+        assert_eq!(pkgs.len(), 1);
+        assert_eq!(pkgs[0].name, "ruff");
+        assert_eq!(pkgs[0].version.as_deref(), Some("0.16.2"));
+    }
+
+    /// Both nimble layouts, because the record one arrived in nimble 2 and the bare one is
+    /// still what older installs print.
+    #[test]
+    fn nimble_reads_a_version_out_of_either_layout() {
+        let record = nimble_list(
+            "nimpy  [(version: 0.2.1, checksum: 22173fb24ce9ca9d1c1db63fe15bdfb14e69c76a)]\n",
+            "nimble",
+        )
+        .expect("nimble 2 output");
+        assert_eq!(record[0].version.as_deref(), Some("0.2.1"));
+
+        let bare = nimble_list("chronos  [1.0.0, 0.9.0]\n", "nimble").expect("nimble 0.13 output");
+        assert_eq!(bare[0].version.as_deref(), Some("1.0.0"));
     }
 
     /// **Synthetic, and labelled as such — this is the test the rule 250 lines below condemns.**

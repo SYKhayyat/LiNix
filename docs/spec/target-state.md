@@ -2998,3 +2998,64 @@ of two calls decide it silently.
 by `every_row_has_an_argv_row` — the other half of
 `every_registrar_has_an_argv_row_or_a_written_reason`, which scans for registrars and cannot see
 a row.
+
+## II.41 A reader is registered with its manager's own bytes (`S72`, V.172)
+
+**A row that can list carries a `[backend.fixture]`**: the stdout its manager printed, what the
+row's reader must produce from it, and a `source` naming where the bytes came from. The suite
+runs one against the other through `parser_for` — the same function that resolves the live
+parser, so a fixture cannot pass against a second resolution of the same fields.
+
+**`source` is part of the fixture, not a note on it.** Bytes typed from a README look exactly
+like bytes captured from a tool. One that was not captured says `UNVERIFIED` and is counted;
+the count is a ratchet that may fall and never rise.
+
+**An empty listing is not an unreadable one.** A manager that prints only a table header, or
+only `No archives currently installed.`, has answered *none* — and a reader that refuses it
+stops every verb that needs the installed set. The header check belongs in the shared
+noise-line rule, not in each reader's `filter_map`, because a header dropped from the packages
+while left in the candidates is what makes the refusal.
+
+**One reader per manager where the output differs.** A shape shared by eight managers is a
+claim about eight tools; the fixture column is what tests it, and where it fails the answer is
+a reader of that manager's own, not a wider guess in the shared one.
+
+## II.42 A downloaded artifact is torn down in one place and named by its key (`S73`, V.173)
+
+**`github:`, `web:` and `appimage:` remove through `artifact::teardown`.** The four steps —
+hand the owning system manager its package back (D5), delete the deployed paths, drop the
+cached download, put the record back on failure — are one function, and a backend that grows a
+fifth downloader inherits them rather than retyping them.
+
+**The cache is dropped only after everything else came off.** A cache emptied beside a file
+that would not delete costs a re-download and buys nothing.
+
+**The failure sentence says the thing is still there**, in both the words the three used before
+they shared one: *still installed and still on disk*.
+
+**Whatever a downloader's `fetch_installed` calls a package, its `remove` finds under that
+name.** These three answer from a JSON file LiNix wrote, so the identity is theirs to keep, and
+getting it wrong is not a cosmetic bug: a reported name the state is not keyed by makes every
+declaration read as absent and re-downloads it on every run for ever.
+
+**A search that is an HTTP call is a `SearchSource`, not a bespoke capability.** npm's registry
+and PyPI are both variants a row can name; neither is reachable only from Rust.
+
+## II.43 One confirm, and it takes the unattended answer as an argument (`S74`, V.174)
+
+**Every yes/no question goes through `core::prompt::confirm`.** There is one, and
+`only_one_place_asks_for_a_yes_or_no` fails when there are two.
+
+**A confirm has three outcomes.** Yes, no, and *nobody is there to answer*. The third is named
+at the call site, never defaulted:
+
+- `Unattended::Refuse(sentence)` for anything that changes the machine. The sentence names the
+  verb, the flag that proceeds without a human, and the safe way to look first.
+- `Unattended::Decline(sentence)` for an offer the run survives without. It prints and answers
+  no; it does not fail the run.
+
+**The default is no.** A confirm that defaults to yes fires on a stray newline.
+
+**`Unattended::Refuse` builds an `Error::Refused`**, so it exits 3 and fires
+`on_guard_refusal` like every other refusal. That conversion has a test of its own, matching on
+the variant rather than on the message.

@@ -85,6 +85,14 @@ pub enum ParserSpec {
         delimiter: Option<String>,
         #[serde(default)]
         skip_prefixes: Vec<String>,
+        /// A double-quoted run is one column, however much whitespace is inside it.
+        ///
+        /// Windows managers put spaces in versions — `Microsoft.PowerShell "7.3.4 (x64)"` — and
+        /// splitting that on whitespace tears one column into three, so `version_col` lands on
+        /// `7.3.4` and the architecture becomes a column of its own. Ignored when `delimiter`
+        /// is set, which already says where the boundaries are.
+        #[serde(default)]
+        quoted: bool,
     },
     /// JSON: an array of objects (or, at `array_path`, a nested one). If the target node
     /// is an object rather than an array, its keys are taken as package names.
@@ -151,6 +159,7 @@ impl ParserSpec {
                 skip_header,
                 delimiter,
                 skip_prefixes,
+                quoted,
             } => {
                 let clean = sanitize(output);
                 let candidates: Vec<&str> = clean
@@ -164,9 +173,14 @@ impl ParserSpec {
                 let found = candidates
                     .iter()
                     .filter_map(|line| {
+                        let owned: Vec<String>;
                         let cols: Vec<&str> = match delimiter {
                             Some(d) if !d.is_empty() => {
                                 line.split(d.as_str()).map(str::trim).collect()
+                            }
+                            _ if *quoted => {
+                                owned = crate::parsers::utils::split_columns(line);
+                                owned.iter().map(String::as_str).collect()
                             }
                             _ => line.split_whitespace().collect(),
                         };
@@ -446,6 +460,9 @@ pub struct CustomBackendDef {
     #[serde(default)]
     pub property_probes: Vec<PropertyProbeDef>,
 
+    /// Bytes this manager actually printed, and what the row's reader must make of them.
+    pub fixture: Option<FixtureDef>,
+
     /// Take the name even if something already holds it — a built-in included (Q6).
     ///
     /// Default `false`, and that default is the security property: a definition cannot take
@@ -550,6 +567,52 @@ impl crate::core::adapter::AdapterRow for CustomBackendDef {
     // about. A second copy here would be the two-of-everything this table exists to end.
 }
 
+/// Bytes a manager actually printed, kept beside the row that reads them.
+///
+/// **A reader shared by eight managers was tested against one manager's output.**
+/// `ws_name_version` serves cabal, spack, pub, krew, helm, guix, luarocks and uv, and the only
+/// input it had ever been run on in this tree was seven words typed by hand — `NAME VERSION` /
+/// `foo 1.2.3` / `bar 0.1.0 some-desc` — labelled `helm`. Seven of the eight were reading their
+/// machine through a parser nobody had shown their machine to.
+///
+/// A shape is a claim about a tool, and the only thing that settles it is the tool's own bytes.
+/// So a row that names a reader carries the bytes, and the suite runs one against the other.
+///
+/// `source` is not decoration. A fixture typed from memory looks exactly like a captured one and
+/// proves nothing, so each says where it came from and the gate counts the ones that admit to
+/// being unverified. That count is a ratchet: it may fall, never rise.
+/// **Unknown keys are refused here and nowhere else in this file.** `[backend.fixture]` is a
+/// table header, so every key written after it belongs to the fixture — and a `searches` or a
+/// `version_pin` that followed the block was silently accepted as a fixture field and silently
+/// lost from the row. That is a backend quietly losing a capability because of where a blank
+/// line fell.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FixtureDef {
+    /// Where the bytes came from — the image and command that produced them, or `UNVERIFIED:`
+    /// and what they were written from instead.
+    pub source: String,
+    /// Stdout of `binary list_args`, verbatim.
+    pub list: Option<String>,
+    /// What the row's installed reader must produce from `list`: `name` or `name@version`, in
+    /// order. An empty list means the fixture is an *empty listing* — a legitimate answer, and
+    /// one the reader must not report as unreadable.
+    #[serde(default)]
+    pub expect: Vec<String>,
+    /// Stdout of `search_binary search_args`, verbatim.
+    pub search: Option<String>,
+    /// What the row's search reader must produce from `search`.
+    #[serde(default)]
+    pub expect_search: Vec<String>,
+}
+
+impl FixtureDef {
+    /// Whether the bytes were captured from the tool rather than written from something else.
+    pub fn is_verified(&self) -> bool {
+        !self.source.trim_start().starts_with("UNVERIFIED")
+    }
+}
+
 /// TOML mirror of [`crate::backends::generic::PropertyProbe`].
 #[derive(Debug, Clone, Deserialize)]
 pub struct PropertyProbeDef {
@@ -605,6 +668,12 @@ impl From<RepoListShapeDef> for RepoListing {
 #[derive(Debug, Clone, Copy, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchSourceDef {
+    /// PyPI's JSON API — exact-name resolution, because `pip search` was withdrawn upstream.
+    ///
+    /// Spelled out, because `rename_all = "snake_case"` would make this `py_pi`, which is not
+    /// what anybody would type.
+    #[serde(rename = "pypi")]
+    PyPi,
     /// Run `search_args` and read stdout.
     #[default]
     Command,
@@ -617,6 +686,7 @@ impl From<SearchSourceDef> for SearchSource {
         match d {
             SearchSourceDef::Command => SearchSource::Command,
             SearchSourceDef::NpmRegistry => SearchSource::NpmRegistry,
+            SearchSourceDef::PyPi => SearchSource::PyPi,
         }
     }
 }
@@ -899,10 +969,103 @@ pub fn register_custom_backends(
                 def.binary.as_deref().unwrap_or(&def.name)
             );
         }
+        // A row may carry the bytes its manager prints. If it does, run them: a spec that
+        // disagrees with its own recorded output is a backend about to under-report the
+        // machine, and the author is the only one who can tell which of the two is wrong.
+        // Registered either way — refusing a backend over a fixture would make writing one
+        // riskier than writing none, which is the opposite of what the field is for.
+        for line in fixture_disagreements(&def) {
+            warn!("Custom backend fixture disagrees with its own parser — {}", line);
+        }
         reg.register(Arc::new(build_capabilities(def, exec)));
         count += 1;
     }
     count
+}
+
+/// The reader a row's backend will actually parse with.
+///
+/// A named reader wins over a described one. Both is not an error — it is a row that said the
+/// same thing twice — and the named one is the one with bytes behind it.
+///
+/// **One function, called by both `build_capabilities` and the fixture check.** A fixture run
+/// against a second resolution of the same fields would prove the second resolution works.
+pub(crate) fn parser_for(def: &CustomBackendDef) -> Arc<dyn OutputParser> {
+    match def
+        .reads
+        .as_deref()
+        .and_then(crate::parsers::named::installed)
+    {
+        Some(reads) => Arc::new(crate::parsers::named::NamedParser::new(
+            &def.name,
+            reads,
+            def.searches.as_deref().and_then(crate::parsers::named::search),
+            def.essential_reads
+                .as_deref()
+                .and_then(crate::parsers::named::names),
+        )),
+        None => Arc::new(ConfiguredParser {
+            backend: def.name.clone(),
+            installed: def.parser.clone().unwrap_or_default(),
+            search: def
+                .search_parser
+                .clone()
+                .or_else(|| def.parser.clone())
+                .unwrap_or_default(),
+        }),
+    }
+}
+
+/// How a package reads in a fixture's `expect`: `name@version`, or `name` with no version.
+fn as_expectation(p: &Package) -> String {
+    match &p.version {
+        Some(v) => format!("{}@{}", p.name, v),
+        None => p.name.clone(),
+    }
+}
+
+/// Run a row's fixture through the row's own reader. An empty vector means they agree.
+///
+/// Nothing here is a warning about style. Each disagreement is a manager whose real output this
+/// build reads differently from how the row says it does, which on the installed side is the
+/// difference between a converged machine and `sync` installing everything.
+pub fn fixture_disagreements(def: &CustomBackendDef) -> Vec<String> {
+    let Some(fixture) = &def.fixture else {
+        return Vec::new();
+    };
+    let parser = parser_for(def);
+    let mut out = Vec::new();
+
+    if let Some(bytes) = &fixture.list {
+        match parser.parse_installed(bytes) {
+            Ok(pkgs) => {
+                let got: Vec<String> = pkgs.iter().map(as_expectation).collect();
+                if got != fixture.expect {
+                    out.push(format!(
+                        "{}: `list` fixture reads as {got:?}, row expects {:?}",
+                        def.name, fixture.expect
+                    ));
+                }
+            }
+            Err(e) => out.push(format!(
+                "{}: `list` fixture is refused as unreadable ({} data lines, first `{}`) — \
+                 that is what this backend would report about a real machine",
+                def.name, e.data_lines, e.sample
+            )),
+        }
+    }
+
+    if let Some(bytes) = &fixture.search {
+        let got: Vec<String> = parser.parse_search(bytes).iter().map(as_expectation).collect();
+        if got != fixture.expect_search {
+            out.push(format!(
+                "{}: `search` fixture reads as {got:?}, row expects {:?}",
+                def.name, fixture.expect_search
+            ));
+        }
+    }
+
+    out
 }
 
 /// Turns one definition into a fully-wired [`BackendCapabilities`] over the generic
@@ -996,27 +1159,7 @@ pub(crate) fn build_capabilities(
         _ => None,
     };
 
-    // A named reader wins over a described one. Both is not an error — it is a row that said
-    // the same thing twice — and the named one is the one with a fixture behind it.
-    let parser: Arc<dyn OutputParser> = match def
-        .reads
-        .as_deref()
-        .and_then(crate::parsers::named::installed)
-    {
-        Some(reads) => Arc::new(crate::parsers::named::NamedParser::new(
-            &def.name,
-            reads,
-            def.searches.as_deref().and_then(crate::parsers::named::search),
-            def.essential_reads
-                .as_deref()
-                .and_then(crate::parsers::named::names),
-        )),
-        None => Arc::new(ConfiguredParser {
-            backend: def.name.clone(),
-            installed: def.parser.clone().unwrap_or_default(),
-            search: def.search_parser.or(def.parser).unwrap_or_default(),
-        }),
-    };
+    let parser = parser_for(&def);
 
     let config = ManagerConfig {
         name: def.name.clone(),
@@ -1168,6 +1311,7 @@ mod tests {
             skip_header: 0,
             delimiter: None,
             skip_prefixes: vec![],
+            quoted: false,
         };
         let pkgs = spec.parse("ripgrep 13.0.0\nbat 0.24.0\n", "custom").expect("this fixture parses");
         assert_eq!(pkgs.len(), 2);
@@ -1184,11 +1328,58 @@ mod tests {
             skip_header: 1,
             delimiter: Some("|".to_string()),
             skip_prefixes: vec!["#".to_string()],
+            quoted: false,
         };
         let pkgs = spec.parse("NAME|VER\ngit|2.40\n# comment|x\ncurl|8.1\n", "c").expect("this fixture parses");
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[0].name, "git");
         assert_eq!(pkgs[1].name, "curl");
+    }
+
+    /// A version with a space in it is one column, which is the whole of what `quoted` buys.
+    #[test]
+    fn a_quoted_column_survives_the_space_inside_it() {
+        let bare = ParserSpec::Columns {
+            name_col: 0,
+            version_col: Some(1),
+            skip_header: 0,
+            delimiter: None,
+            skip_prefixes: vec![],
+            quoted: false,
+        };
+        let quoted = ParserSpec::Columns {
+            name_col: 0,
+            version_col: Some(1),
+            skip_header: 0,
+            delimiter: None,
+            skip_prefixes: vec![],
+            quoted: true,
+        };
+        let line = "Microsoft.PowerShell \"7.3.4 (x64)\" installed\n";
+
+        // Without it the architecture is torn off and left as a column of its own.
+        let torn = bare.parse(line, "c").expect("this fixture parses");
+        assert_eq!(torn[0].version.as_deref(), Some("\"7.3.4"));
+
+        let whole = quoted.parse(line, "c").expect("this fixture parses");
+        assert_eq!(whole[0].name, "Microsoft.PowerShell");
+        assert_eq!(whole[0].version.as_deref(), Some("7.3.4 (x64)"));
+    }
+
+    /// `delimiter` already says where a column ends, so `quoted` beside it is a row that asked
+    /// for two answers to one question — and the explicit one wins.
+    #[test]
+    fn a_delimiter_beats_the_quote_rule() {
+        let spec = ParserSpec::Columns {
+            name_col: 0,
+            version_col: Some(1),
+            skip_header: 0,
+            delimiter: Some("|".to_string()),
+            skip_prefixes: vec![],
+            quoted: true,
+        };
+        let pkgs = spec.parse("git|\"2.40 (x64)\"\n", "c").expect("this fixture parses");
+        assert_eq!(pkgs[0].version.as_deref(), Some("\"2.40 (x64)\""));
     }
 
     #[test]
