@@ -2823,3 +2823,31 @@ means the target path holds readable plaintext for however long that takes, and 
 unless it is listed with the reason it must be its own. There is one such entry: the
 installed-listing cache, which is deliberately neither durable nor preview-aware, because a torn
 cache file is a cache miss and an fsync per listing would be a disk barrier on the read path.
+
+## II.33 Rollback does not undo work that moved the machine toward the declared state (`S60`, `U41`, V.164)
+
+**One rule, both directions, and one function that answers it.** `plan_intends_present(backend,
+name)` reads the plan being executed; the install arm skips its compensating removal on
+`Some(true)`, the removal arm skips its compensating reinstate on `Some(false)`, and neither acts
+on `None`.
+
+- **An install that succeeded, of something still declared,** is not failed work. It is the goal,
+  reached early, and removing it hands the next sync the same work.
+- **A removal that succeeded, of something still undeclared,** is the same event from the other
+  side. The fact that authorised the removal is still true when the rollback fires.
+
+**The set is the plan's own `Install` nodes**, not a copy of the desired state assembled
+elsewhere. `apply` and `heal` rebuild a plan from a file rather than from a model, so the graph
+is the only source all three paths share — and a rollback deciding from a second copy of the
+desired state is how the two drift apart.
+
+**The removal half applies only to a run that is reconciling against the manifest.**
+`GuardScope::reconciles()` is exhaustive over every scope; a scope added later must say which it
+is, because inheriting `true` means inheriting *a failed run may leave your software deleted*.
+Two are exempt: a `rebuild`'s removal phase is the first half of a reinstall of declared
+packages, and an `uninstall` was typed by a person.
+
+**What it costs is stated, not buried:** a package the user had, that a reconciling run removed,
+stays removed after a failed transaction. **Generations and snapshots are the durable
+put-it-back** — a restore point is taken before every sync — and a durable `Prior` in the WAL is
+deferred, not rejected (`U41`).

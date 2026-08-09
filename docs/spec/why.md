@@ -5152,3 +5152,51 @@ planted innocent, and a planted file whose only offence is inside `#[cfg(test)]`
 write goes through `utils::file::persist`"* as ground for a dry-run claim. Scoped to those
 commands it is true; read as a claim about the program it is not, and the four-writer paragraph
 above is why somebody would read it that way. It now says which scope it means.
+
+---
+
+**V.164 — Why the removal arm asks the same question, and why the register had to be told.**
+*(Rule in II.33. Amended ruling in `U41`; fixed 2026-08-09, `S60`.)*
+
+`U41` was answered on 2026-07-27 and its answer said both rollback arms compensate. Then `LX-3`
+changed one of them. `Prior::Absent` stopped being permission to remove, on the argument — a good
+one, written into the code as a comment — that *"was not here before this run" and "is not wanted
+now" are different facts, and the manifest holds the second one*. **Nobody told `decisions.md`.**
+So the register recorded a closed ruling while the code ran two arms under two rules, and the
+only way to find out was to read both arms.
+
+That is the process failure, and it is the reason the review flagged this at all. The code change
+was right.
+
+**The asymmetry itself.** The install arm consulted the plan; the removal arm reinstated
+unconditionally. Asked plainly: *why can rollback know that an install should stand, but not that
+a removal should?* The answer given at the time was that a removal has no equivalent fact — and
+that answer is wrong, in the owner's words: *"we could have figured it out the same way we know
+to delete it: it's not there."*
+
+**Exactly so, and it is the same set.** A `Remove` node exists because the planner found the
+package in `present − desired`. The set that authorised it is the plan's own `Install` nodes —
+what this plan intends the machine to end up holding — and the package's absence from that set is
+still true when the rollback fires. `false` is an answer. Both arms now call
+`plan_intends_present`, which is one function so that the symmetry is a property of the code
+rather than of two comments agreeing.
+
+**What the second half costs.** A package the user had, that this run removed, stays removed
+after a failed transaction. That is a real loss and it is accepted for a stated reason:
+**generations and snapshots are the durable put-it-back**, a pre-sync restore point is taken on
+every run, and `linix history` reaches it. Re-installing at whatever version is newest — which is
+all the WAL can support today, because it records the removal and not the version — is a
+different package wearing the same name. A durable `Prior` is the alternative and it is deferred
+rather than rejected; when it exists this ruling is worth reopening, because part of the case for
+leaving a removal alone is that putting it back imprecisely is worse than not putting it back.
+
+**And two scopes are exempt, which is where this nearly went wrong.** The first implementation
+gated on `declared` being non-empty, which would have been silently correct for `sync` and
+silently catastrophic for `rebuild`: a rebuild's *down* phase is a removals-only graph, so its
+`Install` set is empty, and "not in the set" would have meant "leave every declared package
+deleted". `GuardScope::reconciles()` is the discriminator instead, exhaustive over all twelve
+scopes with the two exceptions written out — a rebuild's removal phase is the first half of a
+reinstall of declared packages, split in two only so the `Remove` and the `Install` cannot race;
+and an `uninstall` was typed by a person rather than derived from a manifest. A scope added later
+does not compile until it says which it is, because inheriting `true` here means inheriting *a
+failed run may leave your software deleted*.

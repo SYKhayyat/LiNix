@@ -162,17 +162,33 @@ pub struct Transaction {
     /// contains a removal, which is a larger change than this finding earns. The five effectors
     /// **are** compile-enforced; this is the seam that hands them their token.
     reaped: Option<crate::app::sync::guard::Reaped>,
-    /// What the manifest still asks for, as `backend:name`, when this transaction is a sync.
+    /// **What this plan intends the machine to end up holding**, as `backend:name` — the
+    /// `Install` nodes of the graph being executed.
     ///
-    /// **Rollback needs this to avoid un-converging the machine.** `Prior::Absent` means *this
-    /// package was not here before this run*, and rollback read that as permission to remove it.
-    /// But "was not here before" and "is not wanted now" are different facts, and the manifest
-    /// holds the second one. A package that installed cleanly and is still declared is not
-    /// failed work — it is the goal, reached early. Removing it means the next `sync` installs
-    /// it again, which is the one mechanism in the program that provably un-converges.
+    /// **Rollback consults it in both directions, and that is one rule, not two** (`U41`,
+    /// amended 2026-08-09). *Rollback does not undo work that moved the machine toward the
+    /// declared state.*
     ///
-    /// `None` for a transaction that is not reconciling against a manifest, where the old
-    /// behaviour is right: there is no declaration to consult.
+    /// - **An install that succeeded, of something still declared,** is not failed work — it is
+    ///   the goal, reached early. `Prior::Absent` says the package was not here before this run;
+    ///   it does not say nobody wants it, and the manifest holds the second fact. Removing it
+    ///   hands the next `sync` the same work to do again.
+    /// - **A removal that succeeded, of something still undeclared,** is the same event seen
+    ///   from the other side. The fact that authorised the removal — nothing declares this — is
+    ///   still true when the rollback fires, and it is knowable the same way it was knowable
+    ///   then: the package is not in this set. Re-installing it un-converges exactly as
+    ///   symmetrically.
+    ///
+    /// **What is lost by the second half, stated plainly:** a package the user had, that this
+    /// run removed, stays removed after a failed transaction. The durable put-it-back is
+    /// generations and snapshots, which is what they are for; the WAL records the removal but
+    /// not the version, so a `Prior` that outlived the process would be the alternative and it
+    /// is deferred, not rejected (`U41`).
+    ///
+    /// `None` for a transaction that is not reconciling against a manifest — see
+    /// [`GuardScope::reconciles`](crate::app::sync::guard::GuardScope::reconciles). There the
+    /// old behaviour is right in both arms: a `rebuild`'s removal phase is half of a reinstall
+    /// of declared packages, and a hand-typed `uninstall` was not derived from anything.
     declared: Option<Arc<std::collections::HashSet<String>>>,
 }
 
@@ -246,6 +262,19 @@ impl Transaction {
     pub fn reconciling(mut self, declared: Arc<std::collections::HashSet<String>>) -> Self {
         self.declared = Some(declared);
         self
+    }
+
+    /// Does this plan intend the machine to end up holding this package?
+    ///
+    /// `None` when the run is not reconciling against a manifest and the question has no
+    /// answer. **The whole of `U41` is that both rollback arms ask this one question**: the
+    /// install arm skips its removal on `Some(true)`, the removal arm skips its reinstate on
+    /// `Some(false)`, and neither does anything on `None`. Written as a function rather than
+    /// twice inline so the symmetry is a fact about the code and not about two comments.
+    fn plan_intends_present(&self, backend: &str, name: &str) -> Option<bool> {
+        self.declared
+            .as_ref()
+            .map(|d| d.contains(&format!("{}:{}", backend, name)))
     }
 
     pub async fn execute_with_telemetry(&mut self) -> Result<Vec<TaskResult>> {
@@ -1057,10 +1086,8 @@ impl Transaction {
                             // work to do again — the transaction's own comment at `:637` claims
                             // rollback "puts this back", and removing something nothing asked it
                             // to remove is the opposite.
-                            if self
-                                .declared
-                                .as_ref()
-                                .is_some_and(|d| d.contains(&format!("{}:{}", spec.backend, spec.name)))
+                            if self.plan_intends_present(&spec.backend, &spec.name)
+                                == Some(true)
                             {
                                 info!(
                                     "rollback is leaving {}:{} installed — it succeeded and the                                      manifest still declares it, so removing it would only give                                      the next sync the same work to do again.",
@@ -1134,6 +1161,25 @@ impl Transaction {
                 GraphAction::Remove { name, backend } => {
                     // Nothing was there to lose.
                     if prior == &Prior::Absent {
+                        continue;
+                    }
+                    // **The install arm's rule, from the other side** (`U41`). This removal
+                    // happened because nothing in the plan intends the package to be present,
+                    // and that fact is still true — it is the same set that authorised the
+                    // removal, asked the same way. Re-installing it would hand the next sync
+                    // the same work to do again, which is the un-convergence the install arm
+                    // already refuses to cause.
+                    //
+                    // `declared` is `None` for the runs where a removal is not a reconciliation
+                    // — a `rebuild`'s down phase, a hand-typed `uninstall` — and there the
+                    // reinstate below is exactly right.
+                    if self.plan_intends_present(&backend, &name) == Some(false) {
+                        info!(
+                            "rollback is leaving {}:{} removed — nothing declares it, so putting \
+                             it back would only give the next sync the same work to do again. \
+                             `linix history` and the pre-sync snapshot are how it comes back.",
+                            backend, name
+                        );
                         continue;
                     }
                     let version = match prior {
@@ -1396,6 +1442,69 @@ mod batching_tests {
             counters,
             _tmp: tmp,
         }
+    }
+
+    /// **`U41`, both halves, as one question.** Rollback does not undo work that moved the
+    /// machine toward the declared state — an install that succeeded of something still
+    /// declared, or a removal that succeeded of something still undeclared. The install arm had
+    /// this rule and the removal arm did not, and nothing in the register said the pair had
+    /// come apart.
+    #[tokio::test]
+    async fn one_rollback_rule_answers_both_directions() {
+        let mut graph = StableDiGraph::new();
+        graph.add_node(GraphAction::Install(spec("apt", "jq")));
+        let h = harness(graph, &["apt"]).await;
+
+        // Nothing to reconcile against: no answer, and both arms fall back to compensating.
+        assert_eq!(h.tx.plan_intends_present("apt", "jq"), None);
+        assert_eq!(h.tx.plan_intends_present("apt", "vim"), None);
+
+        let declared: std::collections::HashSet<String> =
+            ["apt:jq".to_string()].into_iter().collect();
+        let tx = h.tx.reconciling(Arc::new(declared));
+
+        // The install arm: `jq` installed cleanly and is still declared, so the removal that
+        // would compensate it is skipped.
+        assert_eq!(
+            tx.plan_intends_present("apt", "jq"),
+            Some(true),
+            "an install of something still declared is the goal reached early"
+        );
+        // The removal arm: nothing declares `vim`, which is why it was removed, and that fact
+        // has not changed — so the reinstate that would compensate it is skipped.
+        assert_eq!(
+            tx.plan_intends_present("apt", "vim"),
+            Some(false),
+            "a removal of something still undeclared must not be put back"
+        );
+        // Keyed by backend and name together, so `apt:jq` does not answer for `cargo:jq`.
+        assert_eq!(tx.plan_intends_present("cargo", "jq"), Some(false));
+    }
+
+    /// Which runs are reconciliations, asserted as the two exceptions rather than as ten rules.
+    #[test]
+    fn only_a_reconciling_run_may_leave_a_removal_in_place() {
+        use crate::app::sync::guard::GuardScope as S;
+        for scope in [
+            S::Apply,
+            S::RemoveOrphans,
+            S::PurgeUndeclared,
+            S::Sync,
+            S::Watch,
+            S::Upgrade,
+            S::Canary,
+            S::ShellExit,
+            S::ExpirySweep,
+            S::Heal,
+        ] {
+            assert!(scope.reconciles(), "{} removes what nothing declares", scope.as_str());
+        }
+        // A rebuild's removal phase is the first half of a reinstall of DECLARED packages,
+        // split into two transactions so the Remove and the Install cannot race in one graph.
+        // Leaving one of those removals in place is a machine missing software it declares.
+        assert!(!S::Rebuild.reconciles());
+        // And an uninstall was typed by a person, not derived from a manifest.
+        assert!(!S::Remove.reconciles());
     }
 
     #[tokio::test]

@@ -115,6 +115,41 @@ impl GuardScope {
         }
     }
 
+    /// Whether a transaction run under this scope is **reconciling the machine against the
+    /// manifest** — which decides whether its rollback may leave a removal in place (`U41`).
+    ///
+    /// A reconciling run removes a package *because nothing declares it*, and that fact is still
+    /// true when the rollback fires. Putting it back hands the next sync the same work, which is
+    /// the one mechanism in the program that provably un-converges.
+    ///
+    /// **Two scopes are not reconciling, and each has to be said out loud:**
+    ///
+    /// - `Rebuild` splits one operation into two transactions so a `Remove` and an `Install` of
+    ///   the same package cannot race in one graph. Its removal phase is the first half of a
+    ///   reinstall of *declared* packages; leaving one of those removals in place is not
+    ///   convergence, it is a machine missing software it still declares.
+    /// - `Remove` is a person typing `linix uninstall`. The removal was ordered by hand rather
+    ///   than derived from a manifest, so a transaction that failed around it should give the
+    ///   package back.
+    ///
+    /// Exhaustive, and deliberately so: a scope added later must say which it is, because
+    /// inheriting `true` here means inheriting "a failed run may leave your software deleted".
+    pub fn reconciles(&self) -> bool {
+        match self {
+            Self::Rebuild | Self::Remove => false,
+            Self::Apply
+            | Self::RemoveOrphans
+            | Self::PurgeUndeclared
+            | Self::Sync
+            | Self::Watch
+            | Self::Upgrade
+            | Self::Canary
+            | Self::ShellExit
+            | Self::ExpirySweep
+            | Self::Heal => true,
+        }
+    }
+
     /// How a refusal names this run in prose — the `(refused during …)` half of a message.
     ///
     /// Separate from [`as_str`](Self::as_str) because the two answer different questions.

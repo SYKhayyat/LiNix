@@ -1232,7 +1232,7 @@ half. Confirmed to fail against the previous behaviour before it was made to pas
 
 ## U41
 
-**Status: ANSWERED — ruled 2026-07-27.**
+**Status: ANSWERED — ruled 2026-07-27, amended by the owner 2026-08-09.**
 
 **In the tree today:** built in the same commit as this ruling. `Transaction` records a `Prior`
 per node before the node runs, holds the user's `Config`, and its rollback calls
@@ -1266,6 +1266,53 @@ the transaction **partly applied**, and what LiNix should then do is a product d
 - **A rolled-back removal comes back pinned.** The reinstall carried `options: HashMap::new()`,
   so a package restored after a failed removal came back at whatever is newest — the declared
   pin silently gone.
+
+**AMENDED (owner, 2026-08-09): one rule, in both directions — and the amendment `LX-3` made to
+one arm without telling the register is now the rule for both.**
+
+The 2026-07-27 ruling above said both arms compensate. `LX-3` (commit `e9a6ac4`) then changed the
+*install* arm: `Prior::Absent` stopped being permission to remove, because "was not here before"
+and "is not wanted now" are different facts and the manifest holds the second. That change is
+right and shipped with a good comment. **What did not happen is anyone telling this entry**, so
+the register recorded `U41` as `ANSWERED` unamended while the code had two arms following two
+rules.
+
+The rule is now one sentence: **rollback does not undo work that moved the machine toward the
+declared state.**
+
+- **Install arm** (unchanged from `LX-3`): an install that succeeded, of something the plan still
+  intends to be present, is not failed work. It is the goal, reached early.
+- **Removal arm** (new): a removal that succeeded, of something the plan still intends to be
+  absent, is the same event from the other side. **The fact that authorised the removal —
+  nothing declares this — is still true when the rollback fires, and it is knowable the same way
+  it was knowable then.** Re-installing it hands the next sync the same work.
+
+The owner's argument for the second half, in their words: *"we could have figured it out the same
+way we know to delete it: it's not there"* — and *"besides you can rollback generations"*.
+
+**What this costs, stated rather than buried:** a package the user had, that this run removed,
+stays removed after a failed transaction. That is accepted because **generations and snapshots
+are the durable put-it-back** and this is what they are for; a pre-sync restore point is taken on
+every run and `linix history` reaches it.
+
+**Two scopes are exempt, and each is an exception for a reason** —
+`GuardScope::reconciles()` is exhaustive over all twelve:
+
+- **`Rebuild`** splits one operation into two transactions so a `Remove` and an `Install` of the
+  same package cannot race in one graph. Its removal phase is the first half of a reinstall of
+  *declared* packages; leaving one of those removals in place is not convergence, it is a machine
+  missing software it still declares.
+- **`Remove`** is a person typing `linix uninstall`. It was not derived from a manifest, so a
+  transaction that failed around it gives the package back.
+
+**DEFERRED, not rejected: a durable `Prior` in the WAL.** The alternative to the removal-arm rule
+is recording the removed package's *version* where a later process can read it, so a rollback
+that outlives the run can reinstate exactly what was there. The WAL records the removal but not
+the version. That is a real feature and it is not this one; when it exists, this ruling is worth
+revisiting, because the reason to leave a removal in place is partly that putting it back
+imprecisely is worse than not putting it back at all.
+
+The mechanism is in `S60`; the rule is in **II.33**; the reason is in **V.164**.
 
 ---
 

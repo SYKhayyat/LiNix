@@ -654,14 +654,18 @@ impl<'a> SyncEngine<'a> {
             Arc::new(self.config.clone()),
             tx_config,
         );
-        // What the manifest still asks for, for rollback (`Y21`). Every `Install` node in this
-        // graph is a declaration the planner computed as `desired − present`, so the install set
-        // *is* the still-declared set for exactly the packages rollback could compensate — a
-        // `Prior::Absent` package is one this run installed, which means it was an install node.
+        // **What this plan intends the machine to end up holding**, for rollback (`U41`). Every
+        // `Install` node is a declaration the planner computed as `desired − present`, so for a
+        // reconciling run the install set *is* the still-declared set over exactly the packages
+        // rollback could compensate — a `Prior::Absent` package is one this run installed, which
+        // means it was an install node — and a `Remove` node's target is by construction not in
+        // it, which is what lets the removal arm ask the same question.
         //
         // Deliberately built from the graph rather than threaded in from the model: a set
         // assembled somewhere else could disagree with the plan being executed, and a rollback
-        // deciding from a second copy of the desired state is how the two drift apart.
+        // deciding from a second copy of the desired state is how the two drift apart. `apply`
+        // and `heal` rebuild a `SyncChanges` from a file rather than from a model, so the graph
+        // is the only source all three paths share.
         let declared: std::collections::HashSet<String> = changes
             .graph
             .node_weights()
@@ -675,10 +679,14 @@ impl<'a> SyncEngine<'a> {
 
         // Per-package `before_install`/`after_install` hooks fire inside the engine,
         // at the moment each package installs (see Transaction::with_hooks).
-        let mut tx = tx
-            .with_hooks(self.hooks.clone())
-            .guarded_by(reaped)
-            .reconciling(Arc::new(declared));
+        let mut tx = tx.with_hooks(self.hooks.clone());
+        // Only a run that is reconciling against the manifest gets to leave a removal in place;
+        // `GuardScope::reconciles` says which those are and why the two exceptions are
+        // exceptions. Read before `guarded_by` consumes the token.
+        if reaped.scope().reconciles() {
+            tx = tx.reconciling(Arc::new(declared));
+        }
+        let mut tx = tx.guarded_by(reaped);
 
         let pb = self
             .progress
