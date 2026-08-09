@@ -178,8 +178,11 @@ const HAND_WRITTEN: &[HandWritten] = &[
         module: "flatpak.rs",
         why: "`@channel` becomes part of the ref itself — `install_ref` writes `name//branch` — \
               and `ManagerConfig` has `VersionPin` for `@version` with no equivalent for a \
-              channel. Scope stopped being the blocker when `Y22` renamed the key to \
-              `scope = \"user\"|\"system\"`, which a row can substitute as \
+              channel. `Y23` made the blocker larger rather than smaller: flatpak has no channel \
+              switch, so changing one is an install followed by `make-current`, conditional on \
+              reading which branch the app is on — two commands decided by a query, which is the \
+              same shape `snap.rs` is exempted for. Scope stopped being the blocker when `Y22` \
+              renamed the key to `scope = \"user\"|\"system\"`, which a row can substitute as \
               `--{setting.scope|system}`.",
         proof: "--system",
     },

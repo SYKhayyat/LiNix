@@ -4455,3 +4455,80 @@ not run. The extension table is untouched; the name it yields now goes through t
 which is what carries the fallbacks and the alias-avoidance to it. **It was deliberately not
 given shebang parsing** — a second dispatch inside the file whose rule is "no shebang needed"
 would be two-of-everything wearing the costume of a fix.
+
+**V.151 — Why a channel change is repaired by whatever the backend's switch actually is, and why
+two branches means "unreadable".** *(Rules in II.2. Owner ruling 2026-08-09, `Y23`; D13 is the
+parent.)*
+
+D13 ruled the shape — a `@channel` that differs from what a package follows needs a refresh —
+and it was built against snap, which has a refresh. The rule then read as though every backend
+that publishes channels had one. flatpak does not, and the gap was invisible in both directions
+at once: **flatpak's `@channel` really did reach the machine** (`install_ref` builds the ref
+`org.gimp.GIMP//beta`) and the installed branch was never read back, because the listing asked
+for `application,version` and stopped there. So editing a flatpak's channel installed the new
+branch the first time and did nothing for ever after, and *neither half announced itself* — the
+declaration was honoured once, which is the most convincing way for a feature to look finished.
+
+**Adding the column would not have been the fix; it would have been the next bug.** flatpak's
+`install` calls an already-installed ref an *error* and exits non-zero — the string
+`Error: %s%s%s already installed` is in the shipped binary. Making the drift visible without
+changing the repair would have turned a channel that did nothing into a sync that failed on
+every run, which is the same defect with a louder failure mode. `--or-update` — flatpak's own
+*"Update install if already installed"* — is what makes the repair idempotent, and it is applied
+to every flatpak install rather than to the channel path, because an adopted package or a
+half-applied plan reaches that command holding a ref the machine already has.
+
+**And installing the branch is not switching to it.** flatpak keeps branches side by side; the
+launcher goes on running the one it ran yesterday until `make-current` says otherwise. A repair
+that stopped at the install would have reported a converged channel over a machine where nothing
+a user could see had changed — a plan that lies about what it did, which is the class II.7 exists
+to prevent.
+
+**Which leaves what "the installed branch" means when there are two of them, and the answer is
+that there is no answer.** `flatpak list --columns=help` offers no current-branch column, and the
+binary carries no such word among its option strings — this was measured in a `debian:12`
+container against flathub, not inferred. So an app on two branches reports **no** channel, and
+D13's existing rule takes it from there: a value the backend could not read is left alone. The
+alternative was to pick one of the two rows, which reads as thoroughness and is in fact the exact
+failure D13 was written to prevent — a wrong reading schedules the same switch on every sync for
+ever, and unlike the silent version, that one edits the machine.
+
+**The two backends that have channels both report one now, and there are exactly two.**
+`capability::HAS_CHANNELS` is `["snap", "flatpak"]`, and the sweep that closed this checked the
+other end too: every key in every `*_OPTION_KEYS` table has a reader outside the grammar. The
+family is closed by enumeration rather than by resemblance.
+
+**V.152 — Why `@source=` is read when the shim runs and not when it is deployed, and why a shim
+must never resolve to itself.** *(Rules in II.2 and the option table. Owner ruling 2026-08-09,
+closing `Y18`'s third finding.)*
+
+`source` was a legal option on a `shim:` line that nothing read. The imperative `linix shim
+--source` had thrown the same value away before it, II.16 converted the command into the line,
+and the defect **moved house rather than dying** — accepted by the parser, listed in the option
+table, discarded at apply time, which is the "silently ignoring an option the user wrote" shape
+II.2 names, sitting inside the repo that names it.
+
+The reason it stayed unbuilt is a false constraint worth recording: a shim is the linix binary
+copied under another name, so there is nowhere in the *artefact* to keep the answer, and every
+sketch of the fix started by inventing a sidecar file to keep it in. **The record already
+exists.** The config that declared the shim is the same config the shim process loads on its way
+in — it still says `shim:jq@source=cargo:jq` — so the option is read at run time, from the
+declaration, and no second store is created that could disagree with the first. A sidecar would
+have been two of everything, invented to solve a problem that had already been solved by the
+thing that caused it.
+
+**The mechanism it belongs to had never run, and reading it end to end is what found the rest.**
+`exec_shim` had no test caller anywhere in the tree, and the path it takes ends at
+`Command::new(name)` — a bare `PATH` lookup, with nothing excluding `[bin_dir]`. That is the
+directory the shim was deployed into, ahead of the real binary, deliberately: the search finds
+the shim, which re-enters LiNix, which searches again. One process per turn. Nothing in the tree
+stopped it — no depth counter, no environment marker, no exclusion — and it was reachable by
+typing the shimmed name on a machine where the shim worked as designed.
+
+**The exclusion is by identity, not by directory,** and that distinction is the whole reason the
+fix is not one line. `web:`, `github:` and `appimage:` deploy real executables into that same
+`[bin_dir]`; a runner that skipped the directory would be unable to find the packages three
+backends install. So the search asks each candidate whether it is *this binary under another
+name* — the ownership test `create_shim` and `remove_shim` already share — and skips only that.
+The fallback when a `PATH` holds nothing else is the bare name, so the user gets the error they
+would have got by typing it rather than a silent re-entry.

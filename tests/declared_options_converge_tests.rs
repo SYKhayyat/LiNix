@@ -219,6 +219,80 @@ async fn a_satisfied_channel_does_not_hide_a_drifted_confinement() {
     );
 }
 
+/// Y23 — the same defect on the *other* backend that publishes channels. flatpak calls a channel
+/// a branch, `@channel` really does reach the installed ref (`org.gimp.GIMP//beta`), and the
+/// listing LiNix read asked for `application,version` — so the branch was never known, the drift
+/// check had nothing to compare, and editing a flatpak's channel did nothing for ever.
+#[tokio::test]
+async fn an_edited_flatpak_branch_is_drift() {
+    const LIST: &str = "flatpak list --app --columns=application,version,branch";
+    let on_stable = "org.gimp.GIMP\t2.10\tstable\n";
+
+    assert!(
+        plans_a_change(
+            &[(LIST, on_stable)],
+            spec("flatpak", "org.gimp.GIMP", &[("channel", "beta")]),
+        )
+        .await,
+        "declared beta, installed on stable — that is a change"
+    );
+    assert!(
+        !plans_a_change(
+            &[(LIST, on_stable)],
+            spec("flatpak", "org.gimp.GIMP", &[("channel", "stable")]),
+        )
+        .await,
+        "declared stable, installed on stable — nothing to do"
+    );
+    // A line that says nothing about a branch is not asking for one, exactly as `@classic` is
+    // not asking for strict confinement.
+    assert!(!plans_a_change(&[(LIST, on_stable)], spec("flatpak", "org.gimp.GIMP", &[])).await);
+}
+
+/// D13's rule where flatpak is the backend that forces it. flatpak installs branches side by
+/// side and its listing has no column saying which one is current, so an app on two branches is
+/// a channel LiNix cannot read — and an unreadable value is left alone. Reporting either row
+/// would schedule a switch on every sync for ever, which is worse than the drift it would catch.
+#[tokio::test]
+async fn an_app_on_two_branches_is_left_alone_rather_than_switched_for_ever() {
+    const LIST: &str = "flatpak list --app --columns=application,version,branch";
+    let both = "org.gimp.GIMP\t2.10\tstable\norg.gimp.GIMP\t2.99\tbeta\n";
+
+    for declared in ["stable", "beta", "23.08"] {
+        assert!(
+            !plans_a_change(
+                &[(LIST, both)],
+                spec("flatpak", "org.gimp.GIMP", &[("channel", declared)]),
+            )
+            .await,
+            "@channel={declared} against a two-branch install planned a change"
+        );
+    }
+}
+
+/// The versionless case, which is most of flathub. flatpak emits an empty middle field
+/// (`org.gimp.GIMP\t\tstable`), so a whitespace split reads `stable` as the version and the
+/// branch as absent — and a declaration that matched the machine would plan a change every run.
+#[tokio::test]
+async fn a_flatpak_with_no_version_still_has_a_readable_branch() {
+    const LIST: &str = "flatpak list --app --columns=application,version,branch";
+    assert!(
+        !plans_a_change(
+            &[(LIST, "org.gimp.GIMP\t\tstable\n")],
+            spec("flatpak", "org.gimp.GIMP", &[("channel", "stable")]),
+        )
+        .await,
+        "the branch is readable even with no version beside it"
+    );
+    assert!(
+        plans_a_change(
+            &[(LIST, "org.gimp.GIMP\t\tstable\n")],
+            spec("flatpak", "org.gimp.GIMP", &[("channel", "beta")]),
+        )
+        .await
+    );
+}
+
 /// A volume whose declaration matches the disk is not touched. The whole feature is worthless if
 /// it schedules work on a machine that is already correct — that is the "change for ever" failure
 /// wearing the opposite sign.

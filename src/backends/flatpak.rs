@@ -3,6 +3,7 @@ use crate::core::{
     Result, Searchable, Upgradable,
 };
 use crate::model::scope::Scope;
+use crate::parsers::{or_unrecognised, ParseResult};
 use crate::utils::text::sanitize;
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -31,6 +32,23 @@ impl FlatpakBackendCore {
             Scope::User => vec!["--user"],
             Scope::System => vec!["--system"],
         }
+    }
+
+    /// Every installed application, with the branch it is on.
+    ///
+    /// One reader, because the install path needs the same answer the query path does: it has to
+    /// know which branch an app is on *before* it adds another one, and a second listing here
+    /// would be a second chance to disagree with the one the planner read.
+    async fn installed_refs(&self) -> Result<Vec<Package>> {
+        let out = self
+            .executor
+            .run_output(
+                "flatpak",
+                &["list", "--app", "--columns=application,version,branch"],
+                false,
+            )
+            .await?;
+        Ok(parse_flatpak_list(&out)?)
     }
 
     /// The `[backend_settings.flatpak]` block as a scope, or the message that says what to
@@ -64,6 +82,48 @@ impl FlatpakBackendCore {
 
 /// What `flatpak` itself does when neither flag is passed.
 pub const FLATPAK_DEFAULT_SCOPE: Scope = Scope::System;
+
+/// `flatpak list --columns=application,version,branch` — TAB-separated, like `flatpak search`.
+///
+/// **Tabs, not whitespace.** Most flathub apps carry no version, and flatpak keeps an empty
+/// *middle* column as an empty field (`org.gimp.GIMP\t\tstable`) while dropping trailing ones.
+/// Split on whitespace and the branch of every versionless app is read as its version — measured
+/// against flathub, `--columns=application,version,branch` beside `application,branch,version`.
+///
+/// **A second row for an application erases its branch.** flatpak installs branches side by side
+/// and the listing has no column saying which one is current — `--columns=help` offers none, and
+/// the binary carries no such word. An app on two branches is therefore a branch LiNix cannot
+/// read, and D13's rule is that an unreadable value is left alone: guessing one of the two would
+/// schedule a switch on every sync for ever.
+fn parse_flatpak_list(output: &str) -> ParseResult {
+    let clean = sanitize(output);
+    let candidates = crate::parsers::data_lines(&clean);
+    let mut order: Vec<String> = Vec::new();
+    let mut apps: HashMap<String, Package> = HashMap::new();
+    for line in &candidates {
+        let cols: Vec<&str> = line.split('\t').map(str::trim).collect();
+        let Some(name) = cols.first().copied().filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        if let Some(seen) = apps.get_mut(name) {
+            seen.properties.remove("channel");
+            continue;
+        }
+        let mut p = Package::new(name, "flatpak");
+        p.version = cols
+            .get(1)
+            .filter(|s| !s.is_empty())
+            .map(|s| (*s).to_string());
+        if let Some(branch) = cols.get(2).filter(|s| !s.is_empty()) {
+            p.properties
+                .insert("channel".to_string(), (*branch).to_string());
+        }
+        order.push(name.to_string());
+        apps.insert(name.to_string(), p);
+    }
+    let found = order.into_iter().filter_map(|n| apps.remove(&n)).collect();
+    or_unrecognised("flatpak", found, &candidates)
+}
 
 #[async_trait]
 impl BackendCore for FlatpakBackendCore {
@@ -119,6 +179,24 @@ pub struct FlatpakInstallable {
     pub core: Arc<FlatpakBackendCore>,
 }
 
+impl FlatpakInstallable {
+    /// Which branch each `@channel` app is on right now, read before the install so the switch
+    /// after it can tell *added a second branch* from *installed the first*. Empty — and the
+    /// listing unread — when no line asks for a channel.
+    async fn branches_now(&self, specs: &[PackageSpec]) -> Result<HashMap<String, String>> {
+        if !specs.iter().any(|s| s.options.one("channel").is_some()) {
+            return Ok(HashMap::new());
+        }
+        Ok(self
+            .core
+            .installed_refs()
+            .await?
+            .into_iter()
+            .filter_map(|p| p.properties.get("channel").map(|c| (p.name.clone(), c.clone())))
+            .collect())
+    }
+}
+
 /// A flatpak ref is `name/arch/branch`. The arch slot stays empty so flatpak keeps choosing it
 /// from the machine; writing `name/branch` would be read as an architecture, not a branch.
 fn install_ref(spec: &PackageSpec) -> String {
@@ -128,15 +206,33 @@ fn install_ref(spec: &PackageSpec) -> String {
     }
 }
 
+/// `--or-update`, because a ref that is already there is not an error to LiNix.
+///
+/// `flatpak install` answers `Error: <ref> already installed` and exits non-zero. Every other
+/// path here can hand it a ref it already has — a `@channel` whose drift is repaired by the
+/// same sync that read it, a package adopted between the plan and the apply — and each one of
+/// those used to fail the whole transaction over a machine that was already in the declared
+/// state. `--or-update` is flatpak's own answer to that: *"Update install if already
+/// installed."*
 fn install_argv(scope: &[&str], specs: &[PackageSpec]) -> Vec<String> {
     let mut args: Vec<String> = scope.iter().map(|s| s.to_string()).collect();
     args.extend([
         "install".to_string(),
         "-y".to_string(),
         "--noninteractive".to_string(),
+        "--or-update".to_string(),
     ]);
     let names: Vec<String> = specs.iter().map(install_ref).collect();
     crate::core::argv::push_names(&mut args, "flatpak", names);
+    args
+}
+
+/// `flatpak make-current <app> <branch>`, the only thing that moves an app from one branch to
+/// another.
+fn make_current_argv(scope: &[&str], name: &str, branch: &str) -> Vec<String> {
+    let mut args: Vec<String> = scope.iter().map(|s| s.to_string()).collect();
+    args.push("make-current".to_string());
+    crate::core::argv::push_names(&mut args, "flatpak", [name, branch]);
     args
 }
 
@@ -147,6 +243,8 @@ impl Installable for FlatpakInstallable {
             return Ok(());
         }
 
+        let before = self.branches_now(specs).await?;
+
         let args = install_argv(&self.core.scope_args(), specs);
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
 
@@ -155,6 +253,37 @@ impl Installable for FlatpakInstallable {
             .executor
             .run_exclusive("flatpak", "flatpak", &arg_refs, sudo)
             .await?;
+
+        // **flatpak has no channel switch.** `snap refresh --channel=` moves a snap; installing
+        // `app//beta` next to `app//stable` moves nothing — flatpak keeps both and the launcher
+        // still runs the old one. `make-current` is what points it at the declared branch, and
+        // it has to happen here: the listing carries no current-branch column, so no later sync
+        // can see that this step was skipped.
+        for spec in specs {
+            let Some(want) = spec.options.one("channel") else {
+                continue;
+            };
+            let Some(had) = before.get(&spec.name) else {
+                continue;
+            };
+            // Compared the way the planner compares it, through the same function. Two answers
+            // to "is this the branch the line asked for" is how a switch fires on a machine the
+            // planner called converged.
+            use crate::backends::capability::channel_risk;
+            if channel_risk(had) == channel_risk(want) {
+                continue;
+            }
+            info!(
+                "Flatpak: Switching {} from branch {} to {}...",
+                spec.name, had, want
+            );
+            let args = make_current_argv(&self.core.scope_args(), &spec.name, want);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            self.core
+                .executor
+                .run_exclusive("flatpak", "flatpak", &arg_refs, sudo)
+                .await?;
+        }
         Ok(())
     }
 
@@ -202,16 +331,7 @@ impl Queryable for FlatpakQueryable {
     }
 
     async fn fetch_installed(&self) -> Result<Vec<Package>> {
-        let out = self
-            .core
-            .executor
-            .run_output(
-                "flatpak",
-                &["list", "--app", "--columns=application,version"],
-                false,
-            )
-            .await?;
-        Ok(crate::parsers::common::parse_simple_list(&out, "flatpak")?)
+        self.core.installed_refs().await
     }
 
     async fn list_manual(&self) -> Result<Vec<Package>> {
@@ -448,11 +568,216 @@ mod tests {
                 "install",
                 "-y",
                 "--noninteractive",
+                "--or-update",
                 "--",
                 "org.gimp.GIMP",
                 "--user"
             ]
         );
+    }
+
+    /// `flatpak install` calls an already-installed ref an error and exits non-zero — the
+    /// binary carries `Error: %s%s%s already installed`. Every sync that repairs a `@channel`
+    /// hands it a ref it may already have, so without `--or-update` the repair fails the
+    /// transaction over a machine that was already in the declared state.
+    #[test]
+    fn an_already_installed_ref_is_not_an_error_to_linix() {
+        let argv = install_argv(&["--user"], &[spec_with("org.gimp.GIMP", &[])]);
+        assert!(
+            argv.contains(&"--or-update".to_string()),
+            "install must tolerate a ref that is already there: {argv:?}"
+        );
+    }
+
+    #[test]
+    fn a_branch_switch_names_the_app_and_the_branch_behind_the_terminator() {
+        assert_eq!(
+            make_current_argv(&["--user"], "org.gimp.GIMP", "beta"),
+            ["--user", "make-current", "--", "org.gimp.GIMP", "beta"]
+        );
+    }
+
+    /// The listing is TAB-separated and most flathub apps carry no version, so flatpak emits an
+    /// empty *middle* field. Split on whitespace — which is what the shared list parser did —
+    /// and `stable` is read as GIMP's version while its branch goes unread entirely.
+    #[test]
+    fn an_empty_version_column_does_not_slide_the_branch_into_it() {
+        let out = "org.gimp.GIMP\t\tstable\norg.blender.Blender\t4.0\tbeta\n";
+        let pkgs = parse_flatpak_list(out).expect("this fixture parses");
+        assert_eq!(pkgs.len(), 2);
+        assert_eq!(pkgs[0].name, "org.gimp.GIMP");
+        assert_eq!(pkgs[0].version, None);
+        assert_eq!(
+            pkgs[0].properties.get("channel").map(String::as_str),
+            Some("stable")
+        );
+        assert_eq!(pkgs[1].version.as_deref(), Some("4.0"));
+        assert_eq!(
+            pkgs[1].properties.get("channel").map(String::as_str),
+            Some("beta")
+        );
+    }
+
+    /// D13: an app installed on two branches has no readable current branch — the listing has
+    /// no column for it — so it reports none and the planner leaves it alone. Reporting either
+    /// row would schedule a switch on every sync for ever.
+    #[test]
+    fn an_app_on_two_branches_reports_no_branch_at_all() {
+        let out = "org.gimp.GIMP\t2.10\tstable\norg.gimp.GIMP\t2.99\tbeta\norg.blender.Blender\t4.0\tstable\n";
+        let pkgs = parse_flatpak_list(out).expect("this fixture parses");
+        assert_eq!(pkgs.len(), 2, "one row per application");
+        assert_eq!(pkgs[0].name, "org.gimp.GIMP");
+        assert_eq!(
+            pkgs[0].properties.get("channel"),
+            None,
+            "two branches installed, and nothing says which one runs"
+        );
+        assert_eq!(
+            pkgs[1].properties.get("channel").map(String::as_str),
+            Some("stable"),
+            "the single-branch app beside it is still readable"
+        );
+    }
+
+    /// A backend over a mock that has been told nothing.
+    fn scripted_without_a_listing(
+    ) -> (Arc<FlatpakBackendCore>, Arc<crate::core::executor::MockExecutor>) {
+        let vfs = Arc::new(dashmap::DashMap::new());
+        let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(dashmap::DashMap::new()),
+        );
+        (
+            Arc::new(FlatpakBackendCore::new(exec, FLATPAK_DEFAULT_SCOPE)),
+            mock,
+        )
+    }
+
+    /// A backend wired to a scripted `flatpak list`.
+    fn scripted(listing: &str) -> (Arc<FlatpakBackendCore>, Arc<crate::core::executor::MockExecutor>)
+    {
+        let vfs = Arc::new(dashmap::DashMap::new());
+        let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        mock.set_response(
+            "flatpak list --app --columns=application,version,branch",
+            Ok(crate::core::executor::DryRunOutput {
+                stdout: listing.as_bytes().to_vec(),
+                ..Default::default()
+            }
+            .into()),
+        );
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(dashmap::DashMap::new()),
+        );
+        (
+            Arc::new(FlatpakBackendCore::new(exec, FLATPAK_DEFAULT_SCOPE)),
+            mock,
+        )
+    }
+
+    /// **flatpak has no channel switch.** Installing `app//beta` beside `app//stable` moves
+    /// nothing — flatpak keeps both, and the launcher still runs the branch it ran yesterday.
+    /// Without `make-current` the sync reports a repaired channel over a machine that changed
+    /// nothing a user could see.
+    #[tokio::test]
+    async fn switching_branch_installs_the_ref_and_then_points_the_app_at_it() {
+        let (core, mock) = scripted("org.gimp.GIMP\t2.10\tstable\n");
+        FlatpakInstallable { core }
+            .install(&[spec_with("org.gimp.GIMP", &[("channel", "beta")])], false)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            mock.get_calls().await,
+            vec![
+                "flatpak list --app --columns=application,version,branch",
+                "flatpak --system install -y --noninteractive --or-update -- org.gimp.GIMP//beta",
+                "flatpak --system make-current -- org.gimp.GIMP beta",
+            ]
+        );
+    }
+
+    /// The first install of an app is not a switch: flatpak has only the one branch to run, and
+    /// a `make-current` on every install would be a second command doing nothing.
+    #[tokio::test]
+    async fn a_first_install_on_a_declared_branch_is_not_a_switch() {
+        let (core, mock) = scripted("");
+        FlatpakInstallable { core }
+            .install(&[spec_with("org.gimp.GIMP", &[("channel", "beta")])], false)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            mock.get_calls().await,
+            vec![
+                "flatpak list --app --columns=application,version,branch",
+                "flatpak --system install -y --noninteractive --or-update -- org.gimp.GIMP//beta",
+            ]
+        );
+    }
+
+    /// An app already on the declared branch is not switched, and — the reason the listing is
+    /// read at all — an app on *two* branches is not either: nothing says which one runs, so
+    /// nothing here may claim to know (D13).
+    #[tokio::test]
+    async fn an_unreadable_or_matching_branch_issues_no_switch() {
+        for listing in [
+            "org.gimp.GIMP\t2.10\tbeta\n",
+            "org.gimp.GIMP\t2.10\tstable\norg.gimp.GIMP\t2.99\tbeta\n",
+        ] {
+            let (core, mock) = scripted(listing);
+            FlatpakInstallable { core }
+                .install(&[spec_with("org.gimp.GIMP", &[("channel", "beta")])], false)
+                .await
+                .unwrap();
+            assert!(
+                !mock
+                    .get_calls()
+                    .await
+                    .iter()
+                    .any(|c| c.contains("make-current")),
+                "listing {listing:?} produced a switch"
+            );
+        }
+    }
+
+    /// A plan with no `@channel` in it does not read the listing at all — the branch question is
+    /// not asked of packages that never raised it.
+    #[tokio::test]
+    async fn an_install_that_declares_no_channel_never_asks_for_the_listing() {
+        // No listing stub on purpose: registering one and asserting it went unused is what the
+        // mock calls a belief the product disagreed with, so the absence *is* the assertion.
+        let (core, mock) = scripted_without_a_listing();
+        FlatpakInstallable { core }
+            .install(&[spec_with("org.blender.Blender", &[])], false)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            mock.get_calls().await,
+            vec![
+                "flatpak --system install -y --noninteractive --or-update -- org.blender.Blender"
+            ]
+        );
+    }
+
+    /// Bytes off a real flathub listing (`debian:12` container, flatpak 1.14.10): the columns
+    /// are tab-separated and a trailing empty column is dropped rather than emitted.
+    #[test]
+    fn a_row_with_no_trailing_columns_is_still_a_package() {
+        let pkgs = parse_flatpak_list("ai.jan.Jan\n").expect("this fixture parses");
+        assert_eq!(pkgs.len(), 1);
+        assert_eq!(pkgs[0].name, "ai.jan.Jan");
+        assert_eq!(pkgs[0].version, None);
+        assert_eq!(pkgs[0].properties.get("channel"), None);
     }
 
     #[tokio::test]

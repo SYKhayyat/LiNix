@@ -716,6 +716,14 @@ implementing agent's call; that it goes is not.**
   _source_spec)` wrapper that swallowed the dead flag are gone. `ShimManager::create_shim` stays —
   it is what `sync`'s `reconcile_all_shims` calls, and it never took a source in the first place.
 
+  **And the flag was not dead, it was homeless — closed 2026-08-09 (`Y18`.3).** Deleting the
+  command deleted the *caller* of `--source`; `source` stayed a legal option on the `shim:` line
+  that replaced it, and still nothing read it. The line names a provider now and the shim runs it:
+  `Runner::shim_spec` reads `@source=` off the declaration at exec time. Fixing that meant reading
+  the shim's execution path end to end for the first time — `exec_shim` had no test caller
+  anywhere — which turned up the reason the mechanism had never been exercised: it resolved the
+  shimmed name through `PATH`, found the shim, and re-entered LiNix. Both halves are covered now.
+
 - **R4 — Delete `generation rollback`; it is a subset of top-level `rollback`.** Both dispatch to
   the same `rollback_to()` (`main.rs:135` and `:1986`); `generation rollback` just hardcodes
   `with_config = false` (`:1986`). Top-level `rollback` takes `--package` and `--with-config`, so it

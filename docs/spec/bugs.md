@@ -73,12 +73,16 @@ anyone and finding it.
   `Config::snapshot_retention()`. See the Phase 4 "one retention engine" note.
 - Every bundle restore is unverified by construction. **(H1)**
 - `linix repo add` records nothing → modules are not portable.
-- `linix shim --source` is required, documented, and thrown away. **(verified)** — **subject gone,
-  status unruled (2026-08-07).** There is no `shim` verb; II.16 records it becoming the line
-  `shim:jq@source=cargo:jq`, and II.17's Deleted register never gained the entry. So this reads as
-  a live verified defect against a command that does not exist. Whether that means *fixed by
-  deletion* or *the option was lost in the move* is an owner call, not a sweep.
-  Found by `named_commands_exist_tests` once it was pointed at `docs/`.
+- ~~`linix shim --source` is required, documented, and thrown away. **(verified)**~~ **DONE
+  2026-08-09 (`Y18`.3, ruled the same day).** The command was gone — II.16 records it becoming
+  the line `shim:jq@source=cargo:jq` — but **the bug had only moved house**: `source` stayed a
+  legal option that nothing read, so a line naming a provider still got whichever provider the
+  bare name happened to resolve to. The shim now reads `@source=` off its own declaration at run
+  time and provisions and execs that; there is no sidecar store, because the config that declared
+  the shim is the one the shim process already loads. II.17 gained the missing register row in
+  the same change. Found by `named_commands_exist_tests` once it was pointed at `docs/`, which is
+  the second thing this entry is evidence for: **a defect whose subject is deleted is not a
+  defect that is fixed.**
 - Holds (machine-local) silently beat signed locks (portable).
 - `@lease=` in a manifest is inert. `remove --temp` is undone by the next sync.
 - `orphans` message false on both counts. **(C12)**

@@ -3397,7 +3397,9 @@ mod tests {
             ArgvCase::pkg(
                 "flatpak",
                 &|r, e| crate::backends::flatpak::register(r, e, &Config::default()),
-                Runs("flatpak --system install -y --noninteractive -- jq"),
+                // `--or-update` because flatpak calls an already-installed ref an error and
+                // exits non-zero (`Y23`).
+                Runs("flatpak --system install -y --noninteractive --or-update -- jq"),
                 Runs("flatpak --system uninstall -y --noninteractive -- jq"),
             ),
             ArgvCase::pkg(

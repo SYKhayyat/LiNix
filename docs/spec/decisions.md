@@ -1,4 +1,4 @@
-# The decision register — all 181, four of them open
+# The decision register — all 182, one of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -15,9 +15,9 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **2** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **3** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **171** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **174** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -73,11 +73,10 @@ status loses that, so it is kept here:
 
 ## Index
 
-**Two are open — `Z1`, raised 2026-08-03, a licence choice; and `Y21`, whether 2.5 MB of
-specification gets cut. `Y18` is HALF RULED: three of its four findings against Part II are
-corrected, and what remains is not the typo it looked like — `@source=` on a `shim:` line is
-parsed and never read.** All 181 are accounted
-for: **171 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 3 BUILT NEVER RULED, 2 OPEN** — and this line
+**One is open — `Z1`, raised 2026-08-03, a licence choice. `Y18` is RULED in full as of
+2026-08-09: `@source=` on a `shim:` line is read, and `Y23` — flatpak's unreadable channel — was
+ruled and built beside it.** All 182 are accounted
+for: **174 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 3 BUILT NEVER RULED, 1 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -314,7 +313,7 @@ without asking. Two are not mine: one is a legal choice and one changes a publis
 | **Z1** | There is no `LICENSE` file and no `license` key in `Cargo.toml`, for a tool with an install script and a `self-upgrade` verb. Which licence? | **OPEN** |
 | **Z2** | `lock` and `unlock` touch unrelated files and are not inverses; `unlock` can cause package churn. Rename it, or give `lock` a real inverse? | **ANSWERED** — both verbs name their axis (`versions`/`backends`/`scripts`/`all`), and every path that moves a version re-records it |
 
-### Y — the efficiency pass — 23
+### Y — the efficiency pass — 24
 
 *Not a proposal part. `docs/INEFFICIENCIES.md` audited every place in the tree slower than it has
 to be and marked the findings a user would notice as needing a ruling; the owner ruled the lot on
@@ -342,7 +341,8 @@ II.19 and the reasons in V.115–V.118.*
 | **Y15** | A line pinned to a manager this machine does not have failed the whole run: `spec_is_missing` raised `BackendNotFound` from inside the planner's fan-out, so one `apt:` line dropped the twenty `winget:` lines beside it and `sync` planned nothing. RULED: **that is a portable config, not a broken one** — skipped, reported in `skipped`, and the command succeeds; a package that genuinely fails still fails, with `--keep-going` as the per-run opt-in. Reverses `Y14` item 2. | 2026-08-06 |
 | **Y16** | An audit proposed deleting `linix repl`, the two ratatui screens, and the Lua hook arm — the last on the grounds that `mlua` vendors 28,687 lines of C rebuilt ten times per CI push to serve one branch of one `if`. RULED: **keep all three and make them work** — *"it not working is not cause for deletion but fixing"*. The `#rhai` arm had never executed anything (the marker line reached the engine, and `#` is reserved in Rhai), and the one shipped example called an `exec()` nothing registers. The marker is now stripped, all three dialects get the same four facts, and `#rhai` gets the standard library `vars.linix` has. | 2026-08-07 |
 | **Y17** | The dialect `Y16` kept was dead on Windows: `CreateProcess` answers *"not a valid application for this OS platform"* for any script file, because Windows has no shebang mechanism — so a `#!` hook that worked on the author's Linux box failed on a teammate's machine with a message blaming the script. Refuse there, or make it work? — RULED: **read the shebang ourselves**, on every platform. `python3` finds a Windows `python` (then `py`); an absolute interpreter that exists is used as written, so Unix launches what the kernel would have; a missing one is named. `exec:` and event hooks read it too — they had been ignoring it on *both* platforms. | 2026-08-07 |
-| **Y18** | `named_commands_exist_tests` was built around the property rather than the artifact, and then its roots were drawn around `src/`-and-friends — so 2.5 MB of specification went unscanned, and a **CLOSED** owner ruling (`bugs.md` F4) rested its whole justification on `linix doctor`, a command `S38` folded into `check <section>`. Pointed at `docs/` under the weaker property a record can satisfy — *a dead command named here is one II.17 says is dead* — 62 raw hits reduce to three, and all three are Part II: the sync nudge says `linix clean` where the verb is `remove-orphans`; the `adopt` header says `linix forget` where the code already writes `linix unmanage`; and II.17's register never recorded `shim`, which leaves a **verified open bug against a command that does not exist**. **OPEN** — `CLAUDE.md` says a spec that looks wrong is reported, not edited. | — |
+| **Y18** | `named_commands_exist_tests` was built around the property rather than the artifact, and then its roots were drawn around `src/`-and-friends — so 2.5 MB of specification went unscanned, and a **CLOSED** owner ruling (`bugs.md` F4) rested its whole justification on `linix doctor`, a command `S38` folded into `check <section>`. Pointed at `docs/` under the weaker property a record can satisfy — *a dead command named here is one II.17 says is dead* — 62 raw hits reduce to three, and all three are Part II: the sync nudge says `linix clean` where the verb is `remove-orphans`; the `adopt` header says `linix forget` where the code already writes `linix unmanage`; and II.17's register never recorded `shim`, which leaves a **verified open bug against a command that does not exist**. **RULED 2026-08-09** — the first three corrected in Part II on the 8th; the fourth ruled *make `@source=` work*, and built: the shim reads the provider off its own line, and the `PATH` lookup that would have found the shim again is closed. | 2026-08-09 |
+| **Y23** | `@channel` on a `flatpak:` line reaches the machine and is never read back — the listing asked for `application,version`, so D13's drift check had nothing to compare and a channel edit did nothing for ever. Ruled *make it visible and make the repair real*: flatpak has no channel switch, so the declared ref is installed and `make-current` points the app at it, the old branch is left alone, and an app on two branches reports no channel rather than a guess. | 2026-08-09 |
 
 ---
 
@@ -6853,8 +6853,8 @@ a shebang names treats it as a comment, so the file runs unmodified — the whol
 
 ## Y18
 
-**Status: HALF RULED — raised 2026-08-07 by `LX-7`; three of the four ruled by the owner
-2026-08-08, the fourth still open.** Raised by pointing `named_commands_exist_tests` at `docs/`
+**Status: ANSWERED — raised 2026-08-07 by `LX-7`; three of the four ruled by the owner
+2026-08-08, the fourth ruled and built 2026-08-09.** Raised by pointing `named_commands_exist_tests` at `docs/`
 for the first time. `PART_II_LOOKS_WRONG` in that file is asserted exact and shrink-only, so a
 ruling shrinks it and nothing can be quietly added; it is down to one entry.
 
@@ -6880,25 +6880,35 @@ the register rather than restated. That reduced 62 raw hits to 10 and left these
    way out."* `app/adopt.rs:498` already writes `linix unmanage <backend>:<name>`, and
    `adopt.rs:979` asserts it. **The code was right and the rule was stale**, which is the
    direction worth naming: the checked artifact held and the prose did not.
-3. **II.17's register is incomplete — STILL OPEN, and it is not only bookkeeping.** II.16's own
-   table records `linix shim jq --source cargo:jq` becoming the line `shim:jq@source=cargo:jq`,
-   so the command was deleted; II.17 never gained the entry. `bugs.md:76` therefore still carries
-   *"`linix shim --source` is required, documented, and thrown away. **(verified)**"* as an open
-   defect against a command nobody can run.
+3. **II.17's register is incomplete — RULED 2026-08-09: make `@source=` work, and the row goes
+   in.** II.16's own table records `linix shim jq --source cargo:jq` becoming the line
+   `shim:jq@source=cargo:jq`, so the command was deleted; II.17 never gained the entry. It has
+   one now, and `bugs.md`'s entry is closed rather than re-pointed.
 
-   **The bug did not die with the command.** `source` is a legal option on a `shim:` line —
+   **The bug did not die with the command.** `source` was a legal option on a `shim:` line —
    `config/grammar/statement.rs:1477` lists it in `SHIM_OPTION_KEYS` and `:2690` asserts it
-   parses — and no apply path reads it: `app/apply/dependents.rs:71` calls `create_shim(name)`
-   and nothing else. Accepted, documented, discarded, in the new spelling. So the ruling is not
-   *deletion or loss* but **what `@source=` should mean**, and there are only two honest answers:
-   teach the shim to record and exec the named provider, or refuse the option by name until it
-   does. II.17's missing row goes in whichever way it lands.
+   parses — and no apply path read it: `app/apply/dependents.rs:73` called `create_shim(name)`
+   and nothing else. Accepted, documented, discarded, in the new spelling. The ruling was
+   therefore not *deletion or loss* but **what `@source=` should mean**, and the owner took the
+   answer that keeps the feature: the shim provisions and runs the provider the line names.
 
-   Worth knowing before ruling: `exec_shim` has **no test caller anywhere in the tree**, and
-   `Runner::run` spawns the shim's own name through `PATH` (`app/run.rs:174`) without excluding
-   `bin_dir` — which is the directory the shim was deployed into, ahead of the real binary, on
-   purpose. Nothing was measured; the shape is enough to say the mechanism `@source=` belongs to
-   has never been exercised.
+   **Built. The record was never missing — only unread.** A shim is the linix binary under
+   another name and has nowhere to keep data, which is why every sketch of this started by
+   inventing a sidecar store. It does not need one: the config that declared the shim is the
+   config the shim process loads on its way in, and it still says `source=cargo:jq`.
+   `Runner::shim_spec` reads it there (`app/run.rs`), so there is no second store to disagree
+   with the first. Absent, the bare name resolves through `priority` exactly as before — every
+   existing `shim:` line behaves identically.
+
+   **And the mechanism it belongs to had never run.** `exec_shim` had no test caller anywhere in
+   the tree, and `Runner::run` spawned the shim's own name through `PATH` without excluding
+   `bin_dir` — the directory the shim was deployed into, ahead of the real binary, on purpose.
+   Read end to end there was nothing between the two: no depth counter, no marker, no exclusion.
+   The runner now resolves every name it spawns through `PATH` **skipping any file that is this
+   binary under another name** — by identity, never by directory, because `web:`, `github:` and
+   `appimage:` deploy real executables into that same `bin_dir` and excluding it would hide
+   them. `tests::a_shim_on_path_is_never_what_the_runner_spawns` was watched failing on the old
+   resolution, returning the shim. Reasons in `why.md`, under `V.152`.
    **And a fifth finding, produced by writing the ruling down.** Correcting finding 1 meant
    writing the sentence *"`linix clean`, where the verb is `remove-orphans`"* into four
    documents, and the gate reddened on all four: `clean` is a deleted command II.17 never
@@ -7206,3 +7216,54 @@ template language in argv rows is how a data path stops being data.
 
 The exemption in `backend_is_data_not_code_tests.rs` names `Y22` so the entry and the gate cannot
 drift apart; it now names `@channel` as the one blocker left.
+
+---
+
+## Y23
+
+**Status: ANSWERED — raised and ruled 2026-08-09, built in the same change.**
+
+**Y23 — flatpak's channel drift is invisible, and the backend it would drift on has no switch.**
+
+**RULED (owner, 2026-08-09): make it visible and make the repair real.** Read the branch, treat a
+changed `@channel` as drift like D13 says, and repair it with what flatpak actually offers —
+install the declared ref, then `make-current` — leaving any other installed branch alone. **Built
+in the same change.**
+
+**The finding.** `@channel` on flatpak is not decoration: `install_ref` builds the ref
+`org.gimp.GIMP//beta` and the branch reaches the machine. But `fetch_installed` asked for
+`--columns=application,version`, so the installed branch was never read; D13's drift check acts
+only where the current value is readable, and for flatpak there was nothing to read. A channel
+edit therefore applied once, at first install, and did nothing for ever after. Both halves were
+silent, and the honoured-once half is what made it look finished.
+
+**Why this needed a ruling and not a column.** D13 was ruled and built against snap, which has
+`snap refresh --channel=`. flatpak has no switch at all — branches install side by side and the
+launcher keeps running the one it ran yesterday. Adding the column alone would have routed the
+drift into `flatpak install`, which **calls an already-installed ref an error and exits
+non-zero** (`Error: %s%s%s already installed`, in the shipped binary). A channel that did nothing
+would have become a sync that failed on every run.
+
+**Measured, in a `debian:12` container against flathub (flatpak 1.14.10), not inferred:**
+
+- `--columns=help` lists `branch` and `options`; **no column reports which branch is current**,
+  and the binary carries no such word among its option strings.
+- The listing is TAB-separated; a **trailing** empty column is dropped and a **middle** one is
+  kept as an empty field. `application,version,branch` on a versionless app is
+  `ai.jan.Jan\t\tstable`, which a whitespace split reads as version `stable` and no branch. This
+  is why the parser is flatpak's own rather than the shared `parse_simple_list`.
+- `flatpak install --or-update` is real: *"Update install if already installed."*
+- `flatpak make-current APP BRANCH` is real and takes the same `--user` / `--system` scope flags.
+
+**What shipped.** `--columns=application,version,branch` behind one reader used by both the query
+and install paths; `--or-update` on **every** flatpak install, not only the channel path, because
+an adopted package or a half-applied plan reaches that command holding a ref the machine already
+has; `make-current` after an install that added a branch to an app that was on a different one;
+and an app on **two** branches reports no channel at all, so D13's leave-an-unreadable-value-alone
+rule takes it from there rather than a guess switching the machine on every sync for ever.
+
+**What was deliberately not done.** The old branch is not uninstalled. Removing it is a removal,
+it belongs to the guard and to a declaration that asked for it, and a channel edit did not ask.
+
+Rules in II.2, reasons in `why.md` under `V.151`. `capability::HAS_CHANNELS` is
+`["snap", "flatpak"]` and both report their channel now, so the family is closed by enumeration.

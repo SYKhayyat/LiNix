@@ -309,7 +309,7 @@ take the else branch — the silent-wrongness this rule closes.
 | `until` | **absolute** datetime, on `absent:` only. Absent now, present after |
 | `requires` | `BACKEND:NAME` — install that first. **A bare name is an error** |
 | `after_install`, `before_install`, … | a hook. Hashed and locked |
-| `source` | on `shim:` |
+| `source` | on `shim:` — `BACKEND:NAME`, which provider this stand-in forwards to. **It is read when the shim runs, not when it is deployed**: a shim is the linix binary under another name and has nowhere to keep data, so the answer comes from the line itself, which the shim process has already loaded. Absent means the bare name, resolved through `priority` like any other. **V.152** |
 | `cron`, `run`, `notify` | on `schedule:` |
 | `target`, `content`, `template`, `decrypt`, `identity`, `backup` | on `link:` |
 | `enabled`, `status` | on `service:` |
@@ -328,6 +328,14 @@ take the else branch — the silent-wrongness this rule closes.
 | `url` | where a `helm:` plugin is installed from. **Required on every `helm:` line** (U39) |
 | `shim` | bare flag: put a PATH stand-in for this tool in `[bin_dir]`. The form R3's ruling names — a shim asked for on the tool's own line, rather than as a separate `shim:` statement. **It declares the same resource that a `shim:` statement does** (V.111), so it is placed, counted, guarded and torn down like one: adding the option to an installed package creates the stand-in, and deleting the option removes it |
 | `sandbox` | bare flag: the shim above, and `linix run` confines the process |
+
+**A shim never resolves to itself.** `[bin_dir]` is on `PATH` *ahead* of the real binary — that
+is the whole mechanism — so LiNix looking up the shimmed name by bare name finds the shim, which
+re-enters LiNix, which looks the name up again. Every name LiNix spawns is therefore resolved
+through `PATH` **skipping any file that is the linix binary under another name**. The identity
+question is asked of the file and never of the directory: `web:`, `github:` and `appimage:`
+deploy real executables into that same `[bin_dir]`, and excluding the directory would hide them.
+**V.152.**
 | `classic` | bare flag: install this snap unconfined. `snap` only. **Converges (Q20):** adding it to an installed snap runs `snap refresh --classic`. `@classic=false` on a snap that is already classic is **refused** — snapd cannot narrow confinement, and only remove-and-reinstall can, which is the guard's call. Omitting the option manages nothing |
 | `size` | the size a volume is created at. **Required on `lvm:`** — `lvcreate` has no default, so a line without one describes nothing that can be made. `lvm` only |
 | `quota` | a cap on what a declared storage object may use. `btrfs` and `zfs` only |
@@ -530,6 +538,18 @@ is how a config grows lines that do nothing.**
 **`channel` is singular and unordered.** There is no "try edge, fall back to stable": a fallback
 across version streams silently downgrades a machine, and the user asked for a stream, not a
 best-effort.
+
+**A changed `channel` is drift on every backend that has channels, and the repair is whatever
+that backend's switch actually is** (D13; owner ruling 2026-08-09, `Y23`). snap refreshes in
+place. flatpak has no switch at all — it installs branches side by side and keeps them — so the
+declared branch is installed and `make-current` points the app at it, and **the branch that was
+there is left installed**: removing it is a removal, and a channel edit did not ask for one.
+
+**A channel LiNix cannot read is left alone, and two branches is a channel it cannot read.**
+flatpak's listing has no column saying which installed branch is current, so an app on two of
+them reports no channel rather than one of the two. This is D13's rule and not a shortcut around
+it: a guessed value schedules the same switch on every sync for ever, which is worse than the
+drift it was meant to catch. **V.151.**
 
 ## II.3 Modules
 
@@ -2214,7 +2234,7 @@ One package, recoverable, snapshot has your back.
 | Today | Becomes |
 |---|---|
 | `linix repo add` (**stores nothing**) | `repo:apt:ppa:deadsnakes/ppa` |
-| `linix shim jq --source cargo:jq` (**`--source` discarded unread**) | `shim:jq@source=cargo:jq` |
+| `linix shim jq --source cargo:jq` (**`--source` discarded unread**) | `shim:jq@source=cargo:jq` — and the option is read: the shim provisions and runs *that* provider |
 | `linix hold jq` (machine-local `registry.json`) | `apt:jq@hold` |
 | hooks table in config | `apt:nginx@after_install=./setup.sh` |
 | `linix schedule add` (**wrote config**) | a line in `schedules` — the command survives and now writes that file |
@@ -2240,7 +2260,9 @@ real work and must stay.
 `uninstall`) · `clean` (split in two: `remove-orphans` for what the machine no longer needs,
 `clean-cache` for the downloads it kept — V.36) · `status` · `doctor` · `unmanaged` · `absent` ·
 `conflicts` · `audit` (all six → `check <section>`, ruled 2026-07-24) · `undo` (→ `snapshot
-restore` for the filesystem, `rollback` for the manifests)
+restore` for the filesystem, `rollback` for the manifests) · `shim` (→ the line
+`shim:jq@source=cargo:jq` — II.16, ruled 2026-08-09 under `Y18`; `--source` was discarded by the
+command and `@source=` is read by the line)
 
 **Flags:** `-g` / `--groups-dir` · `--no-global` · `--allow-regex-expansion` ·
 `--backend` on removing commands

@@ -31,7 +31,9 @@ impl ShimManager {
     /// tool that installs there. Without this test, removal deletes by NAME alone, so a
     /// managed package called `jq` makes every sync delete whatever `~/.local/bin/jq` is —
     /// a file LiNix never created and does not own.
-    async fn is_deployed_shim(path: &Path) -> bool {
+    /// `pub(crate)` for one caller beyond this file: the runner has to know a shim when it sees
+    /// one on `PATH`, because running a shim is how a shim re-enters LiNix for ever.
+    pub(crate) async fn is_deployed_shim(path: &Path) -> bool {
         let Ok(current_exe) = std::env::current_exe() else {
             return false;
         };
