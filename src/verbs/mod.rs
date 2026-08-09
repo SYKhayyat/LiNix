@@ -76,6 +76,9 @@ pub mod prelude {
         RepoCommand, ScheduleCommand, ServiceCommand, SnapshotCommand,
     };
     pub use crate::core::LockFile;
+    // Every handler that takes `--json` takes it as this, so it belongs here for the same
+    // reason `Result` does.
+    pub use crate::core::Output;
     pub use serde_json::Value;
     pub use std::collections::HashMap;
     pub use tracing::{info, warn};

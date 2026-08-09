@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use linix::app::App;
 use linix::cli::{Cli, Commands};
+use linix::core::Output;
 use std::collections::HashMap;
 use std::env;
 use tracing::warn;
@@ -306,7 +307,17 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
             locked,
             upgrade,
             json,
-        } => handle_sync(app, *locked, *upgrade, *json).await,
+        } => {
+            handle_sync(
+                app,
+                SyncMode {
+                    locked: *locked,
+                    upgrade: *upgrade,
+                },
+                Output::from_json_flag(*json),
+            )
+            .await
+        }
         Commands::Watch {
             interval,
             on_change,
@@ -335,7 +346,7 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
                     except,
                     profile,
                     module,
-                    json: *json,
+                    out: Output::from_json_flag(*json),
                     canary: *canary,
                     test,
                 },
@@ -347,13 +358,20 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
             json,
             temp,
             into,
-        } => handle_install(app, packages, *json, temp.as_deref(), into.as_deref()).await,
+        } => handle_install(
+            app,
+            packages,
+            Output::from_json_flag(*json),
+            temp.as_deref(),
+            into.as_deref(),
+        )
+        .await,
         Commands::Uninstall {
             packages,
             json,
             temp,
             purge: _,
-        } => handle_uninstall(app, packages, *json, temp.as_ref()).await,
+        } => handle_uninstall(app, packages, Output::from_json_flag(*json), temp.as_ref()).await,
         Commands::Shell { packages } => handle_shell(app, packages).await,
         Commands::Module(args) => handle_module(app, &args.command).await,
         Commands::Schedule(args) => handle_schedule(app, &args.command).await,
@@ -374,13 +392,19 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
             query,
             json,
             installed,
-        } => handle_search(app, query, *json, *installed).await,
+        } => handle_search(app, query, Output::from_json_flag(*json), *installed).await,
         Commands::Teleport { package, backend } => handle_teleport(app, package, backend).await,
         Commands::List {
             backend,
             json,
             outdated,
-        } => handle_list(app, backend.as_deref(), *json, *outdated).await,
+        } => handle_list(
+            app,
+            backend.as_deref(),
+            Output::from_json_flag(*json),
+            *outdated,
+        )
+        .await,
         Commands::Info { package } => handle_info(app, package).await,
         Commands::RemoveOrphans => handle_remove_orphans(app).await,
         Commands::CleanCache { all } => handle_clean_cache(app, *all).await,
@@ -404,13 +428,19 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
         Commands::Apply { plan, yes } => handle_apply(app, plan, *yes).await,
         Commands::Update => handle_update(app).await,
         Commands::Reset { force } => handle_reset(app, *force).await,
-        Commands::Check { section, json } => handle_check(app, section.as_deref(), *json).await,
+        Commands::Check { section, json } => {
+            handle_check(app, section.as_deref(), Output::from_json_flag(*json)).await
+        }
         Commands::Vars => handle_vars(app).await,
         Commands::PurgeUndeclared { allow_mass_purge } => {
             handle_purge_undeclared(app, *allow_mass_purge).await
         }
-        Commands::Protected { packages, json } => handle_protected(app, packages, *json).await,
-        Commands::Unmanage { packages, json } => handle_unmanage(app, packages, *json).await,
+        Commands::Protected { packages, json } => {
+            handle_protected(app, packages, Output::from_json_flag(*json)).await
+        }
+        Commands::Unmanage { packages, json } => {
+            handle_unmanage(app, packages, Output::from_json_flag(*json)).await
+        }
         Commands::Rebuild {
             packages,
             backend,
@@ -433,7 +463,9 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
             archive,
         } => handle_bundle(app, out, *artifacts, *archive).await,
         Commands::Restore { dir, force } => handle_restore(app, dir, *force).await,
-        Commands::Why { package, json } => handle_why(app, package, *json).await,
+        Commands::Why { package, json } => {
+            handle_why(app, package, Output::from_json_flag(*json)).await
+        }
         Commands::Service(args) => handle_service(app, &args.command).await,
         Commands::Bisect { test, yes } => linix::app::bisect::bisect(app, test, *yes)
             .await
@@ -872,14 +904,14 @@ pub(crate) async fn load_and_merge_config(cli: &Cli) -> Result<linix::config::Co
     let mut config =
         tokio::task::spawn_blocking(move || linix::config::Config::from_file(&path)).await??;
     config.config_root = located.path;
-    config.merge_cli_overrides(
-        Some(cli.dry_run),
-        Some(cli.yes),
-        None,
-        Some(cli.verbose > 0),
-        Some(cli.allow_mass_removal),
-        Some(cli.allow_mass_install),
-    )?;
+    config.merge_cli_overrides(linix::config::CliOverrides {
+        dry_run: cli.dry_run,
+        yes: cli.yes,
+        verbose: cli.verbose > 0,
+        allow_mass_removal: cli.allow_mass_removal,
+        allow_mass_install: cli.allow_mass_install,
+        config_path: None,
+    });
     // The one place `--dry-run` becomes a property of the process. Set after the config merge
     // so a `dry_run = true` in `preferences.toml` counts too, and before dispatch so no write
     // can run ahead of it. Every config write consults this instead of each verb remembering

@@ -19,6 +19,7 @@ pub mod journal;
 pub mod latency;
 pub mod ledger;
 pub mod manager;
+pub mod output;
 pub mod package;
 pub mod prompt;
 pub mod ratelimiter;
@@ -54,6 +55,7 @@ pub use manager::{
     HealthStatus, Installable, MetadataProvider, Queryable, RepoManager, Searchable, Upgradable,
 };
 
+pub use output::Output;
 pub use package::{Package, PackageSpec};
 
 pub use security::verify_checksum;

@@ -1,5 +1,5 @@
 use crate::verbs::plan::compute_full_changes;
-use crate::verbs::sync::handle_sync;
+use crate::verbs::sync::{handle_sync, SyncMode};
 use crate::verbs::prelude::*;
 
 pub async fn handle_snapshot(app: &App, cmd: &SnapshotCommand) -> Result<()> {
@@ -84,7 +84,7 @@ pub async fn handle_rollback(app: &App, reference: &str) -> Result<()> {
         reference
     );
     // The rollback is not complete until the machine matches the restored manifests.
-    handle_sync(app, false, false, false).await
+    handle_sync(app, SyncMode::default(), Output::Human).await
 }
 
 /// `linix diff <from> [to]` — what changed between two commits, in packages (Phase 4). The
@@ -334,9 +334,9 @@ pub async fn handle_history(app: &App) -> Result<()> {
     }
 }
 
-pub async fn handle_audit(app: &App, json: bool) -> Result<()> {
+pub async fn handle_audit(app: &App, out: Output) -> Result<()> {
     let report = crate::app::insight::audit(app).await?;
-    crate::app::insight::print_audit(&report, json).map_err(|e| e.into())
+    crate::app::insight::print_audit(&report, out).map_err(|e| e.into())
 }
 
 pub async fn handle_sbom(app: &App) -> Result<()> {
@@ -512,12 +512,12 @@ pub async fn handle_restore(app: &App, dir: &str, force: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn handle_why(app: &App, package: &str, json: bool) -> Result<()> {
+pub async fn handle_why(app: &App, package: &str, out: Output) -> Result<()> {
     // Q9: `why nosuchbackend:foo` reported it "not under LiNix management" at exit 0 — true of
     // the string and useless, because the manager is the part that does not exist.
     app.require_known_spec_backends(std::slice::from_ref(&package.to_string()))
         .await?;
-    crate::app::insight::why(app, package, json)
+    crate::app::insight::why(app, package, out)
         .await
         .map_err(|e| e.into())
 }

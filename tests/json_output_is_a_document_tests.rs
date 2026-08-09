@@ -154,3 +154,81 @@ fn check_json_carries_its_numbers_beside_its_sentences() {
         );
     }
 }
+
+/// **A verb is handed a reader, never the flag.**
+///
+/// Both defects above were written under a `!json` guard: the negation reads as "not
+/// machine-readable", not as "there is a person here", and an early return written in the first
+/// dialect happily jumped over the document. `--json` is now converted to
+/// [`linix::core::Output`] once, in `main`'s dispatch, and every handler below it takes the
+/// decision rather than the flag.
+///
+/// A source scan and not a behavioural test because the property is *absence* — the twenty-first
+/// `json: bool` parameter is the one nobody would write a case for.
+#[test]
+fn a_verb_is_handed_a_reader_not_a_flag() {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut offenders: Vec<String> = Vec::new();
+    let mut scanned = 0usize;
+    let mut readers = 0usize;
+
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(&src, &mut files);
+    files.sort();
+
+    for path in &files {
+        let body = std::fs::read_to_string(path).unwrap_or_default();
+        scanned += 1;
+        for (i, line) in body.lines().enumerate() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            // Two files may say `json: bool`, and they are the two ends of the flag's life:
+            // `args.rs` is where clap parses it, `output.rs` is the single conversion into a
+            // reader. Anything between them is a handler that was handed the flag.
+            let exempt = path.ends_with("args.rs") || path.ends_with("output.rs");
+            if !exempt && (line.contains("json: bool") || line.contains("as_json: bool")) {
+                offenders.push(format!(
+                    "{}:{}  {}",
+                    path.file_name().unwrap_or_default().to_string_lossy(),
+                    i + 1,
+                    line.trim()
+                ));
+            }
+            if line.contains("out: Output") {
+                readers += 1;
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "these take the `--json` flag instead of the reader it decides:\n  {}\n\n`--json` \
+         becomes `core::Output` once, in `main`'s dispatch. A handler asks `out.is_human()` \
+         rather than negating a flag it should not have been given.",
+        offenders.join("\n  ")
+    );
+    // Two floors, because either alone passes on a tree this scan has stopped reading.
+    assert!(
+        scanned > 50,
+        "the scan read only {scanned} source files; it is not reading `src/`"
+    );
+    assert!(
+        readers >= 15,
+        "only {readers} signatures take an `Output`; the type has stopped being the way a verb \
+         learns who is reading"
+    );
+}

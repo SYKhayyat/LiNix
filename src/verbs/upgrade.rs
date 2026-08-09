@@ -13,7 +13,7 @@ pub struct UpgradeRequest<'a> {
     pub except: &'a [String],
     pub profile: &'a Option<String>,
     pub module: &'a Option<String>,
-    pub json: bool,
+    pub out: Output,
     pub canary: bool,
     pub test: &'a Option<String>,
 }
@@ -217,10 +217,10 @@ pub async fn upgrade_targeted(
 
 /// Upgrade exactly the packages `audit` reports as vulnerable, to a non-vulnerable version.
 /// Honors `--except`. This is the `audit → upgrade` bridge.
-pub async fn upgrade_security(app: &App, except: &[String], json: bool) -> Result<()> {
+pub async fn upgrade_security(app: &App, except: &[String], out: Output) -> Result<()> {
     let report = crate::app::insight::audit(app).await?;
     if report.findings.is_empty() {
-        if json {
+        if out.is_json() {
             println!("{}", serde_json::json!({ "upgraded": [], "vulnerable": 0 }));
         } else {
             println!(
@@ -274,7 +274,7 @@ pub async fn upgrade_security(app: &App, except: &[String], json: bool) -> Resul
         order.into_iter().filter_map(|k| agg.remove(&k)).collect();
     let seen_total = plan.len() + excluded_keys.len() + held_keys.len();
     let excepted = excluded_keys.len();
-    if !json {
+    if out.is_human() {
         println!(
             "Security upgrade: {} vulnerable package(s){}.",
             plan.len(),
@@ -301,7 +301,7 @@ pub async fn upgrade_security(app: &App, except: &[String], json: bool) -> Resul
 
     // Dry-run: show the remediation plan without installing.
     if app.config.dry_run {
-        if !json {
+        if out.is_human() {
             crate::would_print!("would upgrade to remediate:");
             for (backend, name, fixed) in &plan {
                 match fixed {
@@ -331,7 +331,7 @@ pub async fn upgrade_security(app: &App, except: &[String], json: bool) -> Resul
     }
     app.state.lock().await.save()?;
 
-    if json {
+    if out.is_json() {
         let mut held_list: Vec<_> = held_keys.iter().cloned().collect();
         held_list.sort();
         println!(
@@ -359,10 +359,10 @@ pub async fn upgrade_security(app: &App, except: &[String], json: bool) -> Resul
 /// every mode below is followed by this (Z2). Only packages that were already pinned are
 /// touched — an upgrade is not a `lock`.
 pub async fn handle_upgrade(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
-    let json = req.json;
+    let out = req.out;
     upgrade_modes(app, req).await?;
     let moved = crate::verbs::plan::refresh_version_locks(app).await?;
-    if moved > 0 && !json {
+    if moved > 0 && out.is_human() {
         println!("Lock: re-recorded {} version pin(s).", moved);
     }
     Ok(())
@@ -384,7 +384,7 @@ async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
 
     // Mode 1: audit-driven security upgrade.
     if req.security {
-        return upgrade_security(app, req.except, req.json).await;
+        return upgrade_security(app, req.except, req.out).await;
     }
 
     // Mode 2: explicit packages, or a --backend scope → targeted managed upgrade.
@@ -451,7 +451,7 @@ async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
              prevent. Nothing was upgraded. Please report this."
         ));
     };
-    let json = req.json;
+    let out = req.out;
 
     let resolver =
         crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
@@ -470,7 +470,7 @@ async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
     };
 
     if app.config.dry_run {
-        if json {
+        if out.is_json() {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&changes.generate_report())?
@@ -482,7 +482,7 @@ async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
         return Ok(());
     }
 
-    if !json && !changes.is_empty() {
+    if out.is_human() && !changes.is_empty() {
         print_flight_plan(app, &changes);
     }
 

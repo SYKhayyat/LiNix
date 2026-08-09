@@ -21,7 +21,7 @@ pub fn unverified_packages(state: &crate::core::StateRegistry) -> Vec<(String, S
         .collect()
 }
 
-pub async fn handle_status(app: &App, json: bool) -> Result<()> {
+pub async fn handle_status(app: &App, out: Output) -> Result<()> {
     // This report ends with a crawl of every manager on the machine, so every manager is asked
     // either way — asked here they answer at once instead of in the order the sections below
     // happen to need them (`App::warm_installed`).
@@ -58,7 +58,7 @@ pub async fn handle_status(app: &App, json: bool) -> Result<()> {
         unverified_packages(&state)
     };
 
-    if json {
+    if out.is_json() {
         let out = serde_json::json!({
             "to_install": report.install,
             "to_remove": report.remove,

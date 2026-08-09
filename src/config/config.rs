@@ -718,6 +718,21 @@ impl Default for Config {
     }
 }
 
+/// The command-line half of the settings that also live in `preferences.toml`.
+///
+/// Named fields rather than six positional `Option<bool>`s: `merge_cli_overrides(Some(a),
+/// Some(b), None, Some(c), Some(d), Some(e))` put five interchangeable booleans in a row, one of
+/// which was `allow_mass_removal` — the flag that lets a run delete without a ceiling.
+#[derive(Debug, Clone, Default)]
+pub struct CliOverrides {
+    pub dry_run: bool,
+    pub yes: bool,
+    pub verbose: bool,
+    pub allow_mass_removal: bool,
+    pub allow_mass_install: bool,
+    pub config_path: Option<PathBuf>,
+}
+
 impl Config {
     pub fn from_file(path: &Path) -> Result<Self> {
         // Avoid TOCTOU: don't pre-check existence then read (the file could vanish in
@@ -825,34 +840,28 @@ impl Config {
         Layout::new(self.config_root(), self.data_root())
     }
 
-    pub fn merge_cli_overrides(
-        &mut self,
-        dry_run: Option<bool>,
-        yes: Option<bool>,
-        config_path: Option<PathBuf>,
-        verbose: Option<bool>,
-        allow_mass_removal: Option<bool>,
-        allow_mass_install: Option<bool>,
-    ) -> Result<()> {
-        if let Some(dr) = dry_run {
-            self.dry_run = dr;
-        }
-        if let Some(y) = yes {
-            self.yes = y;
-        }
-        if let Some(a) = allow_mass_removal {
-            self.allow_mass_removal = a;
-        }
-        if let Some(a) = allow_mass_install {
-            self.allow_mass_install = a;
-        }
-        if let Some(cp) = config_path {
+    /// Lay this run's command line over what the file said.
+    ///
+    /// **A flag that was not passed is not a flag set to false.** Each of these is a clap
+    /// `bool` with no `--no-` counterpart, so an absent flag can only mean "the file decides".
+    /// Taking `Option<bool>` and being handed `Some(cli.dry_run)` made an absent flag say
+    /// `false` out loud, and `false` overwrites: `dry_run = true`, `yes = true`,
+    /// `allow_mass_removal = true`, `allow_mass_install = true` and `verbose = true` are all
+    /// `#[serde(default)]` keys of `preferences.toml`, and **every one of them was unreadable**
+    /// — parsed, stored, then flattened before dispatch. `main` even carried a comment saying a
+    /// `dry_run = true` in the file "counts too", four lines under the call that erased it.
+    ///
+    /// So the flags are plain `bool`s and they only ever turn a setting *on*. The one field
+    /// that can genuinely be absent — the config path — keeps its `Option`.
+    pub fn merge_cli_overrides(&mut self, cli: CliOverrides) {
+        self.dry_run |= cli.dry_run;
+        self.yes |= cli.yes;
+        self.allow_mass_removal |= cli.allow_mass_removal;
+        self.allow_mass_install |= cli.allow_mass_install;
+        self.verbose |= cli.verbose;
+        if let Some(cp) = cli.config_path {
             self.preferences_file = cp;
         }
-        if let Some(v) = verbose {
-            self.verbose = v;
-        }
-        Ok(())
     }
 
     /// The snapshot-retention policy: `[retention.snapshots]`, the one config surface (the
@@ -913,6 +922,87 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every `preferences.toml` key that a command-line flag can also turn on, with the field
+    /// on each side. The pairs are the test: a rule that holds for one of them and not the
+    /// other four is how `dry_run` came to be the only one anybody noticed.
+    type FlagPair = (
+        &'static str,
+        fn(&mut CliOverrides),
+        fn(&mut Config),
+        fn(&Config) -> bool,
+    );
+
+    fn flag_pairs() -> Vec<FlagPair> {
+        vec![
+            (
+                "dry_run",
+                (|o: &mut CliOverrides| o.dry_run = true) as fn(&mut CliOverrides),
+                (|c: &mut Config| c.dry_run = true) as fn(&mut Config),
+                (|c: &Config| c.dry_run) as fn(&Config) -> bool,
+            ),
+            (
+                "yes",
+                |o| o.yes = true,
+                |c| c.yes = true,
+                |c| c.yes,
+            ),
+            (
+                "verbose",
+                |o| o.verbose = true,
+                |c| c.verbose = true,
+                |c| c.verbose,
+            ),
+            (
+                "allow_mass_removal",
+                |o| o.allow_mass_removal = true,
+                |c| c.allow_mass_removal = true,
+                |c| c.allow_mass_removal,
+            ),
+            (
+                "allow_mass_install",
+                |o| o.allow_mass_install = true,
+                |c| c.allow_mass_install = true,
+                |c| c.allow_mass_install,
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_setting_written_in_the_file_survives_a_flag_nobody_passed() {
+        for (name, _set_flag, set_file, read) in flag_pairs() {
+            let mut config = Config::default();
+            set_file(&mut config);
+            config.merge_cli_overrides(CliOverrides::default());
+            assert!(
+                read(&config),
+                "`{name} = true` in preferences.toml was erased by a command line that never \
+                 mentioned {name}. There is no `--no-{}` flag, so an absent flag cannot mean off.",
+                name.replace('_', "-")
+            );
+        }
+    }
+
+    #[test]
+    fn a_flag_that_was_passed_turns_the_setting_on() {
+        for (name, set_flag, _set_file, read) in flag_pairs() {
+            let mut overrides = CliOverrides::default();
+            set_flag(&mut overrides);
+            let mut config = Config::default();
+            config.merge_cli_overrides(overrides);
+            assert!(read(&config), "--{} did not reach the config", name);
+        }
+    }
+
+    #[test]
+    fn a_setting_nobody_asked_for_stays_off() {
+        // The other half of the ratchet: `|=` must not be a way for a default to drift on.
+        let mut config = Config::default();
+        config.merge_cli_overrides(CliOverrides::default());
+        for (name, _, _, read) in flag_pairs() {
+            assert!(!read(&config), "{name} turned itself on");
+        }
+    }
 
     #[test]
     fn preferences_cannot_move_the_repo_it_lives_in() {

@@ -9,7 +9,7 @@
 
 use crate::app::App;
 use crate::core::LockFile;
-use crate::core::{Error, Result};
+use crate::core::{Error, Output, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use tracing::debug;
@@ -343,8 +343,8 @@ pub async fn audit(app: &App) -> Result<AuditReport> {
 }
 
 /// Render an audit report to stdout (human or JSON).
-pub fn print_audit(report: &AuditReport, as_json: bool) -> Result<()> {
-    if as_json {
+pub fn print_audit(report: &AuditReport, out: Output) -> Result<()> {
+    if out.is_json() {
         let arr: Vec<Value> = report
             .findings
             .iter()
@@ -613,7 +613,7 @@ fn declarations_of(config: &ResolvedConfig, backend: &str, name: &str) -> Declar
 }
 
 /// Explain why a package is present: how it entered management, and what depends on it.
-/// With `as_json`, emit the same provenance as a machine-readable array instead of text.
+/// With [`Output::Json`], emit the same provenance as a machine-readable array instead of text.
 /// The artifact `why` should explain (D14): the installed file for a download backend, and the
 /// rule that chose it, read from `locks/<backend>.toml`.
 ///
@@ -681,7 +681,7 @@ fn provenance(source: &str) -> String {
     }
 }
 
-pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
+pub async fn why(app: &App, query: &str, out: Output) -> Result<()> {
     // Snapshot the state we need, then release the lock before doing async backend queries.
     #[allow(clippy::type_complexity)]
     let (matches, all_managed): (
@@ -712,7 +712,7 @@ pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
     };
 
     if matches.is_empty() {
-        if as_json {
+        if out.is_json() {
             println!("{}", serde_json::json!({ "query": query, "matches": [] }));
         } else {
             println!("'{}' is not under LiNix management.", query);
@@ -793,7 +793,7 @@ pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
         // re-selection. `(asset, reason)`.
         let selected = artifact_selection(app, &backend, &name);
 
-        if as_json {
+        if out.is_json() {
             json_matches.push(serde_json::json!({
                 "backend": backend,
                 "name": name,
@@ -846,7 +846,7 @@ pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
         }
     }
 
-    if as_json {
+    if out.is_json() {
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({

@@ -47,11 +47,11 @@ pub async fn handle_unmanaged(app: &App) -> Result<()> {
 /// With no section it runs every question and prints a line each: the verdict, and the command
 /// that acts on it. With a section it prints that section's detail. It never changes anything;
 /// `linix heal` is what repairs.
-pub async fn handle_check(app: &App, section: Option<&str>, json: bool) -> Result<()> {
+pub async fn handle_check(app: &App, section: Option<&str>, out: Output) -> Result<()> {
     use crate::app::check::Section;
 
     let Some(name) = section else {
-        return check_summary(app, json).await;
+        return check_summary(app, out).await;
     };
     let Some(section) = Section::parse(name) else {
         anyhow::bail!(
@@ -62,13 +62,13 @@ pub async fn handle_check(app: &App, section: Option<&str>, json: bool) -> Resul
     };
     match section {
         Section::Config => check_config(app).await,
-        Section::Drift => handle_status(app, json).await,
+        Section::Drift => handle_status(app, out).await,
         Section::Unmanaged => handle_unmanaged(app).await,
         Section::Absent => handle_absent(app).await,
-        Section::Conflicts => handle_conflicts(app, json).await,
-        Section::Health => check_health(app, json).await,
-        Section::Security => handle_audit(app, json).await,
-        Section::Approvals => check_approvals(app, json).await,
+        Section::Conflicts => handle_conflicts(app, out).await,
+        Section::Health => check_health(app, out).await,
+        Section::Security => handle_audit(app, out).await,
+        Section::Approvals => check_approvals(app, out).await,
     }
 }
 
@@ -78,11 +78,11 @@ pub async fn handle_check(app: &App, section: Option<&str>, json: bool) -> Resul
 /// silently. The others (`exec:`, adapters, the `vars` provider, package hooks) block a sync
 /// loudly, so a user meets those the moment they run `sync` — this is for the ones nobody meets
 /// until the machine drifts and the hook that should have told them does nothing.
-pub async fn check_approvals(app: &App, json: bool) -> Result<()> {
+pub async fn check_approvals(app: &App, out: Output) -> Result<()> {
     let hooks = crate::app::events::EventHooks::load(&app.config);
     let unapproved = hooks.unapproved();
 
-    if json {
+    if out.is_json() {
         let rows: Vec<_> = unapproved
             .iter()
             .map(|h| serde_json::json!({ "event": h.event.as_str(), "origin": h.origin }))
@@ -136,7 +136,7 @@ async fn probe_all_health(app: &App) -> Vec<(String, crate::core::HealthReport)>
         .await
 }
 
-pub async fn check_summary(app: &App, json: bool) -> Result<()> {
+pub async fn check_summary(app: &App, out: Output) -> Result<()> {
     use crate::app::check::{Finding, Section};
 
     // The unmanaged section crawls every manager, so this run asks all of them whatever
@@ -400,7 +400,7 @@ pub async fn check_summary(app: &App, json: bool) -> Result<()> {
         .counting([("unapproved", unapproved)]),
     );
 
-    if json {
+    if out.is_json() {
         let rows: Vec<_> = findings
             .iter()
             .map(|f| {
@@ -658,7 +658,7 @@ pub async fn handle_absent(app: &App) -> Result<()> {
     Ok(())
 }
 
-pub async fn handle_conflicts(app: &App, json: bool) -> Result<()> {
+pub async fn handle_conflicts(app: &App, out: Output) -> Result<()> {
     use crate::app::conflicts::{detect_conflicts, ConflictKind};
 
     // Resolve the full desired state (all manifests/modules/groups), flatten to specs.
@@ -669,7 +669,7 @@ pub async fn handle_conflicts(app: &App, json: bool) -> Result<()> {
     let specs: Vec<crate::core::PackageSpec> = desired.into_values().flatten().collect();
     let conflicts = detect_conflicts(&specs);
 
-    if json {
+    if out.is_json() {
         println!("{}", serde_json::to_string_pretty(&conflicts)?);
         return Ok(());
     }
@@ -756,7 +756,7 @@ pub fn doctor_tally(
 /// The `health` section of `check`: can each backend actually run, and is the repo intact?
 ///
 /// Reports only. What it used to repair under `--fix` is `heal`'s now (U9).
-pub async fn check_health(app: &App, json: bool) -> Result<()> {
+pub async fn check_health(app: &App, out: Output) -> Result<()> {
     use crate::core::{HealthReport, HealthStatus};
 
     // ---- Per-backend health, via each backend's own probe (not a shallow is_available). ----
@@ -989,7 +989,7 @@ pub async fn check_health(app: &App, json: bool) -> Result<()> {
     }
 
     // ---- Output ----
-    if json {
+    if out.is_json() {
         let backends: Vec<_> = reports
             .iter()
             .map(|(n, r)| serde_json::json!({ "backend": n, "status": r.status, "message": r.message }))

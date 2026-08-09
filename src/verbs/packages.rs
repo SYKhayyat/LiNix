@@ -1,4 +1,4 @@
-use crate::verbs::sync::handle_sync;
+use crate::verbs::sync::{handle_sync, SyncMode};
 use crate::model::Edit;
 use crate::verbs::prelude::*;
 
@@ -34,13 +34,13 @@ pub async fn handle_teleport(app: &App, package: &str, backend: &str) -> Result<
 
     // The line now names the new manager; sync installs it there and removes the old copy as
     // drift — the same convergence every other edit-then-sync command relies on.
-    handle_sync(app, false, false, false).await
+    handle_sync(app, SyncMode::default(), Output::Human).await
 }
 
 pub async fn handle_install(
     app: &App,
     packages: &[String],
-    json: bool,
+    out: Output,
     temp: Option<&str>,
     into: Option<&str>,
 ) -> Result<()> {
@@ -80,7 +80,7 @@ pub async fn handle_install(
                 }));
             }
         }
-        if json {
+        if out.is_json() {
             println!("{}", serde_json::to_string_pretty(&planned)?);
         } else {
             crate::would_print!("would install {} package spec(s):", planned.len());
@@ -105,7 +105,7 @@ pub async fn handle_install(
 
     // And now the ordinary declarative pipeline makes it true — which is also what puts an
     // imperative install behind the guard for the first time (II.10).
-    let synced = handle_sync(app, false, false, json).await;
+    let synced = handle_sync(app, SyncMode::default(), out).await;
 
     if let Err(e) = &synced {
         withdraw_what_can_never_succeed(app, e, &edits).await;
@@ -399,7 +399,7 @@ fn kept_line_advice(why: WhyKept, line: &str, file: &std::path::Path) -> String 
 pub async fn handle_uninstall(
     app: &App,
     packages: &[String],
-    json: bool,
+    out: Output,
     temp: Option<&Option<String>>,
 ) -> Result<()> {
     // Q9: `uninstall nosuchbackend:foo` warned that it "is not declared in any active file" —
@@ -424,7 +424,7 @@ pub async fn handle_uninstall(
     // in a preview the line is still in them, so a sync-shaped report says "remove 0" about
     // the very package the command names.
     if app.config.dry_run {
-        return preview_uninstall(app, packages, json, temp).await;
+        return preview_uninstall(app, packages, out, temp).await;
     }
 
     let vocab = app.vocabulary().await?;
@@ -492,7 +492,7 @@ pub async fn handle_uninstall(
 
     // And the ordinary pipeline removes it: the package is now drift, and removing drift is
     // what sync is (V.34).
-    handle_sync(app, false, false, json).await?;
+    handle_sync(app, SyncMode::default(), out).await?;
 
     // The sync runs first: the names that *were* declared are still owed their removal.
     // But a removal that removed nothing is not a removal, and a warning is the one thing
@@ -517,7 +517,7 @@ pub async fn handle_uninstall(
 async fn preview_uninstall(
     app: &App,
     packages: &[String],
-    json: bool,
+    out: Output,
     temp: Option<&Option<String>>,
 ) -> Result<()> {
     let mut planned = Vec::new();
@@ -547,7 +547,7 @@ async fn preview_uninstall(
         }
     }
 
-    if json {
+    if out.is_json() {
         println!("{}", serde_json::to_string_pretty(&planned)?);
         return Ok(());
     }
@@ -734,7 +734,7 @@ pub fn print_package_row(p: &crate::core::Package) {
     );
 }
 
-pub async fn handle_search(app: &App, query: &str, json: bool, installed: bool) -> Result<()> {
+pub async fn handle_search(app: &App, query: &str, out: Output, installed: bool) -> Result<()> {
     let mut results = app.search(query).await?;
     if installed {
         // Keep only results LiNix already manages, so `search --installed foo` answers
@@ -749,7 +749,7 @@ pub async fn handle_search(app: &App, query: &str, json: bool, installed: bool) 
         };
         results.retain(|p| managed.contains(&(p.backend.clone(), p.name.clone())));
     }
-    if json {
+    if out.is_json() {
         println!("{}", serde_json::to_string_pretty(&results)?);
     } else {
         if results.is_empty() && installed {
@@ -861,7 +861,7 @@ pub async fn compute_outdated(app: &App, list: &[crate::core::Package]) -> Vec<O
 pub async fn handle_list(
     app: &App,
     backend: Option<&str>,
-    json: bool,
+    out: Output,
     outdated: bool,
 ) -> Result<()> {
     // A name nothing claims is a typo, and a typo that prints zero rows and exits 0 reads as
@@ -870,7 +870,7 @@ pub async fn handle_list(
     let list = app.list(backend).await?;
     if outdated {
         let rows = compute_outdated(app, &list).await;
-        if json {
+        if out.is_json() {
             println!("{}", serde_json::to_string_pretty(&rows)?);
         } else if rows.is_empty() {
             println!("Everything is up to date (for backends that report a latest version).");
@@ -889,7 +889,7 @@ pub async fn handle_list(
         }
         return Ok(());
     }
-    if json {
+    if out.is_json() {
         println!("{}", serde_json::to_string_pretty(&list)?);
     } else {
         for p in &list {

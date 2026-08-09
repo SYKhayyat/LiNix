@@ -496,7 +496,7 @@ pub async fn handle_reset(app: &App, force: bool) -> Result<()> {
 /// It drops the package from managed state AND from any manifest that declares it. Doing
 /// only the first would be undone by the next `sync`, which would see the declaration and
 /// re-adopt it.
-pub async fn handle_unmanage(app: &App, packages: &[String], json: bool) -> Result<()> {
+pub async fn handle_unmanage(app: &App, packages: &[String], out: Output) -> Result<()> {
     // Q9: `unmanage nosuchbackend:foo` answered "not managed and not declared — nothing to
     // forget" at exit 0, which is what a correctly-spelled name that is genuinely unmanaged
     // also gets. `split_removal_target` below asks the registry about the prefix and falls back
@@ -556,7 +556,7 @@ pub async fn handle_unmanage(app: &App, packages: &[String], json: bool) -> Resu
         app.state.lock().await.save()?;
     }
 
-    if json {
+    if out.is_json() {
         println!("{}", serde_json::to_string_pretty(&results)?);
         return Ok(());
     }
@@ -598,7 +598,7 @@ pub async fn handle_unmanage(app: &App, packages: &[String], json: bool) -> Resu
 /// rules are inspectable, so this reports the effective rules — and, given package names,
 /// answers the question people actually have ("will this be protected?") along with the
 /// rule that decides it.
-pub async fn handle_protected(app: &App, packages: &[String], json: bool) -> Result<()> {
+pub async fn handle_protected(app: &App, packages: &[String], out: Output) -> Result<()> {
     let cfg = &app.config;
 
     if !packages.is_empty() {
@@ -674,7 +674,7 @@ pub async fn handle_protected(app: &App, packages: &[String], json: bool) -> Res
             };
             rows.push((spec.clone(), protected, reason));
         }
-        if json {
+        if out.is_json() {
             let out: Vec<_> = rows
                 .iter()
                 .map(|(p, prot, why)| {
@@ -691,7 +691,7 @@ pub async fn handle_protected(app: &App, packages: &[String], json: bool) -> Res
         return Ok(());
     }
 
-    if json {
+    if out.is_json() {
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({

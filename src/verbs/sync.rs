@@ -15,7 +15,7 @@ pub struct Reconcile {
     /// a sync converges to what was decided (owner ruling, 2026-07-24).
     upgrade: bool,
     /// Emit the change report as JSON instead of a planned-changes list.
-    json: bool,
+    out: Output,
     /// Which scope the guard reports refusals under.
     scope: crate::app::sync::guard::GuardScope,
     /// Whether to ask before applying. `watch` is unattended by definition and never asks;
@@ -111,7 +111,7 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
     // still have something to say. `sync` printed `already up to date` over a managed,
     // undeclared, protected package it had just declined to remove — and the exit below is the
     // line it returned through (AU1).
-    if !opts.json {
+    if opts.out.is_human() {
         print_flight_plan(app, &changes);
         // W13: a `vars` edit can be the cause of a removal, so when the plan removes anything,
         // name the variables that changed since the last sync — a hundred removals should never
@@ -126,7 +126,7 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
     // reached — so `sync --dry-run --json` answered every question except the one asked of it
     // most, "is this machine already in sync?", and answered that one with the words
     // `already up to date` where a document was expected.
-    if app.config.dry_run && opts.json {
+    if app.config.dry_run && opts.out.is_json() {
         println!(
             "{}",
             serde_json::to_string_pretty(&changes.generate_report())?
@@ -161,7 +161,7 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
     // times that content has run, and what this run will therefore do. Outside the
     // `!changes.is_empty()` block on purpose: a config whose only work is an `exec:` still has
     // to show it.
-    if !opts.json {
+    if opts.out.is_human() {
         app.execs().print_plan(&state);
     }
 
@@ -183,7 +183,7 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
         // Interactive confirmation — but only with a real terminal. A non-interactive caller
         // (pipe/CI/script) must pass --yes (or --json); otherwise we neither hang on a TUI
         // that can't receive input nor silently apply unconfirmed changes.
-        if opts.confirm && !app.config.yes && !opts.json {
+        if opts.confirm && !app.config.yes && opts.out.is_human() {
             use std::io::IsTerminal;
             if !std::io::stdin().is_terminal() {
                 return Err(crate::core::Error::Refused(
@@ -542,13 +542,26 @@ pub async fn handle_rebuild(
     Ok(())
 }
 
-pub async fn handle_sync(app: &App, locked: bool, upgrade: bool, json: bool) -> Result<()> {
+/// The two things a caller can ask a sync to do differently. A struct rather than two
+/// parameters because `handle_sync(app, false, false, ..)` was three positional booleans in a
+/// row at four call sites, where transposing `locked` and `upgrade` compiles and converges the
+/// machine to the other answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SyncMode {
+    /// Strict version matching against the lockfile: a package that is not in it is an error.
+    pub locked: bool,
+    /// Take what the managers offer now instead of what the lock recorded.
+    pub upgrade: bool,
+}
+
+pub async fn handle_sync(app: &App, mode: SyncMode, out: Output) -> Result<()> {
+    let SyncMode { locked, upgrade } = mode;
     let done = reconcile(
         app,
         Reconcile {
             locked,
             upgrade,
-            json,
+            out,
             scope: crate::app::sync::guard::GuardScope::Sync,
             confirm: true,
         },
@@ -559,7 +572,7 @@ pub async fn handle_sync(app: &App, locked: bool, upgrade: bool, json: bool) -> 
     // converges to the lock — plans every one of them back down (Z2).
     if upgrade {
         let moved = crate::verbs::plan::refresh_version_locks(app).await?;
-        if moved > 0 && !json {
+        if moved > 0 && out.is_human() {
             println!("Lock: re-recorded {} version pin(s).", moved);
         }
     }
@@ -569,7 +582,7 @@ pub async fn handle_sync(app: &App, locked: bool, upgrade: bool, json: bool) -> 
     // in `check`.
     // Not under `--json`: the answer there is the document, and a sentence after it is a second
     // answer in a second language that no consumer can read.
-    if done.applied == 0 && done.left_in_place == 0 && !json {
+    if done.applied == 0 && done.left_in_place == 0 && out.is_human() {
         println!("already up to date");
     }
     Ok(())
@@ -616,7 +629,7 @@ pub async fn watch_reconcile(app: &App) -> Result<Reconciled> {
             // versions the lock recorded. Moving forward is a decision, and 3am is the worst
             // time to make one nobody asked for (owner ruling, 2026-07-24).
             upgrade: false,
-            json: false,
+            out: Output::Human,
             scope: crate::app::sync::guard::GuardScope::Watch,
             confirm: false,
         },

@@ -5642,3 +5642,44 @@ merge, the six sites write `Unattended::Refuse("Refusing to …")` and none of t
 `Error::Refused` within the gate's eight-line window. Rewording the messages to dodge the scan
 would have been a lie; teaching it that `Unattended::Refuse` becomes `Error::Refused` is true,
 and the module carries a test that proves it by matching the variant rather than the text.
+
+**V.175 — Why the reader is a type, and why an absent flag stopped meaning false.**
+
+**The bug the `Output` type prevents.** Two `--json` defects are already recorded in this file:
+`sync --dry-run --json` printing `already up to date` in English on a converged machine, and
+`check --json` prefixed with a plain-text note. Both were written under a `!json` guard, and
+that is not a coincidence. `!json` reads as *not machine-readable*, so an early return placed
+under it feels correct — the human path is the one you are thinking about. `out.is_human()`
+reads as *a person is here*, and the same early return under it is visibly a claim about who is
+watching, which is the claim that was wrong. The type does not stop anyone writing the branch;
+it stops the branch reading as though it were about something else.
+
+**Why the bool was also unsafe on its way in.** Four call sites wrote `handle_sync(app, false,
+false, false)`. Three adjacent booleans have six orderings and one meaning, the compiler cannot
+tell them apart, and `locked` versus `upgrade` is the difference between converging to the
+lockfile and taking whatever the managers offer today — the exact decision Z2 exists about. The
+fix is not vigilance; it is that `SyncMode { locked: false, upgrade: false }` cannot be
+transposed.
+
+**Why `Some(cli.dry_run)` was worse than it looks.** An `Option<bool>` parameter says *the caller
+may have no opinion*, and every caller of `merge_cli_overrides` had an opinion it did not have.
+A clap `bool` flag is false both when the user said nothing and when the user could not have said
+anything, and there is no third state to pass along; wrapping it in `Some` turned "no opinion"
+into "off, definitively", and definitively-off wins over the file. The result is five documented
+config keys that parse, validate and then evaporate — the worst kind of dead setting, because
+`Config::from_file` accepts it, `deny_unknown_fields` blesses it, and the run behaves as though
+it were never written. `main` even carried a comment four lines below the call saying a
+`dry_run = true` in `preferences.toml` "counts too". It did not.
+
+**Why `|=` rather than restoring the `Option`.** An `Option<bool>` would be honest only if some
+caller could produce `Some(false)` meaningfully, and none can: there is no `--no-dry-run`, no
+`--no-yes`, no `--no-allow-mass-removal`. Keeping the `Option` would preserve the shape of a
+choice nobody can make, and the next caller would fill it the same wrong way. `|=` says the only
+thing the command line is able to say.
+
+**Why the tests walk five fields instead of pinning `dry_run`.** The reported symptom would have
+been `dry_run`, and a test for `dry_run` alone would pass over the four siblings — including
+`yes`, which decides whether the machine asks before it changes, and `allow_mass_removal`, which
+decides whether the guard has a ceiling. The table in `flag_pairs` is the unit under test: a
+sixth flag added tomorrow has to join it, because `a_flag_that_was_passed_turns_the_setting_on`
+is written over the table rather than over any one name.

@@ -3059,3 +3059,23 @@ at the call site, never defaulted:
 **`Unattended::Refuse` builds an `Error::Refused`**, so it exits 3 and fires
 `on_guard_refusal` like every other refusal. That conversion has a test of its own, matching on
 the variant rather than on the message.
+
+## II.44 A verb is handed the reader, and an absent flag is not a flag set to false (`S75`, V.175)
+
+**`--json` becomes `core::Output` once, in `main`'s dispatch.** A handler takes `Output`, never
+`json: bool`. `a_verb_is_handed_a_reader_not_a_flag` fails on any other signature; only
+`args.rs` (where clap parses the flag) and `output.rs` (the one conversion) may name it.
+
+**A printing site asks `out.is_human()`, not `!json`.** The affirmative is the point: the
+question is whether a person is there, and two `--json` defects were written by answering the
+negative one instead.
+
+**More than one boolean in a signature gets a struct with named fields.** `SyncMode { locked,
+upgrade }` rather than two adjacent `bool`s; `CliOverrides { .. }` rather than six positional
+`Option<bool>`s, one of which was `allow_mass_removal`.
+
+**A command-line flag with no `--no-` form only ever turns a setting on.** `dry_run`, `yes`,
+`verbose`, `allow_mass_removal` and `allow_mass_install` exist in `preferences.toml` and on the
+command line; the merge is `|=`, because an absent flag means *the file decides* and there is no
+way for a user to spell *off* on the command line. Any new flag in that pair joins the table in
+`config::tests::flag_pairs` — all five are asserted together, not one of them chosen.

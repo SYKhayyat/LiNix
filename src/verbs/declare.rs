@@ -1,4 +1,4 @@
-use crate::verbs::sync::handle_sync;
+use crate::verbs::sync::{handle_sync, SyncMode};
 use crate::verbs::prelude::*;
 
 pub async fn handle_repo(app: &App, cmd: &RepoCommand) -> Result<()> {
@@ -661,7 +661,7 @@ pub async fn handle_schedule(app: &App, cmd: &ScheduleCommand) -> Result<()> {
         }
     }
 
-    handle_sync(app, false, false, false).await
+    handle_sync(app, SyncMode::default(), Output::Human).await
 }
 
 pub async fn handle_activate(app: &App, profiles: &[String], add: bool) -> Result<()> {
