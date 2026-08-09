@@ -363,7 +363,7 @@ async fn a_failed_undo_stays_in_the_extras_ledger() {
     kernel
         .app
         .extras()
-        .reconcile(&state, linix::app::sync::guard::GuardScope::Sync, 0)
+        .reconcile(&state, linix::app::sync::guard::GuardScope::Sync)
         .await
         .expect("a failed undo is reported, not fatal");
 
@@ -383,17 +383,23 @@ async fn a_successful_undo_leaves_the_extras_ledger() {
     let locks = kernel.app.config.config_root().join("locks");
     let path = linix::core::ExtrasLedger::path_in(&locks);
 
-    // An unknown *kind* has no undo to fail: `undo_extra` warns and reports success, which is
-    // the success path this asserts without needing a real service manager on the host.
+    // A `shim:` nobody deployed: `remove_shim` finds nothing to delete and returns `Ok(())`,
+    // which is a genuinely successful teardown on any host and needs no service manager.
+    //
+    // **This used to plant `nosuchkind:whatever`**, under a comment explaining that an unknown
+    // kind "warns and reports success". That was `undo_extra`'s catch-all, and reporting success
+    // there dropped the row from the ledger while the resource stayed on the machine (`S56`) —
+    // so this test was pinning the bug as the expected behaviour, which is exactly the shape
+    // `S16` records. An unreadable row is now kept, and the test needed a real success.
     let mut ledger = linix::core::ExtrasLedger::new();
-    ledger.record(["nosuchkind:whatever".to_string()].into_iter().collect());
+    ledger.record(["shim:no-such-shim".to_string()].into_iter().collect());
     ledger.save(&path).unwrap();
 
     let state = linix::model::DesiredState::default();
     kernel
         .app
         .extras()
-        .reconcile(&state, linix::app::sync::guard::GuardScope::Sync, 0)
+        .reconcile(&state, linix::app::sync::guard::GuardScope::Sync)
         .await
         .unwrap();
 

@@ -73,6 +73,7 @@ pub async fn handle_remove_orphans(app: &App) -> Result<()> {
         &app.config,
         &app.registry,
         &removals,
+        &app.reaping,
         GuardScope::RemoveOrphans,
     )
     .await?;

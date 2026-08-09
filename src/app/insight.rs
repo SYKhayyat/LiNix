@@ -553,8 +553,8 @@ fn gating_of(
 /// one cost in it that scales with an answer's length rather than with the question's.
 struct ResolvedConfig {
     state: crate::model::DesiredState,
-    vars: std::collections::HashMap<String, String>,
-    var_origins: std::collections::HashMap<String, String>,
+    vars: crate::model::vars::Vars,
+    var_origins: crate::model::vars::VarOrigins,
 }
 
 impl ResolvedConfig {

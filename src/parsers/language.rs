@@ -434,14 +434,14 @@ Done in 0.05s.
         // npm: a single top-level object.
         let npm =
             r#"{"dependencies":{"cowsay":{"version":"1.6.0"},"typescript":{"version":"5.3.3"}}}"#;
-        let r = parse_npm_style_json(npm, "npm");
+        let r = parse_npm_style_json(npm, "npm").expect("npm's object form reads");
         assert_eq!(r.len(), 2);
         assert!(r
             .iter()
             .any(|p| p.name == "cowsay" && p.version.as_deref() == Some("1.6.0")));
         // pnpm: `pnpm ls -g --json` wraps the same shape in an ARRAY — must parse too.
         let pnpm = r#"[{"path":"/x","private":true,"dependencies":{"cowsay":{"from":"cowsay","version":"1.6.0"}}}]"#;
-        let r2 = parse_npm_style_json(pnpm, "pnpm");
+        let r2 = parse_npm_style_json(pnpm, "pnpm").expect("pnpm's array form reads");
         assert_eq!(
             r2.len(),
             1,
@@ -506,7 +506,7 @@ Done in 0.05s.
     #[test]
     fn test_composer_json_parsing() {
         let input = r#"{"installed": [{"name": "laravel/installer", "version": "v4.0.0"}]}"#;
-        let res = parse_composer_json(input);
+        let res = parse_composer_json(input).expect("a composer listing reads");
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].name, "laravel/installer");
         assert_eq!(res[0].version, Some("v4.0.0".into()));

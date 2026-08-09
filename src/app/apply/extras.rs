@@ -462,6 +462,7 @@ fn declared_extras<'a>(
 #[cfg(test)]
 mod tests {
     use super::in_effect;
+    use crate::core::extras_lock::ExtraKey;
     use crate::backends::service::{InitProviderFile, ServiceBackendCore, ServiceQueryable};
     use crate::backends::BackendRegistry;
     use crate::config::grammar::{Options, Statement};
@@ -505,12 +506,12 @@ list_pattern = 'SERVICE_NAME:\s+(\S+)'
         reg
     }
 
-    fn service(name: &str, key: &str, value: &str) -> (Statement, String) {
+    fn service(name: &str, key: &str, value: &str) -> (Statement, ExtraKey) {
         let mut opts = Options::default();
         opts.insert(key, value);
         (
             Statement::Service(name.to_string(), opts),
-            format!("service:{}", name),
+            ExtraKey::new(crate::config::grammar::ResourceKind::Service, name),
         )
     }
 
@@ -549,17 +550,17 @@ list_pattern = 'SERVICE_NAME:\s+(\S+)'
                 "firewall:22/tcp",
             ),
         ] {
+            let key: ExtraKey = key.parse().expect("the fixture keys are well formed");
             assert_eq!(
-                in_effect(&config, &reg, &stmt, key).await,
+                in_effect(&config, &reg, &stmt, &key).await,
                 None,
                 "`{key}` is documented as unverifiable; if that changed, say so here"
             );
         }
 
-        // A key whose kind is not a keyword at all — a package line's `backend:name` reaching
-        // this by mistake — is not "in effect", and must not be read as one.
-        let pkg = Statement::Setting("x".into(), opts);
-        assert_eq!(in_effect(&config, &reg, &pkg, "apt:jq").await, None);
+        // A key whose kind is not a keyword at all — a package line's `backend:name` — cannot
+        // even be built now, which is the point of the type: `ExtraKey` refuses it at the parse.
+        assert_eq!("apt:jq".parse::<ExtraKey>(), Err(()));
     }
 
     /// The reason `adopt` made every later sync fail: a `service:` line was `unverifiable`, and
@@ -611,8 +612,9 @@ list_pattern = 'SERVICE_NAME:\s+(\S+)'
         opts.insert("status".to_string(), "running");
         opts.insert("enabled".to_string(), "true");
         let both = Statement::Service("nginx".to_string(), opts);
+        let key = ExtraKey::new(crate::config::grammar::ResourceKind::Service, "nginx");
         assert_eq!(
-            in_effect(&config, &reg, &both, "service:nginx").await,
+            in_effect(&config, &reg, &both, &key).await,
             None,
             "running is satisfied and enabled is unknown — the line as a whole is unknown"
         );

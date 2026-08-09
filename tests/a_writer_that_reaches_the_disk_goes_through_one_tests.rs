@@ -42,14 +42,28 @@ const MAY_RENAME: &[(&str, &str)] = &[
     ),
 ];
 
-/// A line that moves a temporary file over a real one, or creates the temporary file to do it
-/// with. Both spellings, because a writer that does the second and not the first is a writer
-/// that has not finished being written.
-fn renames_into_place(line: &str) -> bool {
-    let code = line.split("//").next().unwrap_or(line);
-    // `.persist(` with a dot is `tempfile`'s rename; `file::persist(` — the sanctioned front
-    // door — has no dot before the name, which is the whole of the distinction.
-    code.contains("NamedTempFile::new") || code.contains("fs::rename(") || code.contains(".persist(")
+/// **Judged per file, because the offence is a sequence and not a line.** Writing content into
+/// a temporary file and renaming it over a target is the thing that has to be one implementation;
+/// a bare `rename` is a *move*, and a `NamedTempFile` nobody persists is a temporary file being
+/// used as one.
+///
+/// Getting that wrong the other way is not hypothetical: the first version of this scan flagged
+/// `app/sandbox.rs` (writes a `.wsb` config to a temp file and hands the sandbox its path),
+/// `backends/link.rs` (restores a user's backup over their file) and `core/journal.rs` (sets a
+/// corrupt WAL aside). None of the three writes a file atomically; all three would have been
+/// "fixed" into using a writer that does not fit them.
+fn renames_into_place(source: &str) -> bool {
+    let code: String = source
+        .lines()
+        .map(|l| l.split("//").next().unwrap_or(l))
+        .collect::<Vec<_>>()
+        .join("\n");
+    // `.persist(` with a dot is `tempfile`'s rename-over-the-target; `file::persist(` — the
+    // sanctioned front door — has no dot before the name, which is the whole of the distinction.
+    let persists_a_temp_file = code.contains(".persist(");
+    // The hand-rolled spelling: bytes to a path, then a rename onto the real one.
+    let writes_then_renames = code.contains("fs::write(") && code.contains("fs::rename(");
+    persists_a_temp_file || writes_then_renames
 }
 
 /// Every `src/` file with a rename-into-place in it, excluding test modules — a test that writes
@@ -77,7 +91,7 @@ fn files_that_rename(root: &Path) -> (BTreeSet<String>, usize) {
             scanned += 1;
             // Everything from the first `#[cfg(test)]` on belongs to the tests.
             let product = src.split("#[cfg(test)]").next().unwrap_or(&src);
-            if product.lines().any(renames_into_place) {
+            if renames_into_place(product) {
                 found.insert(
                     path.strip_prefix(root)
                         .unwrap_or(&path)
@@ -136,16 +150,35 @@ fn only_the_two_sanctioned_writers_rename_a_file_into_place() {
 /// matching cannot pass by finding nothing.
 #[test]
 fn the_scan_can_actually_fail() {
-    assert!(renames_into_place("    let t = NamedTempFile::new_in(dir)?;"));
-    assert!(renames_into_place("        std::fs::rename(&tmp, &path)?;"));
-    assert!(renames_into_place("    temp.persist(path).map_err(e)?;"));
-
-    // Not a writer: a comment about one, and a rename of something that is not a file write.
-    assert!(!renames_into_place(
-        "    // NamedTempFile::new_in is how the durable write works"
+    // The two spellings of the offence.
+    assert!(renames_into_place(
+        "let t = NamedTempFile::new_in(dir)?;\nt.persist(path)?;"
     ));
-    assert!(!renames_into_place("    let renamed = old.rename(new);"));
-    assert!(!renames_into_place("    fs::write(&path, body)?;"));
+    assert!(renames_into_place(
+        "std::fs::write(&tmp, json)?;\nstd::fs::rename(&tmp, &path)?;"
+    ));
+
+    // The three real files that are NOT the offence, in the shape they actually have.
+    assert!(
+        !renames_into_place("let mut tmp = NamedTempFile::new()?;\ncmd.arg(tmp.path());"),
+        "a temp file used as a temp file is not an atomic write (app/sandbox.rs)"
+    );
+    assert!(
+        !renames_into_place("tokio::fs::rename(&backup, path).await?;"),
+        "restoring a backup is a move (backends/link.rs)"
+    );
+    assert!(
+        !renames_into_place("let moved = std::fs::rename(&self.path, &backup).is_ok();"),
+        "setting a corrupt file aside is a move (core/journal.rs)"
+    );
+    assert!(
+        !renames_into_place("crate::utils::file::persist(&p, &body)?;"),
+        "the sanctioned front door has no dot before `persist`"
+    );
+    assert!(!renames_into_place("fs::write(&path, body)?;"));
+    assert!(!renames_into_place(
+        "// NamedTempFile::new_in(d).persist(p) is how the durable write works"
+    ));
     assert!(!renames_into_place(""));
 
     // And the walk finds a planted file. Driven over a temp tree so the assertion is about the
@@ -155,7 +188,7 @@ fn the_scan_can_actually_fail() {
     std::fs::create_dir_all(&src).expect("the tree");
     std::fs::write(
         src.join("offender.rs"),
-        "fn save() {\n    let t = NamedTempFile::new_in(d)?;\n}\n",
+        "fn save() {\n    let t = NamedTempFile::new_in(d)?;\n    t.persist(p)?;\n}\n",
     )
     .expect("the offender");
     std::fs::write(
@@ -165,7 +198,7 @@ fn the_scan_can_actually_fail() {
     .expect("the innocent");
     std::fs::write(
         src.join("only_in_tests.rs"),
-        "fn save() {}\n#[cfg(test)]\nmod t {\n    fn f() { NamedTempFile::new_in(d); }\n}\n",
+        "fn save() {}\n#[cfg(test)]\nmod t {\n    fn f() { NamedTempFile::new_in(d).persist(p); }\n}\n",
     )
     .expect("the test-only file");
 
