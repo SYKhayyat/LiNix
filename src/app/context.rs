@@ -34,6 +34,10 @@ pub struct App {
     pub journal: Arc<Mutex<Journal>>,
     pub diagnostics: Arc<FailureDiagnosticEngine>,
     pub scheduler: Arc<SchedulerManager>,
+    /// What this command has removed so far, so a guard ceiling is a budget for the command and
+    /// not for each of its four removal phases. One `App` is one invocation, which is what makes
+    /// this the right owner.
+    pub reaping: Arc<crate::app::sync::guard::Reaping>,
 }
 
 impl App {
@@ -127,6 +131,7 @@ impl App {
             journal,
             diagnostics,
             scheduler,
+            reaping: Arc::new(crate::app::sync::guard::Reaping::new()),
         })
     }
 
@@ -156,6 +161,7 @@ impl App {
             self.snapshot_manager.clone(),
             self.journal.clone(),
             self.diagnostics.clone(),
+            self.reaping.clone(),
         )
     }
 
@@ -171,6 +177,7 @@ impl App {
             self.state.clone(),
             self.config.clone(),
             self.diagnostics.clone(),
+            self.reaping.clone(),
         )
     }
 
@@ -218,6 +225,7 @@ impl App {
             config: &self.config,
             executor: &self.executor,
             registry: &self.registry,
+            reaping: &self.reaping,
         }
     }
 
@@ -259,6 +267,7 @@ impl App {
             executor: &self.executor,
             registry: &self.registry,
             scheduler: &self.scheduler,
+            reaping: &self.reaping,
         }
     }
 
@@ -268,6 +277,7 @@ impl App {
             registry: &self.registry,
             state: &self.state,
             journal: &self.journal,
+            reaping: &self.reaping,
         }
     }
 
@@ -283,6 +293,7 @@ impl App {
             self.journal.clone(),
             self.state.clone(),
             self.diagnostics.clone(),
+            self.reaping.clone(),
         )
         .await
     }

@@ -56,9 +56,20 @@ pub struct GuardSettings {
     #[serde(default)]
     pub unprotected_packages: Vec<String>,
     /// Refuse a plan that removes more than this many packages unless explicitly opted into.
-    /// `0` disables the check.
+    /// `0` disables the check. Counted over the whole command, not per phase.
     #[serde(default = "default_max_removals")]
     pub max_removals: usize,
+    /// The same ceiling for the resources a declaration put in place — a `link:`, `service:`,
+    /// `setting:`, `shim:`, `schedule:` or `repo:` line leaving the model, and a port closed
+    /// because no `firewall:` line declares it. `0` disables the check.
+    ///
+    /// **Its own number, because it is its own kind of loss** (`Y20`). Software leaving a
+    /// machine and a perimeter being tightened are different events, and a machine that wants
+    /// to be told about three packages does not necessarily want to be stopped by forty ports
+    /// closing on the run that first declares a firewall. Counted over the whole command, and
+    /// answered by the same `--allow-mass-removal`.
+    #[serde(default = "default_max_extra_removals")]
+    pub max_extra_removals: usize,
     /// Refuse a plan that installs more than this many packages at once unless explicitly
     /// opted into. `0` (unset) disables it — installs are additive and far less dangerous.
     #[serde(default)]
@@ -115,6 +126,7 @@ impl Default for GuardSettings {
             protected_packages: default_protected_packages(),
             unprotected_packages: Vec::new(),
             max_removals: default_max_removals(),
+            max_extra_removals: default_max_extra_removals(),
             max_installs: 0,
             deny_packages: Vec::new(),
             pinned_only: false,
@@ -571,6 +583,13 @@ fn default_nix_gc_age() -> String {
 /// Twenty is comfortably above a routine cleanup and far below the ~100 that adopting a
 /// stock Ubuntu's manual set produces.
 fn default_max_removals() -> usize {
+    20
+}
+
+/// The same twenty for the resource teardowns (`Y20`). Deliberately equal to
+/// [`default_max_removals`] and deliberately not the same number: they are two budgets, and a
+/// machine that raises one has said nothing about the other.
+fn default_max_extra_removals() -> usize {
     20
 }
 

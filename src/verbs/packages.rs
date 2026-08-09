@@ -616,6 +616,7 @@ pub async fn suspend_for_session(app: &App, packages: &[String]) -> Result<()> {
                 &app.config,
                 &app.registry,
                 &[(b.name().to_string(), bare_name.clone())],
+                &app.reaping,
                 crate::app::sync::guard::GuardScope::Remove,
             )
             .await?;

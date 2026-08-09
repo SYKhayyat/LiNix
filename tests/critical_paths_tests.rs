@@ -303,6 +303,7 @@ async fn a_dry_run_reports_the_recovery_and_performs_none_of_it() {
         kernel.app.journal.clone(),
         kernel.app.state.clone(),
         kernel.app.diagnostics.clone(),
+        kernel.app.reaping.clone(),
     )
     .await;
 

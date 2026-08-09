@@ -12,6 +12,8 @@ pub struct Leases<'a> {
     /// same reason `Execs` holds one: a maintenance pass that has to be handed the log is a
     /// maintenance pass somebody can forget to hand it.
     pub(crate) journal: &'a std::sync::Arc<tokio::sync::Mutex<crate::core::Journal>>,
+    /// The command's removal budget: a sweep is a removal phase like any other.
+    pub(crate) reaping: &'a crate::app::sync::guard::Reaping,
 }
 
 impl Leases<'_> {
@@ -62,6 +64,7 @@ impl Leases<'_> {
             self.config,
             self.registry,
             &pairs,
+            self.reaping,
             crate::app::sync::guard::GuardScope::ExpirySweep,
         )
         .await

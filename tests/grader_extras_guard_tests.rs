@@ -90,9 +90,13 @@ fn undeclaring_managed_extras_goes_through_the_removal_guard() {
 
     // A guard that must refuse this: five removals against a limit of one, and one of the
     // five named protected.
+    //
+    // `max_extra_removals` as well as `max_removals`: since `Y20` a teardown answers to its own
+    // ceiling, and setting only the package one would leave this measuring five link removals
+    // against the default of twenty — a test that passes because nothing is being tested.
     std::fs::write(
         f.cfg().join("preferences.toml"),
-        "[guard]\nmax_removals = 1\nprotected_packages = [\"f3\"]\n",
+        "[guard]\nmax_removals = 1\nmax_extra_removals = 1\nprotected_packages = [\"f3\"]\n",
     )
     .unwrap();
     let (rules, _) = f.run(&["protected"]);

@@ -3469,8 +3469,10 @@ What is binding:
 
 1. **`protected_packages` applies to resources**, matched on the key and also on the final
    component of a path key — `protected_packages = ["vimrc"]` protects `link:/home/u/.vimrc`.
-2. **`max_removals` counts the whole command**, packages and resources together, not each
-   phase separately.
+2. **The ceiling counts the whole command**, not each phase separately. *(Amended 2026-08-09
+   by `Y20`: packages and resources are counted separately, against `max_removals` and
+   `max_extra_removals`. The "whole command, not each phase" half stands unchanged; the
+   "together" half does not.)*
 3. **OS-essential and undeclarable do not apply.** No resource manager publishes an essential
    list, and no resource key parses as a package line — applying that second test would refuse
    every teardown on every machine forever.
@@ -7023,8 +7025,8 @@ pins it.
 
 ## Y20
 
-**Status: BUILT, NEVER RULED — built 2026-08-07 from `LX-2`, with one question inside it that is
-OPEN and is `N7`'s to answer.**
+**Status: ANSWERED — built 2026-08-07 from `LX-2`, the question inside it ruled by the owner
+2026-08-09.**
 
 **Y20 — every path that removes now carries proof it asked, and closing an undeclared port is one
 of them. Should it count against `max_removals`?**
@@ -7069,14 +7071,40 @@ exactly two kinds of entry: a unit test of an effector, and `heal`, which enforc
 interrupted removal individually *before* it becomes a graph node. `grep -rn "Reaped::for_reason"`
 is the list a reviewer wants, and it is the list `is_removal_call` could never produce.
 
-**THE OPEN QUESTION, and it is not mine.** *Is closing an undeclared port a removal for the
-purposes of `max_removals`?* The guard now counts them, which is the conservative reading and the
-one that follows from wiring `enforce_extras`. It has a cost a user would meet immediately: **a
-machine with 40 ports open and one `firewall:22/tcp` line hits the default ceiling of 20 and
-refuses.** That may be exactly right — 39 ports closing at once is the shape `max_removals` exists
-to interrupt — or it may make the feature unusable on any real server. `N7` says drift is
-corrected; it does not say at what count a person should be asked first. **Ruling wanted; the
-count is trivially separable if the answer is no.**
+**THE QUESTION INSIDE IT, now answered.** *Is closing an undeclared port a removal for the
+purposes of `max_removals`?* It was raised because the guard counted them, which is the
+conservative reading and the one that follows from wiring `enforce_extras`, and it had a cost a
+user would meet immediately: **a machine with 40 ports open and one `firewall:22/tcp` line hits
+the default ceiling of 20 and refuses.**
+
+**RULED 2026-08-09 (owner): yes, it is a removal and yes, it counts — against its own ceiling.**
+
+The reading that lost was "one number for everything", which is what `Q7` clause 2 said and what
+the code did. The owner's words: *"I think we should have different counts: counts of removed
+packages that won't count them, and counts of changes."*
+
+What is binding:
+
+1. **`max_removals` is packages only**, default 20. Software leaving the machine.
+2. **`max_extra_removals` is new**, default 20, and covers every resource teardown —
+   `link:`, `service:`, `setting:`, `shim:`, `schedule:`, `repo:` — plus a port closed because
+   no `firewall:` line declares it. A `dotfiles:` tree's files are `link:` lines and go here too.
+3. **Both are budgets for the whole command, not for a phase.** A sync tears extras down in two
+   places (the firewall, then the ledger's drift) and both spend the same `max_extra_removals`.
+4. **Neither spends the other's budget.** That is the whole point of splitting them: one number
+   made the stricter of the two govern both, so a server whose first `firewall:` declaration
+   closes forty ports could not also remove a package.
+5. **`--allow-mass-removal` answers both**, because "yes, that many, I meant it" is one question.
+   Protection is still a refusal and nothing overrides it (V.26).
+6. **The refusal names which ceiling it hit**, so the reader is sent to the line they have to
+   change rather than to the other one.
+
+The cost this ruling accepts, stated plainly: **a machine with forty ports open and one
+`firewall:22/tcp` line still refuses on its first sync**, now at `max_extra_removals` rather than
+at `max_removals`. Forty ports closing at once is the shape a ceiling exists to interrupt, and
+the answer is one flag.
+
+The mechanism is in `S55`; the rule is in **II.28**; the reason is in **V.159**.
 
 ---
 

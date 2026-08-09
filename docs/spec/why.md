@@ -4849,3 +4849,66 @@ exactly what all five private `unreadable` helpers did, and the reason they exis
 full-output copy the escape hatch made on every pipx and yarn listing. The tests that pinned the
 pipx and yarn empty cases still pass — through the container check now, which is the reading that
 was meant.
+
+---
+
+**V.159 — Why the count is a value the command owns, and why there are two of them.**
+*(Rule in II.28. Ruled 2026-08-09 as `Y20`; fixed as `S55`.)*
+
+**The parameter was right and that is what made it dangerous.** `inspect_removals` took
+`also_removing: usize`, and its doc comment argued the case correctly: *"a sync that drops three
+packages and three links removes six things, and a limit of five must see six. Checking each
+phase's own list separately is how a ceiling gets passed twice by a plan that exceeds it once."*
+Exactly so. The design was understood. The problem is that understanding it left every caller
+holding a number, and a number three callers assemble is a number one of them assembles wrong.
+
+Three callers, and they diverged in the way this repo's bugs always diverge — the reviewed one
+was right and the quiet one was not:
+
+- `verbs/sync.rs` passed `changes.total_remove()`, read *after* the TUI may have filtered the
+  plan. Correct, and carefully so.
+- `verbs/plan.rs` passed `package_pairs.len()` for its preview. Correct.
+- **`apply/firewall.rs` passed `0`.** So four packages and four ports, under a limit of five,
+  were invisible to every guard call in the run: the packages saw four, the ports saw four, and
+  nothing ever saw eight.
+
+The firewall teardown had been outside the guard entirely until 2026-08-07 (`Y20`), and the
+change that wired it in supplied the argument the signature demanded — with the only value
+available at that call site, which was nothing. Not carelessness: the count simply was not
+reachable from there. **A parameter that a caller cannot answer is a parameter that will be
+answered with a zero.**
+
+`Reaping` is the number, owned by the `App` — one invocation, one budget — and written where the
+guard clears a set rather than where a caller believes one was cleared. `enforce_extras` no
+longer asks how much has gone; it looks. The firewall struct holds the value instead of a
+literal, which is the only change that call site needed and the one it could not make while the
+count lived in `verbs/sync.rs`.
+
+**Then the second half, which is the owner's ruling and not a repair.** With the phases finally
+sharing one number, the number turned out to be the wrong shape: `Q7` had ruled in July that
+packages and resources count *together*, and `Y20` had left open whether a closed port belongs in
+that count at all. Together, one ceiling of twenty meant a machine with forty ports open and one
+`firewall:22/tcp` line could not converge — and, worse, that its perimeter and its package set
+competed for the same budget, so tightening a firewall made the machine less able to remove a
+package.
+
+Ruled: two counts. **Software leaving a machine and a perimeter tightening are different events
+and deserve different tolerances**, and one number makes the stricter of the two govern both.
+`max_removals` stays packages-only at twenty; `max_extra_removals` is new, also twenty, and
+covers every teardown including the ports. `Q7` clause 2 is amended: *whole command, not each
+phase* stands; *together* does not.
+
+**Both answer to the same `--allow-mass-removal`**, because the question the flag answers — *yes,
+that many, I meant it* — is one question, and a second flag would be a second thing to remember
+in the one moment a user is already being interrupted. And both refusals now name the setting
+they hit, because a message reading `[guard] max_removals` over a port closure sends the reader
+to a line that will not help.
+
+**The forty-port machine still refuses**, at the new ceiling rather than the old one. That is
+the ruling, not an oversight: forty ports closing at once is the shape a ceiling exists to
+interrupt, and one flag is the answer.
+
+**One detail worth its line: a refused set is not recorded.** The total is raised only where the
+guard says yes. A removal that was refused must not make the next phase's budget smaller — the
+command is about to stop anyway, and the alternative is a counter that punishes a plan for what
+it was not allowed to do.

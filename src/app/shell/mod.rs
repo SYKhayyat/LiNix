@@ -43,6 +43,8 @@ pub struct EphemeralShell {
     snapshot_manager: Arc<SnapshotManager>,
     journal: Arc<Mutex<Journal>>,
     diagnostics: Arc<FailureDiagnosticEngine>,
+    /// The command's removal budget: a session teardown removes real packages.
+    reaping: Arc<crate::app::sync::guard::Reaping>,
 }
 
 impl EphemeralShell {
@@ -58,6 +60,7 @@ impl EphemeralShell {
         snapshot_manager: Arc<SnapshotManager>,
         journal: Arc<Mutex<Journal>>,
         diagnostics: Arc<FailureDiagnosticEngine>,
+        reaping: Arc<crate::app::sync::guard::Reaping>,
     ) -> Self {
         Self {
             registry,
@@ -70,6 +73,7 @@ impl EphemeralShell {
             snapshot_manager,
             journal,
             diagnostics,
+            reaping,
         }
     }
 
@@ -414,6 +418,7 @@ impl EphemeralShell {
             self.journal.clone(),
             self.state.clone(),
             self.diagnostics.clone(),
+            self.reaping.clone(),
         )
         .await
     }

@@ -10,6 +10,9 @@ pub struct Firewall<'a> {
     /// undeclared port is a removal. This struct carried only what it used, and what it used did
     /// not include the guard.
     pub(crate) registry: &'a std::sync::Arc<crate::backends::BackendRegistry>,
+    /// The command's teardown budget. Held rather than counted here: this phase passed `0` for
+    /// what the rest of the command had already removed, which is the whole of `S55`.
+    pub(crate) reaping: &'a crate::app::sync::guard::Reaping,
 }
 
 impl Firewall<'_> {
@@ -151,7 +154,7 @@ impl Firewall<'_> {
                 self.config,
                 self.registry,
                 &removals,
-                0,
+                self.reaping,
                 scope,
             )
             .await?;

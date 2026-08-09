@@ -15,6 +15,8 @@ pub struct Extras<'a> {
     pub(crate) executor: &'a crate::core::CommandExecutor,
     pub(crate) registry: &'a std::sync::Arc<crate::backends::BackendRegistry>,
     pub(crate) scheduler: &'a std::sync::Arc<crate::app::scheduler::SchedulerManager>,
+    /// The command's teardown budget, shared with every other phase that removes.
+    pub(crate) reaping: &'a guard::Reaping,
 }
 
 /// What a sync would do to the resources a module declares — `link:`, `service:`, `setting:`,
@@ -146,7 +148,6 @@ impl Extras<'_> {
         &self,
         state: &crate::model::DesiredState,
         scope: guard::GuardScope,
-        packages_being_removed: usize,
     ) -> Result<usize> {
         use crate::core::extras_lock::{split_key, ExtrasLedger};
 
@@ -178,7 +179,7 @@ impl Extras<'_> {
                     self.config,
                     self.registry,
                     &guard::extra_removal_pairs(&drift),
-                    packages_being_removed,
+                    self.reaping,
                     scope,
                 )
                 .await?,

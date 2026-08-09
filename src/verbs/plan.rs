@@ -316,11 +316,9 @@ pub async fn handle_plan(app: &App, out: &str) -> Result<()> {
                 crate::app::sync::guard::RemovalKind::Package,
                 0,
             ),
-            (
-                &extra_pairs,
-                crate::app::sync::guard::RemovalKind::Extra,
-                package_pairs.len(),
-            ),
+            // Zero, not `package_pairs.len()`: since `Y20` the two kinds answer to two
+            // ceilings, so a package removal no longer spends a teardown's budget.
+            (&extra_pairs, crate::app::sync::guard::RemovalKind::Extra, 0),
         ] {
             let report = crate::app::sync::guard::inspect_removals(
                 &app.config,
@@ -509,8 +507,8 @@ pub async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Result<()> {
     // The resource half, through the same phase list `sync` runs (N-2). Not a second
     // implementation: `apply_non_package_phases` is the one list, and the comment above it
     // records what four separate copies of it already cost. It carries its own guard for the
-    // teardown, and the package removals just performed are passed in so `max_removals` is a
-    // ceiling on the command rather than on each phase.
+    // teardown, against `app.reaping` — the removals this command has already cleared, which
+    // it reads rather than being told.
     let resources = if plan.resources.is_empty() {
         0
     } else {
@@ -518,7 +516,6 @@ pub async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Result<()> {
             app,
             &now.state,
             crate::app::sync::guard::GuardScope::Apply,
-            removed,
         )
         .await?
     };

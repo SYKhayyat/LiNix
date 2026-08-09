@@ -441,10 +441,10 @@ deleting a file from the tree removes its link and puts your file back, and dele
 does that for the whole tree. **A tree with its own placement loop had none of it** — it called
 `remove_file`, and a file deleted from a tree left a dangling symlink for ever. **V.139.**
 
-**A tree's removals count against `max_removals` like any others.** Deleting a `dotfiles:` line
-with more files than the ceiling is refused by name, pointing at `[guard] max_removals` — the
-same refusal twenty-one `link:` lines get, and `also_removing` puts a tree's files in the same
-budget as the packages in the same plan. Exempting a tree would be the second teardown again.
+**A tree's removals count against `max_extra_removals` like any other resource's.** Deleting a
+`dotfiles:` line with more files than the ceiling is refused by name, pointing at the setting to
+change — the same refusal twenty-one `link:` lines get, out of the same budget, because a tree is
+a pile of `link:` lines and nothing else. Exempting a tree would be the second teardown again.
 
 **Ownership is what the ledger recorded, not what the filesystem looks like.** *Did LiNix put
 this here?* is answered by the row, in union with "is it a symlink" for anything placed before
@@ -1572,7 +1572,8 @@ opinion about the packages that keep the machine running.
 | `unprotected_packages` | …unless I say so. **Wins over everything, including OS-essential** |
 | OS-essential | never remove what the OS says is load-bearing |
 | undeclarable | never remove a name no package line can hold — **not even `unprotected_packages` releases this one** |
-| `max_removals` (default **20**) | never remove more than this at once |
+| `max_removals` (default **20**) | never remove more than this many packages at once |
+| `max_extra_removals` (default **20**) | the same for resource teardowns and firewall ports — its own budget (`Y20`) |
 | `max_installs` (default **unset**) | never install more than this at once |
 | `deny_packages` | never install this |
 | `pinned_only` (default **off**) | never install anything without an explicit `@version=` |
@@ -1602,8 +1603,12 @@ in `src/` and fails on any that no ledger entry accounts for. **Both directions,
 
 **The guard covers resources, not only packages** *(owner ruling, 2026-07-28 — Q7)*. A `link:`,
 `service:`, `setting:`, `shim:`, `schedule:` or `repo:` line that leaves the model is torn down
-under `protected_packages` and against the same `max_removals` ceiling, counted **once for the
-whole command** rather than once per phase. A `protected_packages` entry matches a resource by
+under `protected_packages` and against `max_extra_removals`, counted **once for the whole
+command** rather than once per phase. That ceiling is its own (`Y20`): software leaving a machine
+and a perimeter tightening are different events, and one budget for both would make the stricter
+govern both — a server whose first `firewall:` line closes forty ports could not also remove a
+package. Both are answered by the same `--allow-mass-removal`, because "yes, that many, I meant
+it" is one question. A `protected_packages` entry matches a resource by
 its key and also by the final component of a path key, so `protected_packages = ["vimrc"]`
 protects `link:/home/u/.vimrc` — a user names the thing, not the path LiNix keys it by. The two
 checks that do **not** carry over are OS-essential (no resource manager publishes such a list)
@@ -1718,6 +1723,7 @@ false**, and a table that quietly stops describing its own function is how the l
 |---|---|
 | sync shows the plan and asks | **skips** |
 | `max_removals` exceeded | **cannot skip.** `--allow-mass-removal` |
+| `max_extra_removals` exceeded | **cannot skip.** `--allow-mass-removal` |
 | `max_installs` exceeded | **cannot skip.** `--allow-mass-install` |
 | hook script new or changed | **cannot skip.** `linix lock` |
 | protected / OS-essential | **nothing overrides** |
@@ -2697,3 +2703,30 @@ helper building the same `Unrecognised` by hand, and seven sites carried the
 `found.is_empty() && !container.is_empty()` literal. The correct rule living in six copies while
 the shared helper held the weak one is how the five backends using the shared helper became the
 unprotected ones.
+
+## II.28 A removal ceiling is a budget for the command, and there are two of them (`S55`, `Y20`, V.159)
+
+**One value per command counts what has been taken away, and the `enforce*` family is the only
+thing that reads or writes it.** Not a `usize` each caller assembles: a sync removes in four
+places, and a number three callers compute is a number one of them computes wrong.
+
+**Two counts, two ceilings** (`Y20`):
+
+- **`max_removals`** (default 20) — packages. Software leaving the machine.
+- **`max_extra_removals`** (default 20) — every resource teardown: `link:`, `service:`,
+  `setting:`, `shim:`, `schedule:`, `repo:`, a `dotfiles:` tree's files, and a port closed
+  because no `firewall:` line declares it.
+
+**Neither spends the other's budget**, and each is spent across the whole command. The firewall
+phase and the extras teardown are both extras, so fifteen ports followed by ten links is
+twenty-five against one ceiling and is refused — the failure that made this a rule was two
+phases each passing a limit the run exceeded once.
+
+**A refusal names the ceiling it hit.** `[guard] max_removals` printed over a port closure sends
+the reader to the wrong line.
+
+**A refused set is not recorded.** A removal that was never allowed must not raise the total the
+next phase is measured against.
+
+**`--allow-mass-removal` answers both counts and nothing else.** Protection remains a refusal
+(V.26): nothing overrides it, on either kind.

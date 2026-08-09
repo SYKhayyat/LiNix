@@ -146,7 +146,7 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
         // placement half is counted here too — `repo:` is phase 1 and was applied above, so a
         // run that reaches this line can still have put a resource in place.
         let resources = app.extras().changes(&state).await?;
-        let undone = app.extras().reconcile(&state, opts.scope, 0).await?;
+        let undone = app.extras().reconcile(&state, opts.scope).await?;
         return Ok(Reconciled {
             applied: resources.place.len() + undone,
             left_in_place: changes.skipped.len(),
@@ -154,7 +154,6 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
     }
 
     let applied = changes.total_install() + changes.total_remove();
-    let mut removed_packages = changes.total_remove();
     // Read before the plan is consumed by the engine below.
     let left_in_place = changes.skipped.len();
 
@@ -171,8 +170,7 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
     if app.config.dry_run {
         // The same phases a real run would perform, in the same order, from the same list —
         // each honours `dry_run` itself and previews instead of acting.
-        let extras_undone =
-            apply_non_package_phases(app, &state, opts.scope, changes.total_remove()).await?;
+        let extras_undone = apply_non_package_phases(app, &state, opts.scope).await?;
         return Ok(Reconciled {
             applied: applied + extras_undone,
             left_in_place: changes.skipped.len(),
@@ -203,16 +201,19 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
         }
 
         // Read before the plan is consumed, and used after the sync succeeds: a warning about
-        // a package that failed to install would be answering a question nobody reached. The
-        // removal count is read here too — after the TUI may have filtered the plan, so the
-        // extras ceiling counts what is actually being removed, not what was proposed.
+        // a package that failed to install would be answering a question nobody reached.
+        //
+        // The removal count is no longer read here. It used to be, and passed down to the
+        // teardown so `max_removals` was a ceiling on the command — a number two callers
+        // assembled correctly and one passed as `0` (`S55`). `app.reaping` is that number now,
+        // written where the guard clears a set, so it counts what was actually removed rather
+        // than what a caller believed had been.
         let installed_by = backends_that_installed(&changes);
-        removed_packages = changes.total_remove();
         engine.sync(changes, opts.scope).await?;
         warn_about_unreachable_binaries(app, &installed_by).await;
     }
 
-    let extras_undone = apply_non_package_phases(app, &state, opts.scope, removed_packages).await?;
+    let extras_undone = apply_non_package_phases(app, &state, opts.scope).await?;
     perform_maintenance(app).await?;
     Ok(Reconciled {
         applied: applied + extras_undone,
@@ -269,7 +270,6 @@ pub async fn apply_non_package_phases(
     app: &App,
     state: &crate::model::DesiredState,
     scope: crate::app::sync::guard::GuardScope,
-    packages_being_removed: usize,
 ) -> Result<usize> {
     use crate::config::grammar::Phase;
 
@@ -305,14 +305,12 @@ pub async fn apply_non_package_phases(
 
     // The teardown (S20): undo extras that were applied before but are no longer declared.
     // Not a `Phase` — a phase is where a *declaration's* work happens, and this is the half
-    // that runs on the declarations that are gone. The package removals already planned are
-    // passed in, so `max_removals` is a ceiling on the command rather than on each phase — a
-    // sync dropping three packages and three links removes six things, and a limit of five
-    // has to see six.
-    let undone = app
-        .extras()
-        .reconcile(state, scope, packages_being_removed)
-        .await?;
+    // that runs on the declarations that are gone.
+    //
+    // It runs after `Phase::Firewall`, and both spend the same `max_extra_removals` budget:
+    // `app.reaping` carries the ports already closed into this call, so a run that closes
+    // fifteen and then tears down ten is refused at twenty-five rather than passing twice.
+    let undone = app.extras().reconcile(state, scope).await?;
     Ok(resources.place.len() + undone)
 }
 

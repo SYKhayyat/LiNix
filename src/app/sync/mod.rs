@@ -59,6 +59,9 @@ pub struct SyncEngine<'a> {
     pub journal: Arc<Mutex<Journal>>,
     pub state: Arc<Mutex<StateRegistry>>,
     pub diagnostics: Arc<FailureDiagnosticEngine>,
+    /// The command's removal budget, shared with the extras teardown and the firewall so the
+    /// ceilings are one budget for the run.
+    pub reaping: Arc<guard::Reaping>,
 }
 
 impl<'a> SyncEngine<'a> {
@@ -74,6 +77,7 @@ impl<'a> SyncEngine<'a> {
         journal: Arc<Mutex<Journal>>,
         state: Arc<Mutex<StateRegistry>>,
         diagnostics: Arc<FailureDiagnosticEngine>,
+        reaping: Arc<guard::Reaping>,
     ) -> Self {
         Self {
             config,
@@ -86,6 +90,7 @@ impl<'a> SyncEngine<'a> {
             journal,
             state,
             diagnostics,
+            reaping,
         }
     }
 
@@ -206,9 +211,25 @@ impl<'a> SyncEngine<'a> {
             let removals = guard::removal_pairs(&changes);
             let reaped = match scope {
                 guard::GuardScope::PurgeUndeclared => {
-                    guard::enforce_deliberate(self.config, &self.registry, &removals, scope).await?
+                    guard::enforce_deliberate(
+                        self.config,
+                        &self.registry,
+                        &removals,
+                        &self.reaping,
+                        scope,
+                    )
+                    .await?
                 }
-                _ => guard::enforce(self.config, &self.registry, &removals, scope).await?,
+                _ => {
+                    guard::enforce(
+                        self.config,
+                        &self.registry,
+                        &removals,
+                        &self.reaping,
+                        scope,
+                    )
+                    .await?
+                }
             };
 
             // The install-side ceiling (II.10): a mis-globbed manifest schedules a flood of
@@ -912,6 +933,7 @@ impl<'a> SyncEngine<'a> {
                     self.config,
                     &self.registry,
                     &removal,
+                    &self.reaping,
                     guard::GuardScope::Heal,
                 )
                 .await

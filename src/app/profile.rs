@@ -34,6 +34,9 @@ pub struct ProfileManager {
     config: Arc<Config>,
     diagnostics: Arc<FailureDiagnosticEngine>,
     layout: Layout,
+    /// The command's removal budget. Activating a profile is a full converge, and it spends the
+    /// same ceilings as any other.
+    reaping: Arc<crate::app::sync::guard::Reaping>,
 }
 
 impl ProfileManager {
@@ -49,6 +52,7 @@ impl ProfileManager {
         state: Arc<Mutex<StateRegistry>>,
         config: Arc<Config>,
         diagnostics: Arc<FailureDiagnosticEngine>,
+        reaping: Arc<crate::app::sync::guard::Reaping>,
     ) -> Self {
         let layout = config.layout();
         Self {
@@ -63,6 +67,7 @@ impl ProfileManager {
             config,
             diagnostics,
             layout,
+            reaping,
         }
     }
 
@@ -436,6 +441,7 @@ impl ProfileManager {
             self.journal.clone(),
             self.state.clone(),
             self.diagnostics.clone(),
+            self.reaping.clone(),
         )
         .await;
 

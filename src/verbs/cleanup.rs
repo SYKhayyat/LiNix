@@ -304,6 +304,7 @@ pub async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Resul
         &app.config,
         &app.registry,
         &removals,
+        &app.reaping,
         crate::app::sync::guard::GuardScope::PurgeUndeclared,
     )
     .await?;

@@ -42,7 +42,7 @@ pub async fn handle_repo(app: &App, cmd: &RepoCommand) -> Result<()> {
                 &app.config,
                 &app.registry,
                 &[("repo".to_string(), format!("{}:{}", b_name, name))],
-                0,
+                &app.reaping,
                 crate::app::sync::guard::GuardScope::Remove,
             )
             .await?;
