@@ -116,6 +116,22 @@ pub fn extra_key(stmt: &Statement) -> Option<ExtraKey> {
         // command, not a noun with an inverse. Its output declarations ARE nouns and are keyed
         // here individually once merged, but the generate line itself has no teardown.
         Statement::Exec(..) | Statement::Generate(..) | Statement::Dotfiles(..) => None,
+        // **A setting is keyed with its scope**, because the teardown resets what the
+        // declaration wrote and `@scope=` is the only thing that says where that was. Without
+        // it the key is `setting:org.gnome.x/y` for both a user line and a system one, and the
+        // removal reset the store's default scope — so deleting a `setting:x@scope=system` line
+        // reset the USER key and left the machine-wide value in place, silently.
+        //
+        // Unscoped keys stay exactly as they were: `@scope=` is written only to override a
+        // store's own default, so a key with no suffix means that default, which is what every
+        // existing row in every ledger already means.
+        Statement::Setting(name, opts) => Some(ExtraKey::new(
+            ResourceKind::Setting,
+            match opts.one("scope") {
+                Some(scope) => format!("{}@scope={}", name, scope),
+                None => name.clone(),
+            },
+        )),
         // Everything else with a keyword is a noun with an inverse: deleting a `firewall:` line
         // closes the port (N5), deleting a `service:` line disables the service.
         //
@@ -264,6 +280,54 @@ mod tests {
         assert!(extra_key(&Statement::Exec("./x.sh".into(), o())).is_none());
         assert!(extra_key(&Statement::Generate("./x.sh".into(), o())).is_none());
         assert!(extra_key(&Statement::Dotfiles("tree".into(), o())).is_none());
+    }
+
+    /// **The scope rides the key, because by teardown time the line that carried it is gone.**
+    ///
+    /// `setting:x@scope=system` and `setting:x` were the same ledger row, so removing the
+    /// system-scoped line reset the USER key and left the machine-wide value in place, reporting
+    /// success. The removal reads the scope back off the subject; an unscoped key still means
+    /// the store's own default, which is what every row written before this said.
+    #[test]
+    fn a_scoped_setting_is_a_different_row_from_an_unscoped_one() {
+        let mut system = Options::default();
+        system.insert("scope", "system");
+        let scoped = extra_key(&Statement::Setting("org.gnome.desktop/theme".into(), system))
+            .expect("a setting is an extra");
+        assert_eq!(
+            scoped.to_string(),
+            "setting:org.gnome.desktop/theme@scope=system"
+        );
+
+        let plain = extra_key(&Statement::Setting(
+            "org.gnome.desktop/theme".into(),
+            Options::default(),
+        ))
+        .expect("a setting is an extra");
+        assert_eq!(plain.to_string(), "setting:org.gnome.desktop/theme");
+
+        assert_ne!(
+            scoped, plain,
+            "one row for both scopes is how a system reset became a user reset"
+        );
+        // Both still round trip, and the scope stays in the subject rather than becoming a
+        // second kind: the teardown dispatches on the kind and reads the rest.
+        for key in [&scoped, &plain] {
+            assert_eq!(key.kind, ResourceKind::Setting);
+            assert_eq!(
+                key.to_string().parse::<ExtraKey>().as_ref(),
+                Ok(key),
+                "`{key}` does not read back"
+            );
+        }
+        // And deleting a system line leaves an unscoped declaration of the same key alone.
+        let ledger_had = [scoped.to_string()].into_iter().collect();
+        let mut ledger = ExtrasLedger::new();
+        ledger.record(ledger_had);
+        assert_eq!(
+            ledger.drift(&[plain.to_string()].into_iter().collect()),
+            vec![scoped.to_string()]
+        );
     }
 
     #[test]

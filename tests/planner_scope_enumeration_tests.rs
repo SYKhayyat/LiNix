@@ -11,7 +11,8 @@
 //! **Why a source scan and not a behavioural test.** `a_plan_reaps_only_what_it_was_asked_about`
 //! proves the planner honours each variant and that the two callers reachable from an
 //! integration test pass the right one. It cannot reach `src/verbs/` at all — `main.rs` declares
-//! `mod verbs;`, private to the binary — and two of the four bugs were in there. A scan reaches
+//! `mod verbs;`, private to the binary at the time — it is `pub mod verbs;` in `lib.rs` now —
+//! and two of the four bugs were in there. A scan reaches
 //! them, and it also catches the site nobody has written yet, which is the shape this defect
 //! keeps taking: `plan`/`apply` sat three lines of git history from the sibling that had the
 //! fix *and the comment explaining it*, in the same file, and did not get it.

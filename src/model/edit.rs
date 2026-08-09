@@ -179,6 +179,33 @@ impl<'a> Editor<'a> {
     ///
     /// A failed write is an error that names the file. "Permission denied" with no path is a
     /// message nobody can act on.
+    /// Reassemble lines with the line ending the file already used.
+    ///
+    /// **The grammar goes out of its way to accept a BOM because that is what Notepad writes,
+    /// and then every rewrite converted the file to LF, which is the other thing Notepad
+    /// writes.** `str::lines()` drops the carriage return along with the newline, so rejoining
+    /// with a bare newline turns a CRLF module into an LF one in full: one `linix install`
+    /// becomes a whole-file diff, and every later `git blame` points at the run that touched
+    /// the line endings instead of at the change. Two halves of one courtesy, one delivered.
+    ///
+    /// Decided by what the file actually contains rather than by the platform: a CRLF file on
+    /// Linux and an LF file on Windows are both ordinary, and the answer is the same either
+    /// way - leave it as it was found. A file with no newline at all takes the platform's.
+    fn rejoin(original: &str, lines: &[String]) -> String {
+        let eol = if original.contains("\r\n") {
+            "\r\n"
+        } else if original.contains('\n') {
+            "\n"
+        } else if cfg!(windows) {
+            "\r\n"
+        } else {
+            "\n"
+        };
+        let mut body = lines.join(eol);
+        body.push_str(eol);
+        body
+    }
+
     fn write(&self, path: &std::path::Path, body: &str) -> Result<()> {
         if self.writes == Writes::Planned {
             return Ok(());
@@ -318,9 +345,7 @@ impl<'a> Editor<'a> {
             out.push(line.to_string());
         }
 
-        let mut body = out.join("\n");
-        body.push('\n');
-        body
+        Self::rejoin(existing, &out)
     }
 
     /// `backend:name` for a package line, `None` for anything else.
@@ -467,8 +492,7 @@ impl<'a> Editor<'a> {
             if hit.is_empty() {
                 continue;
             }
-            let mut new_body = out.join("\n");
-            new_body.push('\n');
+            let new_body = Self::rejoin(&body, &out);
             self.write(file, &new_body)?;
             for line in hit {
                 edits.push(Edit {
@@ -522,8 +546,7 @@ impl<'a> Editor<'a> {
             if !changed {
                 continue;
             }
-            let mut new_body = out.join("\n");
-            new_body.push('\n');
+            let new_body = Self::rejoin(&body, &out);
             self.write(file, &new_body)?;
         }
         Ok(edits)

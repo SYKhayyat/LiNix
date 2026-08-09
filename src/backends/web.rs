@@ -234,7 +234,16 @@ impl Installable for WebInstallable {
                 }
             }
 
-            let id = format!("{:x}", md5::compute(&spec.name));
+            // A directory name derived from the URL, so two downloads cannot collide. `sha2`
+            // rather than `md5`: the crate was already a dependency for checksum verification,
+            // and carrying a second hash implementation for one cache key is a supply-chain
+            // line item to explain in a tool whose pitch is being careful about those. Truncated
+            // to 32 hex characters — this names a folder, it does not verify anything.
+            let id = {
+                use sha2::{Digest, Sha256};
+                let digest = Sha256::digest(spec.name.as_bytes());
+                format!("{:x}", digest)[..32].to_string()
+            };
             let dest_dir = self.core.install_dir.join(&id);
             if dest_dir.exists() {
                 tokio::fs::remove_dir_all(&dest_dir)

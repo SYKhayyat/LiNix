@@ -545,16 +545,45 @@ fn gating_of(
         .collect()
 }
 
-/// Ask the resolver where `backend:name` is declared.
+/// The configuration, resolved once, for every question `why` asks of it.
 ///
-/// An error is returned, never swallowed into "declared nowhere": a `why` that cannot read
-/// your files must say so, or it reports a broken config as an absent declaration.
-async fn declarations_of(app: &App, backend: &str, name: &str) -> Result<Declared> {
-    let resolver =
-        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
-            .await;
-    let state = resolver.resolve_model().await?;
-    let (vars, var_origins) = resolver.resolve_vars_with_origins().await?;
+/// **`declarations_of` used to resolve it itself, inside the loop over matches** — so a name two
+/// backends carry resolved the whole model twice, and every `vars` file with it. `why` is a read
+/// command whose entire job is to answer from the configuration; resolving it per match is the
+/// one cost in it that scales with an answer's length rather than with the question's.
+struct ResolvedConfig {
+    state: crate::model::DesiredState,
+    vars: std::collections::HashMap<String, String>,
+    var_origins: std::collections::HashMap<String, String>,
+}
+
+impl ResolvedConfig {
+    /// An error is returned, never swallowed into "declared nowhere": a `why` that cannot read
+    /// your files must say so, or it reports a broken config as an absent declaration.
+    async fn read(app: &App) -> Result<Self> {
+        let resolver = crate::app::sync::resolver::StateResolver::new(
+            &app.config,
+            app.registry.clone(),
+            false,
+        )
+        .await;
+        let state = resolver.resolve_model().await?;
+        let (vars, var_origins) = resolver.resolve_vars_with_origins().await?;
+        Ok(Self {
+            state,
+            vars,
+            var_origins,
+        })
+    }
+}
+
+/// Ask the resolved configuration where `backend:name` is declared.
+fn declarations_of(config: &ResolvedConfig, backend: &str, name: &str) -> Declared {
+    let ResolvedConfig {
+        state,
+        vars,
+        var_origins,
+    } = config;
 
     let lapsed_keys: Vec<&str> = state.lapsed.iter().map(|(k, _)| k.as_str()).collect();
     let key = format!("{}:{}", backend, name);
@@ -568,7 +597,7 @@ async fn declarations_of(app: &App, backend: &str, name: &str) -> Result<Declare
             out.formats = format_choice(backend, &spec.options);
         }
         if out.gating.is_empty() {
-            out.gating = gating_of(&spec.options, &vars, &var_origins);
+            out.gating = gating_of(&spec.options, vars, var_origins);
         }
         out.declarations.push(Declaration {
             at: spec
@@ -580,10 +609,10 @@ async fn declarations_of(app: &App, backend: &str, name: &str) -> Result<Declare
             lapsed: lapsed_keys.contains(&key.as_str()),
         });
     }
-    Ok(out)
+    out
 }
 
-/// Explain why a package is present: how it entered management, and what depends on it./// Explain why a package is present: how it entered management, and what depends on it.
+/// Explain why a package is present: how it entered management, and what depends on it.
 /// With `as_json`, emit the same provenance as a machine-readable array instead of text.
 /// The artifact `why` should explain (D14): the installed file for a download backend, and the
 /// rule that chose it, read from `locks/<backend>.toml`.
@@ -692,10 +721,13 @@ pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
     }
 
     let mut json_matches: Vec<serde_json::Value> = Vec::new();
+    // Once, before the loop. Two backends carrying one name is an ordinary answer and used to
+    // cost two full resolutions of every file you own.
+    let config = ResolvedConfig::read(app).await?;
 
     for (backend, name, version, source, expires) in matches {
         // Where your files declare it, from the resolver — the same answer `sync` acts on.
-        let found = declarations_of(app, &backend, &name).await?;
+        let found = declarations_of(&config, &backend, &name);
         let formats = found.formats.clone();
         let declarations: Vec<String> = found.declarations.iter().map(|d| d.describe()).collect();
         let gating: Vec<String> = found.gating.iter().map(|g| g.describe()).collect();

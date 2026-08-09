@@ -360,21 +360,50 @@ impl Installable for SettingInstallable {
 
     async fn remove(&self, names: &[String], _sudo: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
         for name in names {
-            let (schema, key) = SettingBackendCore::split(name)?;
+            // **A removal resets the key where the declaration put it, which means it has to
+            // know where that was.** The scope rides the extras-ledger key — `setting:x@scope=
+            // system` — because it is the only place it can: by the time the teardown runs, the
+            // line that carried `@scope=` is gone. Before this the removal always reset
+            // `Scope::User`, so deleting a system-scoped line reset the *user* key and left the
+            // machine-wide value in place, reporting success.
+            let (bare, scope) = split_scope(name);
+            let (schema, key) = SettingBackendCore::split(bare)?;
             // A store with no adapter never held the value, so there is nothing to reset and
             // nothing to fail on.
             let Some(adapter) = self.core.adapter() else {
                 continue;
             };
-            // A removal resets the key where the declaration put it. Scope is not carried on a
-            // removal (only names are), so this resets the store's default scope — which is
-            // where an unscoped declaration wrote, the case that exists today.
-            let (prog, args) = adapter.reset_command(Scope::User, schema, key);
+            // A store with no machine-wide commands cannot have written a machine-wide value,
+            // so there is nothing there to reset — and resetting the user key instead is the
+            // bug this whole path is about. `scope_of` refuses that combination at apply time.
+            if scope == Scope::System && !adapter.has_system_scope() {
+                continue;
+            }
+            let (prog, args) = adapter.reset_command(scope, schema, key);
             let refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core.executor.run(&prog, &refs, false).await?;
-            info!("Setting {}/{} reset to its default", schema, key);
+            info!(
+                "Setting {}/{} reset to its default ({} scope)",
+                schema,
+                key,
+                scope.as_str()
+            );
         }
         Ok(())
+    }
+}
+
+/// Split a `SCHEMA/KEY@scope=system` ledger subject into the key and the scope it was written
+/// at. No suffix means the store's own default, which is what an unscoped declaration means and
+/// what every ledger row written before this said.
+///
+/// An unrecognised scope spelling reads as the default rather than refusing: this runs during a
+/// teardown, and a row LiNix cannot fully parse is still a row naming something it put there.
+/// Resetting the default is what it did before the scope was carried at all.
+fn split_scope(subject: &str) -> (&str, Scope) {
+    match subject.split_once("@scope=") {
+        Some((bare, scope)) => (bare, Scope::parse(scope).unwrap_or(Scope::User)),
+        None => (subject, Scope::User),
     }
 }
 

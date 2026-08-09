@@ -105,7 +105,9 @@ fn ord_is_the_run_order() {
     );
 }
 
-/// The half the compiler cannot reach: `verbs/` is private to the binary (`main.rs`), so no
+/// The half a single call cannot reach. `verbs/` is public from the library now (`lib.rs`'s
+/// `pub mod verbs;`), so this is not about reachability — it is that the claim is about every
+/// phase in the list, and exercising one says nothing about the others. No
 /// test binary can call `apply_non_package_phases`. The `match` inside it is exhaustive, so
 /// the compiler does force an arm per phase — but only for whoever builds the binary, and a
 /// phase can still be dispatched to nothing by being folded into the ignored arm. This asserts

@@ -2878,3 +2878,23 @@ untested by construction.
 **LiNix is `MIT OR Apache-2.0`** (`Z1`). Both files are at the root, the SPDX expression is in
 `Cargo.toml`, and LiNix's own crate answers the same `cargo deny` licence gate as every
 dependency.
+
+## II.35 A rewrite leaves everything it was not asked to change (`S63`, `S64`, V.166)
+
+**A file LiNix edits keeps its line endings.** `str::lines()` drops the carriage return, so
+rejoining with a bare newline converts a CRLF file to LF in full — one added package becomes a
+whole-file diff, and the grammar accepts a BOM precisely because Notepad writes one, and Notepad
+writes CRLF too. The ending is read from the file being rewritten, never from the platform.
+
+**A teardown undoes what the declaration did, at the place it did it.** Where a declaration's
+effect depends on an option — `setting:x@scope=system` — the ledger key carries that option,
+because by teardown time the line is gone and the ledger is the only record left. Resetting the
+default scope instead is not a smaller version of the right answer; it changes a different key
+and reports success.
+
+**A read command resolves the configuration once.** `linix why` is answering *from* your files;
+resolving them again per match makes the cost of an answer scale with the answer's length.
+
+**A comment justifying a check must be true, or the check dies with it.** Three source scans were
+justified by "`verbs/` is private to the binary" — it is `pub mod verbs;` — and a scan resting on
+a false reason is one the next reader deletes.

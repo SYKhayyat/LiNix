@@ -5261,3 +5261,46 @@ script gives them. Two placeholders went with it, and both were honest while the
 `publish = false`, which said *crates.io would refuse this anyway*, and `deny.toml`'s
 `private = { ignore = true }`, which existed so a lint config would not answer the owner's legal
 question by implication. Neither has anything left to stand for.
+
+---
+
+**V.166 — Why four unrelated one-liners share a reason.**
+*(Rule in II.35. Fixed 2026-08-09, `S63`, `S64`.)*
+
+They are all the same failure: **a rewrite that changed something nobody asked it to change, and
+a comment that had made peace with it.**
+
+**The CRLF one is the clearest.** `model/edit.rs` rejoined with `"\n"` at three sites, so every
+`linix install` on a Windows-authored module rewrote the whole file's line endings. Nobody
+noticed because the *content* diff is one line — it is `git diff` that shows four hundred, and
+by then the change has been committed. The sharp detail is one file over: the grammar accepts a
+leading BOM, and the comment explaining why says *because that is what Notepad writes*. Notepad
+writes CRLF as well. Somebody thought carefully about meeting that editor halfway and then
+delivered one half of the courtesy.
+
+**The `setting:` scope is the same shape with worse consequences**, and it came with a comment
+that stated its own cause: *"Scope is not carried on a removal (only names are), so this resets
+the store's default scope — which is where an unscoped declaration wrote, the case that exists
+today."* Both clauses are true. The conclusion does not follow: `@scope=system` is a spelling the
+grammar accepts and `scope_of` writes a bespoke refusal for, so the case that exists today is not
+the only case. Deleting such a line reset the *user* key, left the machine-wide value in place,
+and said the line had been undone.
+
+The fix is where the fix for this class always is — **carry the fact to where the decision is
+made**. By teardown time the declaration is gone, so the ledger key is the only record left, and
+the key now carries the scope. An unscoped key means the store's default, which is exactly what
+every row written before this meant, so nothing on disk changes meaning.
+
+**`linix why` re-resolving per match** is the same instinct in the read path: the function that
+needed the configuration fetched it itself, which is right until it is called in a loop. Two
+backends carrying one name — an ordinary answer — read every file you own twice.
+
+**And `md5`** is a supply-chain line item for one cache-directory name, beside `sha2`, in a tool
+whose pitch is being careful about exactly that.
+
+**The fourth is not a bug in the code and is here because it is the most dangerous.** Three
+source scans justify themselves with *"`verbs/` is private to the binary"*. It is
+`pub mod verbs;`, and `verbs_are_reachable_tests.rs` imports through it. The scans are still the
+right technique — the claim is about *every* call site, and calling one proves nothing about the
+other forty — but they were resting on a reason that is false, and a check with a false reason is
+the one the next careful reader deletes. Fixing the reason is what keeps the check.

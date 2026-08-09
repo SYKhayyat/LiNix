@@ -10,7 +10,10 @@
 // So the tests here are not four tests of four call sites. They are the property — *a plan
 // removes only what its desired set was actually asked about, and only from the managers
 // `priority` names* — put to the planner directly, and then to the two callers reachable from an
-// integration test. `verbs/` is private to the binary (`main.rs:10`), so `plan`/`apply` and
+// integration test. `verbs/` is reachable from the library now (`lib.rs`'s `pub mod verbs;`,
+// which `verbs_are_reachable_tests.rs` imports through), so the reason this is a source scan
+// is not that the code cannot be called: it is that the claim is about EVERY call site, and
+// calling one proves nothing about the rest. `plan`/`apply` and
 // `upgrade --canary` are covered by `planner_scope_enumeration_tests` instead, which reads their
 // source.
 //
