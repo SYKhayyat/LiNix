@@ -7,7 +7,6 @@
 use crate::core::Package;
 use crate::parsers::{ParseResult, Unrecognised};
 use crate::utils::text::sanitize;
-use serde_json::Value;
 
 /// `serde_json::from_str(..).unwrap_or_default()` gives `Value::Null`, and every accessor below
 /// then answers `None`, and every `unwrap_or_default()` after that gives the empty vector — so
@@ -34,7 +33,7 @@ fn unreadable(what: &str, output: &str) -> Unrecognised {
 /// full export; it carries pip's packages, not conda's, and is skipped.
 pub fn parse_conda_history(output: &str) -> ParseResult {
     let clean = sanitize(output);
-    let Ok(json) = serde_json::from_str::<Value>(&clean) else {
+    let Some(json) = crate::parsers::json_document(&clean) else {
         return Err(unreadable("not JSON", &clean));
     };
     let Some(deps) = json.get("dependencies").and_then(|d| d.as_array()) else {
@@ -65,7 +64,7 @@ pub fn parse_conda_history(output: &str) -> ParseResult {
 /// Parses `conda list -n <env> --json` — an array of `{ "name", "version", ... }`.
 pub fn parse_conda_list(output: &str) -> ParseResult {
     let clean = sanitize(output);
-    let Ok(json) = serde_json::from_str::<Value>(&clean) else {
+    let Some(json) = crate::parsers::json_document(&clean) else {
         return Err(unreadable("not JSON", &clean));
     };
     let Some(arr) = json.as_array() else {
@@ -90,7 +89,7 @@ pub fn parse_conda_list(output: &str) -> ParseResult {
 /// (last) build's version. A `{ "error": ... }` payload (no match) yields no results.
 pub fn parse_conda_search(output: &str) -> Vec<Package> {
     let clean = sanitize(output);
-    let json: Value = serde_json::from_str(&clean).unwrap_or_default();
+    let json = crate::parsers::json_document(&clean).unwrap_or_default();
     let Some(obj) = json.as_object() else {
         return vec![];
     };

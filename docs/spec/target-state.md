@@ -2638,3 +2638,34 @@ acquisition is at the mutation, and neither is inferred from the other.
 **A user verb takes the lock when any of its steps writes** — not when the first does, and not
 unconditionally. One lock spans the whole verb, because two steps that have to agree about the
 same registry must not have it released between them.
+
+## II.25 A query answers about the machine; the catalogue answers a different question (`S53`, V.156)
+
+**`Queryable::info` means *is this installed here, and at what version*.** `Some` is present;
+`None` is absent; `Err` is *could not ask*, which is a third answer and never a synonym for the
+second. `Searchable` is where *could this be installed* is asked, and nothing else may answer it
+in `info`'s place.
+
+**A backend whose query tool answers from a catalogue must find the installed record inside that
+answer.** `brew info`, `snap info` and a marketplace endpoint all describe things that are merely
+publishable. Each of those reports carries the local fact somewhere — `installed: []`, the
+`installed:` line, the local CLI's own listing — and that is the part `info` is about. **The
+version comes from the installed record too, never from `latest` or `stable`**: a drift check
+compares the declaration against what is on disk, and comparing it against upstream's newest
+build re-installs for ever the moment upstream publishes.
+
+**The name a listing returns is the name an install was given.** State keyed by a URL is listed
+by that URL; a subvolume created at `/mnt/data/vol` is listed as `/mnt/data/vol`. A name `list`
+does not return is a package `sync` believes is absent, and it re-creates it on every run.
+
+## II.26 A `--json` flag buys the shape of the answer, not the whole stream (`S51`, V.157)
+
+**Manager output is read for the document inside it, never parsed from byte zero.** One reader,
+`parsers::json_document`. It finds the first document and stops at the end of it, so a banner
+above and a summary below are both survivable — and both are real: composer prints
+`Changed current directory to …` ahead of every global command, and it is not the only one.
+
+**A syntax error is not an empty machine.** A reader that answers `unwrap_or_default()` to
+unparseable bytes reports nothing installed, which plans every declaration as a fresh install and
+drops every removal — the `LX-1` failure again, one layer up. `json_document` returns `Option`
+precisely so the caller has to say which of the two it means.

@@ -4712,3 +4712,91 @@ reader-set assertion goes red naming the diff, and the clap-driven classificatio
 naming `history`. The reader set is read out of `Commands::writes` itself rather than restated,
 so a variant moving between the arms appears as a diff in this file — which is precisely what a
 list living seventy lines away could never do.
+
+---
+
+**V.156 — Why `info` is about the machine, and how three backends came to answer the catalogue.**
+*(Rule in II.25. Fixed 2026-08-09, `S53`, `S52`.)*
+
+**`Queryable::info` had no doc comment.** Not a short one — none. Fourteen implementations, one
+undocumented signature, and the meaning lived entirely in the call sites: `spec_is_missing` reads
+`Ok(None)` as *schedule an install*, `prior_state` reads it as *this was absent before we
+started*, and `linix info` prints *"is not installed on this machine"* from it. Those call sites
+are heavily commented — `planner.rs` explains at length why `Err` must not be read as absence —
+and every one of those comments is on the reading side of the boundary.
+
+Three backends answered the other question:
+
+- **`vscode` POSTed to `marketplace.visualstudio.com`** and returned `Some` for anything
+  published, carrying the marketplace's *latest* version. Every plan therefore made one
+  rate-limited HTTPS POST per declared extension, and every one of them said "already installed".
+- **`brew info --json=v1`** prints a full record for any formula in any tapped repository. The
+  code read `installed[0]` for its `prefix` and `installed_as_dependency` — so it *had* the field
+  that distinguishes a tap from a machine in its hand — and ignored whether the array was empty.
+- **`snap info`** answers from the store. The local helper `installed_state` returns `None` for a
+  store-only report, its doc comment says *"`snap info` answers happily for a snap that only
+  exists in the store, and reading that as installed would send every first install down the
+  refresh path"*, and there is a test pinning it. `info` did not call it for that.
+
+**The failure is the same in all three, and it is silent in the worst direction.** The planner
+asks *is it missing?*, hears *no*, and schedules nothing; `linix install vscode:x` prints success
+having done nothing at all. Then the version half: a `@version=` pin compares against upstream's
+newest published build, so the moment a new one appears the pin is "drifted" and re-installs on
+every sync, for ever, without ever converging.
+
+**This was already known.** `mise.rs:183` carries the obituary in a doc comment — *"It used to
+ask `mise plugins ls --all`, which lists every plugin mise has ever heard of… `linix install
+mise:jq` reported already up to date while installing nothing"* — found by the `tools` container
+on 2026-07-24, with an assertion at `:409` that the catalogue is never consulted. **The test that
+would have caught vscode, brew and snap already existed, written against the fourth backend.**
+That is what a family looks like when only one member is fixed: the diagnosis is perfect, the
+prose is quotable, and the bug is still shipping in three other files.
+
+**`appimage` is the same shape one field over** (`S52`). `install` keys its state by the URL,
+because for that backend the URL *is* the name; `fetch_installed` reported the basename. `info`
+compares the two and never matched, so every declared AppImage read as absent and `sync`
+re-downloaded all of them on every run, for ever. `btrfs.rs` carries a test for exactly this,
+dated 2026-07-30, whose comment reads *"A name `list` does not return is a package `sync`
+believes is absent: it re-creates it on every run, for ever."* Diagnosed, named, tested, and
+fixed in one member.
+
+**So the contract is now on the trait method** rather than distributed across its readers, and
+the rule it states is the one the four fixes have in common: the answer is about this machine,
+and the version is the one on disk.
+
+---
+
+**V.157 — Why the JSON is found rather than assumed, and why that is one function.**
+*(Rule in II.26. Fixed 2026-08-09, `S51`.)*
+
+composer prints `Changed current directory to /root/.composer` ahead of every global command
+whenever a global config directory exists — which is every machine that has ever run
+`composer global`, i.e. every machine that has a composer package to manage. Parsed from byte
+zero that banner is a syntax error.
+
+`parse_composer_json` answered a syntax error with `unwrap_or_default()`, which is `Value::Null`,
+which answers `None` to every accessor, which yields the empty vector. **So the installed listing
+`sync` plans from was empty on every real machine**: every declared PHP package a fresh install,
+every removal silently dropped. That is `LX-1`'s failure — *nothing in the chain believed
+anything had failed* — reappearing one layer above the place `LX-1` fixed it.
+
+**The comment explaining the banner was already in this repo, two lines from the wiring.**
+`registry.rs:1933` describes it exactly, attached to the `outdated` probe, whose parser opens
+with `text.find('{')`. The installed reader, sitting on the line above, did not. Two lines apart,
+one of them right — which is the argument for a shared function rather than for a second correct
+copy: the sibling's fix is now the only implementation, and `parse_composer_outdated`'s bespoke
+`find('{')` was deleted rather than left as a second one.
+
+**Stopping at the end of the first value is the other half.** `serde_json::from_str` rejects
+trailing bytes, so a manager that prints a summary line *below* its document fails for the mirror
+image of the same reason. A stream deserializer reads one value and does not care what follows.
+
+**The fallback is anchored to a line start, not to the next brace.** If the first bracket byte
+turns out to be inside the banner — a path with a `{` in it — the retry looks for a line that
+*opens* with a bracket. Scanning forward brace by brace would eventually find a nested object
+inside a malformed document and return one sub-tree of it, confidently and wrongly, which is
+worse than returning nothing.
+
+**And it returns `Option`, not `Value::Null`.** The whole failure above is a caller that could
+not tell "I did not understand this" from "there is nothing here". A reader that hands back
+`Null` for both makes that distinction unavailable to everyone downstream.

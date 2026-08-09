@@ -85,6 +85,47 @@ pub fn is_prose_line(line: &str) -> bool {
         .is_some_and(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_digit()))
 }
 
+/// The JSON document inside a manager's output, which is not always the whole of it.
+///
+/// **A `--json` flag buys the shape of the answer, not sole possession of the stream.**
+/// composer prints `Changed current directory to /root/.composer` ahead of every global
+/// command whenever a global config dir exists, which is every machine that has ever run
+/// `composer global`. Parsed from byte zero that is a syntax error, and a reader that answers
+/// `unwrap_or_default()` to a syntax error reports an empty machine — install everything, own
+/// nothing. The same shape reaches pip behind a proxy warning, yarn behind node's deprecation
+/// notice, and conda behind its own.
+///
+/// Reading stops at the end of the first value, so a manager that prints a summary line *after*
+/// its document is read the same way: trailing bytes are not the reader's business.
+pub fn json_document(output: &str) -> Option<serde_json::Value> {
+    fn parse_from(text: &str) -> Option<serde_json::Value> {
+        serde_json::Deserializer::from_str(text)
+            .into_iter::<serde_json::Value>()
+            .next()?
+            .ok()
+    }
+    // The first bracket byte, which is where the document starts on every real banner seen so
+    // far. Only if that fails does the first bracket-opening *line* get a turn: a later bracket
+    // byte inside a failed document would parse as some sub-object and answer confidently with
+    // the wrong half of the tree, so the second attempt is anchored to a line start, not to the
+    // next brace along.
+    if let Some(start) = output.find(['{', '[']) {
+        if let Some(v) = parse_from(&output[start..]) {
+            return Some(v);
+        }
+    }
+    let mut offset = 0;
+    for line in output.split_inclusive('\n') {
+        if line.starts_with(['{', '[']) {
+            if let Some(v) = parse_from(&output[offset..]) {
+                return Some(v);
+            }
+        }
+        offset += line.len();
+    }
+    None
+}
+
 /// The lines of a manager's output that could carry a package — the default candidate set.
 ///
 /// Blank lines and the manager's own prose are excluded, because neither is evidence that
@@ -235,6 +276,69 @@ impl OutputParser for LambdaParser {
 mod tests {
     use super::*;
 
+    /// Verbatim shape of `composer global show --format=json` on a machine with a global config
+    /// dir, which is every machine that has ever run `composer global`.
+    const COMPOSER_WITH_BANNER: &str = concat!(
+        "Changed current directory to /root/.composer\n",
+        r#"{"installed":[{"name":"psr/log","version":"1.1.4"}]}"#,
+        "\n"
+    );
+
+    /// composer prints `Changed current directory to /root/.composer` ahead of every global
+    /// command, and a `--json` reader that starts at byte zero reads that as a syntax error and
+    /// answers "nothing installed" about a full machine.
+    #[test]
+    fn a_banner_above_the_document_does_not_hide_it() {
+        let composer = COMPOSER_WITH_BANNER;
+        let doc = json_document(composer).expect("the document below the banner");
+        assert_eq!(doc["installed"][0]["name"], "psr/log");
+
+        // The same output read from byte zero, which is what every one of these readers did.
+        assert!(
+            serde_json::from_str::<serde_json::Value>(composer).is_err(),
+            "if this ever parses, the fixture stopped reproducing the bug"
+        );
+    }
+
+    /// The other half: a manager that prints its summary *after* the document. `from_str`
+    /// rejects trailing bytes, so this failed for the same reason at the other end.
+    #[test]
+    fn a_note_below_the_document_does_not_hide_it_either() {
+        let doc = json_document(concat!(
+            r#"[{"name":"jq","version":"1.7"}]"#,
+            "\ndone in 0.3s\n"
+        ))
+        .expect("the document above the note");
+        assert_eq!(doc[0]["name"], "jq");
+    }
+
+    /// A banner that itself contains a brace. The first bracket byte fails, and the retry is
+    /// anchored to a line start rather than to the next brace along — because the next brace
+    /// along is inside the document, and parsing from there would answer confidently with one
+    /// sub-object of the tree.
+    #[test]
+    fn a_brace_in_the_banner_does_not_get_read_as_the_document() {
+        let out = concat!(
+            "Changed current directory to /root/{conf}\n",
+            r#"{"installed":[{"name":"psr/log","version":"1.1.4"}]}"#,
+            "\n"
+        );
+        let doc = json_document(out).expect("the real document, not the brace in the path");
+        assert_eq!(doc["installed"][0]["name"], "psr/log");
+    }
+
+    /// No document is `None`, which is what lets a caller tell "unreadable" from "empty".
+    /// Returning `Value::Null` here is the shape that made a format change look like a bare
+    /// machine, so it must not be spelled that way.
+    #[test]
+    fn output_with_no_document_is_none_and_not_null() {
+        assert_eq!(json_document("error: could not connect\n"), None);
+        assert_eq!(json_document(""), None);
+        // An unterminated document is not a document.
+        assert_eq!(json_document(r#"{"installed": ["#), None);
+        // And an empty one is still one.
+        assert_eq!(json_document("{}"), Some(serde_json::json!({})));
+    }
     #[test]
     fn bare_names_parses_apt_mark_showmanual() {
         // `apt-mark showmanual` prints bare names, no versions — which is why the normal

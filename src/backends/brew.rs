@@ -137,6 +137,20 @@ impl Queryable for BrewQueryable {
     }
 
     /// Uses `brew info --json=v1`, the only form that reports the install path.
+    ///
+    /// **`brew info` answers about the formula, not about this machine.** It prints a full
+    /// record for anything in a tapped repository, installed or not, with `"installed": []` as
+    /// the only thing that distinguishes the two — and that array was read for its properties
+    /// while its emptiness was ignored. So `info` said `Some` for every formula Homebrew has
+    /// ever heard of: `linix install brew:jq` reported *already up to date* and installed
+    /// nothing, and `linix info jq` told the user a package was on their machine because a tap
+    /// knows the name.
+    ///
+    /// **And the version came from `versions.stable`, which is the newest published one.** A
+    /// declaration pinning the version a machine actually has compared against upstream's
+    /// latest instead, so every `brew:x@version=` re-installed on every sync from the moment
+    /// Homebrew published a newer bottle. The installed keg carries its own version; that is
+    /// the one a drift check is about.
     async fn info(&self, name: &str) -> Result<Option<Package>> {
         let mut args = vec!["info".to_string(), "--json=v1".to_string()];
         crate::core::argv::push_names(&mut args, "brew", [name]);
@@ -158,20 +172,25 @@ impl Queryable for BrewQueryable {
             return Ok(None);
         }
         let first = &arr[0];
+        let Some(installed) = first["installed"].as_array().and_then(|a| a.last()) else {
+            return Ok(None);
+        };
         let pkg_name = first["name"].as_str().unwrap_or(name).to_string();
-        let version = first["versions"]["stable"].as_str().map(|s| s.to_string());
-        let mut pkg =
-            Package::with_version(&pkg_name, version.as_deref().unwrap_or("unknown"), "brew");
-        if let Some(installed) = first["installed"].as_array().and_then(|a| a.first()) {
-            if let Some(path) = installed["installed_as_dependency"].as_bool() {
-                pkg.properties
-                    .insert("installed_as_dependency".to_string(), path.to_string());
-            }
-            // The install path is the prefix of the installed keg
-            if let Some(prefix) = installed["prefix"].as_str() {
-                pkg.properties
-                    .insert("install_path".to_string(), prefix.to_string());
-            }
+        // The keg's own version. `brew` lists kegs oldest-first, so the last is the one a
+        // freshly linked formula is running.
+        let version = installed["version"]
+            .as_str()
+            .or_else(|| first["versions"]["stable"].as_str())
+            .unwrap_or("unknown");
+        let mut pkg = Package::with_version(&pkg_name, version, "brew");
+        if let Some(path) = installed["installed_as_dependency"].as_bool() {
+            pkg.properties
+                .insert("installed_as_dependency".to_string(), path.to_string());
+        }
+        // The install path is the prefix of the installed keg
+        if let Some(prefix) = installed["prefix"].as_str() {
+            pkg.properties
+                .insert("install_path".to_string(), prefix.to_string());
         }
         // Fallback: use the cellar path
         if !pkg.properties.contains_key("install_path") {
@@ -295,6 +314,69 @@ mod tests {
         let exec =
             CommandExecutor::with_layer(false, false, mock.clone(), vfs, Arc::new(DashMap::new()));
         (mock, Arc::new(BrewBackendCore::new(exec)))
+    }
+
+    /// Real `brew info --json=v1` shape, trimmed to the keys this reader touches. The whole
+    /// point is that the two answers differ **only** in `installed`: everything else is the
+    /// formula's record, which a tap carries whether or not the machine ever installed it.
+    fn brew_info_json(installed: &str) -> String {
+        format!(
+            r#"[{{"name":"jq","versions":{{"stable":"1.7.1"}},"cellar":"/opt/homebrew/Cellar","installed":{installed}}}]"#
+        )
+    }
+
+    /// `brew info` answers about the formula, not about this machine — `"installed": []` was
+    /// the only thing distinguishing the two, and it was read for its properties while its
+    /// emptiness was ignored. So `info` said `Some` for every formula Homebrew has heard of.
+    #[tokio::test]
+    async fn info_answers_installed_here_not_known_to_a_tap() {
+        let (mock, core) = mocked();
+        mock.set_response(
+            "brew info --json=v1 -- jq",
+            Ok(crate::core::executor::DryRunOutput {
+                stdout: brew_info_json("[]").into_bytes(),
+                stderr: vec![],
+            }
+            .into()),
+        );
+        assert!(
+            BrewQueryable { core }.info("jq").await.unwrap().is_none(),
+            "a formula a tap knows was reported as installed — `install` then does nothing"
+        );
+    }
+
+    /// And the version is the keg's, not `versions.stable`. Reading the latest published
+    /// version made every `brew:x@version=` pin re-install on every sync from the moment
+    /// Homebrew published a newer bottle.
+    #[tokio::test]
+    async fn the_version_reported_is_the_one_on_disk() {
+        let (mock, core) = mocked();
+        mock.set_response(
+            "brew info --json=v1 -- jq",
+            Ok(crate::core::executor::DryRunOutput {
+                stdout: brew_info_json(
+                    r#"[{"version":"1.6","prefix":"/opt/homebrew/Cellar/jq/1.6","installed_as_dependency":false}]"#,
+                )
+                .into_bytes(),
+                stderr: vec![],
+            }
+            .into()),
+        );
+        let found = BrewQueryable { core }.info("jq").await.unwrap().expect("installed");
+        assert_eq!(
+            found.version.as_deref(),
+            Some("1.6"),
+            "the stable version is what an upgrade would move to, not what is installed"
+        );
+        assert_eq!(
+            found.properties.get("install_path").map(String::as_str),
+            Some("/opt/homebrew/Cellar/jq/1.6"),
+            "the keg prefix still reaches the caller"
+        );
+        assert_eq!(
+            found.properties.get("installed_as_dependency").map(String::as_str),
+            Some("false")
+        );
     }
 
     #[tokio::test]

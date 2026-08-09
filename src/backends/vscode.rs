@@ -189,32 +189,33 @@ impl Queryable for VscodeQueryable {
         self.list_installed().await
     }
 
+    /// Is this extension installed **here**?
+    ///
+    /// It used to POST to `marketplace.visualstudio.com` and answer `Some` for anything that
+    /// *exists* there, carrying the marketplace's *latest* version. Three consequences, all
+    /// silent: `linix install vscode:x` reported success and installed nothing, a `@version=`
+    /// pin re-installed for ever the moment upstream published a newer build, and every plan
+    /// made one rate-limited HTTPS POST per declared extension. Same bug as `mise:`, whose
+    /// obituary is at `mise.rs:183`.
+    ///
+    /// The marketplace answers *could this be installed?* — that is `search`, and
+    /// `get_dependencies`, both of which still ask it.
+    ///
+    /// Extension ids are case-insensitive on the marketplace and `code --list-extensions`
+    /// prints the publisher's canonical casing, so a manifest that spells `ms-python.Python`
+    /// must still resolve to the installed row.
     async fn info(&self, name: &str) -> Result<Option<Package>> {
-        let json = self.core.query_marketplace(name).await?;
-
-        if let Some(ext) = json["results"][0]["extensions"]
-            .as_array()
-            .and_then(|a| a.first())
-        {
-            let publisher = ext["publisher"]["publisherName"]
-                .as_str()
-                .unwrap_or("unknown");
-            let ext_name = ext["extensionName"].as_str().unwrap_or("unknown");
-
-            let mut p = Package::new(format!("{}.{}", publisher, ext_name), "vscode");
-            p.version = ext["versions"][0]["version"]
-                .as_str()
-                .map(|s| s.to_string());
-
-            if let Some(desc) = ext["shortDescription"].as_str() {
-                p.properties.insert("description".to_string(), desc.to_string());
-            }
-
-            p.properties
-                .insert("publisher".to_string(), publisher.to_string());
-            return Ok(Some(p));
-        }
-        Ok(None)
+        let all = self.list_installed().await?;
+        Ok(all
+            .into_iter()
+            .find(|p| p.name == name || p.name.eq_ignore_ascii_case(name))
+            .map(|mut p| {
+                if let Some((publisher, _)) = p.name.split_once('.') {
+                    p.properties
+                        .insert("publisher".to_string(), publisher.to_string());
+                }
+                p
+            }))
     }
 }
 
@@ -301,6 +302,64 @@ pub fn register(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn vscode_with(list_output: &str) -> (Arc<VscodeBackendCore>, Arc<crate::core::executor::MockExecutor>) {
+        let vfs = Arc::new(dashmap::DashMap::new());
+        let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        mock.set_response(
+            "code --list-extensions --show-versions",
+            Ok(crate::core::executor::DryRunOutput {
+                stdout: list_output.as_bytes().to_vec(),
+                stderr: vec![],
+            }
+            .into()),
+        );
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(dashmap::DashMap::new()),
+        );
+        (Arc::new(VscodeBackendCore::new(exec)), mock)
+    }
+
+    /// `info` asked `marketplace.visualstudio.com` and returned `Some` for anything that
+    /// *exists* there, at the marketplace's *latest* version. Three silent consequences:
+    /// `linix install vscode:x` reported success and installed nothing, a `@version=` pin
+    /// re-installed for ever the moment upstream published, and every plan made one
+    /// rate-limited HTTPS POST per declared extension.
+    ///
+    /// The same bug's obituary is in `mise.rs:183`, written 2026-07-24. The assertion that the
+    /// catalogue is not consulted is the one that file already makes; this is its sibling.
+    #[tokio::test]
+    async fn info_answers_installed_here_not_published_to_the_marketplace() {
+        let (core, mock) =
+            vscode_with("ms-python.python@2024.2.1\nrust-lang.rust-analyzer@0.3.1\n");
+        let q = VscodeQueryable { core };
+
+        // An extension the marketplace certainly carries, and this machine does not.
+        assert!(
+            q.info("ms-vscode.cpptools").await.unwrap().is_none(),
+            "info claimed an uninstalled extension was present — the planner skips its install"
+        );
+        // One that really is installed, at the version the machine has and not the latest one.
+        let found = q.info("ms-python.python").await.unwrap().expect("installed");
+        assert_eq!(found.version.as_deref(), Some("2024.2.1"));
+        assert_eq!(found.properties.get("publisher").map(String::as_str), Some("ms-python"));
+
+        // Extension ids are case-insensitive on the marketplace, so a manifest that spells the
+        // publisher's name differently still has to resolve to the installed row.
+        assert!(q.info("MS-Python.Python").await.unwrap().is_some());
+
+        // The network is not the machine, and nothing here asked it.
+        let calls = mock.get_calls().await;
+        assert!(
+            calls.iter().all(|c| c.starts_with("code ")),
+            "info reached past the `code` CLI: {:?}",
+            calls
+        );
+    }
 
     #[tokio::test]
     async fn an_extension_id_is_an_option_value_so_no_terminator_is_emitted() {

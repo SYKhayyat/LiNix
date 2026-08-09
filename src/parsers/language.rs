@@ -80,7 +80,7 @@ pub fn parse_search(backend: &str, output: &str) -> Vec<Package> {
 /// (`[{"dependencies": {...}}]`) — so normalize to a list of entries and pull each one's
 /// dependency map, or pnpm's global packages parse as empty.
 fn parse_npm_style_json(output: &str, backend: &str) -> Vec<Package> {
-    let json: Value = serde_json::from_str(output).unwrap_or_default();
+    let json = crate::parsers::json_document(output).unwrap_or_default();
     let mut res = vec![];
     let entries: Vec<&Value> = match &json {
         Value::Array(items) => items.iter().collect(),
@@ -102,7 +102,7 @@ fn parse_npm_style_json(output: &str, backend: &str) -> Vec<Package> {
 
 /// Parses the flat JSON array output of `pip list --format=json`.
 fn parse_pip_json(output: &str) -> Vec<Package> {
-    let json: Value = serde_json::from_str(output).unwrap_or_default();
+    let json = crate::parsers::json_document(output).unwrap_or_default();
     json.as_array()
         .unwrap_or(&vec![])
         .iter()
@@ -116,7 +116,7 @@ fn parse_pip_json(output: &str) -> Vec<Package> {
 
 /// Parses the complex JSON object of `pipx list --json`.
 fn parse_pipx_json(output: &str) -> Vec<Package> {
-    let json: Value = serde_json::from_str(output).unwrap_or_default();
+    let json = crate::parsers::json_document(output).unwrap_or_default();
     let mut res = vec![];
     if let Some(venvs) = json.get("venvs").and_then(|v| v.as_object()) {
         for (name, data) in venvs {
@@ -269,7 +269,7 @@ fn parse_gem_list(output: &str) -> Vec<Package> {
 
 /// Parses the JSON output of `composer global show --format=json`.
 fn parse_composer_json(output: &str) -> Vec<Package> {
-    let json: Value = serde_json::from_str(output).unwrap_or_default();
+    let json = crate::parsers::json_document(output).unwrap_or_default();
     let mut res = vec![];
     if let Some(installed) = json.get("installed").and_then(|i| i.as_array()) {
         for pkg in installed {
@@ -318,7 +318,7 @@ fn parse_gem_search(output: &str) -> Vec<Package> {
 
 /// Specialized parser for `composer search`.
 fn parse_composer_search(output: &str) -> Vec<Package> {
-    let json: Value = serde_json::from_str(output).unwrap_or_default();
+    let json = crate::parsers::json_document(output).unwrap_or_default();
     json.as_array()
         .unwrap_or(&vec![])
         .iter()
@@ -632,10 +632,7 @@ mod gem_default_tests {
 /// which is all of them.
 pub fn parse_composer_outdated(output: &str) -> Vec<Package> {
     let text = sanitize(output);
-    let Some(start) = text.find('{') else {
-        return Vec::new();
-    };
-    let Ok(doc) = serde_json::from_str::<Value>(&text[start..]) else {
+    let Some(doc) = crate::parsers::json_document(&text) else {
         return Vec::new();
     };
     let Some(items) = doc.get("installed").and_then(|i| i.as_array()) else {
@@ -652,6 +649,57 @@ pub fn parse_composer_outdated(output: &str) -> Vec<Package> {
             Some(Package::with_version(name, latest, "composer"))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod composer_installed_tests {
+    use super::*;
+
+    /// The banner is not optional: composer prints `Changed current directory to …` ahead of
+    /// every global command whenever a global config dir exists, which is every machine that has
+    /// ever run `composer global`.
+    ///
+    /// **The comment explaining that banner was already in this repo, two lines from the wiring,
+    /// attached to the `outdated` probe.** Its parser found the document; the installed reader —
+    /// the one `sync` plans from — did not, and answered an empty machine: every declared PHP
+    /// package a fresh install, every removal dropped.
+    const REAL_GLOBAL_SHOW: &str = concat!(
+        "Changed current directory to /root/.composer\n",
+        r#"{"installed":["#,
+        r#"{"name":"psr/log","version":"1.1.4","latest":"3.0.2"},"#,
+        r#"{"name":"symfony/console","version":"6.4.0","latest":"7.0.1"}]}"#,
+        "\n"
+    );
+
+    #[test]
+    fn the_installed_listing_is_read_from_under_the_banner() {
+        let found = parse_installed("composer", REAL_GLOBAL_SHOW).expect("a readable listing");
+        let names: Vec<&str> = found.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["psr/log", "symfony/console"]);
+        // `version`, not `latest` — the second is what an upgrade would move to.
+        assert_eq!(found[0].version.as_deref(), Some("1.1.4"));
+    }
+
+    /// Both readers of the same output, so the pair cannot drift apart again.
+    #[test]
+    fn the_outdated_probe_reads_the_same_output_and_reports_the_latest() {
+        let outdated = parse_composer_outdated(REAL_GLOBAL_SHOW);
+        let names: Vec<&str> = outdated.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["psr/log", "symfony/console"]);
+        assert_eq!(outdated[0].version.as_deref(), Some("3.0.2"));
+    }
+
+    /// A composer with nothing installed globally is an empty listing, not an unread one — and
+    /// that judgement has to survive the banner too.
+    #[test]
+    fn an_empty_global_install_is_empty_and_not_unrecognised() {
+        let empty = concat!(
+            "Changed current directory to /root/.composer\n",
+            r#"{"installed":[]}"#,
+            "\n"
+        );
+        assert_eq!(parse_installed("composer", empty).expect("readable"), vec![]);
+    }
 }
 
 #[cfg(test)]

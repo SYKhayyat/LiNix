@@ -207,8 +207,12 @@ fn parse_nix_search(output: &str) -> Result<Vec<Package>> {
     if output.trim().is_empty() || output.trim() == "{}" {
         return Ok(vec![]);
     }
-    let json: Value = serde_json::from_str(output)
-        .map_err(|e| Error::Other(format!("Nix search JSON error: {}", e)))?;
+    let json = crate::parsers::json_document(output).ok_or_else(|| {
+        Error::Other(format!(
+            "`nix search --json` returned no JSON document, the output opening `{}`",
+            output.trim().chars().take(120).collect::<String>()
+        ))
+    })?;
     let mut results = Vec::new();
     if let Some(map) = json.as_object() {
         for (attr, meta) in map {

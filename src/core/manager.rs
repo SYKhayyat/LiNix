@@ -266,6 +266,22 @@ pub trait Queryable: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// **Is this installed *here*, and at what version.** `Some` means present on this machine;
+    /// `None` means absent; `Err` means the manager could not be asked, which is a third answer
+    /// and never a synonym for the second.
+    ///
+    /// **The catalogue answers a different question — *could this be installed?* — and nothing
+    /// asks that here.** [`Searchable`] does. Three backends answered the catalogue anyway and
+    /// each produced the same three failures: `install` reported *already up to date* while
+    /// installing nothing, a `@version=` pin compared against the latest published version and
+    /// so re-installed for ever once upstream moved, and `linix info` claimed a package was on a
+    /// machine that had never seen it. `mise` was caught by the `tools` container on 2026-07-24;
+    /// `vscode`, `brew` and `snap` were still doing it on 2026-08-09.
+    ///
+    /// A backend whose query tool answers about the catalogue — `brew info`, `snap info`, a
+    /// marketplace endpoint — must therefore find the *installed* record inside that answer and
+    /// return `None` when there is none. Version comes from the installed record too, never from
+    /// `latest`/`stable`.
     async fn info(&self, name: &str) -> Result<Option<Package>>;
 
     /// System packages this backend installed *through another manager* (D5), as

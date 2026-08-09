@@ -319,15 +319,22 @@ impl Queryable for SnapQueryable {
             return Ok(None);
         }
 
+        // **`snap info` answers from the store.** It prints publisher, summary and channels for
+        // any snap that exists, installed or not, and the `installed:` line is the only part of
+        // that report that is about this machine. Returning `Some` for the whole report told the
+        // planner every declared snap was already present, so `linix install snap:x` reported
+        // success and installed nothing. `snap find` is the command that answers *does this
+        // exist*, and `Searchable` is where it is asked.
+        let Some(state) = installed_state(&output) else {
+            return Ok(None);
+        };
         let mut p = Package::new(name, "snap");
         // Q20: confinement, from the same report and the same line as the version. The planner
         // reads `info`, so a `@classic` that never took effect is invisible without this — the
         // snap is installed, so the name is present, so `sync` reports nothing to do over a
         // declaration it applied to a different confinement.
-        if let Some(state) = installed_state(&output) {
-            p.properties
-                .insert("classic".to_string(), state.classic.to_string());
-        }
+        p.properties
+            .insert("classic".to_string(), state.classic.to_string());
         for line in output.lines() {
             if let Some(v) = line.strip_prefix("summary:") {
                 p.properties.insert("summary".to_string(), v.trim().to_string());
@@ -465,6 +472,73 @@ mod tests {
 
         // In the store, not on the machine.
         assert_eq!(installed_state("name: code\nsummary: x\n"), None);
+    }
+
+    /// **`snap info` answers from the store.** It prints publisher, summary and channels for
+    /// any snap that exists, installed or not — the fixture above already says so, and
+    /// `installed_state` already returns `None` for it. `info` was the caller that did not ask:
+    /// it returned `Some` for the whole report, so the planner read every declared snap as
+    /// already present and `linix install snap:x` reported success having installed nothing.
+    #[tokio::test]
+    async fn info_answers_installed_here_not_present_in_the_store() {
+        let store_only = "name:      code\n\
+                          summary:   Code editing. Redefined.\n\
+                          publisher: Snapcrafters\n\
+                          channels:\n  \
+                          latest/stable:    1.85.1\n";
+        let (core, _) = snap_with("snap info -- code", store_only);
+        assert!(
+            SnapQueryable { core }.info("code").await.unwrap().is_none(),
+            "a snap that only exists in the store was reported as installed"
+        );
+
+        let on_the_machine = "name:      code\n\
+                              tracking:     latest/stable\n\
+                              installed:          1.85.1                     (139) 351MB classic\n";
+        let (core, _) = snap_with("snap info -- code", on_the_machine);
+        let found = SnapQueryable { core }
+            .info("code")
+            .await
+            .unwrap()
+            .expect("installed");
+        assert_eq!(found.version.as_deref(), Some("1.85.1"));
+        assert_eq!(
+            found.properties.get("classic").map(String::as_str),
+            Some("true"),
+            "Q20's confinement still reaches the planner"
+        );
+        assert_eq!(
+            found.properties.get("channel").map(String::as_str),
+            Some("stable"),
+            "and D13's channel with it"
+        );
+    }
+
+    fn snap_with(
+        pattern: &str,
+        output: &str,
+    ) -> (
+        Arc<SnapBackendCore>,
+        Arc<crate::core::executor::MockExecutor>,
+    ) {
+        let vfs = Arc::new(dashmap::DashMap::new());
+        let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        mock.set_response(
+            pattern,
+            Ok(crate::core::executor::DryRunOutput {
+                stdout: output.as_bytes().to_vec(),
+                stderr: vec![],
+            }
+            .into()),
+        );
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(dashmap::DashMap::new()),
+        );
+        (Arc::new(SnapBackendCore::new(exec)), mock)
     }
 
     /// Q20's argv. Both switches ride one refresh: a snap needing a channel *and* a confinement
