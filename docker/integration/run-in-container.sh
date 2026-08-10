@@ -2029,6 +2029,22 @@ crash_run() {
     else
         hard "crash/$_tag: the sync after the crash did not converge — still missing:$(crash_missing)"
         excerpt "/tmp/crash-conv-$_tag.out" 6
+        # **What the manager's own lock was doing at the time** (`Q50`). The commonest cause of
+        # this failure is a lock the killed run left behind, and `heal` clears one it can prove
+        # nobody holds — so when the sync still does not converge, the two facts a reader needs
+        # are whether a lock is there and whether anything is holding it. Printed here rather
+        # than reasoned about: this failure was diagnosed twice from a passing local run and the
+        # answer was wrong both times.
+        for _lk in /var/lib/pacman/db.lck /var/cache/dnf/metadata_lock.pid /run/zypp.pid; do
+            [ -e "$_lk" ] && echo "        lock still present: $(ls -l "$_lk" 2>&1)"
+        done
+        for _d in /proc/[0-9]*; do
+            _c=$(cat "$_d/comm" 2>/dev/null) || continue
+            case "$_c" in
+                pacman|dnf|zypper)
+                    echo "        a $_c is running: $_d state=$(awk '{print $3}' "$_d/stat" 2>/dev/null)" ;;
+            esac
+        done
     fi
 
     # The group kill leaves the PACKAGE MANAGER half-written, which is the whole point of it —
