@@ -21,7 +21,27 @@
 [advisories]
 # An advisory against a dependency fails the build. That is the whole feature.
 yanked = "warn"
-ignore = []
+
+# **Every entry here is a build that was made green by a decision rather than by a fix, so each
+# one says what the decision was and what would end it.** An empty list is the goal; a list with
+# an undocumented entry is worse than no gate at all, because it looks like one.
+ignore = [
+    # RUSTSEC-2026-0249 — `smartstring` is unmaintained: its repository was archived on
+    # 2026-05-03. Not a vulnerability, and there is no upgrade: it is a **non-optional**
+    # dependency of `rhai` (checked in rhai's own manifest — no feature disables it), and rhai
+    # 1.25.1, the newest release, still carries it. The advisory says so itself: "No safe upgrade
+    # is available!"
+    #
+    # The only two ways out are upstream migrating to `compact_str`/`smol_str`, or LiNix dropping
+    # `rhai` — which is one of the three hook dialects the owner ruled all stay (2026-07-20), and
+    # is also what `vars.linix` is evaluated by. Neither is a thing to do on the way to a release
+    # because a GitHub repository was archived.
+    #
+    # **What would end this entry:** a rhai release whose dependency tree no longer contains
+    # smartstring. `cargo tree -i smartstring` is the check, and it is a one-line change here
+    # when it comes back empty.
+    "RUSTSEC-2026-0249",
+]
 
 [licenses]
 # Permissive licences, plus the ones the Rust ecosystem's own crates actually use.

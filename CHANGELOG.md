@@ -60,6 +60,16 @@ crash.*
   preview TUIs, `git` after every sync, a `--help` probe, an external `vars` provider, and the
   data-directory lock's two-minute poll each held a thread for their whole duration.
 
+### Supply chain
+
+- **One advisory is silenced, and it says so.** `RUSTSEC-2026-0249` — `smartstring` is
+  unmaintained, its repository archived on 2026-05-03. It is not a vulnerability and there is no
+  upgrade: it is a non-optional dependency of `rhai`, which is one of the three hook dialects and
+  what `vars.linix` runs on, and the newest rhai still carries it. The entry in `deny.toml` names
+  the advisory, why no fix exists, and the one-line check that ends it. A test now audits that
+  ignore list the way every other exemption table here is audited — a supply-chain gate with a
+  quietly growing list of exceptions is not a gate.
+
 ### Looking
 
 - **`linix check adapters`**, the ninth section: extension files that are written and not in

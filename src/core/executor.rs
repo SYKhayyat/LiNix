@@ -1640,13 +1640,34 @@ impl CommandExecutor {
                 }
             })
             .collect();
-        OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(dir.join(format!("{}.lock", stem)))
-            .map_err(Error::from)
+        let path = dir.join(format!("{}.lock", stem));
+        let open = || {
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(&path)
+        };
+        match open() {
+            Ok(file) => Ok(file),
+            // **The cache above is an optimisation, and it must not be load-bearing.** It records
+            // that a directory was created, not that it still exists — and `create(true)` creates
+            // the *file*, never its parent. So a data directory removed after the first exclusive
+            // command of the process fails every one after it with a bare "cannot find the path
+            // specified", which names neither the directory nor the fact that it went missing.
+            //
+            // Measured as a Windows CI flake: the data directory is a process-global setting, the
+            // test suite points it at temporary directories, and a directory cached by one test
+            // was deleted while another still held the memo. That is a test arrangement, but the
+            // mechanism is not — `/tmp` reapers and cleanup tools do the same thing to a long
+            // `sync`, and the answer in both cases is to make the directory again rather than to
+            // trust a memo about the past.
+            Err(_) => {
+                crate::utils::file::ensure_dir(dir)?;
+                open().map_err(Error::from)
+            }
+        }
     }
 
     pub async fn run_exclusive(
@@ -2619,6 +2640,36 @@ mod child_process_tests {
 
         drop(CommandExecutor::open_lock_at(&lock_dir, "apt").unwrap());
         assert_eq!(std::fs::read_to_string(&canary).unwrap(), "must survive");
+    }
+
+    /// **The "already created this directory" memo is an optimisation, not a fact.**
+    ///
+    /// `LOCK_DIRS` records that a lock directory was created once per process, and `create(true)`
+    /// creates the lock *file*, never its parent — so a directory that goes away after the first
+    /// exclusive command fails every one after it with a bare *"cannot find the path specified"*,
+    /// naming neither the directory nor that it vanished.
+    ///
+    /// Found as a Windows CI failure: the data directory is a process-global setting, the suite
+    /// points it at temporary directories, and one test deleted a directory another still held
+    /// the memo for. The arrangement is a test's; the mechanism is not — a `/tmp` reaper does the
+    /// same thing to a long `sync`.
+    #[test]
+    fn a_lock_directory_that_went_missing_is_made_again() {
+        let root = tmpdir("execgone");
+        let lock_dir = root.join("exec-locks");
+        drop(CommandExecutor::open_lock_at(&lock_dir, "brew").unwrap());
+        assert!(lock_dir.exists());
+
+        // The memo now says this directory exists. Take it away underneath the memo.
+        std::fs::remove_dir_all(&lock_dir).unwrap();
+        assert!(!lock_dir.exists());
+
+        drop(
+            CommandExecutor::open_lock_at(&lock_dir, "brew").expect(
+                "a lock directory that vanished is remade, not reported as a bare io error",
+            ),
+        );
+        assert!(lock_dir.join("brew.lock").exists());
     }
 
     /// A key is a backend name from a config file; one carrying a separator would otherwise
