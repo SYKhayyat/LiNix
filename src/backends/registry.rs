@@ -2886,13 +2886,23 @@ mod tests {
                 &|r, e| crate::backends::service::register(r, e, &Config::default()),
                 "nginx",
                 &[("state", "running")],
+                // **Three platforms, three init systems.** The backend detects which one is
+                // driving the host — systemd, launchd, `sc` — so an `else` meaning "Linux" is a
+                // guess that holds until somebody builds on a Mac. Nobody had: the matrix
+                // produced one target out of four, and the first macOS run in this repo's
+                // history reported `launchctl load -w nginx` against an expectation of
+                // `systemctl`. The product was right; the test had two branches for three cases.
                 Runs(if cfg!(windows) {
                     "sc start nginx"
+                } else if cfg!(target_os = "macos") {
+                    "launchctl"
                 } else {
                     "systemctl"
                 }),
                 Runs(if cfg!(windows) {
                     "sc stop nginx"
+                } else if cfg!(target_os = "macos") {
+                    "launchctl"
                 } else {
                     "systemctl"
                 }),
@@ -2906,16 +2916,37 @@ mod tests {
                     "org.linix.probe/key"
                 },
                 &[("value", "1")],
-                Runs(if cfg!(windows) {
-                    "reg add HKCU\\Software\\LinixProbe /v Value /d 1 /f"
+                // **macOS has no settings store at all**, and this row is where that becomes a
+                // stated fact rather than a surprise. `setting_stores.toml` ships `gsettings`
+                // (`os = "linux"`) and the Windows registry, and nothing else — so on a Mac the
+                // backend finds no adapter, refuses by name, and runs nothing. That is a real
+                // gap in `setting:` coverage and not a defect in this test; recording it here
+                // is how the gap stops being invisible.
+                if cfg!(target_os = "macos") {
+                    NoCommand(
+                        "macOS ships no `[[setting_store]]` row — `setting_stores.toml` covers \
+                         gsettings and the Windows registry — so the backend finds no adapter \
+                         and refuses by name rather than running anything",
+                    )
                 } else {
-                    "gsettings set org.linix.probe key 1"
-                }),
-                Runs(if cfg!(windows) {
-                    "reg delete HKCU\\Software\\LinixProbe /v Value /f"
+                    Runs(if cfg!(windows) {
+                        "reg add HKCU\\Software\\LinixProbe /v Value /d 1 /f"
+                    } else {
+                        "gsettings set org.linix.probe key 1"
+                    })
+                },
+                if cfg!(target_os = "macos") {
+                    NoCommand(
+                        "the same, from the other side: with no adapter for this machine there \
+                         is nothing to reset, and the removal refuses by name having run nothing",
+                    )
                 } else {
-                    "gsettings reset org.linix.probe key"
-                }),
+                    Runs(if cfg!(windows) {
+                        "reg delete HKCU\\Software\\LinixProbe /v Value /f"
+                    } else {
+                        "gsettings reset org.linix.probe key"
+                    })
+                },
             ),
             // ---- Backends that run no command. Each fetches over HTTP or writes to the
             // filesystem directly, so "no argv" is the right answer and not a hole — but it is
