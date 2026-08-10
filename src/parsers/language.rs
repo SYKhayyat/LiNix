@@ -84,9 +84,39 @@ pub fn parse_search(backend: &str, output: &str) -> Vec<Package> {
 /// (`[{"dependencies": {...}}]`) — so normalize to a list of entries and pull each one's
 /// dependency map, or pnpm's global packages parse as empty.
 ///
-/// **`dependencies` absent is not `dependencies` empty.** npm renaming that key is the shape of
-/// a format change, and it must not read as a machine with nothing installed — so the container
-/// is `None` when no entry carried the map at all, and `Some(0)` when one did and it was empty.
+/// **`dependencies` absent is how npm says "nothing".** This rule used to be the opposite —
+/// *absent is not empty*, on the reasoning that npm renaming the key would otherwise read as a
+/// machine with nothing installed — and the reasoning was sound about a risk that is not the one
+/// that happened. Measured in the fedora image, 2026-08-10:
+///
+/// ```text
+/// $ npm list -g --depth=0 --json      # nothing installed globally
+/// {
+///   "name": "lib"
+/// }                                    # exit 0, and no `dependencies` key at all
+/// ```
+///
+/// So the guard fired on the ordinary state of a fresh Node install, `check health` reported
+/// **`[FAIL] npm — says it is ready but cannot list`**, and npm dropped out of the READY set on
+/// every machine with no global packages. It cost a real backend lifecycle in CI and would cost
+/// a first-time user their npm backend entirely.
+///
+/// **The format-change protection stays, and it is what makes this safe to change.** The two
+/// cases are distinguishable by looking, which the first attempt at this fix missed and
+/// `a_renamed_container_is_a_format_change_and_not_an_empty_machine` caught:
+///
+/// | document | reading |
+/// |---|---|
+/// | `{"name":"lib"}` | zero packages — nothing here could be the map |
+/// | `{"name":"root","packages":{"typescript":{…}}}` | **refused** — `packages` is a map of objects, which is what `dependencies` renamed would look like |
+///
+/// A missing `dependencies` therefore means *empty* only when no other key holds a non-empty
+/// object of objects. That is the difference between "this machine has nothing" and "npm
+/// changed its schema", and getting it wrong in the permissive direction is the catastrophic
+/// one: the planner reads an empty listing as *install everything, own nothing*.
+///
+/// A document that is not an object or an array is still unrecognised: that is a shape nobody
+/// has ever seen from these three, and "empty" is not a reasonable reading of it.
 fn parse_npm_style_json(output: &str, backend: &str) -> ParseResult {
     let Some(json) = crate::parsers::json_document(output) else {
         return crate::parsers::or_unrecognised_json(backend, vec![], None, "not JSON", output);
@@ -94,25 +124,53 @@ fn parse_npm_style_json(output: &str, backend: &str) -> ParseResult {
     let mut res = vec![];
     let entries: Vec<&Value> = match &json {
         Value::Array(items) => items.iter().collect(),
-        other => vec![other],
+        // pnpm emits an array of these, npm a single object. Anything else is a shape this
+        // parser has no reading for, and it says so rather than calling it empty.
+        Value::Object(_) => vec![&json],
+        _ => {
+            return crate::parsers::or_unrecognised_json(
+                backend,
+                vec![],
+                None,
+                "JSON that is neither an object nor an array",
+                output,
+            )
+        }
     };
-    let mut declared = None;
+    let mut declared = 0;
+    let mut renamed = false;
     for entry in entries {
-        if let Some(deps) = entry.get("dependencies").and_then(|d| d.as_object()) {
-            *declared.get_or_insert(0) += deps.len();
-            for (name, val) in deps {
-                let version = val
-                    .get("version")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                res.push(Package::with_version(name, version, backend));
+        match entry.get("dependencies").and_then(|d| d.as_object()) {
+            Some(deps) => {
+                declared += deps.len();
+                for (name, val) in deps {
+                    let version = val
+                        .get("version")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    res.push(Package::with_version(name, version, backend));
+                }
+            }
+            // No `dependencies`. That is npm's empty answer — *unless* the document carries
+            // some other key holding what a package map looks like, which is what a renamed
+            // container looks like and is the one thing that must never read as "empty".
+            None => {
+                renamed |= entry.as_object().is_some_and(|m| {
+                    m.values().any(|v| {
+                        v.as_object().is_some_and(|inner| {
+                            !inner.is_empty() && inner.values().all(Value::is_object)
+                        })
+                    })
+                })
             }
         }
     }
     crate::parsers::or_unrecognised_json(
         backend,
         res,
-        declared,
+        // `Some(0)` — an answer of none — only when nothing in the document could have been the
+        // map under another name. `None` keeps the refusal.
+        if renamed { None } else { Some(declared) },
         "JSON with no `dependencies` object",
         output,
     )
@@ -829,6 +887,86 @@ mod an_empty_listing_is_not_an_unreadable_one_tests {
         assert_eq!(pkgs.len(), 1);
         assert_eq!(pkgs[0].name, "black");
         assert_eq!(pkgs[0].version.as_deref(), Some("24.1.0"));
+    }
+
+    /// **npm and pnpm were the siblings this module never covered**, and the omission cost a
+    /// backend. The bytes are npm's own, captured in the fedora integration image on
+    /// 2026-08-10 with nothing installed globally — exit 0, and no `dependencies` key at all:
+    ///
+    /// ```text
+    /// $ npm list -g --depth=0 --json
+    /// {
+    ///   "name": "lib"
+    /// }
+    /// ```
+    ///
+    /// `parse_npm_style_json` read that as unrecognised *deliberately*, to catch npm renaming
+    /// the key. What it caught was the ordinary state of a fresh Node install: `check health`
+    /// said `[FAIL] npm — says it is ready but cannot list`, npm left the READY set on every
+    /// machine with no global packages, and the fedora leg lost a real lifecycle to it — which
+    /// is how it was found, eleven days later, the first time CI could run.
+    ///
+    /// The rule this module is named for was already written down twice. npm is the third.
+    #[test]
+    fn an_empty_npm_global_is_empty_and_not_unreadable() {
+        let out = "{
+  \"name\": \"lib\"
+}
+";
+        assert_eq!(
+            parse_installed("npm", out).expect("an empty npm is empty, not unreadable"),
+            Vec::new()
+        );
+        // pnpm wraps the same shape in an array, and an empty one says the same thing.
+        assert_eq!(
+            parse_installed("pnpm", "[]").expect("an empty pnpm is empty, not unreadable"),
+            Vec::new()
+        );
+        // And the key present but empty, which always parsed and must keep doing so.
+        assert_eq!(
+            parse_installed("npm", r#"{"name":"lib","dependencies":{}}"#).expect("parses"),
+            Vec::new()
+        );
+    }
+
+    /// **The boundary between the two, side by side**, because the first attempt at the empty
+    /// fix erased it: it made every `dependencies`-less object read as zero, which would have
+    /// waved a renamed container through as an empty machine. Same shape of document, opposite
+    /// readings, and the thing that separates them is whether anything else in it could have
+    /// been the map.
+    #[test]
+    fn empty_and_renamed_are_told_apart_by_what_else_the_document_carries() {
+        // Nothing else in it: empty.
+        assert_eq!(
+            parse_installed("npm", r#"{"name":"lib","version":"1.0.0"}"#).expect("empty"),
+            Vec::new()
+        );
+        // A key holding a map of objects: that is the map under another name, and it is refused.
+        assert!(
+            parse_installed("npm", r#"{"name":"lib","packages":{"ts":{"version":"5"}}}"#).is_err()
+        );
+        // A non-empty key that is NOT a map of objects cannot be the container, so it does not
+        // trip the guard — `problems` is an array npm really does emit.
+        assert_eq!(
+            parse_installed("npm", r#"{"name":"lib","problems":["something"]}"#).expect("empty"),
+            Vec::new()
+        );
+    }
+
+    /// The control, and it is the whole reason the change above is safe: a parser that answers
+    /// "empty" to anything it cannot read tells the planner a full machine is bare, and the
+    /// planner answers by installing everything and dropping every removal.
+    #[test]
+    fn npm_garbage_is_still_unreadable() {
+        assert!(parse_installed("npm", "not json at all").is_err());
+        assert!(
+            parse_installed("npm", "\"a string\"").is_err(),
+            "a JSON scalar is not an empty listing"
+        );
+        assert!(
+            parse_installed("npm", "42").is_err(),
+            "a JSON number is not an empty listing"
+        );
     }
 
     #[test]
