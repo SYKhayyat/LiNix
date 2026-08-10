@@ -60,10 +60,58 @@ const TERMINATORS: &[Terminator] = &[
     row("dpkg-query", true, GETOPT),
     row("aptitude", true, GETOPT),
     // ---- Red Hat.
-    row("dnf", true, GETOPT),
-    row("dnf5", true, GETOPT),
-    row("yum", true, GETOPT),
-    row("microdnf", true, GETOPT),
+    //
+    // **`dnf` is not one program.** Fedora 41 replaced the Python/argparse `dnf` with `dnf5`,
+    // a C++ reimplementation with its own argument parser, and kept the name: `/usr/bin/dnf`
+    // IS dnf5 there. So a row keyed on the binary name cannot tell the two apart, and the one
+    // it must be right for is the one that refuses.
+    row(
+        "dnf",
+        false,
+        Evidence::Measured(
+            "`dnf search -- jq` on Fedora answers `Unknown argument \"--\" for command \
+             \"search\"`, and the install fails with it — because that `dnf` is dnf5. Listed \
+             false for BOTH implementations rather than detected: dnf4 does not *need* the \
+             terminator (the grammar already refuses a leading-dash name, II.12b), while dnf5 \
+             is broken by it, so the safe answer is the same answer for both. Measured in CI \
+             run 31393556390, 2026-08-10, where it failed every dnf install on the image.",
+        ),
+    ),
+    row(
+        "dnf5",
+        false,
+        Evidence::Measured(
+            "the same refusal, under its own name: `Unknown argument \"--\" for command \
+             \"search\"`. It was listed as terminating on the getopt inference, which is the \
+             error this table's own header warns about — dnf5 links no getopt.",
+        ),
+    ),
+    // **The siblings, and they are the same program.** On a Fedora with dnf5, `/usr/bin/yum`
+    // and `/usr/bin/microdnf` are both dnf5 under another name — `yum` has been a symlink to
+    // dnf since Fedora 22, and dnf5 provides `microdnf`. So a fix that moved only the row
+    // spelled `dnf` would have left the identical defect live under two more spellings, on the
+    // same machines, reachable by any config that names them. Where they are NOT dnf5
+    // (RHEL/CentOS, where `yum` is dnf4) the terminator is defence-in-depth the grammar
+    // already provides, so false is right there too.
+    row(
+        "yum",
+        false,
+        Evidence::Measured(
+            "the same parser as `dnf`, because on Fedora it IS `dnf` — a symlink since \
+             Fedora 22, and dnf5 since Fedora 41. Where it is dnf4 instead, dropping the \
+             terminator costs nothing the grammar's leading-dash refusal does not already \
+             cover (II.12b).",
+        ),
+    ),
+    row(
+        "microdnf",
+        false,
+        Evidence::Measured(
+            "provided by dnf5 on any image that has dnf5, so it is the binary that answered \
+             `Unknown argument \"--\"`. Listed with its two siblings rather than left on the \
+             getopt inference that was wrong for all three.",
+        ),
+    ),
     row("rpm", true, GETOPT),
     // ---- Arch.
     row("pacman", true, GETOPT),
@@ -507,12 +555,15 @@ mod tests {
     /// someone who recognised the shape, and each one broke every install that went through it.
     /// `tests/terminator_probe_tests.rs` is the thing that asks; run it in an image that has
     /// the tool, take the names it prints, and lower this.
-    const UNASKED_CEILING: usize = 61;
+    ///
+    /// Lowered 61 → 57 on 2026-08-10: `dnf`, `dnf5`, `yum` and `microdnf` stopped being
+    /// inferences and became measurements, at the cost of every dnf install on Fedora until
+    /// CI could run and say so.
+    const UNASKED_CEILING: usize = 57;
 
     #[test]
     fn a_gnu_style_manager_terminates_and_a_windows_one_does_not() {
         assert!(terminates_options("apt-get"));
-        assert!(terminates_options("dnf"));
         assert!(terminates_options("pacman"));
         assert!(terminates_options("brew"));
         assert!(!terminates_options("winget"));
@@ -531,6 +582,28 @@ mod tests {
     /// terminate", and a manager joins the terminating set **when someone has checked its
     /// argument parser**. Two joined without that, and a `--` a manager reads as a package
     /// name turns every install through it into a failure.
+    /// **A name is not an implementation.** Fedora 41 replaced the Python `dnf` with the C++
+    /// `dnf5` and kept the name, so `/usr/bin/dnf` parses arguments with something that has
+    /// never seen getopt — and the row that said otherwise said it on the getopt *inference*,
+    /// which is the move the header of this file warns about and which has now broken five
+    /// managers rather than four.
+    ///
+    /// What it cost: every `dnf` install on Fedora, from `search` outward. The container leg
+    /// that would have caught it in July was in a workflow file that had not parsed since
+    /// 2026-08-09, so the first run that could see it is the first run there was.
+    #[test]
+    fn dnf_does_not_terminate_because_dnf_may_be_dnf5() {
+        assert!(!terminates_options("dnf"));
+        assert!(!terminates_options("dnf5"));
+        // The siblings, because they are the same program under other names: `yum` is a
+        // symlink to dnf and dnf5 provides `microdnf`. Fixing one spelling and leaving these
+        // would have left the identical defect live on the identical machines.
+        assert!(!terminates_options("yum"));
+        assert!(!terminates_options("microdnf"));
+        // `rpm` is not dnf5 under any name, so it keeps its terminator.
+        assert!(terminates_options("rpm"));
+    }
+
     #[test]
     fn a_manager_that_reads_the_terminator_as_a_name_is_not_listed_as_terminating() {
         assert!(!terminates_options("asdf"));

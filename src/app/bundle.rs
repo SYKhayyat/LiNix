@@ -538,6 +538,10 @@ mod tests {
                 ]
             ))
         );
+        // No terminator here, unlike apt and pip above, and it is not an omission: `dnf` is
+        // dnf5 on Fedora 41+, whose parser refuses `--`. Same table, same reason, and this is
+        // the third place the same fact had to be written down — which is how the argv table
+        // came to be the one source the others are checked against.
         assert_eq!(
             offline_fetch_command("dnf", "curl", "/d"),
             Some((
@@ -546,7 +550,6 @@ mod tests {
                     "download".into(),
                     "--destdir".into(),
                     "/d".into(),
-                    "--".into(),
                     "curl".into()
                 ]
             ))

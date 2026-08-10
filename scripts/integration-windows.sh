@@ -614,7 +614,6 @@ on_path "$PKG" && PKG_WAS_HERE=1
 PKG_PREPATH=""
 [ -z "$PKG_WAS_HERE" ] && PKG_PREPATH="$(path_of "$PKG")"
 
-> /tmp/itw-life0.out
 lx -y install "$BACKEND:$PKG" >/tmp/itw-life0.out 2>&1
 IRC=$?
 CLASS=installed
@@ -1267,6 +1266,32 @@ ok "path --explain says which source won" lx path --explain
 ok "config show prints the active configuration" lx config show
 ok "policy checks the desired state against [guard]" lx policy
 ok "check conflicts reports cross-backend conflicts" lx check conflicts
+# `adapters` (S78) — the eight extension surfaces. Twin of the block in
+# `docker/integration/run-in-container.sh`; change one, change the other. A fresh machine has no
+# `adapters/` directory at all, which is the state almost every machine is in and the one a
+# survey must report without complaining about.
+ok "adapters reports every surface" lx adapters
+grep_ok "adapters says an unextended machine has extended nothing" "extended nothing" lx adapters
+nok "adapters refuses a name that is not a surface" lx adapters nosuchsurface
+# **The failure a plugin system has that a built-in does not**: a file that is present,
+# approved, valid TOML and read by nobody, because the array key is `backends` and the reader
+# wants `backend`. Every other signal says fine. `rows in force` is the only one that does not.
+mkdir -p "$LINIX_CONFIG_DIR/adapters"
+printf '[[backends]]\nname = "mymgr"\n' > "$LINIX_CONFIG_DIR/adapters/backends.toml"
+grep_ok "an adapter file nobody approved is reported unapproved" "unapproved" lx adapters backends
+lx lock >/dev/null 2>&1
+grep_ok "a table nobody opens is 'no rows', not 'in use'" "no rows" lx adapters backends
+printf '[[backend]]\nname = "mymgr"\ninstall = "cmd /c exit 0"\n' > "$LINIX_CONFIG_DIR/adapters/backends.toml"
+lx lock >/dev/null 2>&1
+grep_ok "a row of the right kind is in force" "in use" lx adapters backends
+# Malformed degrades rather than refusing (owner ruling, 2026-08-10), and `check adapters` is
+# where that fact is an exit code instead of a warning nobody re-reads.
+printf 'this is not toml at all\n' > "$LINIX_CONFIG_DIR/adapters/backends.toml"
+grep_ok "an unreadable adapter file is reported malformed" "malformed" lx adapters backends
+ok "a malformed adapter does not stop a sync" lx sync --dry-run
+nok "check adapters exits non-zero on a file that is not in use" lx check adapters
+rm -f "$LINIX_CONFIG_DIR/adapters/backends.toml"
+ok "check adapters is clean once the file is gone" lx check adapters
 ok "sbom emits a bill of materials" lx sbom
 # `try` rehearses in a container. Named against an image that cannot exist, so the
 # answer is a refusal on every host: with no runtime it refuses for want of one, with a

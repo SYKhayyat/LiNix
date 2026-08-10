@@ -19,18 +19,28 @@ mkdir -p "$SHIM_DIR"
 
 # A shim logs its argv and execs the real thing. `command -v` is deliberately not used to find
 # the real binary: it answers from the shell's hash table and would find the shim.
-for prog in pacman; do
-    real=$(ls /usr/bin/$prog 2>/dev/null || true)
-    [ -n "$real" ] || continue
-    cat > "$SHIM_DIR/$prog" <<SHIM
+#
+# One manager, named rather than looped over. This was `for prog in pacman`, a loop with one
+# element — the shape of a list that used to have more, and a promise of generality the rest of
+# the file does not keep: the module below is six *pacman* packages and the assertions read
+# pacman's argv. A loop that can only run once says otherwise to whoever edits it next.
+PROG=pacman
+REAL=/usr/bin/$PROG
+if [ -x "$REAL" ]; then
+    cat > "$SHIM_DIR/$PROG" <<SHIM
 #!/bin/sh
-printf '%s' "$prog" >> $LOG
+printf '%s' "$PROG" >> $LOG
 for a in "\$@"; do printf ' %s' "\$a" >> $LOG; done
 printf '\n' >> $LOG
-exec $real "\$@"
+exec $REAL "\$@"
 SHIM
-    chmod 0755 "$SHIM_DIR/$prog"
-done
+    chmod 0755 "$SHIM_DIR/$PROG"
+else
+    # Loudly, and not `continue`: this script's every number comes from that log, and with no
+    # shim it would measure nothing and report zeroes as a result.
+    echo "FATAL: $REAL is not here — this measurement only runs in the arch image." >&2
+    exit 1
+fi
 export PATH="$SHIM_DIR:$PATH"
 
 linix init >/dev/null 2>&1

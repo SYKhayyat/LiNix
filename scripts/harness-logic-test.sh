@@ -318,7 +318,19 @@ for _src in $SOURCES; do
         continue
     fi
     (
-        PASS=0; FAILC=0; SOFTC=0; FAILED_NAMES=""; TO_LONG="timeout 900"
+        PASS=0; FAILC=0; SOFTC=0
+        # The environment the lifted body runs in, not this script's own variables — both are
+        # read by `run-in-container.sh`'s `classify_install` and its callers, and shellcheck
+        # cannot see through the `eval` below to know that. Dropping them would make the lifted
+        # code run against unset names, which is the failure this whole file exists to catch.
+        #
+        # One directive per line, and the assignments split off the line above for that reason:
+        # a directive attaches to the next *command*, so on `A=1; B=2` it covers `A` and leaves
+        # `B` reported — which is how the first attempt at this suppression did nothing.
+        # shellcheck disable=SC2034
+        FAILED_NAMES=""
+        # shellcheck disable=SC2034
+        TO_LONG="timeout 900"
         soft() { SOFTC=$((SOFTC + 1)); }
         hard() { FAILC=$((FAILC + 1)); }
         refused() { PASS=$((PASS + 1)); }

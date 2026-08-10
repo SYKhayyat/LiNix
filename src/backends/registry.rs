@@ -2572,11 +2572,14 @@ mod tests {
                 Runs("pacman -S --noconfirm --needed -- jq"),
                 Runs("pacman -Rs --noconfirm -- jq"),
             ),
+            // No terminator, and that is the fix rather than the omission: `dnf` is dnf5 on
+            // Fedora 41+, whose parser answers `Unknown argument "--"`. This expectation
+            // demanded the broken form and was green the whole time the installs were failing.
             ArgvCase::pkg(
                 "dnf",
                 &register_dnf,
-                Runs("dnf install -y -- jq"),
-                Runs("dnf remove -y -- jq"),
+                Runs("dnf install -y jq"),
+                Runs("dnf remove -y jq"),
             ),
             // Void's manager installs and removes with two different programs, which is the
             // `remove_binary` case a single-binary assumption gets wrong.
@@ -3137,7 +3140,11 @@ mod tests {
 
         // Caught: a terminating program handed the declaration's own text bare. These are the
         // two real invocations that were live when this was written.
-        assert_eq!(probe("dnf", "jq", "dnf install -y jq"), 1);
+        // `dnf` is no longer in the terminating set (it may be dnf5), so its bare operand is
+        // correct and the scan must NOT flag it. `apt` is the terminating system manager this
+        // half of the check still has to catch.
+        assert_eq!(probe("dnf", "jq", "dnf install -y jq"), 0);
+        assert_eq!(probe("apt-get", "jq", "apt-get install -y jq"), 1);
         assert_eq!(
             probe("pacman", "jq", "pacman -S --noconfirm --needed jq"),
             1
@@ -3337,7 +3344,7 @@ mod tests {
             (
                 "dnf",
                 register_dnf as Registrar,
-                "dnf repoquery --requires --resolve --queryformat %{name} -- jq",
+                "dnf repoquery --requires --resolve --queryformat %{name} jq",
             ),
             ("pacman", register_pacman, "pacman -Si -- jq"),
             ("xbps", register_xbps, "xbps-query -x -- jq"),

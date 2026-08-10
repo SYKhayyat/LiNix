@@ -1592,6 +1592,31 @@ ok "policy checks the desired state against [guard]" lx policy
 ok "check conflicts reports cross-backend conflicts" lx check conflicts
 # With no event hooks declared, approvals is clean and exits 0 (not 2).
 ok "check approvals is clean with no hooks" lx check approvals
+# `adapters` (S78) — the eight extension surfaces. The container starts with no `adapters/`
+# directory at all, which is the state almost every machine is in and the one a survey must
+# report without complaining about.
+ok "adapters reports every surface" lx adapters
+grep_ok "adapters says an unextended machine has extended nothing" "extended nothing" lx adapters
+nok "adapters refuses a name that is not a surface" lx adapters nosuchsurface
+# **The failure a plugin system has that a built-in does not**: a file that is present,
+# approved, valid TOML and read by nobody, because the array key is `backends` and the reader
+# wants `backend`. Every other signal says fine. `rows in force` is the only one that does not.
+mkdir -p "$LINIX_CONFIG_DIR/adapters"
+printf '[[backends]]\nname = "mymgr"\n' > "$LINIX_CONFIG_DIR/adapters/backends.toml"
+grep_ok "an adapter file nobody approved is reported unapproved" "unapproved" lx adapters backends
+lx lock >/dev/null 2>&1
+grep_ok "a table nobody opens is 'no rows', not 'in use'" "no rows" lx adapters backends
+printf '[[backend]]\nname = "mymgr"\ninstall = "true --"\n' > "$LINIX_CONFIG_DIR/adapters/backends.toml"
+lx lock >/dev/null 2>&1
+grep_ok "a row of the right kind is in force" "in use" lx adapters backends
+# Malformed degrades rather than refusing (owner ruling, 2026-08-10), and `check adapters` is
+# where that fact is an exit code instead of a warning nobody re-reads.
+printf 'this is not toml at all\n' > "$LINIX_CONFIG_DIR/adapters/backends.toml"
+grep_ok "an unreadable adapter file is reported malformed" "malformed" lx adapters backends
+ok "a malformed adapter does not stop a sync" lx sync --dry-run
+nok "check adapters exits non-zero on a file that is not in use" lx check adapters
+rm -f "$LINIX_CONFIG_DIR/adapters/backends.toml"
+ok "check adapters is clean once the file is gone" lx check adapters
 # `add` vendors a source's modules. A local path with a module is the network-free case; it
 # copies the module in and reports it.
 mkdir -p /tmp/linix-share/modules

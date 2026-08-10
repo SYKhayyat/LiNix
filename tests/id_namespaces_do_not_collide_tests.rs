@@ -63,13 +63,12 @@ fn defines_id(line: &str) -> Option<String> {
     let t = line.trim();
 
     let candidate = if let Some(rest) = t.strip_prefix('#') {
-        rest.trim_start_matches('#').trim_start().to_string()
-    } else if let Some(rest) = t.strip_prefix("| **") {
-        rest.to_string()
-    } else if let Some(rest) = t.strip_prefix("| ~~**") {
-        rest.to_string()
+        rest.trim_start_matches('#').trim_start()
     } else {
-        return None;
+        // A struck-out row still defines the id it strikes out — `~~` is how the register
+        // retires one, and a retired id is exactly the kind that must not be reissued.
+        t.strip_prefix("| **")
+            .or_else(|| t.strip_prefix("| ~~**"))?
     };
 
     // `W9`, `W9a`, `W9 —`, `W9**`, `W9 ·` … take the leading identifier and stop.
