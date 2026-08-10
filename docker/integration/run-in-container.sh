@@ -2118,7 +2118,15 @@ crash_run() {
 # crash's doing, and 23 of them were already there.
 _baseline_open=$(journal_open)
 _baseline_total=$(journal_status_tally "InProgress Abandoned Failed Completed")
-if [ "$_baseline_total" -lt 1 ]; then
+if [ "$_baseline_total" -lt 1 ] && [ -n "$SMOKE" ]; then
+    # **The premise of the check below is false on a SMOKE_ONLY image.** It reads "sixteen
+    # sections of installs and removals have run above this line", and on gentoo none of them
+    # did — Portage builds from source, so that image installs and removes nothing by design.
+    # An empty write-ahead log there is the correct state, and calling it a hard failure is a
+    # sentence about a run that never happened. It failed every scheduled night for at least a
+    # week on exactly this.
+    skip_smoke "journal: the write-ahead log is empty, and there is nothing to audit"
+elif [ "$_baseline_total" -lt 1 ]; then
     # An audit of an empty set passes without examining anything — the same collapse
     # `too_few_to_audit` exists for. Sixteen sections of installs and removals have run above
     # this line, so an empty log means the binary under test never recorded an operation, and
