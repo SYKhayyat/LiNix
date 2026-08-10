@@ -36,6 +36,15 @@ fn fabricate_status(code: i32) -> std::process::ExitStatus {
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;
+        // **A Unix exit code is eight bits**, so `.code()` reads back `(raw >> 8) & 0xff` and a
+        // fabricated `0x8A150001` comes back as `1`. That is deliberate and demonstrated by
+        // `a_fabricated_status_round_trips_only_what_this_os_can_hold`, which fabricates a
+        // Windows code here on purpose to show it does not survive — so this cannot assert the
+        // range without breaking the test that documents the rule.
+        //
+        // The rule was re-entered anyway, a third time, by a winget test carrying a 32-bit
+        // HRESULT. It went unnoticed for a reason no assertion here would have fixed: the build
+        // matrix produced one target out of four, so no test in this file had ever run on Linux.
         std::process::ExitStatus::from_raw(code << 8)
     }
     #[cfg(windows)]
@@ -1371,6 +1380,36 @@ impl CommandExecutor {
         self
     }
 
+    /// Whether a command asking for privilege actually gets a `sudo` in front of it here.
+    ///
+    /// **Three environments, two answers, and a test cannot guess which.** Windows never
+    /// escalates; Linux as an ordinary user does; Linux as root does not, because it is already
+    /// there. A test that hard-codes one of those is a test that passes on the machine it was
+    /// written on — which is exactly what happened: three `web` tests registered `dpkg -r fd`,
+    /// passed on Windows for months, and were never run on Linux at all because the build matrix
+    /// silently produced one target out of four. On a Linux runner the product ran
+    /// `sudo dpkg -r fd` and the stub went unmatched.
+    ///
+    /// So the rule is a function, and the tests ask it rather than restating it. One rule, one
+    /// place; a second copy is the copy that is wrong on somebody else's machine.
+    pub fn escalates(sudo: bool) -> bool {
+        sudo && !cfg!(windows) && !Self::is_root()
+    }
+
+    /// The argv `run_on` would actually launch, as one string — what a mock registers against.
+    #[cfg(test)]
+    pub fn as_launched(cmd: &str, args: &[&str], sudo: bool) -> String {
+        let line = std::iter::once(cmd)
+            .chain(args.iter().copied())
+            .collect::<Vec<_>>()
+            .join(" ");
+        if Self::escalates(sudo) {
+            format!("sudo {line}")
+        } else {
+            line
+        }
+    }
+
     pub fn is_root() -> bool {
         #[cfg(unix)]
         {
@@ -1405,7 +1444,7 @@ impl CommandExecutor {
         let mut final_cmd = cmd.to_string();
         let mut final_args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
 
-        if sudo && !cfg!(windows) && !Self::is_root() {
+        if Self::escalates(sudo) {
             final_args.insert(0, final_cmd);
             final_cmd = "sudo".to_string();
         }
@@ -2180,6 +2219,13 @@ mod child_process_tests {
     /// Measured: winget loses ~3 of a cold burst of 16 concurrent listings and none of the
     /// next 32. The second attempt is usually the whole fix, which is why this is worth a
     /// retry at all — and why it is worth it only for reads, which are idempotent.
+    ///
+    /// **Windows only, because `0x8A150001` is only an exit code on Windows.** A Unix exit code
+    /// is eight bits; a 32-bit HRESULT cannot be one, and the fixture that fabricated it there
+    /// silently truncated it to `1`. winget is a Windows manager, so the platform this runs on
+    /// is the platform the case occurs on. The classifier's own arithmetic is covered
+    /// everywhere by `exit_policy`'s tests, which are pure and take the code as a number.
+    #[cfg(windows)]
     #[tokio::test]
     async fn a_read_whose_only_signal_is_its_exit_code_is_still_classified_and_retried() {
         let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());

@@ -510,6 +510,19 @@ mod tests {
         )
     }
 
+    /// A system manager's removal, spelled the way this machine will actually launch it.
+    ///
+    /// Removing a `.deb` or an `.rpm` asks for privilege, and whether that becomes a `sudo`
+    /// depends on the platform and the euid — `CommandExecutor::escalates` is the one place that
+    /// knows. Asked rather than restated, because the three registrations below were hard-coded
+    /// without it and were wrong on every Linux machine that is not root.
+    fn removal_argv(line: &str) -> String {
+        let mut parts = line.split(' ');
+        let cmd = parts.next().unwrap_or_default();
+        let args: Vec<&str> = parts.collect();
+        CommandExecutor::as_launched(cmd, &args, true)
+    }
+
     /// D5: a `.deb` LiNix handed to `dpkg` is removed **through `dpkg`**, by the package name
     /// read out of the file at install time — not by the URL, and not by deleting a tree LiNix
     /// does not own.
@@ -519,7 +532,12 @@ mod tests {
         let url = "https://example.invalid/fd_10.2.0_amd64.deb";
         record(&web.core, url, handed_to("dpkg", "fd", url)).await;
 
-        mock.set_response("dpkg -r fd", Ok(DryRunOutput::new().into()));
+        // Registered as the product will really launch it. A system manager's removal asks
+        // for privilege, so on a Linux runner it arrives as `sudo dpkg -r fd` and on Windows
+        // as `dpkg -r fd` — three environments, two answers, and `escalates` is the one place
+        // that knows which. Hard-coded here, it passed on Windows and had never once run on
+        // Linux, because the build matrix was producing one target out of four.
+        mock.set_response(&removal_argv("dpkg -r fd"), Ok(DryRunOutput::new().into()));
         web.remove(&[url.to_string()], false, reaped())
             .await
             .expect("the removal succeeds");
@@ -548,7 +566,7 @@ mod tests {
         let url = "https://example.invalid/fd-10.2.0.x86_64.rpm";
         record(&web.core, url, handed_to("rpm", "fd", url)).await;
 
-        mock.set_response("rpm -e fd", Ok(DryRunOutput::new().into()));
+        mock.set_response(&removal_argv("rpm -e fd"), Ok(DryRunOutput::new().into()));
         web.remove(&[url.to_string()], false, reaped())
             .await
             .expect("the removal succeeds");
@@ -573,7 +591,7 @@ mod tests {
         record(&web.core, url, handed_to("dpkg", "fd", url)).await;
 
         mock.set_response(
-            "dpkg -r fd",
+            &removal_argv("dpkg -r fd"),
             Err(Error::Other("dpkg: dependency problems".into())),
         );
         let err = web
