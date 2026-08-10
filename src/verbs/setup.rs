@@ -614,7 +614,7 @@ pub async fn handle_heal(app: &App) -> Result<()> {
     // below runs — and `heal()` ends in a `?`, so a lock cleared *after* it is a lock cleared
     // on the runs that did not need it. First written the other way round, under a comment
     // claiming it went first.
-    for fixed in clear_stale_manager_locks(app).await {
+    for fixed in settle_manager_locks(app).await {
         println!("heal: {}", fixed);
     }
     app.sync_engine().await.heal().await?;
@@ -638,7 +638,67 @@ pub async fn handle_heal(app: &App) -> Result<()> {
 /// Which locks may be cleared, and the proof that one is not held, are
 /// [`crate::app::stale_lock`]'s: this is the half that acts, and it is separate so the deciding
 /// half can be tested against a machine that is not this one.
-pub async fn clear_stale_manager_locks(app: &App) -> Vec<String> {
+/// Clear what is stale — and first, wait out anything that is merely *busy*.
+///
+/// **A survey is a snapshot, and `heal` was acting on one.** It looked once at the top, found a
+/// live `pacman` holding `db.lck`, correctly left it alone — and then that `pacman`, an orphan of
+/// the very run `heal` was called to recover from, exited during the recovery. By the time the
+/// lock was stale, the only step that could clear it had already run, and `heal` finished by
+/// telling the user to run `heal`.
+///
+/// So the holder is waited out first. That is not a delay bolted on: `heal`'s whole subject is
+/// *a run was interrupted*, and an orphan still finishing that run's transaction is the most
+/// interesting thing on the machine. Waiting for it is the repair; clearing what it leaves is
+/// the rest of the repair. Bounded by `manager_lock_wait_secs`, the same budget `sync` waits
+/// under, and announced — a silent `heal` that pauses for five minutes is a `heal` that gets
+/// killed, which is how the lock got there.
+async fn settle_manager_locks(app: &App) -> Vec<String> {
+    let budget = std::time::Duration::from_secs(app.config.manager_lock_wait_secs);
+    let mut said = Vec::new();
+
+    for lock in crate::app::stale_lock::MANAGER_LOCKS {
+        let Some(backend) = lock.backends.first() else {
+            continue;
+        };
+        let crate::app::stale_lock::Held::Live(who) =
+            crate::app::stale_lock::held_for_on_this_machine(backend)
+        else {
+            continue;
+        };
+        if budget.is_zero() {
+            said.push(format!(
+                "{who} is running, so its lock is held — not waiting, because \
+                 `manager_lock_wait_secs` is 0"
+            ));
+            continue;
+        }
+        println!(
+            "heal: waiting up to {}s for {who} to finish — it is holding {}'s lock, and until it \
+             lets go nothing can be said about whether that lock is stale",
+            budget.as_secs(),
+            lock.holder()
+        );
+        match crate::app::stale_lock::wait_until_not_held(backend, budget, &|| false).await {
+            crate::app::stale_lock::Waited::Freed(spent) => said.push(format!(
+                "waited {}s for {who} to finish before looking at {}'s lock",
+                spent.as_secs(),
+                lock.holder()
+            )),
+            crate::app::stale_lock::Waited::StillHeld => said.push(format!(
+                "{who} has been running for {}s and still holds {}'s lock — nothing is broken, \
+                 it is working. Run `linix heal` again when it has finished.",
+                budget.as_secs(),
+                lock.holder()
+            )),
+            crate::app::stale_lock::Waited::Cancelled => {}
+        }
+    }
+
+    said.extend(clear_stale_manager_locks(app).await);
+    said
+}
+
+async fn clear_stale_manager_locks(app: &App) -> Vec<String> {
     let mut fixed = Vec::new();
     let survey = crate::app::stale_lock::find_on_this_machine();
     // Said, not skipped. A lock left in place is the likeliest reason the next command fails,

@@ -5968,6 +5968,24 @@ from a hang, and a hang gets killed. Killing LiNix mid-sync is what leaves an or
 holding a lock — so a silent wait here would manufacture, on the next run, exactly the condition
 it was waiting out.
 
+**Why `heal` waits before it judges, and why the filesystem is asked before the process list.**
+Both of these are the same mistake caught twice, a few hours apart.
+
+`heal` surveyed once at the top, found a live `pacman` holding `db.lck`, and correctly left it —
+then went on to a recovery during which that `pacman`, an orphan of the run `heal` had been
+called about, exited. The lock became stale after the only step that could clear it had already
+happened, and the run ended by advising the user to run the command they were running. A snapshot
+is not a state; the holder has to be waited out before the question means anything.
+
+And `held_for` asked *is a manager running* before *is there a lock at all*, which reads fine
+until you notice that `ProcFs::any_named` answers **yes** on a machine with no `/proc`. That
+answer is deliberate and right for the clearing path — "I cannot tell" must never become "go
+ahead and delete it". For the *waiting* path it is exactly backwards: on Windows, where none of
+these four files exists, every row reported as held, and `heal`'s new settle step would have
+waited the full budget on each of them. Twenty minutes of a command doing nothing. A running
+`pacman` with no `db.lck` holds nothing, on any platform, and that is the cheaper question
+besides.
+
 **Why backends that share a manager share a lock.** `pacman` and `yay` in one config is an
 ordinary Arch machine: the repositories from one, the AUR from the other, both writing
 `/var/lib/pacman/`. Keyed by their own names, LiNix ran them concurrently and let pacman's

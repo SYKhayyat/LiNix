@@ -1329,26 +1329,26 @@ async fn wait_for_manager_lock(
          (up to {}s; `manager_lock_wait_secs` sets that)",
         wait.as_secs()
     );
-    let started = std::time::Instant::now();
-    while started.elapsed() < wait {
-        if cancel_token.is_cancelled() {
-            return Err(Error::Cancelled);
+    // The polling loop is `stale_lock`'s, because `heal` waits on the same question and the two
+    // must not drift. What is decided here is only what to say about each ending.
+    match crate::app::stale_lock::wait_until_not_held(backend, wait, &|| {
+        cancel_token.is_cancelled()
+    })
+    .await
+    {
+        // It let go. Whether it finished or died, the next attempt is the thing that finds out,
+        // and a stale lock left by a holder that died mid-wait is reported by the next pass
+        // through the verdict rather than guessed at here.
+        crate::app::stale_lock::Waited::Freed(spent) => {
+            info!(
+                "the lock `{}` needs came free after {}s",
+                backend,
+                spent.as_secs()
+            );
+            return Ok(spent);
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        match crate::app::stale_lock::held_for_on_this_machine(backend) {
-            crate::app::stale_lock::Held::Live(_) => continue,
-            // It let go. Whether it finished or died, the next attempt is the thing that finds
-            // out, and a stale lock left by a holder that died mid-wait is reported by the next
-            // pass through the verdict rather than guessed at here.
-            _ => {
-                info!(
-                    "the lock `{}` needs came free after {}s",
-                    backend,
-                    started.elapsed().as_secs()
-                );
-                return Ok(started.elapsed());
-            }
-        }
+        crate::app::stale_lock::Waited::Cancelled => return Err(Error::Cancelled),
+        crate::app::stale_lock::Waited::StillHeld => {}
     }
     Err(Error::CommandFailed {
         message: format!(

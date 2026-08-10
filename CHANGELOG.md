@@ -35,6 +35,11 @@ crash.*
   between. Bounded by `manager_lock_wait_secs` (default 300, `0` to opt out), as one budget
   across the whole retry loop. Nothing is scanned unless the manager already said the word, so a
   successful install costs nothing.
+- **`heal` waits for a manager that is still finishing before deciding its lock is stale.** It
+  surveyed once at the top, correctly left a lock alone because a manager was alive, and then
+  watched that manager — an orphan of the run it was called to recover — exit during the
+  recovery. The lock went stale after the only step that could clear it had run, so `heal` ended
+  by advising you to run `heal`.
 - **`pacman` and `yay` no longer fight each other.** Backends that drive the same manager took
   their own exclusive locks — an ordinary Arch config with repos from one and the AUR from the
   other ran them concurrently and let `db.lck` arbitrate, which it does by failing whichever

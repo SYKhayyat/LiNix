@@ -280,6 +280,13 @@ pub fn says_the_lock_is_taken(backend: &str, message: &str) -> bool {
 /// a sound one: the kernel drops an `flock` when its holder dies, so a lock that is genuinely
 /// taken has a live taker by definition. Those rows can therefore never report [`Held::Stale`],
 /// which is the same fact as their never being removable, arrived at from the other side.
+///
+/// **No lock file on disk, no lock.** A running `pacman` with no `db.lck` is a `pacman` doing
+/// something that is not a transaction, and there is nothing to wait for. Asking the process list
+/// first got this backwards, and the cost was not theoretical: `ProcFs::any_named` answers *yes*
+/// on a machine with no `/proc` — deliberately, because for *clearing* a lock that is the safe
+/// direction — so on Windows every row read as held, and the settle step `heal` runs would have
+/// waited the full budget on each of four locks that do not exist. Twenty minutes of nothing.
 pub fn held_for(
     backend: &str,
     procs: &dyn Processes,
@@ -288,6 +295,15 @@ pub fn held_for(
     let Some(lock) = lock_of(backend) else {
         return Held::Free;
     };
+    let present: Vec<&Path> = lock
+        .paths
+        .iter()
+        .map(Path::new)
+        .filter(|p| read(p).is_some())
+        .collect();
+    if present.is_empty() {
+        return Held::Free;
+    }
     if let Some(who) = running_holder(lock, procs) {
         return Held::Live(who);
     }
@@ -296,8 +312,7 @@ pub fn held_for(
         // `flock` to report and nothing to wait for.
         return Held::Free;
     }
-    for path in lock.paths {
-        let path = Path::new(path);
+    for path in present {
         let Some(body) = read(path) else { continue };
         if !lock.carries_pid {
             // Its existence is the lock, and nothing of the manager's is running.
@@ -322,6 +337,43 @@ pub fn held_for(
 /// The same question against the real machine.
 pub fn held_for_on_this_machine(backend: &str) -> Held {
     held_for(backend, &ProcFs, &|p| std::fs::read_to_string(p).ok())
+}
+
+/// How a wait for someone else's manager ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Waited {
+    /// It let go. Whether it finished or died is the next question's business, not this one's.
+    Freed(std::time::Duration),
+    /// Still holding when the budget ran out. Nothing is wrong; it is simply still working.
+    StillHeld,
+    /// The run was cancelled underneath the wait.
+    Cancelled,
+}
+
+/// Wait until nothing live holds `backend`'s manager lock.
+///
+/// One polling loop, because there are two callers and they must agree: the retry loop waits
+/// here before trying a command again, and `heal` waits here before deciding whether a lock is
+/// stale. `heal` learned that the hard way — it surveyed once at the top, correctly left a lock
+/// alone because a `pacman` was alive, and then watched that `pacman` exit during the recovery
+/// it went on to run. By the time the lock was stale, the only step that could clear it had
+/// already happened.
+pub async fn wait_until_not_held(
+    backend: &str,
+    budget: std::time::Duration,
+    cancelled: &(dyn Fn() -> bool + Sync),
+) -> Waited {
+    let started = std::time::Instant::now();
+    while started.elapsed() < budget {
+        if cancelled() {
+            return Waited::Cancelled;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        if !matches!(held_for_on_this_machine(backend), Held::Live(_)) {
+            return Waited::Freed(started.elapsed());
+        }
+    }
+    Waited::StillHeld
 }
 
 /// The first of a lock's holder programs that is running, phrased for a sentence.
@@ -763,6 +815,58 @@ mod tests {
             ),
             Held::Live("pid 4242".into()),
         );
+    }
+
+    /// **A running manager with no lock file on disk holds nothing.** Asking the process list
+    /// before the filesystem is what made every row read as held on a machine with no `/proc`,
+    /// because `any_named` answers *yes* there on purpose — the safe direction for clearing, the
+    /// catastrophic one for waiting.
+    #[test]
+    fn a_manager_that_is_running_but_holds_no_lock_file_holds_nothing() {
+        assert_eq!(
+            held_for(
+                "pacman",
+                &Fake {
+                    alive: vec![],
+                    running: vec!["pacman"]
+                },
+                &reader(&[]),
+            ),
+            Held::Free,
+        );
+    }
+
+    /// **A wait for a lock that is not held ends at once**, so the settle step `heal` runs costs
+    /// nothing on the ordinary machine — which is every machine that has not just been killed
+    /// mid-transaction. One poll interval, not the budget.
+    #[tokio::test]
+    async fn a_lock_nobody_holds_is_not_waited_for() {
+        let started = std::time::Instant::now();
+        let out =
+            wait_until_not_held("pacman", std::time::Duration::from_secs(30), &|| false).await;
+        assert!(matches!(out, Waited::Freed(_)), "{out:?}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "a free lock took {:?} to answer",
+            started.elapsed()
+        );
+    }
+
+    /// A cancelled run stops waiting rather than serving out its budget: five minutes after a
+    /// Ctrl-C is five minutes of looking hung, and a hang is what gets killed.
+    #[tokio::test]
+    async fn a_cancelled_wait_stops_rather_than_serving_out_its_budget() {
+        let out =
+            wait_until_not_held("pacman", std::time::Duration::from_secs(300), &|| true).await;
+        assert_eq!(out, Waited::Cancelled);
+    }
+
+    /// A backend with no lock in the table is never waited on at all — `held_for` answers
+    /// `Free`, so the first poll ends it.
+    #[tokio::test]
+    async fn a_backend_with_no_lock_is_never_waited_on() {
+        let out = wait_until_not_held("npm", std::time::Duration::from_secs(300), &|| false).await;
+        assert!(matches!(out, Waited::Freed(_)), "{out:?}");
     }
 
     /// A backend with no lock in the table is not made to wait for one.

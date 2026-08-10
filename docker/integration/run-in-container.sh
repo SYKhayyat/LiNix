@@ -2301,12 +2301,21 @@ else
             soft "lock: the stamp was already gone after the kill, so the corpse case below is weaker than intended"
         fi
 
+        # **The subject here is LiNix's own lock, so the package manager's is cleared first.**
+        # Killing a holder mid-sync also orphans the `pacman` it had started, which keeps its own
+        # `db.lck` and then leaves it behind — so the sync below failed on *that* lock and this
+        # check reported it as a LiNix lock that was not released. A check that can fail for a
+        # reason unrelated to its own sentence proves nothing when it passes either. `heal` is
+        # the command whose job that repair is (II.50), and it is untimed: what is being measured
+        # is the sync, and specifically that it does not wait 120s on a corpse.
+        $TO "$LINIX" -y heal >/tmp/lock-corpse-heal.out 2>&1 || true
         _t0=$(date +%s)
         $TO "$LINIX" -y sync >/tmp/lock-corpse.out 2>&1
         _rc=$?
         _took=$(since "$_t0")
         if [ "$_rc" -ne 0 ] && [ "$_rc" -ne 2 ]; then
             hard "lock: a run after a killed holder failed (rc=$_rc) instead of taking the free lock"
+            echo "        heal said: $(tr '\n' ' ' < /tmp/lock-corpse-heal.out | tail -c 300)"
             excerpt /tmp/lock-corpse.out 6
         elif [ "$_took" -ge 30 ]; then
             hard "lock: the next run waited ${_took}s on a holder that was already dead — the stale stamp file was believed over the lock"

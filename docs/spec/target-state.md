@@ -3254,6 +3254,20 @@ II.50 exists to repair.
 only after a failure whose text matched that manager's own phrasing for a taken lock. A
 successful install never pays for this, and a missing package never waits on it.
 
+**No lock file on disk, no lock.** A running `pacman` with no `db.lck` is a `pacman` doing
+something that is not a transaction. Asking the process list before the filesystem inverted this,
+and the cost was not theoretical: the `/proc` scan answers *yes, something is running* on a
+machine that has no `/proc`, deliberately — for **clearing** a lock that is the safe direction —
+so every row read as held on Windows, where none of these files exists.
+
+**And `heal` settles the locks before it judges them (II.50).** A survey is a snapshot, and `heal`
+was acting on one: it looked once, correctly left a lock alone because a manager was alive, and
+then that manager — an orphan of the very run `heal` was recovering from — exited during the
+recovery. By the time the lock was stale, the only step that could clear it had run, and `heal`
+finished by telling the user to run `heal`. So a live holder is waited out first, under the same
+budget and announced the same way. An orphan finishing the interrupted run's transaction is the
+most interesting thing on that machine; waiting for it *is* the repair.
+
 **Backends that drive one manager take one lock.** `pacman` and `yay` both write
 `/var/lib/pacman/`; `apt` and `apt-get` share dpkg's; `dnf`, `yum` and `microdnf` share dnf's.
 Keyed by their own names they were several locks over one database, and LiNix contended with
