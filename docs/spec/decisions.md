@@ -1,4 +1,4 @@
-# The decision register — all 185, none of them open
+# The decision register — all 187, none of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -17,7 +17,7 @@ not in this paragraph.
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **2** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **179** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **181** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -76,7 +76,7 @@ status loses that, so it is kept here:
 **Nothing is open. `Z1` — the licence — was ruled 2026-08-09, and `Y18` is RULED in full as of
 the same day: `@source=` on a `shim:` line is read, and `Y23` — flatpak's unreadable channel —
 was ruled and built beside it.** All 185 are accounted
-for: **179 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 2 BUILT NEVER RULED, 0 OPEN** — and this line
+for: **181 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 2 BUILT NEVER RULED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -239,7 +239,7 @@ there). It is when the question stopped being open, not when the code landed.
 | **U42** | Do the overlapping command clusters get consolidated? | 2026-07-27 |
 | **U43** | How much does an ordinary run say about itself? | 2026-07-27 |
 
-### Q — the production-readiness round and the grading rounds after it — 49
+### Q — the production-readiness round and the grading rounds after it — 51
 
 *Not a proposal part. These are the questions the readiness assessment forced — behaviour a
 user notices, or a published contract — raised because `CLAUDE.md` requires a ruling for them
@@ -336,6 +336,8 @@ II.19 and the reasons in V.115–V.118.*
 | **Y10** | The write-ahead log had two variants and all nine `apply/` modules referenced it zero times, while a `dotfiles:` tree destroyed the user's file with no backup, no ledger row and therefore no teardown — four documents said otherwise. RULED: **the log covers what cannot be recomputed**, and **a tree is the `link:` lines it stands for.** | 2026-08-06 |
 | **Q49** | `pip:` cannot install on a PEP 668 distro, and LiNix has no answer for it. | 2026-08-10 |
 | **Q50** | A killed run leaves the package manager's own lock behind, and every later run fails. | 2026-08-10 |
+| **Q51** | Another package manager holding its own lock made LiNix fail in 3.5 seconds, with a sentence that was false in exactly that case. RULED: **wait for it.** | 2026-08-10 |
+| **Q52** | LiNix started processes it did not own — SIGKILL for a package manager mid-transaction, and seventeen sites that detached a child or parked a runtime worker. RULED: **every child has an owner, through one of three doors.** | 2026-08-10 |
 | **Q48** | Every `link:` on Windows took the cross-drive COPY fallback, same drive or not: `is_same_drive` compared a verbatim prefix against a plain one — and the limitation it guarded does not exist, since a Windows symlink spans volumes. RULED: **a `link:` links; only a missing privilege gets a copy, and it says so.** | 2026-08-06 |
 | **Y11** | Two backends built install and remove argv by hand and lost the `--` terminator; forty backends could not clear a cache because no row could say how; one manager took two locks over one database. The argv table recorded all of it and checked none of it. RULED: **one path per backend, and a capability the machinery lacks is a field.** | 2026-08-06 |
 | **Y12** | `ChangePlanner::plan` took `Option<Scope>`, where `None` meant both "do not filter the desired set" and "reap every backend on the box"; five of eight callers passed it and four wanted only the first — the transient shell, whose desired set is its own requests, planned a removal for every other package on the machine. RULED: **a plan says what it is computed over, and the case that reaps cannot be written without the list that bounds it.** | 2026-08-06 |
@@ -5201,6 +5203,94 @@ works again until they find that sentence and act on it themselves.
    one the user now knows about.
 
 The rule is in **II.50**; the reason is in **V.180**.
+
+---
+
+## Q51
+
+**Status: ANSWERED — ruled 2026-08-10.** Raised by the arch CI leg that `Q50` was meant to fix,
+which failed again for a different reason.
+
+**Q51 — Another package manager is holding its own lock. Should LiNix wait for it, or fail?**
+`Q50` taught `heal` to clear a lock nothing holds. This is the other half, and it is the common
+one: the lock is held by a `pacman` or an `apt` that is *running*, in another terminal, or on an
+unattended-upgrade timer, or — as CI found — orphaned by a killed LiNix and still finishing the
+transaction it was given.
+
+LiNix retried four times over about three and a half seconds and then said:
+
+> tried 4 times; the failure did not change, so a further retry will not help — **this is not the
+> transient failure its output looks like**
+
+Every clause of that is wrong here. It *is* the transient failure it looks like; a further retry
+is exactly what helps, once the holder is done. And LiNix already knows how to do the right
+thing — it waits politely on *its own* data-directory lock, announcing the holder, for two
+minutes. It would not extend the same courtesy to the package manager's.
+
+**RULED (owner, 2026-08-10): it should not fail there at all. Wait for it.**
+
+1. **The three states are three answers, and the machine is asked which one it is in.** The
+   manager's message is the same either way; `/proc` is what knows. *Held by something live* →
+   wait, announcing the holder. *On disk with nothing holding it* → fail at once and name `linix
+   heal`, because waiting on a corpse never ends. *Free* → the holder let go mid-retry, which is
+   an ordinary race and gets the ordinary backoff.
+2. **Bounded, and the bound is one budget across the whole retry loop** — `manager_lock_wait_secs`,
+   default 300. Sized for the *other* manager's transaction, not for LiNix's patience: a `dnf
+   upgrade` of a hundred packages legitimately runs that long. `0` opts out.
+3. **The wait announces itself the moment it starts.** A wait with no reason given is
+   indistinguishable from a hang, and a hang is what people kill — which is the interruption
+   that leaves the wedged machine `Q50` is about.
+4. **Nothing is scanned unless the manager already said the word.** The `/proc` question is
+   asked only after a failure whose text matched that manager's own phrasing for a taken lock,
+   so a successful install never pays for this and a missing package never waits on it.
+5. **Backends that drive one manager take one lock.** `pacman` and `yay` in one config is an
+   ordinary Arch machine and both write `/var/lib/pacman/`; keyed by their own names they were
+   two locks over one database, and LiNix contended with itself. Same for `apt`/`apt-get` and
+   `dnf`/`yum`/`microdnf`.
+
+The rule is in **II.51**; the reason is in **V.181**.
+
+---
+
+## Q52
+
+**Status: ANSWERED — ruled 2026-08-10.** Raised while fixing `Q51`, by asking what created the
+orphaned `pacman` in the first place.
+
+**Q52 — What does LiNix own, of the processes it starts?** Two failures, in opposite directions,
+from the same missing idea.
+
+*It killed what it should have asked.* `kill_on_drop(true)` and `start_kill()` are **SIGKILL**,
+which cannot be caught — so a package manager LiNix stopped on a timeout got no chance to roll
+its transaction back or unlink its lock. LiNix was manufacturing the wedged machine `Q50` exists
+to unwedge. Worse: LiNix's child is usually `sudo`, and SIGKILL kills `sudo` alone, leaving the
+real manager running as root with its parent gone — which is precisely the orphan `Q51` had to
+be taught to wait for.
+
+*It abandoned what it should have owned.* Awaiting `Command::output()` and dropping that future
+does not kill the process; tokio detaches it. Seventeen sites did that, including a secret
+decrypt whose own timeout freed the sync and left `gpg` running **under a comment promising it
+would not**, and the `generate:` commands that run on every single sync with no bound at all.
+Ten of the seventeen were found by the gate, not by reading.
+
+**RULED (owner, 2026-08-10): every process LiNix starts belongs to LiNix, and there are three
+doors.**
+
+1. **A child is asked to stop before it is killed** — SIGTERM, a grace period, then SIGKILL only
+   for one that will not go. `sudo` forwards a SIGTERM; nothing forwards a SIGKILL.
+2. **Captured, bounded, owned** (`supervised_output`) for a tool nobody is watching.
+   **Terminal handed over, unbounded, still owned** (`supervised_status`) for a program a person
+   is looking at — an editor at a prompt is not a hung command, but it must not outlive LiNix.
+3. **A blocking `std::process::Command` goes through the third door** (`blocking::command_output`).
+   Its hazard is the opposite one: it cannot be abandoned, so it holds a runtime worker until the
+   child exits. So do the human-facing waits — a confirm, a TUI — and the data-directory lock,
+   which slept a worker for up to two minutes.
+4. **A gate, not a sweep.** `tests/a_spawned_child_has_an_owner_tests.rs` fails on a new
+   `Command` that reaches `spawn`/`output`/`status` outside the executor, unless it is in an
+   exemption table with a sentence. Fixing seventeen sites fixes seventeen sites; this is what
+   stops the eighteenth.
+
+The rule is in **II.52**; the reason is in **V.182**.
 
 ---
 

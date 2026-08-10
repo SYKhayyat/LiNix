@@ -677,8 +677,21 @@ impl GenericBackendCore {
     /// package database — so a `linix` installing and a `linix` removing could hold both at
     /// once. Every hand-written backend already named its manager here; the shared machinery was
     /// the one place that named the binary.
+    /// What this backend takes an exclusive lock on — the **manager**, not the backend.
+    ///
+    /// Usually the same string, and for most backends there is no difference: one name, one
+    /// program, one database. It matters where several backends drive one manager. `pacman` and
+    /// `yay` in one config is an ordinary Arch machine — the repos from one, the AUR from the
+    /// other — and both write `/var/lib/pacman/`. Keyed by their own names they were two locks
+    /// over one database, so a sync touching both ran them concurrently and let pacman's own
+    /// `db.lck` decide, which it does by failing the loser. The same holds for `apt`/`apt-get`
+    /// and for `dnf`/`yum`/`microdnf`.
+    ///
+    /// The family table lives in `app::stale_lock`, because *which backends share a manager
+    /// lock* and *which lock is left behind when one is killed* are the same fact, and the
+    /// second copy of it would be the one that went stale.
     pub fn lock_key(&self) -> &str {
-        &self.name
+        crate::app::stale_lock::lock_of(&self.name).map_or(self.name.as_str(), |l| l.holder())
     }
 
     /// The program that removes. Falls back to [`binary`](Self::binary), not to the name, so a
@@ -2289,6 +2302,42 @@ mod tests {
     ///   zypper:Reading requires zypper:No
     /// ```
     ///
+    /// **Backends that drive one manager take one lock.** `pacman` and `yay` in one config is
+    /// an ordinary Arch machine, and both of them write `/var/lib/pacman/`. Keyed by their own
+    /// names they were two locks over one database: a sync touching both ran them at the same
+    /// time and let pacman's `db.lck` arbitrate, which it does by failing whichever lost.
+    ///
+    /// A backend that shares its manager with nobody keys on itself, and that is checked too —
+    /// folding every backend onto one lock would serialise `npm` behind `apt` and throw away
+    /// the parallelism that makes a mixed sync worth running.
+    #[test]
+    fn backends_that_share_a_package_manager_share_its_lock() {
+        let key = |name: &str| {
+            let vfs = Arc::new(DashMap::new());
+            let mock = Arc::new(MockExecutor::new(vfs.clone()));
+            let exec =
+                CommandExecutor::with_layer(true, false, mock, vfs, Arc::new(DashMap::new()));
+            apt_like_core_named(name, exec).lock_key().to_string()
+        };
+        for (backend, expected) in [
+            ("pacman", "pacman"),
+            ("yay", "pacman"),
+            ("paru", "pacman"),
+            ("apt", "apt"),
+            ("apt-get", "apt"),
+            ("dnf", "dnf"),
+            ("yum", "dnf"),
+            ("microdnf", "dnf"),
+            ("zypper", "zypper"),
+            // No shared manager, no shared lock.
+            ("npm", "npm"),
+            ("cargo", "cargo"),
+            ("flatpak", "flatpak"),
+        ] {
+            assert_eq!(key(backend), expected, "{backend} locks the wrong manager");
+        }
+    }
+
     /// The fixture is that command's real output, captured from the openSUSE image.
     #[tokio::test]
     async fn preamble_and_metadata_are_not_dependencies() {

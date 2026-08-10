@@ -435,7 +435,7 @@ pub async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Result<()> {
         use std::io::IsTerminal;
         if std::io::stdin().is_terminal() {
             let mut preview = TuiPreview::new(&changes, HashMap::new());
-            if !preview.run()? {
+            if !crate::core::on_the_terminal(|| preview.run())? {
                 println!("Apply cancelled.");
                 return Ok(());
             }

@@ -47,6 +47,7 @@ mod a_parser_can_say_it_did_not_understand_tests;
 mod a_plan_installs_only_declarations_tests;
 mod a_plan_reaps_only_what_it_was_asked_about_tests;
 mod a_shim_runs_what_its_line_named_tests;
+mod a_spawned_child_has_an_owner_tests;
 mod a_writer_that_reaches_the_disk_goes_through_one_tests;
 mod absent_marker_coverage_tests;
 mod adapter_tables_share_one_mechanism_tests;

@@ -308,6 +308,181 @@ fn launch_path(cmd: &str) -> Option<PathBuf> {
 static LOCK_DIRS: once_cell::sync::Lazy<dashmap::DashSet<PathBuf>> =
     once_cell::sync::Lazy::new(dashmap::DashSet::new);
 
+/// A spawned child that is **asked** to stop before it is made to.
+///
+/// **SIGKILL is not a way to stop a package manager.** It cannot be caught, so nothing gets to
+/// run: `dpkg`'s database is left mid-write, `pacman`'s `db.lck` is left on disk, and the next
+/// LiNix run on that machine — and every `apt` the user types afterwards — fails on a lock whose
+/// owner is dead. That is the wedged machine `linix heal` exists to unwedge, and LiNix was
+/// creating it itself. SIGTERM *is* caught: apt rolls the transaction back, pacman unlinks its
+/// lock, and the machine is left usable.
+///
+/// **And LiNix's child is usually `sudo`, not the manager.** `sudo` forwards a SIGTERM to the
+/// command it runs; a SIGKILL kills `sudo` alone and leaves the manager running as root with its
+/// parent gone — an orphan still holding the lock, which is precisely the state that makes the
+/// next run fail with a lock nobody appears to hold.
+///
+/// Windows has no catchable termination signal for a console process, so there `kill_on_drop`
+/// keeps the job and this type only carries the child.
+struct Stopping {
+    child: tokio::process::Child,
+}
+
+impl Stopping {
+    fn new(child: tokio::process::Child) -> Self {
+        Self { child }
+    }
+
+    /// SIGTERM, then wait, then SIGKILL only if it is still there.
+    ///
+    /// The grace is the point: a manager that is cleaning up is doing the thing that keeps the
+    /// machine usable, and hurrying it undoes the whole exercise.
+    async fn stop(&mut self) {
+        #[cfg(unix)]
+        {
+            if self.request_stop()
+                && tokio::time::timeout(RawExecutor::TERMINATION_GRACE, Box::pin(self.child.wait()))
+                    .await
+                    .is_ok()
+            {
+                return;
+            }
+        }
+        let _ = self.child.start_kill();
+        let _ = self.child.wait().await;
+    }
+
+    /// Send SIGTERM. `false` when there is nothing to send it to — the child has already exited,
+    /// or this is not Unix.
+    #[cfg(unix)]
+    fn request_stop(&mut self) -> bool {
+        match self.child.id() {
+            Some(pid) => {
+                // SAFETY: `kill(2)` with a pid tokio still owns. The child has not been reaped —
+                // this type owns it and no `wait` has returned — so the pid cannot have been
+                // reused by another process.
+                unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) == 0 }
+            }
+            None => false,
+        }
+    }
+}
+
+/// The abort path — a worker whose task was cancelled, the global timeout — reaches the child
+/// only through `Drop`, which cannot wait for anything. It sends the signal that lets a manager
+/// clean up and does not stay to watch: a package manager finishing its own transaction after
+/// LiNix has stopped caring is the *good* outcome, and the run after it now waits for that
+/// manager rather than failing on its lock.
+#[cfg(unix)]
+impl Drop for Stopping {
+    fn drop(&mut self) {
+        if self.child.try_wait().is_ok_and(|s| s.is_some()) {
+            return;
+        }
+        self.request_stop();
+    }
+}
+
+/// Run an outside tool LiNix does not otherwise supervise, under the same ownership and the same
+/// bound as everything else it spawns.
+///
+/// **A child spawned outside `RawExecutor` used to have neither.** Awaiting `Command::output()`
+/// and then dropping that future does not kill the process — tokio detaches it — so every
+/// abandoned operation left a program running with nothing watching it: a `generate:` command
+/// after the sync that asked for it failed, a hook after the node that fired it was rolled back,
+/// a secret decrypt after its own timeout expired, under a comment promising the process would
+/// not be left hung. And none of them was bounded at all, so a `generate:` command that blocks
+/// on a prompt blocks every sync on that machine, forever, with no message.
+///
+/// `stdin` is closed unless `feed` gives it something. A tool that needs one otherwise is a tool
+/// asking a question nobody will answer, and a child sharing LiNix's stdin eats input meant for
+/// LiNix.
+///
+/// `mirror` echoes the tool's output to stderr as it arrives, for the callers whose tool used to
+/// inherit the terminal — a hook and the bisect oracle both printed as they ran, and capturing
+/// that silently would be a regression dressed as a fix. Never stdout: that carries LiNix's own
+/// answer, and a child's chatter interleaved with it is not parseable by whoever piped us.
+pub async fn supervised_output(command: Command, what: &str, mirror: bool) -> Result<StdOutput> {
+    supervise(command, what, mirror, None).await
+}
+
+/// The same, for a tool that is handed something on stdin and then sees it close.
+///
+/// The payload is written before the output is drained, so it must be small enough for the pipe
+/// buffer — every caller here sends a JSON fact sheet of a few hundred bytes. A large one would
+/// deadlock against a child that will not read until it has written.
+pub async fn supervised_output_fed(
+    command: Command,
+    what: &str,
+    mirror: bool,
+    feed: &str,
+) -> Result<StdOutput> {
+    supervise(command, what, mirror, Some(feed)).await
+}
+
+/// The other door: a child that **takes the terminal**, run to completion and owned all the same.
+///
+/// `linix run`, the ephemeral shell, an interpreter a user is watching. Its streams are inherited
+/// rather than captured, because the point is that the person is looking at it, and there is no
+/// idle bound for the same reason — a shell sitting at a prompt is not a hung command. What it
+/// does get is an owner: abandoning the future used to leave the child holding the terminal after
+/// LiNix was gone, which is a mess nobody can attribute to anything.
+pub async fn supervised_status(
+    mut command: Command,
+    what: &str,
+) -> Result<std::process::ExitStatus> {
+    #[cfg(windows)]
+    command.kill_on_drop(true);
+    #[cfg(unix)]
+    command.kill_on_drop(false);
+    let child = command
+        .spawn()
+        .map_err(|e| Error::command_failed(format!("could not start {what}: {e}")))?;
+    let mut child = Stopping::new(child);
+    child
+        .child
+        .wait()
+        .await
+        .map_err(|e| Error::command_failed(format!("waiting for {what}: {e}")))
+}
+
+async fn supervise(
+    mut command: Command,
+    what: &str,
+    mirror: bool,
+    feed: Option<&str>,
+) -> Result<StdOutput> {
+    command
+        .stdin(if feed.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    command.kill_on_drop(true);
+    #[cfg(unix)]
+    command.kill_on_drop(false);
+    let mut child = command
+        .spawn()
+        .map_err(|e| Error::command_failed(format!("could not start {what}: {e}")))?;
+    if let (Some(feed), Some(mut pipe)) = (feed, child.stdin.take()) {
+        use tokio::io::AsyncWriteExt;
+        // A tool that ignores stdin closes the pipe, and writing to a closed pipe is that tool's
+        // choice rather than an error: it was told, and it may not care.
+        let _ = pipe.write_all(feed.as_bytes()).await;
+        let _ = pipe.shutdown().await;
+    }
+    RawExecutor::wait_watched(
+        child,
+        what,
+        mirror && std::io::stderr().is_terminal(),
+        command_idle_timeout(),
+    )
+    .await
+}
+
 pub struct RawExecutor {
     stdin: ChildStdin,
     idle: Option<std::time::Duration>,
@@ -351,6 +526,17 @@ impl RawExecutor {
         Self { stdin, idle }
     }
 
+    /// How long a child gets to stop itself before it is killed outright.
+    ///
+    /// Long enough for a package manager to abort a transaction and unlink its lock, short
+    /// enough that a run LiNix has already given up on does not sit there. `dpkg`'s own
+    /// shutdown path is the slowest of these and finishes well inside it.
+    ///
+    /// Unix only, because it is the grace between the signal that can be caught and the one that
+    /// cannot, and Windows has only the second.
+    #[cfg(unix)]
+    const TERMINATION_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
     /// Collect the child's output, optionally echoing it to the terminal as it arrives, and
     /// give up on a child that has gone silent.
     ///
@@ -360,6 +546,10 @@ impl RawExecutor {
     ///
     /// The wait is sliced rather than awaited whole so the child stays reachable between
     /// slices — killing it needs the same `&mut` the wait future holds.
+    ///
+    /// The child is stopped through [`Stopping`], never with a bare kill: what LiNix spawns is
+    /// usually a package manager, and how you stop one of those decides whether the machine is
+    /// usable afterwards.
     async fn wait_watched(
         mut child: tokio::process::Child,
         cmd: &str,
@@ -395,6 +585,9 @@ impl RawExecutor {
         let last: Arc<SyncMutex<Instant>> = Arc::new(SyncMutex::new(Instant::now()));
         let out_pipe = child.stdout.take();
         let err_pipe = child.stderr.take();
+        // From here the child is owned by the guard: every way out of this function — returning,
+        // an error, or the whole future being dropped by an aborted worker — goes through it.
+        let mut child = Stopping::new(child);
         let mut out_task = tokio::spawn({
             let last = last.clone();
             async move {
@@ -415,27 +608,27 @@ impl RawExecutor {
         });
 
         let status = match idle {
-            None => child.wait().await?,
+            None => child.child.wait().await?,
             Some(idle) => loop {
                 let quiet = last.lock().unwrap_or_else(|e| e.into_inner()).elapsed();
                 let remaining = idle.saturating_sub(quiet);
                 if remaining.is_zero() {
-                    let _ = child.start_kill();
-                    let _ = child.wait().await;
+                    child.stop().await;
                     out_task.abort();
                     err_task.abort();
                     // Permanent: the retry loop would spend another `idle` per attempt on a
                     // command that has already proved it does not finish, and a user watching
                     // three silences instead of one learns nothing new from the second two.
                     return Err(Error::command_failed_permanently(format!(
-                        "`{}` produced no output for {}s and had not exited; LiNix stopped \
-                         waiting and killed it. If this command is legitimately silent for \
-                         longer, raise `command_idle_timeout_secs` (0 disables the bound).",
+                        "`{}` produced no output for {}s and had not exited; LiNix asked it to \
+                         stop and killed it if it would not. If this command is legitimately \
+                         silent for longer, raise `command_idle_timeout_secs` (0 disables the \
+                         bound).",
                         cmd,
                         idle.as_secs(),
                     )));
                 }
-                if let Ok(status) = tokio::time::timeout(remaining, child.wait()).await {
+                if let Ok(status) = tokio::time::timeout(remaining, child.child.wait()).await {
                     break status?;
                 }
             },
@@ -662,7 +855,14 @@ impl ExecutionLayer for RawExecutor {
         // future, and dropping a future does not kill the process it spawned. Without this an
         // `apt install` keeps running against the same dpkg lock the rollback is about to take,
         // and whatever it completes is in no history that could compensate it.
+        //
+        // On Unix `Stopping` takes that job over, because tokio's version of it is SIGKILL and
+        // **SIGKILL is not a way to stop a package manager** (see that type). Windows has no
+        // gentler signal to send, so there it stays exactly as it was.
+        #[cfg(windows)]
         command.kill_on_drop(true);
+        #[cfg(unix)]
+        command.kill_on_drop(false);
 
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
         let interactive = self.stdin == ChildStdin::Interactive;

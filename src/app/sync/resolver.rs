@@ -620,11 +620,19 @@ impl<'a> StateResolver<'a> {
 
         let outputs: Vec<std::io::Result<std::process::Output>> = {
             use futures::stream::StreamExt;
-            futures::stream::iter(approved.iter().map(|(_, _, _, path)| {
-                tokio::process::Command::new(path)
-                    .current_dir(self.config.config_root())
-                    .stdin(std::process::Stdio::null())
-                    .output()
+            futures::stream::iter(approved.iter().map(|(cmd, _, _, path)| {
+                // Supervised: a `generate:` command is somebody's script, it runs on every
+                // sync, and before this it had no bound and no owner — one that blocked on a
+                // prompt blocked every sync on the machine with nothing said, and one abandoned
+                // by a failed sync kept running.
+                let mut command = tokio::process::Command::new(path);
+                command.current_dir(self.config.config_root());
+                let label = format!("generate:{cmd}");
+                async move {
+                    crate::core::executor::supervised_output(command, &label, false)
+                        .await
+                        .map_err(|e| std::io::Error::other(e.to_string()))
+                }
             }))
             .buffered(self.config.max_parallel.max(1))
             .collect()

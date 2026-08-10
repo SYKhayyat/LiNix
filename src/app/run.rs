@@ -156,14 +156,10 @@ impl Runner {
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit());
 
-        let mut handle = child.spawn().map_err(|e| {
-            Error::command_failed(format!("Failed to start binary {}: {}", command, e))
-        })?;
-
-        handle
-            .wait()
-            .await
-            .map_err(|e| Error::command_failed(format!("Error during process wait: {}", e)))
+        // The terminal-handoff door: streams inherited because the user is looking at it, no idle
+        // bound because a program waiting for them to type is not a hung one — but owned, so it
+        // does not keep the terminal after LiNix has gone.
+        crate::core::executor::supervised_status(child, &command).await
     }
 
     /// What a `shim:` line says to provision and run under this name, or the bare name when the

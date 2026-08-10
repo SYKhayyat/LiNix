@@ -19,6 +19,42 @@ x86_64 Linux, both Apple architectures and x86_64 Windows, and installers that d
   written, ports opened and closed. A refusal now names every ceiling it hit rather than the
   first, and `linix protected` prints all five instead of `max_removals` alone.
 
+### Other package managers, and the processes LiNix starts
+
+*Both found by the arch integration leg, which kills LiNix mid-sync on purpose and then asks the
+machine to converge. It could not, twice, for two different reasons — and neither was about the
+crash.*
+
+- **LiNix waits for another package manager instead of failing at it** (`Q51`). An `apt upgrade`
+  in your other terminal, an unattended-upgrade timer, a GUI updater: `linix sync` used to retry
+  four times over about three and a half seconds and then say *"this is not the transient failure
+  its output looks like"* — which was false in exactly that case. It now asks the machine which
+  of three states the lock is in and does the matching thing: **wait** for a live holder,
+  announcing who it is; **fail at once and name `linix heal`** for a lock left behind by a killed
+  run, because waiting on that never ends; **back off as before** if the holder let go in
+  between. Bounded by `manager_lock_wait_secs` (default 300, `0` to opt out), as one budget
+  across the whole retry loop. Nothing is scanned unless the manager already said the word, so a
+  successful install costs nothing.
+- **`pacman` and `yay` no longer fight each other.** Backends that drive the same manager took
+  their own exclusive locks — an ordinary Arch config with repos from one and the AUR from the
+  other ran them concurrently and let `db.lck` arbitrate, which it does by failing whichever
+  lost. Same for `apt`/`apt-get` and `dnf`/`yum`/`microdnf`.
+- **A package manager is asked to stop before it is killed** (`Q52`). `kill_on_drop` and the idle
+  timeout were SIGKILL, which cannot be caught — so a manager LiNix stopped never rolled its
+  transaction back or unlinked its lock, and LiNix was manufacturing the wedged machine `heal`
+  exists to repair. Worse, LiNix's child is usually `sudo`: SIGKILL killed `sudo` and left the
+  real manager running as root with its parent gone. Now SIGTERM, a grace period, then SIGKILL
+  only for a child that will not go.
+- **Seventeen places that started a process now own it.** Dropping a future that awaits a command
+  does not kill it — the process is detached — so a `generate:` command outlived the sync that
+  asked for it, a hook outlived the node that fired it, and a secret decrypt outlived its own
+  timeout under a comment promising it would not. None of them was bounded either. Everything now
+  goes through one of three doors, and a test fails the build on a new one that does not. Ten of
+  the seventeen were found by that test on its first run, not by reading.
+- **Blocking waits no longer park a runtime worker.** A confirmation prompt, the history and
+  preview TUIs, `git` after every sync, a `--help` probe, an external `vars` provider, and the
+  data-directory lock's two-minute poll each held a thread for their whole duration.
+
 ### Looking
 
 - **`linix check adapters`**, the ninth section: extension files that are written and not in

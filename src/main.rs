@@ -148,7 +148,7 @@ async fn main() -> Result<()> {
 
     // 5. One writer at a time. Held for the whole run, released when `main` returns — a
     //    lock dropped before the last write is a lock over part of a set that must agree.
-    let _data_lock = acquire_data_lock(&cli.command)?;
+    let _data_lock = acquire_data_lock(&cli.command).await?;
 
     // 6. Kernel Initialization
     let app = App::new(config).await?;
@@ -524,7 +524,12 @@ pub(crate) async fn cargo_install_from(
     if locked {
         cmd.arg("--locked");
     }
-    cmd.status().await
+    // The terminal-handoff door: a `cargo install --git` compiles for minutes and the person is
+    // reading its progress, so it is inherited and unbounded — but owned, because a compile left
+    // running after LiNix has gone still writes to `~/.cargo/bin` when it finishes.
+    linix::core::executor::supervised_status(cmd, "cargo install")
+        .await
+        .map_err(std::io::Error::other)
 }
 
 pub(crate) async fn handle_self_upgrade(git: Option<&str>, check: bool) -> Result<()> {
@@ -667,7 +672,7 @@ pub(crate) fn preferences_path_from_argv(argv: &[String]) -> Option<std::path::P
 /// install path, and `fleet` was off it while touching nothing local. `Commands::writes` is
 /// exhaustive, so a subcommand added later does not compile until it answers, which is the
 /// property the argv read was reaching for and could not have.
-pub(crate) fn acquire_data_lock(
+pub(crate) async fn acquire_data_lock(
     command: &Commands,
 ) -> Result<Option<linix::core::datalock::DataLock>> {
     if !command.writes() {
@@ -678,11 +683,12 @@ pub(crate) fn acquire_data_lock(
     // starts doing work — the rate-limit ceiling, 30s by default — with room for the install
     // it then performs. It is not meant to outlast a whole sync: past this point the honest
     // answer is that someone else is writing, not a longer silence (S27).
-    let lock = linix::core::datalock::DataLock::acquire(
+    let lock = linix::core::datalock::DataLock::acquire_async(
         &linix::utils::safe_data_dir(),
         &name,
         std::time::Duration::from_secs(120),
-    )?;
+    )
+    .await?;
     Ok(Some(lock))
 }
 
@@ -863,7 +869,7 @@ pub(crate) async fn run_user_verb(steps: Vec<Vec<String>>) -> Result<()> {
     // the first one does. Taking it per step would release it between two commands that have
     // to agree about the same registry.
     let _data_lock = match parsed.iter().find(|c| c.command.writes()) {
-        Some(writer) => acquire_data_lock(&writer.command)?,
+        Some(writer) => acquire_data_lock(&writer.command).await?,
         None => None,
     };
     let app = App::new(config).await?;

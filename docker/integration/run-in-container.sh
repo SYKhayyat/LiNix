@@ -2522,6 +2522,22 @@ EOF
         # nothing here runs for fifteen minutes. Naming that is the point: a proxy that cannot
         # fail for the reason it claims to test is the vacuous check this harness exists to
         # refuse.
+        # What THIS section declares under `$SUDO_CFG`, tracked as it goes.
+        #
+        # The cleanup below used to ask the machine instead — "which canaries are on PATH" — and
+        # call the answer "the section's own packages". Sections before this one install canaries
+        # too, under a *different* config root, so an empty manifest here correctly removes none
+        # of them and the check called that a survival. It failed on ubuntu the first run where
+        # 16e happened to leave all three installed rather than one, which is a coin toss, not a
+        # defect. A check that can fail for a reason unrelated to its sentence is the vacuous
+        # check this harness exists to refuse.
+        _sudo_mine=""
+        _mine_add() { _sudo_mine="$_sudo_mine $1"; }
+        _mine_drop() {
+            _kept=""
+            for _m in $_sudo_mine; do [ "$_m" = "$1" ] || _kept="$_kept $_m"; done
+            _sudo_mine="$_kept"
+        }
         if [ -n "$CRASH_PKGS" ]; then
             _a=""; _b=""
             for _c in $CRASH_PKGS; do
@@ -2533,9 +2549,11 @@ EOF
         else
             su "$SUDO_USER_NAME" -c "sudo -k" >/dev/null 2>&1
             run_as_sudoer "-y install $BACKEND:$_a" "$SUDO_PW" /tmp/sudo-seed.out
+            _mine_add "$_a"
             su "$SUDO_USER_NAME" -c "sudo -k" >/dev/null 2>&1
             # One run, two manager invocations: $_a comes out, $_b goes in.
             printf '%s:%s\n' "$BACKEND" "$_b" > "$SUDO_CFG/modules/imperative.txt"
+            _mine_drop "$_a"; _mine_add "$_b"
             chown "$SUDO_USER_NAME" "$SUDO_CFG/modules/imperative.txt" 2>/dev/null || true
             run_as_sudoer "-y sync" "$SUDO_PW" /tmp/sudo-onerun.out
             _rc=$?
@@ -2566,6 +2584,7 @@ EOF
             if [ "$_rc" -eq 0 ] && on_path "$_sudo_pkg"; then
                 PASS=$((PASS + 1)); echo "  PASS  sudo: a non-root user installed $BACKEND:$_sudo_pkg, and the file is on disk"
                 _sudo_installed=1
+                _mine_add "$_sudo_pkg"
             else
                 hard "sudo: the privileged install of $BACKEND:$_sudo_pkg reported rc=$_rc and $(on_path "$_sudo_pkg" && echo 'the binary is there anyway' || echo 'nothing reached PATH')"
                 excerpt /tmp/sudo-install.out 8
@@ -2581,6 +2600,7 @@ EOF
             else
                 su "$SUDO_USER_NAME" -c "sudo -k" >/dev/null 2>&1
                 run_as_sudoer "-y uninstall $BACKEND:$_sudo_pkg" "$SUDO_PW" /tmp/sudo-remove.out
+                _mine_drop "$_sudo_pkg"
                 if on_path "$_sudo_pkg"; then
                     hard "sudo: the privileged uninstall of $BACKEND:$_sudo_pkg left the binary on PATH"
                     excerpt /tmp/sudo-remove.out 8
@@ -2599,14 +2619,17 @@ EOF
         # What this section actually put on the machine, read BEFORE the cleanup. An empty
         # manifest removing nothing is not a pass — and "nothing is installed" is the state a
         # do-nothing binary leaves too, which is how this check survived the mutation gate.
+        #
+        # `$_sudo_mine`, not every canary on PATH: only what this section declared under
+        # `$SUDO_CFG` is this section's to take back. See where `_sudo_mine` is built.
         _had=""
-        for _c in $CRASH_PKGS; do on_path "$_c" && _had="$_had $_c"; done
+        for _c in ${_sudo_mine:-}; do on_path "$_c" && _had="$_had $_c"; done
         : > "$SUDO_CFG/modules/imperative.txt"
         chown "$SUDO_USER_NAME" "$SUDO_CFG/modules/imperative.txt" 2>/dev/null || true
         su "$SUDO_USER_NAME" -c "sudo -k" >/dev/null 2>&1
         run_as_sudoer "-y sync" "$SUDO_PW" /tmp/sudo-cleanup.out
         _left=""
-        for _c in $CRASH_PKGS; do on_path "$_c" && _left="$_left $_c"; done
+        for _c in $_had; do on_path "$_c" && _left="$_left $_c"; done
         if [ -z "$_had" ]; then
             soft "sudo: this section installed nothing, so an empty manifest had nothing to take back"
         elif [ -z "$_left" ]; then

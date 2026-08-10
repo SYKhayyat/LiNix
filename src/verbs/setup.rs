@@ -340,9 +340,11 @@ pub async fn handle_try(app: &App, image: Option<&str>) -> Result<()> {
     let argv = rehearsal::argv(runtime, image, &config_path);
     let (program, args) = argv.split_first().expect("an argv is never empty");
 
-    let status = tokio::process::Command::new(program)
-        .args(args)
-        .status()
+    let mut command = tokio::process::Command::new(program);
+    command.args(args);
+    // The terminal-handoff door: a container rehearsal prints as it goes and the person is
+    // watching it — but owned, so abandoning the rehearsal does not leave the container running.
+    let status = crate::core::executor::supervised_status(command, runtime)
         .await
         .map_err(|e| crate::core::Error::Other(format!("could not run `{}`: {}", runtime, e)))?;
 
@@ -533,9 +535,12 @@ pub async fn handle_edit(cli: &Cli, file: Option<&str>) -> Result<()> {
         println!("Created {} from the default template.", target.display());
     }
 
-    let status = tokio::process::Command::new(&editor)
-        .arg(&target)
-        .status()
+    let mut command = tokio::process::Command::new(&editor);
+    command.arg(&target);
+    // The terminal-handoff door: `$EDITOR` owns the terminal for as long as somebody is typing
+    // in it, so no bound — but owned, because an editor still holding the config file after
+    // LiNix has gone is the state AU6 is about.
+    let status = crate::core::executor::supervised_status(command, &editor)
         .await
         .with_context(|| format!("launching editor '{}'", editor))?;
 
@@ -928,16 +933,21 @@ pub async fn interactive_init(app: &App, force: bool) -> Result<()> {
     let defaults = crate::config::Config::default();
     let mut answers = InitAnswers::default();
 
-    let keep: String = Input::new()
-        .with_prompt("How many system snapshots to keep (0 keeps every one)")
-        .default(defaults.snapshot_retention().keep_last.to_string())
-        .interact_text()?;
+    // `init` is a conversation, so every answer here is an unbounded wait on a person.
+    let keep: String = crate::core::on_the_terminal(|| {
+        Input::new()
+            .with_prompt("How many system snapshots to keep (0 keeps every one)")
+            .default(defaults.snapshot_retention().keep_last.to_string())
+            .interact_text()
+    })?;
     answers.snapshot_count = keep.trim().parse::<u32>().ok();
 
-    let starter: String = Input::new()
-        .with_prompt("Packages to start with (comma-separated, blank to skip)")
-        .allow_empty(true)
-        .interact_text()?;
+    let starter: String = crate::core::on_the_terminal(|| {
+        Input::new()
+            .with_prompt("Packages to start with (comma-separated, blank to skip)")
+            .allow_empty(true)
+            .interact_text()
+    })?;
     answers.starter_packages = starter
         .split(',')
         .map(|s| s.trim().to_string())

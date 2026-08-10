@@ -97,10 +97,9 @@ impl GitManager {
     }
 
     pub fn git_available() -> bool {
-        std::process::Command::new("git")
-            .arg("--version")
-            .stdin(std::process::Stdio::null())
-            .output()
+        let mut cmd = std::process::Command::new("git");
+        cmd.arg("--version").stdin(std::process::Stdio::null());
+        crate::core::blocking::command_output(&mut cmd)
             .map(|o| o.status.success())
             .unwrap_or(false)
     }
@@ -140,7 +139,9 @@ impl GitManager {
         // streams, so the question would be asked where nobody can read it. Closed stdin turns
         // that into git's own error instead of a wait with no end and nothing on screen.
         cmd.stdin(std::process::Stdio::null());
-        cmd.output()
+        // Blocking, from a synchronous API that async verbs call — and LiNix runs git after
+        // every successful sync. Held a runtime worker for the length of every commit.
+        crate::core::blocking::command_output(&mut cmd)
             .map_err(|e| Error::command_failed(format!("git {:?} failed to spawn: {}", args, e)))
     }
 

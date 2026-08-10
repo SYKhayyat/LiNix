@@ -140,7 +140,8 @@ pub fn run_external_with_origins(path: &Path, facts: &HostFacts) -> Result<(Vars
     // An external provider runs on every resolution, before any manager is asked — so a slow
     // one looks like LiNix being slow to start until the breakdown names it.
     let timing = crate::core::timing::begin();
-    let output = cmd.output();
+    // Blocking, and it runs on every resolution before any manager is asked.
+    let output = crate::core::blocking::command_output(&mut cmd);
     crate::core::timing::end(timing, "vars provider", std::slice::from_ref(&name));
 
     let output = output.map_err(|e| {

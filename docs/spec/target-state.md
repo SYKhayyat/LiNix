@@ -3211,9 +3211,11 @@ name, not something a converge does on the way past.
 
 **Only locks whose existence IS the lock.** pacman's `db.lck`, dnf's `metadata_lock.pid`,
 zypper's `/run/zypp.pid` are created around a transaction and removed at its end. **apt's and
-dpkg's are not**, and they are named in `stale_lock::NEVER_REMOVE` rather than merely left out:
-those files exist permanently, are held with `flock(2)` — which the kernel releases when the
-holder dies — and deleting one deletes what the next `apt` expects to lock.
+dpkg's are not**, and they are rows of the same `stale_lock::MANAGER_LOCKS` table carrying a
+`never_remove_because` rather than being left out of it: those files exist permanently, are held
+with `flock(2)` — which the kernel releases when the holder dies — and deleting one deletes what
+the next `apt` expects to lock. A reason that travels with the paths it is about cannot be
+re-admitted by someone extending a table who never read the other one.
 
 **Staleness is proved, not assumed.** A lock naming a pid is stale when that pid is not running;
 a lock naming nothing is stale when no process of that manager is running at all. Anything else,
@@ -3221,3 +3223,67 @@ including a pid file with nothing readable in it, is left alone.
 
 **Every removal is reported by name and with its reason**, and a removal that fails is reported
 too — a lock LiNix could not clear is one the user can now clear themselves.
+
+## II.51 LiNix waits for another package manager rather than failing (`Q51`, V.181)
+
+**Two package managers on one machine is not an error, it is a Tuesday.** An `apt upgrade` in
+another terminal, an unattended-upgrade timer, a GUI updater, or a manager orphaned by a run that
+was killed and still finishing its transaction. The manager says so plainly, and LiNix used to
+answer with four retries over three and a half seconds and the sentence *"this is not the
+transient failure its output looks like"* — which was false in precisely the case that printed it.
+
+**The manager's words say a lock is taken; the machine says which kind.** Three states, three
+answers, and collapsing any two of them is the original defect:
+
+- **held by something live** — wait for it, announcing the holder;
+- **on disk with nothing holding it** — fail at once, naming `linix heal`, because waiting on a
+  lock nothing holds never ends;
+- **free** — the holder let go between the failure and the question, which is an ordinary race
+  and gets the ordinary backoff.
+
+**Bounded, and the bound is one budget across the whole retry loop.** `manager_lock_wait_secs`,
+default 300 seconds, `0` to opt out. Sized for the *other* manager's transaction rather than for
+LiNix's patience: a `dnf upgrade` of a hundred packages legitimately runs that long, and a wait
+that expires before the ordinary case finishes is the same failure with delay in front of it.
+
+**The wait announces itself when it starts.** A wait with no reason given is indistinguishable
+from a hang, and a hang is what people kill — which is the interruption that leaves the machine
+II.50 exists to repair.
+
+**Nothing is scanned unless the manager already said the word.** The `/proc` question is asked
+only after a failure whose text matched that manager's own phrasing for a taken lock. A
+successful install never pays for this, and a missing package never waits on it.
+
+**Backends that drive one manager take one lock.** `pacman` and `yay` both write
+`/var/lib/pacman/`; `apt` and `apt-get` share dpkg's; `dnf`, `yum` and `microdnf` share dnf's.
+Keyed by their own names they were several locks over one database, and LiNix contended with
+itself. The families live in `stale_lock::MANAGER_LOCKS`, because *which backends share a manager
+lock* and *which lock is left behind when one is killed* are the same fact.
+
+## II.52 Every process LiNix starts belongs to LiNix (`Q52`, V.182)
+
+**A child is asked to stop before it is killed.** SIGTERM, a grace period, then SIGKILL only for
+one that will not go. SIGKILL cannot be caught, so a package manager stopped with it never rolls
+its transaction back and never unlinks its lock — LiNix was manufacturing the wedged machine
+II.50 repairs. And LiNix's child is usually `sudo`, which forwards a SIGTERM and dies alone under
+a SIGKILL, leaving the real manager running as root with its parent gone.
+
+**Three doors, and no fourth.**
+
+- `executor::supervised_output` — captured, bounded by `command_idle_timeout_secs`, stopped on
+  every exit including an abandoned future. For a tool nobody is watching.
+- `executor::supervised_status` — streams inherited and no idle bound, because a program waiting
+  for someone to type is not a hung one. Still owned: an editor holding the terminal after LiNix
+  has gone is nobody's idea of finished.
+- `blocking::command_output` / `command_status` — for a `std::process::Command`, whose hazard is
+  the opposite one. It cannot be abandoned, so it holds a runtime worker until the child exits.
+
+**Blocking waits do not sit on a runtime worker.** A confirm at a prompt, a TUI event loop, the
+data-directory lock's two-minute poll: each of them parked a tokio worker for its whole duration.
+`core::blocking` is where that is decided — `on_the_terminal` where the call cannot move,
+`off_the_runtime` where the work can.
+
+**A gate, not a sweep.** `tests/a_spawned_child_has_an_owner_tests.rs` fails on a `Command` that
+reaches `spawn`/`output`/`status` outside the executor unless it goes through a door or sits in
+an exemption table with a sentence. Fixing seventeen sites fixes seventeen sites; the gate is
+what stops the eighteenth — and it found ten of the seventeen on its first run.

@@ -579,10 +579,10 @@ const BUILTIN_SNAPSHOT_DEFS: &str = include_str!("snapshot_builtins.toml");
 /// The auto-detected zfs root dataset, when `zfs_dataset` is not configured. Empty when zfs is
 /// absent or the query fails — which drops the row rather than shipping a source-less one.
 fn detect_zfs_root() -> String {
-    StdCommand::new("zfs")
-        .args(["list", "-H", "-o", "name", "-r", "/"])
-        .stdin(std::process::Stdio::null())
-        .output()
+    let mut cmd = StdCommand::new("zfs");
+    cmd.args(["list", "-H", "-o", "name", "-r", "/"])
+        .stdin(std::process::Stdio::null());
+    crate::core::blocking::command_output(&mut cmd)
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .and_then(|s| s.lines().next().map(|l| l.trim().to_string()))

@@ -202,7 +202,6 @@ fn preference_hook(config: &Config, event: Event) -> Option<EventHook> {
 /// temp directory, and it exists for as long as the hook takes.
 async fn run(hook: &EventHook, stdin: &str) -> Result<()> {
     use std::io::Write;
-    use tokio::io::AsyncWriteExt;
 
     debug!("firing {} from {}", hook.event, hook.origin);
 
@@ -232,28 +231,21 @@ async fn run(hook: &EventHook, stdin: &str) -> Result<()> {
     .map_err(|e| Error::Other(e.to_string()))??;
 
     let launch = crate::model::script::launch_for(&script, &hook.script)?;
-    let mut child = tokio::process::Command::new(&launch.program)
+    let mut command = tokio::process::Command::new(&launch.program);
+    command
         .args(&launch.args)
         .env("LINIX_EVENT", hook.event.as_str())
         .env("LINIX_OS", std::env::consts::OS)
-        .env("LINIX_ARCH", std::env::consts::ARCH)
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| Error::Other(format!("could not start the hook: {}", e)))?;
+        .env("LINIX_ARCH", std::env::consts::ARCH);
 
-    if let Some(mut pipe) = child.stdin.take() {
-        // A hook that ignores stdin closes the pipe, and writing to a closed pipe is that
-        // hook's choice rather than an error: it is told, and it may not care.
-        let _ = pipe.write_all(stdin.as_bytes()).await;
-        let _ = pipe.shutdown().await;
-    }
-
-    let status = child
-        .wait()
+    // Supervised: an event hook is arbitrary code fired by a timer or a package-manager hook,
+    // with nobody at the terminal. Unowned and unbounded, one that waited on something waited
+    // forever, and one abandoned by whatever fired it kept running.
+    let out = crate::core::executor::supervised_output_fed(command, "the hook", true, stdin)
         .await
-        .map_err(|e| Error::Other(format!("waiting for the hook: {}", e)))?;
-    if !status.success() {
-        return Err(Error::Other(format!("it exited {:?}", status.code())));
+        .map_err(|e| Error::Other(format!("could not start the hook: {}", e)))?;
+    if !out.status.success() {
+        return Err(Error::Other(format!("it exited {:?}", out.status.code())));
     }
     Ok(())
 }

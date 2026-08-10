@@ -234,10 +234,10 @@ impl EphemeralShell {
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit());
 
-        let mut handle = child
-            .spawn()
-            .map_err(|e| Error::command_failed(format!("Shell error: {}", e)))?;
-        let _ = handle.wait().await?;
+        // The terminal-handoff door: the person is *in* this shell, so it is inherited and
+        // unbounded — but owned, because a shell left holding the terminal after LiNix has gone
+        // is a session nobody can account for.
+        let _ = crate::core::executor::supervised_status(child, "the ephemeral shell").await?;
         Ok(())
     }
 

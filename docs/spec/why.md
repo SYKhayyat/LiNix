@@ -5934,3 +5934,82 @@ failed command; it is a package database with two writers. So a pid file is judg
 pid, a lock with no pid is judged by whether that manager is running at all, and a pid file with
 nothing readable in it — half-written by a process that died between `create` and `write` — is
 evidence of nothing and is left alone. Not proved is not stale.
+
+**V.181 — Why LiNix waits for another package manager instead of failing at it.**
+*(Rule in II.51. Ruled by the owner 2026-08-10 as `Q51`.)*
+
+V.180 is about a lock nothing holds. This is about the far commoner case — a lock something
+**does** hold — and LiNix treated the two as one failure.
+
+The retry loop gave a taken lock four attempts over about three and a half seconds, and then
+printed the sentence V.180 praises: *"tried 4 times; the failure did not change, so a further
+retry will not help — this is not the transient failure its output looks like"*. Against an
+`apt upgrade` running in the next terminal, every clause of that is false. It **is** the
+transient failure it looks like. A further retry is exactly what helps, once the holder is
+finished. And the reason the failure did not change in three and a half seconds is that three
+and a half seconds is not how long a package manager takes.
+
+**The words cannot tell you which case it is; the machine can.** `pacman` says *"unable to lock
+database"* whether its lock is held by a live transaction or by a corpse, and it says so
+precisely because it does not know — its lock file carries no pid, which is why its own advice
+begins *"if you're sure a package manager is not already running"*. `/proc` is sure. So the
+verdict is taken from the machine and only the *trigger* from the message, which also keeps the
+scan off every successful install: nothing is asked of `/proc` until a manager has already used
+its own phrasing for a taken lock.
+
+**Why waiting is bounded by the holder's work rather than by LiNix's patience.** Five minutes is
+not a guess about how long a user will tolerate a pause; it is a guess about how long a large
+`dnf upgrade` takes. A bound sized the other way expires in the middle of the ordinary case and
+produces the same failure with a delay in front of it, which is worse than either honest answer.
+
+**Why the wait says who it is waiting for, immediately.** LiNix's own data-directory lock has
+announced its holder since S27, for the reason recorded there: a silent wait is indistinguishable
+from a hang, and a hang gets killed. Killing LiNix mid-sync is what leaves an orphaned manager
+holding a lock — so a silent wait here would manufacture, on the next run, exactly the condition
+it was waiting out.
+
+**Why backends that share a manager share a lock.** `pacman` and `yay` in one config is an
+ordinary Arch machine: the repositories from one, the AUR from the other, both writing
+`/var/lib/pacman/`. Keyed by their own names, LiNix ran them concurrently and let pacman's
+`db.lck` arbitrate — which it does by failing whichever lost. That is LiNix contending with
+itself, and no amount of waiting is the right fix for a race it created. The family table is the
+same one V.180 reads, because *which backends share a manager lock* and *which lock is left
+behind when one is killed* are one fact, and a second copy is the copy that goes stale.
+
+**V.182 — Why a process LiNix starts is a process LiNix owns.**
+*(Rule in II.52. Ruled by the owner 2026-08-10 as `Q52`.)*
+
+Asking where the orphaned `pacman` in V.181 came from turned up two failures pointing in
+opposite directions, both from the same missing idea.
+
+**LiNix killed what it should have asked.** `kill_on_drop(true)` and `start_kill()` are SIGKILL.
+It cannot be caught, so nothing runs: no rollback, no unlink, no cleanup. A package manager
+stopped that way leaves dpkg's database mid-write and pacman's `db.lck` on disk — LiNix was
+*manufacturing* the wedged machine of V.180, on its own idle timeout, and then diagnosing it
+beautifully on the next run. SIGTERM is caught, and every one of these managers handles it.
+
+And the child is usually not the manager. LiNix runs `sudo pacman …`, so SIGKILL kills `sudo`
+and the manager it launched survives as an orphan owned by init — still writing, still holding
+the lock, with nothing left that could wait for it or report it. The orphan V.181 was taught to
+wait for was, in the container, LiNix's own doing.
+
+**LiNix abandoned what it should have owned.** Dropping a future that awaits `Command::output()`
+does not kill the process; tokio detaches it and returns. Seventeen sites did that. The sharpest
+is `backends/link.rs`, where a `tokio::time::timeout` around a secret decrypt carried the comment
+*"rather than leaving the process (and this sync) hung forever"* — and freed the sync while
+leaving `gpg` running against a prompt for as long as the machine stayed up. The comment
+described the intent exactly and the code did half of it.
+
+**Why a gate rather than a sweep.** The hand search for these found seven. The gate found
+seventeen on its first run, including a `git` invocation, a `zfs list`, a `--help` probe, and the
+`generate:` commands that run on every sync — none of which the search had reached, because it
+had been capped at twenty results by whoever ran it. A list of sites fixed is a fact about one
+afternoon; a predicate that fails the build is a fact about every afternoon after it.
+
+**Why three doors and not one.** The hazards are genuinely different and one door would lie about
+two of them. A `tokio` child's problem is detachment: it must be stopped when abandoned. A child
+that owns the terminal must *not* be bounded, because a person typing into an editor is not a
+silence to time out. A `std::process::Command` cannot be abandoned at all — its problem is the
+opposite, that it holds a runtime worker until the child exits, which is why `git commit` after
+every sync was parking a thread. Collapsing those into one mechanism is the same mistake as
+collapsing V.181's three lock states into one failure.

@@ -352,13 +352,17 @@ pub async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Resul
             )
             .into());
         }
-        let typed: String = dialoguer::Input::new()
-            .with_prompt(format!(
-                "Type the number of packages to remove ({}) to confirm",
-                undeclared.len()
-            ))
-            .allow_empty(true)
-            .interact_text()?;
+        // Waiting on a person, not on work: `block_in_place` so the runtime's other tasks move
+        // off this worker rather than queueing behind someone reading a number off the screen.
+        let typed: String = crate::core::on_the_terminal(|| {
+            dialoguer::Input::new()
+                .with_prompt(format!(
+                    "Type the number of packages to remove ({}) to confirm",
+                    undeclared.len()
+                ))
+                .allow_empty(true)
+                .interact_text()
+        })?;
         if typed.trim() != undeclared.len().to_string() {
             println!("Aborted. Nothing was removed.");
             return Ok(());
@@ -445,13 +449,15 @@ pub async fn handle_reset(app: &App, force: bool) -> Result<()> {
             )
             .into());
         }
-        let typed: String = dialoguer::Input::new()
-            .with_prompt(format!(
-                "Type the number of packages to forget ({}) to confirm",
-                managed
-            ))
-            .allow_empty(true)
-            .interact_text()?;
+        let typed: String = crate::core::on_the_terminal(|| {
+            dialoguer::Input::new()
+                .with_prompt(format!(
+                    "Type the number of packages to forget ({}) to confirm",
+                    managed
+                ))
+                .allow_empty(true)
+                .interact_text()
+        })?;
         if typed.trim() != managed.to_string() {
             println!("Aborted. Nothing was forgotten.");
             return Ok(());

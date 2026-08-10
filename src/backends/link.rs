@@ -215,22 +215,31 @@ impl LinkBackendCore {
         // T3: a decrypt that does not complete is waiting on a prompt nobody will answer. Bound
         // it, and on timeout name the token and the identity rather than leaving the process
         // (and this sync) hung forever.
-        let output =
-            match tokio::time::timeout(crate::model::secret::DECRYPT_TIMEOUT, cmd.output()).await {
-                Ok(result) => result.map_err(|e| {
-                    Error::Other(format!(
-                        "could not launch '{}' to decrypt {:?}: {} — is it installed and on PATH?",
-                        tool, source, e
-                    ))
-                })?,
-                Err(_) => {
-                    return Err(Error::Other(crate::model::secret::token_timeout_message(
-                        source,
-                        identity.as_deref().unwrap_or(Path::new("(none)")),
-                        plugin.as_deref(),
-                    )));
-                }
-            };
+        //
+        // **And the process really does stop now.** Dropping the future that awaits a child does
+        // not kill it, so this bound used to free the sync and leave `gpg` running against a
+        // prompt for as long as the machine was up — the one thing the comment above promised it
+        // would not do. `supervised_output` owns the child, so the timeout below reaches it.
+        let output = match tokio::time::timeout(
+            crate::model::secret::DECRYPT_TIMEOUT,
+            crate::core::executor::supervised_output(cmd, &program, false),
+        )
+        .await
+        {
+            Ok(result) => result.map_err(|e| {
+                Error::Other(format!(
+                    "could not launch '{}' to decrypt {:?}: {} — is it installed and on PATH?",
+                    tool, source, e
+                ))
+            })?,
+            Err(_) => {
+                return Err(Error::Other(crate::model::secret::token_timeout_message(
+                    source,
+                    identity.as_deref().unwrap_or(Path::new("(none)")),
+                    plugin.as_deref(),
+                )));
+            }
+        };
         if !output.status.success() {
             return Err(Error::Other(format!(
                 "{} failed to decrypt {:?}: {}",

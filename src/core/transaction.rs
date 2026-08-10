@@ -36,6 +36,9 @@ pub struct TransactionConfig {
     /// backend that draws no such distinction removes as usual — the decision cannot be
     /// per-package because a removal happens after the line that carried it is gone.
     pub purge: bool,
+    /// How long to wait for another package manager that holds its own lock. Zero does not
+    /// wait. See `manager_lock_wait_secs` in the config for why this is not a backoff.
+    pub manager_lock_wait: Duration,
 }
 
 impl Default for TransactionConfig {
@@ -60,6 +63,9 @@ impl TransactionConfig {
             auto_rollback: true,
             continue_on_error: false,
             purge: false,
+            manager_lock_wait: Duration::from_secs(
+                crate::config::config::default_manager_lock_wait_secs(),
+            ),
         }
     }
 
@@ -74,6 +80,7 @@ impl TransactionConfig {
             max_concurrent: config.max_parallel.max(1),
             purge: config.remove.purge || config.purge_this_run,
             continue_on_error: config.keep_going_this_run,
+            manager_lock_wait: Duration::from_secs(config.manager_lock_wait_secs),
             ..Self::patient()
         }
     }
@@ -815,6 +822,7 @@ impl Transaction {
 
         let mut attempt = 0;
         let mut last_error = None;
+        let mut lock_waited = Duration::ZERO;
 
         while attempt <= config.max_retries {
             attempt += 1;
@@ -838,11 +846,40 @@ impl Transaction {
             }
 
             if attempt > 1 {
-                let backoff = std::cmp::min(
-                    config.initial_backoff * (1 << (attempt - 2)),
-                    config.max_backoff,
-                );
-                tokio::time::sleep(backoff).await;
+                // **Another package manager is not a failure to back off from — it is one to
+                // wait for.** A backoff is for a flake; this is a second program holding a lock
+                // it will hand back when its own transaction finishes, and three doublings of
+                // half a second do not outlast an `apt upgrade`. Only ever entered against a
+                // holder proved to be alive: a lock left behind by a killed run is reported at
+                // once, because waiting on it would never end.
+                // One budget across the whole retry loop, not one per attempt. A queue of
+                // holders taking the lock in turn is a real machine state, and three full waits
+                // in a row would be three times the bound the setting promises.
+                let budget = config.manager_lock_wait.saturating_sub(lock_waited);
+                match lock_wait_verdict(&last_error, &b_name, budget, &|b| {
+                    crate::app::stale_lock::held_for_on_this_machine(b)
+                }) {
+                    LockWait::Wait(who) => {
+                        match wait_for_manager_lock(&b_name, &who, budget, &cancel_token).await {
+                            Ok(spent) => lock_waited += spent,
+                            Err(err) => {
+                                last_error = Some(err);
+                                break;
+                            }
+                        }
+                    }
+                    LockWait::Hopeless(err) => {
+                        last_error = Some(err);
+                        break;
+                    }
+                    LockWait::Backoff => {
+                        let backoff = std::cmp::min(
+                            config.initial_backoff * (1 << (attempt - 2)),
+                            config.max_backoff,
+                        );
+                        tokio::time::sleep(backoff).await;
+                    }
+                }
             }
 
             // One node's timeout, scaled by how many packages the command carries: eight
@@ -1213,6 +1250,118 @@ impl Transaction {
     }
 }
 
+/// What to do about a failed attempt whose manager said its lock was taken.
+#[derive(Debug)]
+enum LockWait {
+    /// A live holder, named. Wait for it.
+    Wait(String),
+    /// Waiting would never end. Fail now, with the sentence that says why.
+    Hopeless(Error),
+    /// Not a lock failure, or the lock is free again. The ordinary backoff.
+    Backoff,
+}
+
+/// Which of the three a failure is.
+///
+/// The verdict is taken from the machine and not from the message: the manager only says *"could
+/// not get lock"*, and whether that is a queue to join or a corpse to clear is the difference
+/// between waiting five minutes and waiting forever. `/proc` knows; the string does not.
+/// `look` is how the machine is asked, so the three verdicts can be exercised without a second
+/// package manager to kill. It is called only *after* the manager's own words have matched, which
+/// is what keeps a successful install from ever reading `/proc`.
+fn lock_wait_verdict(
+    last_error: &Option<Error>,
+    backend: &str,
+    wait: Duration,
+    look: &dyn Fn(&str) -> crate::app::stale_lock::Held,
+) -> LockWait {
+    let Some(err) = last_error else {
+        return LockWait::Backoff;
+    };
+    if !crate::app::stale_lock::says_the_lock_is_taken(backend, &err.to_string()) {
+        return LockWait::Backoff;
+    }
+    match look(backend) {
+        crate::app::stale_lock::Held::Live(who) if !wait.is_zero() => LockWait::Wait(who),
+        // Opted out of waiting. The message is still the true one rather than the old
+        // "a further retry will not help", because a further retry is exactly what would help,
+        // once the holder is done.
+        crate::app::stale_lock::Held::Live(who) => LockWait::Hopeless(Error::CommandFailed {
+            message: format!(
+                "`{backend}` cannot run: {who} holds the manager's lock, and \
+                 `manager_lock_wait_secs` is 0, so LiNix did not wait for it. Raise that setting \
+                 or run this again once the other manager has finished."
+            ),
+            retry: Retryability::Exhausted,
+            absent_name: false,
+        }),
+        crate::app::stale_lock::Held::Stale(path) => LockWait::Hopeless(Error::CommandFailed {
+            message: format!(
+                "`{backend}` cannot run: {} is on disk and nothing holds it — a run of this \
+                 manager was killed and left its lock behind. Waiting will not clear it. \
+                 `linix heal` removes exactly this, after proving again that no manager is \
+                 running.",
+                path.display()
+            ),
+            retry: Retryability::Exhausted,
+            absent_name: false,
+        }),
+        crate::app::stale_lock::Held::Free => LockWait::Backoff,
+    }
+}
+
+/// Wait for whoever holds the manager's lock, and say so while waiting.
+///
+/// `None` means the lock came free and the caller should try again. `Some(err)` is the wait
+/// ending without that happening, and it says which of the two ways it ended.
+///
+/// **A wait with no reason given is indistinguishable from a hang**, and a hang is what people
+/// kill — which is how a machine ends up with the interrupted transaction this whole module is
+/// about. It announces once, up front, the way the data-directory lock does.
+async fn wait_for_manager_lock(
+    backend: &str,
+    who: &str,
+    wait: Duration,
+    cancel_token: &CancellationToken,
+) -> std::result::Result<Duration, Error> {
+    eprintln!(
+        "linix: waiting for {who} to finish — it holds the lock `{backend}` needs \
+         (up to {}s; `manager_lock_wait_secs` sets that)",
+        wait.as_secs()
+    );
+    let started = std::time::Instant::now();
+    while started.elapsed() < wait {
+        if cancel_token.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        match crate::app::stale_lock::held_for_on_this_machine(backend) {
+            crate::app::stale_lock::Held::Live(_) => continue,
+            // It let go. Whether it finished or died, the next attempt is the thing that finds
+            // out, and a stale lock left by a holder that died mid-wait is reported by the next
+            // pass through the verdict rather than guessed at here.
+            _ => {
+                info!(
+                    "the lock `{}` needs came free after {}s",
+                    backend,
+                    started.elapsed().as_secs()
+                );
+                return Ok(started.elapsed());
+            }
+        }
+    }
+    Err(Error::CommandFailed {
+        message: format!(
+            "`{backend}` cannot run: {who} has held the manager's lock for {}s, which is all \
+             `manager_lock_wait_secs` allows. It is still running, so nothing here is broken and \
+             nothing needs clearing — run this again when it has finished, or raise that setting.",
+            wait.as_secs()
+        ),
+        retry: Retryability::Exhausted,
+        absent_name: false,
+    })
+}
+
 /// A failure that survived its own retries is not transient, whatever the string said.
 ///
 /// `Retryability::Transient` is a claim: *a second attempt could differ*. The container harness
@@ -1252,6 +1401,155 @@ fn falsify_transience(err: Error, attempts: u32) -> Error {
             absent_name,
         },
         other => other,
+    }
+}
+
+/// **What LiNix does when another package manager holds the lock** — the three verdicts, each
+/// exercised without a second package manager to kill.
+///
+/// The shipped behaviour was one verdict for all three: four retries over three and a half
+/// seconds, then *"the failure did not change, so a further retry will not help — this is not the
+/// transient failure its output looks like"*. That sentence was printed most often in the one
+/// case where it was false.
+#[cfg(test)]
+mod manager_lock_tests {
+    use super::*;
+    use crate::app::stale_lock::Held;
+
+    fn lock_failure(msg: &str) -> Option<Error> {
+        Some(Error::CommandFailed {
+            message: msg.to_string(),
+            retry: Retryability::Transient,
+            absent_name: false,
+        })
+    }
+
+    const PACMAN_SAID: &str = "`pacman` failed (exit 1): error: failed to init transaction \
+                               (unable to lock database)";
+
+    /// A live holder is a queue to join. Waiting is the only thing that helps, and it is what
+    /// LiNix already does for its own lock.
+    #[test]
+    fn a_live_holder_is_waited_for() {
+        let verdict = lock_wait_verdict(
+            &lock_failure(PACMAN_SAID),
+            "pacman",
+            Duration::from_secs(300),
+            &|_| Held::Live("a `pacman`".into()),
+        );
+        assert!(
+            matches!(&verdict, LockWait::Wait(who) if who.contains("pacman")),
+            "{verdict:?}"
+        );
+    }
+
+    /// A lock nothing holds is a corpse, and waiting for it never ends. It fails at once, and
+    /// the message names the command that clears it rather than three more retries.
+    #[test]
+    fn a_stale_lock_fails_at_once_and_names_heal() {
+        let verdict = lock_wait_verdict(
+            &lock_failure(PACMAN_SAID),
+            "pacman",
+            Duration::from_secs(300),
+            &|_| Held::Stale("/var/lib/pacman/db.lck".into()),
+        );
+        let LockWait::Hopeless(err) = verdict else {
+            panic!("waiting on a lock nothing holds never ends: {verdict:?}");
+        };
+        let said = err.to_string();
+        assert!(said.contains("linix heal"), "{said}");
+        assert!(said.contains("db.lck"), "the file has to be named: {said}");
+        assert_eq!(err.retryability(), Retryability::Exhausted);
+    }
+
+    /// The holder let go between the failure and the question. That is an ordinary race, and the
+    /// ordinary backoff is the right answer — not a wait for a lock that is already free.
+    #[test]
+    fn a_lock_that_came_free_goes_back_to_the_backoff() {
+        let verdict = lock_wait_verdict(
+            &lock_failure(PACMAN_SAID),
+            "pacman",
+            Duration::from_secs(300),
+            &|_| Held::Free,
+        );
+        assert!(matches!(verdict, LockWait::Backoff), "{verdict:?}");
+    }
+
+    /// **The machine is not consulted for a failure that is not about a lock.** A wait on every
+    /// failed install would be a hang on every typo, and the `/proc` scan would be paid on
+    /// every one of them.
+    #[test]
+    fn a_failure_that_is_not_about_a_lock_never_asks_the_machine() {
+        let asked = std::cell::Cell::new(false);
+        let verdict = lock_wait_verdict(
+            &lock_failure("`pacman` failed (exit 1): error: target not found: qqqq"),
+            "pacman",
+            Duration::from_secs(300),
+            &|_| {
+                asked.set(true);
+                Held::Live("a `pacman`".into())
+            },
+        );
+        assert!(matches!(verdict, LockWait::Backoff), "{verdict:?}");
+        assert!(
+            !asked.get(),
+            "the machine was scanned over a missing package"
+        );
+    }
+
+    /// And a backend with no lock in the table is never made to wait for one, whatever its
+    /// failure happens to say.
+    #[test]
+    fn a_backend_with_no_manager_lock_backs_off_as_before() {
+        let verdict = lock_wait_verdict(
+            &lock_failure("`npm` failed: could not get lock"),
+            "npm",
+            Duration::from_secs(300),
+            &|_| panic!("npm has no manager lock, so nothing should have been asked"),
+        );
+        assert!(matches!(verdict, LockWait::Backoff), "{verdict:?}");
+    }
+
+    /// `manager_lock_wait_secs = 0` opts out of waiting — and still does not print the old
+    /// sentence, because a further retry is exactly what *would* help once the holder is done.
+    #[test]
+    fn opting_out_of_the_wait_still_says_something_true() {
+        let verdict = lock_wait_verdict(
+            &lock_failure(PACMAN_SAID),
+            "pacman",
+            Duration::ZERO,
+            &|_| Held::Live("a `pacman`".into()),
+        );
+        let LockWait::Hopeless(err) = verdict else {
+            panic!("with no wait allowed there is nothing to wait for: {verdict:?}");
+        };
+        let said = err.to_string();
+        assert!(said.contains("manager_lock_wait_secs"), "{said}");
+        assert!(
+            !said.contains("a further retry will not help"),
+            "the old sentence is the false one: {said}"
+        );
+    }
+
+    /// Nothing has failed yet on the first attempt, so there is nothing to classify.
+    #[test]
+    fn no_failure_yet_is_not_a_lock_failure() {
+        let verdict = lock_wait_verdict(&None, "pacman", Duration::from_secs(300), &|_| {
+            panic!("there is no error to have been about a lock")
+        });
+        assert!(matches!(verdict, LockWait::Backoff), "{verdict:?}");
+    }
+
+    /// The wait ends rather than running to its deadline when the run is cancelled — a Ctrl-C
+    /// during a five-minute wait must not become a five-minute wait.
+    #[tokio::test]
+    async fn a_cancelled_run_stops_waiting_immediately() {
+        let token = CancellationToken::new();
+        token.cancel();
+        let out = wait_for_manager_lock("pacman", "a `pacman`", Duration::from_secs(300), &token)
+            .await
+            .expect_err("a cancelled wait does not succeed");
+        assert!(matches!(out, Error::Cancelled), "{out:?}");
     }
 }
 

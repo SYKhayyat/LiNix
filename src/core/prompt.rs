@@ -45,10 +45,15 @@ pub fn confirm(yes: bool, prompt: &str, unattended: Unattended<'_>) -> Result<bo
             }
         };
     }
-    Ok(dialoguer::Confirm::new()
-        .with_prompt(prompt)
-        .default(false)
-        .interact()?)
+    // The wait here is a person, and it is the longest wait LiNix ever does — a confirm sits at
+    // the prompt until someone answers, or until they walk away and never do. Reached from an
+    // `async fn`, a bare `interact()` parks a tokio worker for the whole of it.
+    Ok(crate::core::on_the_terminal(|| {
+        dialoguer::Confirm::new()
+            .with_prompt(prompt)
+            .default(false)
+            .interact()
+    })?)
 }
 
 #[cfg(test)]

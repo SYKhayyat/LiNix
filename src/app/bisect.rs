@@ -38,7 +38,7 @@ pub fn first_bad<F: FnMut(usize) -> bool>(len: usize, mut is_good: F) -> Option<
 
 /// Run a shell command and return whether it succeeded (exit 0). Cross-platform.
 pub async fn run_test(cmd: &str) -> bool {
-    let mut command = if cfg!(windows) {
+    let command = if cfg!(windows) {
         let mut c = tokio::process::Command::new("cmd");
         c.args(["/C", cmd]);
         c
@@ -47,7 +47,13 @@ pub async fn run_test(cmd: &str) -> bool {
         c.args(["-c", cmd]);
         c
     };
-    matches!(command.status().await, Ok(s) if s.success())
+    // Supervised: the oracle is a command the user typed, and a bisect that hangs on it hangs
+    // with a snapshot half-restored. Its output is captured rather than printed — a bisect runs
+    // this many times, and the answer that matters is the exit status.
+    matches!(
+        crate::core::executor::supervised_output(command, "the bisect test", true).await,
+        Ok(o) if o.status.success()
+    )
 }
 
 /// Drive a bisect across the machine's snapshots using `test` as the good/bad oracle.

@@ -22,6 +22,18 @@ pub struct DataLock {
 }
 
 impl DataLock {
+    /// Take the lock from an `async` command, without parking a runtime worker.
+    ///
+    /// The wait below is `thread::sleep` in a poll loop for up to two minutes, and every caller
+    /// is inside `#[tokio::main]`. `run_exclusive` already moved its `flock` wait to the blocking
+    /// pool for exactly this reason and wrote down why; this is the same wait, one layer up,
+    /// which nobody had noticed was the same.
+    pub async fn acquire_async(data_dir: &Path, command: &str, timeout: Duration) -> Result<Self> {
+        let dir = data_dir.to_path_buf();
+        let command = command.to_string();
+        crate::core::off_the_runtime(move || Self::acquire(&dir, &command, timeout)).await?
+    }
+
     /// Take the lock, waiting up to `timeout` for whoever holds it.
     ///
     /// Waiting with no reason given is indistinguishable from hanging, so the wait announces

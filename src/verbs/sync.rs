@@ -191,7 +191,7 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
                 .to_string()).into());
             }
             let mut preview = TuiPreview::new(&changes, HashMap::new());
-            if !preview.run()? {
+            if !crate::core::on_the_terminal(|| preview.run())? {
                 return Ok(Reconciled {
                     applied: 0,
                     left_in_place: changes.skipped.len(),

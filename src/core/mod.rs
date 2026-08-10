@@ -2,6 +2,7 @@ pub mod adapter;
 pub mod argv;
 pub mod artifact_lock;
 pub mod bare_lock;
+pub mod blocking;
 pub mod datalock;
 pub mod download;
 pub mod dry_run;
@@ -37,6 +38,7 @@ pub mod validator;
 
 pub use adapter::{AdapterRow, Detected};
 pub use argv::{push_names, terminates_options};
+pub use blocking::{off_the_runtime, on_the_terminal};
 
 pub use error::{Error, Result, Retryability};
 pub use exit_policy::ExitPolicy;

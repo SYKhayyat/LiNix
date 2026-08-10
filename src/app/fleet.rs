@@ -32,13 +32,17 @@ async fn ssh_capture(host: &str, remote_cmd: &str) -> Result<String> {
     check_host(host)?;
     // `-o BatchMode=yes` fails fast instead of hanging on a password prompt. `--` must follow
     // it, not precede it, or ssh stops reading the `-o` pair as options.
-    let out = tokio::process::Command::new("ssh")
+    let mut command = tokio::process::Command::new("ssh");
+    command
         .arg("-o")
         .arg("BatchMode=yes")
         .arg("--")
         .arg(host)
-        .arg(remote_cmd)
-        .output()
+        .arg(remote_cmd);
+    // Supervised: `BatchMode` stops ssh asking for a password, but nothing stopped it hanging on
+    // a host that accepts the connection and never answers — and a fleet query abandoned midway
+    // left one ssh per host behind it.
+    let out = crate::core::executor::supervised_output(command, "ssh", false)
         .await
         .map_err(|e| Error::Other(format!("failed to launch ssh for {}: {}", host, e)))?;
     if !out.status.success() {

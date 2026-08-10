@@ -68,11 +68,12 @@ impl Sandbox {
     async fn windows_sandbox_feature_enabled() -> bool {
         #[cfg(target_os = "windows")]
         {
-            let output = tokio::process::Command::new("powershell")
-                .args(["-NoProfile", "-NonInteractive", "-Command", "Get-WindowsOptionalFeature -Online -FeatureName 'Containers-DisposableClient' | Select-Object -ExpandProperty State"])
-                .stdin(std::process::Stdio::null())
-                .output()
-                .await;
+            let mut command = tokio::process::Command::new("powershell");
+            command.args(["-NoProfile", "-NonInteractive", "-Command", "Get-WindowsOptionalFeature -Online -FeatureName 'Containers-DisposableClient' | Select-Object -ExpandProperty State"]);
+            // Supervised: `Get-WindowsOptionalFeature` talks to the servicing stack, which is
+            // the component most likely on a Windows box to answer in its own time or not at all.
+            let output =
+                crate::core::executor::supervised_output(command, "powershell", false).await;
 
             if let Ok(out) = output {
                 return crate::utils::text::sanitize(&String::from_utf8_lossy(&out.stdout))

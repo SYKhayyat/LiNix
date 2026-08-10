@@ -310,7 +310,7 @@ pub async fn handle_history(app: &App) -> Result<()> {
         return Ok(());
     }
 
-    let action = HistoryBrowser::new(commits).run()?;
+    let action = crate::core::on_the_terminal(|| HistoryBrowser::new(commits).run())?;
     match action {
         HistoryAction::Quit => Ok(()),
         HistoryAction::Rollback { reference } => {
@@ -322,11 +322,12 @@ pub async fn handle_history(app: &App) -> Result<()> {
             // `state.save()` and all. The same function through `Commands::Rollback` is
             // locked; through this door it was not, so one function had two locking regimes
             // decided by which one the user happened to walk through.
-            let _data_lock = crate::core::datalock::DataLock::acquire(
+            let _data_lock = crate::core::datalock::DataLock::acquire_async(
                 &crate::utils::safe_data_dir(),
                 "history rollback",
                 std::time::Duration::from_secs(120),
-            )?;
+            )
+            .await?;
             println!("Rolling back to {reference}…");
             handle_rollback(app, &reference).await
         }

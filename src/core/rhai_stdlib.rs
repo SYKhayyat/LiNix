@@ -61,8 +61,7 @@ fn register_stdlib(engine: &mut Engine) {
     engine.register_fn(
         "sh",
         |cmd: &str| -> std::result::Result<String, Box<EvalAltResult>> {
-            let out = shell_command(cmd)
-                .output()
+            let out = crate::core::blocking::command_output(&mut shell_command(cmd))
                 .map_err(|e| rt_err(format!("sh: could not run `{}`: {}", cmd, e)))?;
             if !out.status.success() {
                 let stderr = String::from_utf8_lossy(&out.stderr);
@@ -79,8 +78,7 @@ fn register_stdlib(engine: &mut Engine) {
         },
     );
     engine.register_fn("sh_ok", |cmd: &str| {
-        shell_command(cmd)
-            .output()
+        crate::core::blocking::command_output(&mut shell_command(cmd))
             .map(|o| o.status.success())
             .unwrap_or(false)
     });

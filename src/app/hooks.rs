@@ -186,15 +186,17 @@ impl LuaHooks {
             cmd.env(format!("LINIX_{}", name), value);
         }
 
-        let status = cmd
-            .status()
+        // Supervised: a hook is arbitrary code, and plenty of them run a package manager. Left
+        // unowned it outlived the node that fired it — still holding dpkg's lock while the
+        // rollback that abandoned it tried to take the same one.
+        let out = crate::core::executor::supervised_output(cmd, "the hook", true)
             .await
             .map_err(|e| Error::Other(format!("Polyglot execution failed: {}", e)))?;
 
-        if !status.success() {
+        if !out.status.success() {
             return Err(Error::LuaScript(format!(
                 "External hook failed with exit code: {:?}",
-                status.code()
+                out.status.code()
             )));
         }
 

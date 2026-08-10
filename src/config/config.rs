@@ -390,6 +390,25 @@ pub struct Config {
     #[serde(default = "default_rate_limit_max_wait_secs")]
     pub rate_limit_max_wait_secs: u64,
 
+    /// How long to wait for **another package manager** that is holding its own lock. `0` does
+    /// not wait at all and fails the way LiNix used to.
+    ///
+    /// Two package managers on one machine is not an error, it is a Tuesday: an `apt upgrade`
+    /// in another terminal, an unattended-upgrade timer, a GUI updater. The manager says so
+    /// plainly (*"could not get lock"*, *"unable to lock database"*) and LiNix used to answer
+    /// with four retries over three and a half seconds and the sentence *"this is not the
+    /// transient failure its output looks like"* — which was false in precisely the case that
+    /// printed it.
+    ///
+    /// Five minutes because that is sized for the holder, not for LiNix: a `dnf upgrade` of a
+    /// hundred packages legitimately runs that long, and a wait that expires before the ordinary
+    /// case finishes is the same failure with more delay in front of it. The wait announces its
+    /// holder as soon as it starts, so it is never silence — and it is only ever entered when a
+    /// *live* process is proved to hold the lock, so a lock left behind by a killed run is
+    /// reported at once instead of waited on forever.
+    #[serde(default = "default_manager_lock_wait_secs")]
+    pub manager_lock_wait_secs: u64,
+
     /// Retention window passed to `nix-collect-garbage --delete-older-than` during
     /// orphan cleanup (e.g. "30d", "2w"). Replaces the previously hardcoded "30d".
     #[serde(default = "default_nix_gc_age")]
@@ -599,6 +618,14 @@ fn default_read_retry_attempts() -> u32 {
 fn default_nix_gc_age() -> String {
     "30d".to_string()
 }
+/// Five minutes, sized for the *other* manager's transaction rather than for LiNix's patience.
+/// The wait is only entered against a proved-live holder, so it ends when that holder does.
+///
+/// Public because `TransactionConfig::patient()` needs the same number and a second literal is
+/// how two defaults drift apart.
+pub fn default_manager_lock_wait_secs() -> u64 {
+    300
+}
 
 /// Refuse a plan removing more than this many packages without an explicit opt-in.
 /// Twenty is comfortably above a routine cleanup and far below the ~100 that adopting a
@@ -721,6 +748,7 @@ impl Default for Config {
             query_idle_timeout_secs: default_query_idle_timeout_secs(),
             read_retry_attempts: default_read_retry_attempts(),
             rate_limit_max_wait_secs: default_rate_limit_max_wait_secs(),
+            manager_lock_wait_secs: default_manager_lock_wait_secs(),
             nix_gc_age: default_nix_gc_age(),
             clean_cache_on_remove: false,
             cache_dirs: Vec::new(),

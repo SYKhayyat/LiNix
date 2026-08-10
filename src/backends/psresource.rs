@@ -61,7 +61,8 @@ impl PsResourceCore {
             // process rather than reading PATH, so a `--timings` run that left it out would
             // show a probe pass costing more than every command in it.
             let timing = crate::core::timing::begin();
-            let present = std::process::Command::new(&self.shell)
+            let mut probe_cmd = std::process::Command::new(&self.shell);
+            probe_cmd
                 .args([
                     "-NoProfile",
                     "-NonInteractive",
@@ -70,8 +71,8 @@ impl PsResourceCore {
                      { exit 0 } else { exit 1 }",
                 ])
                 .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
+                .stderr(std::process::Stdio::null());
+            let present = crate::core::blocking::command_status(&mut probe_cmd)
                 .map(|s| s.success())
                 .unwrap_or(false);
             crate::core::timing::end(
