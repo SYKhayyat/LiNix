@@ -93,17 +93,42 @@ jobs:
       #
       # Named by target because two rows now share `macos`, and each builds on the hardware
       # it targets: `macos-latest` is arm64 and `macos-13` is the last Intel image.
+      #
+      # **Every row carries its own `rust`, and there is no base matrix.** With `rust: [stable]`
+      # above the `include:`, the matrix had exactly ONE combination, and GitHub merges an
+      # include entry into an existing combination when it overwrites none of the base values —
+      # so all four rows merged into that same job in turn and the last one won. Measured, not
+      # reasoned: three consecutive runs produced a single `Build for x86_64-pc-windows-msvc`
+      # and no others. Linux and both Macs were never built here at all, while the release job
+      # below asserts four binaries in `dist/` — the same shape as the assets that were all
+      # named `linix`, and found the same way, by reading what the run actually did.
       matrix:
-        rust: [stable]
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            rust: stable
           - os: macos-13
             target: x86_64-apple-darwin
+            rust: stable
           - os: macos-latest
             target: aarch64-apple-darwin
+            rust: stable
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            rust: stable
+
+    # **Fat LTO and one codegen unit are settings for a binary somebody downloads, not for a
+    # gate.** `codegen-units = 1` forbids parallel codegen by definition, so this job cannot use
+    # the runner's other cores however many it has, and it was 24 minutes against 12 for the
+    # slowest container leg — the whole critical path, in one job, alone. A gate that takes half
+    # an hour is a gate people stop reading.
+    #
+    # What this job proves is that the tree compiles for the target and its tests pass there, and
+    # thin LTO proves exactly that. A tag build keeps the full settings, because that artifact is
+    # the one that runs on somebody's machine.
+    env:
+      CARGO_PROFILE_RELEASE_LTO: ${{ startsWith(github.ref, 'refs/tags/v') && 'fat' || 'thin' }}
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ startsWith(github.ref, 'refs/tags/v') && '1' || '16' }}
 
     steps:
     - uses: actions/checkout@v4

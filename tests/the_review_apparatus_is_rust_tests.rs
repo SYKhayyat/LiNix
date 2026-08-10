@@ -512,3 +512,140 @@ fn every_workflow_value_that_yaml_would_read_as_a_key_is_quoted() {
         found.join("\n  ")
     );
 }
+
+/// **Every target the release publishes is a target something builds.**
+///
+/// The build matrix declared four and produced **one**. A base `rust: [stable]` above the
+/// `include:` gives the matrix exactly one combination, and GitHub merges an include entry into
+/// an existing combination whenever it overwrites none of the base values — so all four rows
+/// merged into that same job in turn and the last one, Windows, won. Three consecutive runs
+/// produced a single `Build for x86_64-pc-windows-msvc` and nothing else: Linux and both Macs
+/// were never compiled here at all, while the release job asserts four binaries in `dist/`.
+///
+/// It is the same shape as the four release assets that were all named `linix`, and it survived
+/// the same way — by being a claim about a run nobody read. So the claim is checked: the targets
+/// the release step names by hand and the targets the matrix builds are one list, and a matrix
+/// that cannot expand to one job per row fails here rather than in six months at a tag.
+#[test]
+fn every_target_the_release_publishes_is_one_the_matrix_actually_builds() {
+    let ci = read(".github/workflows/ci.yml");
+
+    // The matrix rows. `- target:` appears only under an `include:` list; the container legs
+    // use `distro:`, so there is nothing else to exclude.
+    let built: std::collections::BTreeSet<String> = ci
+        .lines()
+        .map(str::trim)
+        .filter_map(|l| l.strip_prefix("target: "))
+        .map(|t| t.trim().to_string())
+        .collect();
+    assert!(
+        built.len() >= 4,
+        "the build matrix names {} target(s); it declared four when this was written: {built:?}",
+        built.len()
+    );
+
+    // **And no base key above the rows**, which is the thing that collapsed them. A `rust:` (or
+    // any other) list beside `include:` reintroduces exactly one combination for four rows to
+    // overwrite each other in.
+    // Line endings are not assumed: this file is checked out CRLF here and LF on the runners,
+    // and a marker carrying a `\n` matches on exactly one of the two.
+    let matrix_at = ci.find("      matrix:").expect("the build matrix");
+    let matrix = &ci[matrix_at..];
+    let matrix = &matrix[..matrix.find("    steps:").unwrap_or(matrix.len())];
+    assert!(
+        collapses_to_one_job(matrix).is_none(),
+        "{}",
+        collapses_to_one_job(matrix).unwrap_or_default()
+    );
+
+    // The targets the release step names by hand, which is the list that must agree.
+    let published: std::collections::BTreeSet<String> = ci
+        .lines()
+        .filter(|l| l.contains("dist/linix-"))
+        .flat_map(|l| {
+            l.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'))
+                .filter_map(|w| w.strip_prefix("linix-"))
+                .map(|t| t.trim_end_matches(".exe").to_string())
+                .collect::<Vec<_>>()
+        })
+        .filter(|t| t.contains('-'))
+        .collect();
+
+    let unbuilt: Vec<&String> = published.difference(&built).collect();
+    assert!(
+        unbuilt.is_empty(),
+        "the release publishes {unbuilt:?}, and no matrix row builds them. Every one of these \
+         is a binary somebody downloads for a platform CI never compiled for."
+    );
+}
+
+/// Why a matrix block would expand to fewer jobs than it has rows, or `None` if it is sound.
+///
+/// A base key beside `include:` gives the matrix one combination, and GitHub merges an include
+/// entry into an existing combination whenever it overwrites none of the base values — so every
+/// row lands in that same job in turn and only the last survives. A row without its own copy of
+/// the base key is the same defect written the other way round.
+fn collapses_to_one_job(matrix: &str) -> Option<String> {
+    let include_at = matrix.find("include:")?;
+    let before = &matrix[..include_at];
+    if before.contains(": [") {
+        return Some(format!(
+            "the build matrix has a base key above its `include:` rows:\n{before}\nThat makes \
+             ONE combination, and every include row merges into it in turn — the last row wins \
+             and the rest never run. Put the key on each row instead."
+        ));
+    }
+    let rows = matrix.matches("- os:").count();
+    let toolchains = matrix.matches("rust:").count();
+    (rows != toolchains).then(|| {
+        format!(
+            "{rows} matrix row(s) and {toolchains} `rust:` key(s) — a row without one has to \
+             borrow from a base key, and a base key is what collapsed this matrix"
+        )
+    })
+}
+
+/// **The predicate above, shown failing.** A scan that has never objected to anything is
+/// indistinguishable from a clean tree, and three of this repo's gates once passed for exactly
+/// that reason. So it is fed the shape CI actually shipped for three runs.
+#[test]
+fn the_matrix_scan_objects_to_the_shape_that_shipped() {
+    let collapsed = r"      matrix:
+        rust: [stable]
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+";
+    let why = collapses_to_one_job(collapsed).expect(
+        "the scan cannot see the defect it exists for - this is the exact matrix that built one          target out of four for three consecutive runs",
+    );
+    assert!(why.contains("base key"), "{why}");
+
+    // A row missing its toolchain is the same defect the other way round.
+    let uneven = r"      matrix:
+        include:
+          - os: ubuntu-latest
+            target: a
+            rust: stable
+          - os: windows-latest
+            target: b
+";
+    assert!(
+        collapses_to_one_job(uneven).is_some(),
+        "an uneven matrix passed"
+    );
+
+    // And the control, so a green run above is not explained by "it objects to everything".
+    let sound = r"      matrix:
+        include:
+          - os: ubuntu-latest
+            target: a
+            rust: stable
+          - os: windows-latest
+            target: b
+            rust: stable
+";
+    assert_eq!(collapses_to_one_job(sound), None);
+}
