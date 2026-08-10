@@ -93,7 +93,6 @@ pub fn detect_conflicts(specs: &[PackageSpec]) -> Vec<Conflict> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn spec(backend: &str, name: &str, version: Option<&str>) -> PackageSpec {
         let mut options = crate::config::grammar::Options::default();

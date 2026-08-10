@@ -38,9 +38,8 @@ use linix::parsers::{apt, bsd, common, dnf, pacman, ParseResult};
 /// read. What cannot move is that a stock image has packages, so a parser that returns none has
 /// broken.
 fn assert_reads(label: &str, result: ParseResult, floor: usize, expect_name: &str) {
-    let pkgs = result.unwrap_or_else(|e| {
-        panic!("{label}: the tool's own captured output did not parse — {e}")
-    });
+    let pkgs = result
+        .unwrap_or_else(|e| panic!("{label}: the tool's own captured output did not parse — {e}"));
     assert!(
         pkgs.len() >= floor,
         "{label}: read {} package(s) from a stock image, expected at least {floor}",
@@ -212,7 +211,9 @@ fn the_fixture_check_can_fail() {
     const APT: &str = include_str!("fixtures/apt/dpkg-query-installed.txt");
     let crossed = common::parse_dash_version_list(APT, "apk").expect("it parses, wrongly");
     assert!(
-        crossed.iter().any(|p| p.name == "base" || p.version.is_none()),
+        crossed
+            .iter()
+            .any(|p| p.name == "base" || p.version.is_none()),
         "cross-fed output should look wrong on inspection: {:?}",
         crossed.iter().take(5).map(|p| &p.name).collect::<Vec<_>>()
     );
@@ -235,7 +236,10 @@ fn the_fixture_check_can_fail() {
     assert!(
         wrong.iter().any(|p| p.name == "libbz2"),
         "`libbz2-1.0` should be mangled into `libbz2`: {:?}",
-        wrong.iter().map(|p| (&p.name, &p.version)).collect::<Vec<_>>()
+        wrong
+            .iter()
+            .map(|p| (&p.name, &p.version))
+            .collect::<Vec<_>>()
     );
     let real = apt::parse_list(APT).expect("captured output");
     assert!(

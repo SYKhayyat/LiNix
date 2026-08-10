@@ -30,9 +30,7 @@
 //! at all**, in every layer that carries them, and that the type has not quietly grown a way back
 //! to conflating them.
 
-use linix::parsers::{
-    self, common, dnf, ecosystem, language, windows, ParseResult, Unrecognised,
-};
+use linix::parsers::{self, common, dnf, ecosystem, language, windows, ParseResult, Unrecognised};
 
 // -------------------------------------------------------------------------------------------
 // The distinction itself.
@@ -61,7 +59,10 @@ fn a_manager_with_nothing_installed_says_so_and_is_believed() {
         let pkgs = result
             .as_ref()
             .unwrap_or_else(|e| panic!("`{backend}`: no output must read as no packages, got {e}"));
-        assert!(pkgs.is_empty(), "`{backend}` invented a package out of nothing");
+        assert!(
+            pkgs.is_empty(),
+            "`{backend}` invented a package out of nothing"
+        );
     }
 }
 
@@ -93,23 +94,17 @@ fn a_manager_saying_it_has_none_is_an_empty_machine() {
             .expect("MacPorts' own empty answer")
             .is_empty()
     );
-    assert!(
-        parsers::macos::parse_macports_installed(
-            "The following ports are currently installed:\n"
-        )
-        .expect("a heading with nothing under it")
-        .is_empty()
-    );
-    assert!(
-        windows::parse_installed("choco", "0 packages installed.\n")
-            .expect("choco's own empty answer")
-            .is_empty()
-    );
-    assert!(
-        ecosystem::names_only("No packages found.\n", "spack")
-            .expect("spack's own empty answer")
-            .is_empty()
-    );
+    assert!(parsers::macos::parse_macports_installed(
+        "The following ports are currently installed:\n"
+    )
+    .expect("a heading with nothing under it")
+    .is_empty());
+    assert!(windows::parse_installed("choco", "0 packages installed.\n")
+        .expect("choco's own empty answer")
+        .is_empty());
+    assert!(ecosystem::names_only("No packages found.\n", "spack")
+        .expect("spack's own empty answer")
+        .is_empty());
 }
 
 /// And the other half: output that carried something and yielded no package is reported.
@@ -161,7 +156,10 @@ fn junk_is_a_different_failure_from_emptiness_and_this_change_does_not_address_i
     let pkgs = parsers::apt::parse_list("E: Could not open lock file\nE: Are you root?\n")
         .expect("this is not the empty-vs-unread failure; it produces packages");
     assert_eq!(pkgs.len(), 2, "{pkgs:?}");
-    assert_eq!(pkgs[0].name, "E:", "apt's error prefix reads as a package name");
+    assert_eq!(
+        pkgs[0].name, "E:",
+        "apt's error prefix reads as a package name"
+    );
     assert_eq!(
         pkgs[0].version.as_deref(),
         Some("Could not open lock file"),
@@ -176,8 +174,14 @@ fn junk_is_a_different_failure_from_emptiness_and_this_change_does_not_address_i
 #[test]
 fn a_backend_with_no_reader_wired_is_not_an_empty_machine() {
     for (layer, result) in [
-        ("language", language::parse_installed("nosuchmanager", "some output\n")),
-        ("windows", windows::parse_installed("nosuchmanager", "some output\n")),
+        (
+            "language",
+            language::parse_installed("nosuchmanager", "some output\n"),
+        ),
+        (
+            "windows",
+            windows::parse_installed("nosuchmanager", "some output\n"),
+        ),
     ] {
         let e = result.expect_err("an unwired backend must not report an empty machine");
         assert_eq!(e.backend, "nosuchmanager", "{layer}");

@@ -193,7 +193,16 @@ async fn every_terminator_claim_still_holds_where_the_tool_is_installed() {
         };
         if let Some(i) = backend.as_installable() {
             let _ = i.install(std::slice::from_ref(&spec), false).await;
-            let _ = i.remove(&[SENTINEL.to_string()], false, linix::app::sync::guard::Reaped::for_reason(linix::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself")).await;
+            let _ = i
+                .remove(
+                    &[SENTINEL.to_string()],
+                    false,
+                    linix::app::sync::guard::Reaped::for_reason(
+                        linix::app::sync::guard::GuardScope::Remove,
+                        "a unit test of the effector itself",
+                    ),
+                )
+                .await;
         }
         if let Some(s) = backend.as_searchable() {
             let _ = s.search(SENTINEL).await;

@@ -171,11 +171,9 @@ mod json_tests {
     /// nothing rather than inventing a package from a header row.
     #[test]
     fn an_empty_data_array_is_an_empty_machine_and_everything_else_is_unread() {
-        assert!(
-            parse_dotnet_list_json(r#"{"version":1,"data":[]}"#)
-                .expect("dotnet with no global tools returns an empty `data` array")
-                .is_empty()
-        );
+        assert!(parse_dotnet_list_json(r#"{"version":1,"data":[]}"#)
+            .expect("dotnet with no global tools returns an empty `data` array")
+            .is_empty());
         // The table form is what an SDK *without* `--format json` prints, and the empty string
         // is what it prints when the command fails outright. Both used to arrive as "no global
         // tools are installed" — for exactly the users on older tooling, who are the least

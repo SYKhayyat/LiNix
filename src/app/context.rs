@@ -91,10 +91,8 @@ impl App {
                     Some(d) => Journal::at(d.join(Journal::FILE_NAME)),
                     None => Journal::new(),
                 })
-                    .await
-                    .map_err(|e| {
-                        Error::Other(format!("Kernel Thread Panic opening the WAL: {}", e))
-                    })?
+                .await
+                .map_err(|e| Error::Other(format!("Kernel Thread Panic opening the WAL: {}", e)))?
             }
         };
         let build_registry = async {

@@ -185,10 +185,13 @@ pub fn user_adapters(cfg: &crate::config::Config) -> Vec<SettingAdapter> {
         Some(body) => match toml::from_str::<SettingStoreFile>(&body) {
             Ok(f) => f.setting_store,
             Err(e) => {
-                warn!("{}", crate::app::adapters::cannot_use(
-                    crate::app::adapters::surface("settings").expect("a declared surface"),
-                    e,
-                ));
+                warn!(
+                    "{}",
+                    crate::app::adapters::cannot_use(
+                        crate::app::adapters::surface("settings").expect("a declared surface"),
+                        e,
+                    )
+                );
                 Vec::new()
             }
         },
@@ -324,12 +327,9 @@ impl Installable for SettingInstallable {
     async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
         for spec in specs {
             let (schema, key) = SettingBackendCore::split(&spec.name)?;
-            let want = spec
-                .options
-                .one("value")
-                .ok_or_else(|| {
-                    Error::Validation(format!("`setting:{}` has no value", spec.name))
-                })?;
+            let want = spec.options.one("value").ok_or_else(|| {
+                Error::Validation(format!("`setting:{}` has no value", spec.name))
+            })?;
 
             let Some(adapter) = self.core.adapter() else {
                 return Err(self.core.no_adapter(&spec.name));
@@ -358,7 +358,12 @@ impl Installable for SettingInstallable {
         Ok(())
     }
 
-    async fn remove(&self, names: &[String], _sudo: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
+    async fn remove(
+        &self,
+        names: &[String],
+        _sudo: bool,
+        _reaped: crate::app::sync::guard::Reaped,
+    ) -> Result<()> {
         for name in names {
             // **A removal resets the key where the declaration put it, which means it has to
             // know where that was.** The scope rides the extras-ledger key — `setting:x@scope=
@@ -639,8 +644,7 @@ mod tests {
         let core = SettingBackendCore::new(CommandExecutor::new(true, false), adapters(vec![]));
         let g = gsettings();
         assert_eq!(
-            core.scope_of(&g, Some("user"), "org.gnome.x/k")
-                .unwrap(),
+            core.scope_of(&g, Some("user"), "org.gnome.x/k").unwrap(),
             Scope::User
         );
         // And omitting it means the same thing.

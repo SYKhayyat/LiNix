@@ -88,7 +88,6 @@ pub fn client(allow_http: bool, user_agent: &str) -> Result<reqwest::Client> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn spec(opts: &[(&str, &str)]) -> PackageSpec {
         PackageSpec {

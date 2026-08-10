@@ -26,7 +26,9 @@ impl Schedules<'_> {
             if self.config.dry_run {
                 crate::would!(
                     "would schedule `{}`: `{}` on `{}`",
-                    name, cfg.command, cfg.cron
+                    name,
+                    cfg.command,
+                    cfg.cron
                 );
                 continue;
             }

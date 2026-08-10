@@ -1697,7 +1697,12 @@ when $role == travel {
             .unwrap();
 
         let mosh = d.present().find(|p| p.name == "mosh").unwrap();
-        let chain: Vec<&str> = mosh.options.all("__gated_by").iter().map(String::as_str).collect();
+        let chain: Vec<&str> = mosh
+            .options
+            .all("__gated_by")
+            .iter()
+            .map(String::as_str)
+            .collect();
         assert_eq!(chain.len(), 3, "{:?}", chain);
         assert!(
             chain[0].starts_with("when $role == travel @ "),
@@ -1840,10 +1845,7 @@ when $role == travel {
             .resolve()
             .unwrap();
         let spec = d.present().find(|p| p.name == "nginx").unwrap();
-        assert_eq!(
-            spec.options.one("version"),
-            Some("1.24.0")
-        );
+        assert_eq!(spec.options.one("version"), Some("1.24.0"));
     }
 
     #[test]

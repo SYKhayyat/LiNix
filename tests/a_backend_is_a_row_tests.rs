@@ -80,9 +80,7 @@ fn named_readers(def: &CustomBackendDef) -> Vec<(&'static str, &str, bool)> {
     ];
     fields
         .into_iter()
-        .filter_map(|(field, value, found)| {
-            value.as_deref().map(|v| (field, v, found(v)))
-        })
+        .filter_map(|(field, value, found)| value.as_deref().map(|v| (field, v, found(v))))
         .collect()
 }
 
@@ -263,7 +261,8 @@ fn every_row_has_an_argv_row() {
         .split_once("\n    }")
         .expect("the argv table has no end")
         .0;
-    let cases = table.matches("ArgvCase::pkg(").count() + table.matches("ArgvCase::shaped(").count();
+    let cases =
+        table.matches("ArgvCase::pkg(").count() + table.matches("ArgvCase::shaped(").count();
     assert!(
         cases > 40,
         "counted only {cases} argv rows — the scan is broken, not the code"
@@ -303,7 +302,9 @@ fn every_row_that_reads_a_listing_carries_its_manager_s_bytes() {
         }
         match &def.fixture {
             None => bare.push(def.name.clone()),
-            Some(f) if f.list.is_none() => bare.push(format!("{} (fixture with no `list`)", def.name)),
+            Some(f) if f.list.is_none() => {
+                bare.push(format!("{} (fixture with no `list`)", def.name))
+            }
             Some(f) if f.source.trim().is_empty() => {
                 bare.push(format!("{} (fixture with no `source`)", def.name))
             }

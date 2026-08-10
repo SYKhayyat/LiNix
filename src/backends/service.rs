@@ -395,7 +395,12 @@ impl Installable for ServiceInstallable {
         Ok(())
     }
 
-    async fn remove(&self, names: &[String], sudo: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
+    async fn remove(
+        &self,
+        names: &[String],
+        sudo: bool,
+        _reaped: crate::app::sync::guard::Reaped,
+    ) -> Result<()> {
         for name in names {
             // Stop then disable; never let a missing service abort the sweep.
             self.core
@@ -532,10 +537,13 @@ pub fn register(
     .and_then(|body| match toml::from_str::<InitProviderFile>(&body) {
         Ok(f) => Some(f.init),
         Err(e) => {
-            warn!("{}", crate::app::adapters::cannot_use(
-                crate::app::adapters::surface("init").expect("a declared surface"),
-                e,
-            ));
+            warn!(
+                "{}",
+                crate::app::adapters::cannot_use(
+                    crate::app::adapters::surface("init").expect("a declared surface"),
+                    e,
+                )
+            );
             None
         }
     })

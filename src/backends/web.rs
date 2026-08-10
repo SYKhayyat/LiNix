@@ -349,7 +349,12 @@ impl Installable for WebInstallable {
         Ok(())
     }
 
-    async fn remove(&self, urls: &[String], _: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
+    async fn remove(
+        &self,
+        urls: &[String],
+        _: bool,
+        _reaped: crate::app::sync::guard::Reaped,
+    ) -> Result<()> {
         let mut state = self.core.load_state().await;
         let mut failures = Vec::new();
         for url in urls {
@@ -452,8 +457,8 @@ pub fn register(
 mod tests {
     use super::*;
     use crate::app::sync::guard::{GuardScope, Reaped};
-    use crate::core::executor::MockExecutor;
     use crate::core::executor::DryRunOutput;
+    use crate::core::executor::MockExecutor;
     use dashmap::DashMap;
 
     /// A `web:` backend over a temporary tree, with a mock in front of every command.
@@ -466,13 +471,8 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let vfs: Arc<DashMap<std::path::PathBuf, String>> = Arc::new(DashMap::new());
         let mock = Arc::new(MockExecutor::new(vfs.clone()));
-        let exec = CommandExecutor::with_layer(
-            false,
-            false,
-            mock.clone(),
-            vfs,
-            Arc::new(DashMap::new()),
-        );
+        let exec =
+            CommandExecutor::with_layer(false, false, mock.clone(), vfs, Arc::new(DashMap::new()));
         let core = Arc::new(WebBackendCore::new(
             exec,
             tmp.path().join(tag),

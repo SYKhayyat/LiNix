@@ -1,6 +1,6 @@
+use crate::app::sync::guard;
 use crate::config::grammar::{Origin, Statement};
 use crate::core::LockFile;
-use crate::app::sync::guard;
 use crate::core::{Error, Result};
 use tracing::warn;
 
@@ -194,10 +194,7 @@ impl Extras<'_> {
         // could delete five files under a summary reading `already up to date`.
         for key in &drift {
             if self.config.dry_run {
-                crate::would_warn!(
-                    "`{}` is no longer declared — sync would undo it.",
-                    key
-                );
+                crate::would_warn!("`{}` is no longer declared — sync would undo it.", key);
             } else {
                 warn!("`{}` is no longer declared — undoing it.", key);
             }
@@ -462,10 +459,10 @@ fn declared_extras<'a>(
 #[cfg(test)]
 mod tests {
     use super::in_effect;
-    use crate::core::extras_lock::ExtraKey;
     use crate::backends::service::{InitProviderFile, ServiceBackendCore, ServiceQueryable};
     use crate::backends::BackendRegistry;
     use crate::config::grammar::{Options, Statement};
+    use crate::core::extras_lock::ExtraKey;
     use crate::core::{BackendCapabilities, CommandExecutor};
     use std::sync::Arc;
 

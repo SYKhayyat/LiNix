@@ -179,7 +179,11 @@ async fn test_sync_report_generation_schema_fidelity() {
         vec![PackageSpec {
             name: "ripgrep".into(),
             backend: "brew".into(),
-            options: { let mut o = linix::config::grammar::Options::default(); o.insert("__source".to_string(), "module:dev-tools"); o },
+            options: {
+                let mut o = linix::config::grammar::Options::default();
+                o.insert("__source".to_string(), "module:dev-tools");
+                o
+            },
             requires: vec![],
             present: true,
         }],
@@ -242,14 +246,24 @@ async fn test_scoped_planner_filtering_accuracy() {
             PackageSpec {
                 name: "pkg-work".into(),
                 backend: "brew".into(),
-                options: { let mut o = linix::config::grammar::Options::default(); o.insert("__scopes".to_string(), "module:dev"); o.insert("__scopes".to_string(), "profile:Work"); o },
+                options: {
+                    let mut o = linix::config::grammar::Options::default();
+                    o.insert("__scopes".to_string(), "module:dev");
+                    o.insert("__scopes".to_string(), "profile:Work");
+                    o
+                },
                 requires: vec![],
                 present: true,
             },
             PackageSpec {
                 name: "pkg-home".into(),
                 backend: "brew".into(),
-                options: { let mut o = linix::config::grammar::Options::default(); o.insert("__scopes".to_string(), "module:media"); o.insert("__scopes".to_string(), "profile:Home"); o },
+                options: {
+                    let mut o = linix::config::grammar::Options::default();
+                    o.insert("__scopes".to_string(), "module:media");
+                    o.insert("__scopes".to_string(), "profile:Home");
+                    o
+                },
                 requires: vec![],
                 present: true,
             },

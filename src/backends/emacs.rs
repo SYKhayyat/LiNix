@@ -127,7 +127,12 @@ impl Installable for EmacsInstallable {
         Ok(())
     }
 
-    async fn remove(&self, names: &[String], _: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
+    async fn remove(
+        &self,
+        names: &[String],
+        _: bool,
+        _reaped: crate::app::sync::guard::Reaped,
+    ) -> Result<()> {
         if names.is_empty() {
             return Ok(());
         }
@@ -336,7 +341,14 @@ mod batch_tests {
     async fn a_batch_of_removals_is_one_emacs() {
         let (core, mock) = wired();
         EmacsInstallable { core }
-            .remove(&["csv-mode".to_string(), "rainbow-mode".to_string()], false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"))
+            .remove(
+                &["csv-mode".to_string(), "rainbow-mode".to_string()],
+                false,
+                crate::app::sync::guard::Reaped::for_reason(
+                    crate::app::sync::guard::GuardScope::Remove,
+                    "a unit test of the effector itself",
+                ),
+            )
             .await
             .unwrap();
         let calls = mock.get_calls().await;

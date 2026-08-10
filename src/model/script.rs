@@ -211,7 +211,9 @@ fn program_name(interpreter: &str) -> &str {
         // `cut > 0`: a file actually called `.exe` has no name left once the suffix is taken off
         // it, and an empty interpreter resolves to whatever `which("")` feels like answering.
         Some(cut)
-            if cut > 0 && name.is_char_boundary(cut) && name[cut..].eq_ignore_ascii_case(".exe") =>
+            if cut > 0
+                && name.is_char_boundary(cut)
+                && name[cut..].eq_ignore_ascii_case(".exe") =>
         {
             &name[..cut]
         }
@@ -224,9 +226,7 @@ fn is_assignment(token: &str) -> bool {
     match token.split_once('=') {
         Some((name, _)) => {
             !name.is_empty()
-                && name
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
                 && !name.starts_with(|c: char| c.is_ascii_digit())
         }
         None => false,
@@ -304,7 +304,11 @@ mod tests {
         let launch = launch_for(Path::new("/tmp/hook"), "echo hi\n").expect("launch");
         if cfg!(windows) {
             assert_eq!(launch.program, "powershell");
-            assert!(launch.args.iter().any(|a| a == "-NoProfile"), "{:?}", launch);
+            assert!(
+                launch.args.iter().any(|a| a == "-NoProfile"),
+                "{:?}",
+                launch
+            );
             assert!(launch.args.iter().any(|a| a == "-File"), "{:?}", launch);
         } else {
             assert_eq!(launch.program, "sh");
@@ -437,7 +441,11 @@ mod tests {
         )
         .expect_err("no such interpreter");
         let text = err.to_string();
-        assert!(text.contains("definitely-not-installed-anywhere"), "{}", text);
+        assert!(
+            text.contains("definitely-not-installed-anywhere"),
+            "{}",
+            text
+        );
         assert!(text.contains("PATH"), "{}", text);
     }
 }

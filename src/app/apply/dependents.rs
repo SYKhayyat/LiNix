@@ -89,7 +89,8 @@ impl Dependents<'_> {
                         .await?
                 }
                 Statement::Link(name, opts) => {
-                    self.apply_through_backend("link", name, opts, origin).await?
+                    self.apply_through_backend("link", name, opts, origin)
+                        .await?
                 }
                 Statement::Setting(name, opts) => {
                     self.apply_through_backend("setting", name, opts, origin)

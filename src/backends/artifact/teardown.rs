@@ -150,7 +150,10 @@ mod tests {
     /// be a delete of the current directory.
     #[test]
     fn an_empty_path_is_not_a_path() {
-        let d = Deployed::default().path("").path("/tmp/real").maybe_path(None);
+        let d = Deployed::default()
+            .path("")
+            .path("/tmp/real")
+            .maybe_path(None);
         assert_eq!(d.paths, vec!["/tmp/real".to_string()]);
     }
 
@@ -177,7 +180,10 @@ mod tests {
     fn the_failure_sentence_says_still_installed() {
         let e = still_installed("web resource", &["a: denied".into(), "b: busy".into()]);
         let text = e.to_string();
-        assert!(text.contains("could not remove 2 web resource(s)"), "{text}");
+        assert!(
+            text.contains("could not remove 2 web resource(s)"),
+            "{text}"
+        );
         // Both halves: three backends said one or the other, and neither may be dropped.
         assert!(text.contains("still installed"), "{text}");
         assert!(text.contains("still on disk"), "{text}");

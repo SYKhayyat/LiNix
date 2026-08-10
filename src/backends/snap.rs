@@ -246,7 +246,12 @@ impl Installable for SnapInstallable {
     /// **Removal batches; install does not.** `snap install` above has to choose per package
     /// between `install` and `refresh --channel=` depending on what is already present (D13,
     /// Q20), so those specs cannot share a command. Removal asks no such question.
-    async fn remove(&self, names: &[String], sudo: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
+    async fn remove(
+        &self,
+        names: &[String],
+        sudo: bool,
+        _reaped: crate::app::sync::guard::Reaped,
+    ) -> Result<()> {
         if names.is_empty() {
             return Ok(());
         }
@@ -337,7 +342,8 @@ impl Queryable for SnapQueryable {
             .insert("classic".to_string(), state.classic.to_string());
         for line in output.lines() {
             if let Some(v) = line.strip_prefix("summary:") {
-                p.properties.insert("summary".to_string(), v.trim().to_string());
+                p.properties
+                    .insert("summary".to_string(), v.trim().to_string());
             }
             if let Some(v) = line.strip_prefix("installed:") {
                 let ver = v.split_whitespace().next().unwrap_or(v);
@@ -388,7 +394,8 @@ fn parse_snap_find(output: &str) -> Vec<Package> {
                 .insert("publisher".to_string(), publisher.to_string());
         }
         if parts.len() > 4 {
-            p.properties.insert("summary".to_string(), parts[4..].join(" "));
+            p.properties
+                .insert("summary".to_string(), parts[4..].join(" "));
         }
         results.push(p);
     }
@@ -655,7 +662,14 @@ mod tests {
         let core = Arc::new(SnapBackendCore::new(exec));
 
         SnapInstallable { core: core.clone() }
-            .remove(&["code".to_string()], false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"))
+            .remove(
+                &["code".to_string()],
+                false,
+                crate::app::sync::guard::Reaped::for_reason(
+                    crate::app::sync::guard::GuardScope::Remove,
+                    "a unit test of the effector itself",
+                ),
+            )
             .await
             .unwrap();
         SnapQueryable { core: core.clone() }.info("code").await.ok();
@@ -700,7 +714,14 @@ mod tests {
         let core = Arc::new(SnapBackendCore::new(exec));
 
         SnapInstallable { core: core.clone() }
-            .remove(&["code".to_string(), "firefox".to_string()], false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"))
+            .remove(
+                &["code".to_string(), "firefox".to_string()],
+                false,
+                crate::app::sync::guard::Reaped::for_reason(
+                    crate::app::sync::guard::GuardScope::Remove,
+                    "a unit test of the effector itself",
+                ),
+            )
             .await
             .unwrap();
 

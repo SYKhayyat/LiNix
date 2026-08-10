@@ -183,8 +183,7 @@ mod tests {
 
     fn spec(backend: &str, name: &str, present: bool) -> crate::core::PackageSpec {
         let mut options = crate::config::grammar::Options::default();
-        options.set("__source", format!("/repo/modules/x.txt:{}", name.len()),
-        );
+        options.set("__source", format!("/repo/modules/x.txt:{}", name.len()));
         crate::core::PackageSpec {
             name: name.into(),
             backend: backend.into(),
@@ -307,7 +306,9 @@ mod tests {
         let mut state = crate::model::DesiredState::default();
         state.vars.insert("gpu".to_string(), Value::Bool(true));
         state.vars.insert("cores".to_string(), Value::Num(8.0));
-        state.vars.insert("host".to_string(), Value::Str("aria".into()));
+        state
+            .vars
+            .insert("host".to_string(), Value::Str("aria".into()));
         let json = Evaluation::of(&state, Path::new("/repo")).render().unwrap();
         assert!(json.contains("\"gpu\": true"), "{}", json);
         assert!(json.contains("\"cores\": 8.0"), "{}", json);

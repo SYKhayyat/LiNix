@@ -27,7 +27,6 @@
 //! unconditional. `ExtrasManager::in_effect` already answers "is this resource in place?" — the
 //! probe `check` and `plan` were given in round 3 — and the loop that places them never asks.
 
-
 use crate::harness::Fixture;
 
 /// The shared root, plus what these tests need in it.

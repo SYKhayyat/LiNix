@@ -459,12 +459,11 @@ fn the_refusal_scan_rejects_an_unwrapped_builder() {
     }
 
     // --- `enclosing_builder`: a fn returning a message is one; a fn returning an error is not.
-    let builder: Vec<String> =
-        "pub fn lockout_refusal(port: u16) -> String {\n    \
+    let builder: Vec<String> = "pub fn lockout_refusal(port: u16) -> String {\n    \
          format!(\"refusing to apply the firewall change: port {}\", port)\n}"
-            .lines()
-            .map(|l| l.to_string())
-            .collect();
+        .lines()
+        .map(|l| l.to_string())
+        .collect();
     assert_eq!(
         enclosing_builder(&builder, 1).as_deref(),
         Some("lockout_refusal"),
@@ -495,13 +494,19 @@ fn the_refusal_scan_rejects_an_unwrapped_builder() {
 
     // --- `call_sites`: the wrap above, the wrap below, the missing wrap, and the exclusions.
     let sources = vec![
-        planted("good_above.rs", "    return Err(Error::Refused(lockout_refusal(port)));"),
+        planted(
+            "good_above.rs",
+            "    return Err(Error::Refused(lockout_refusal(port)));",
+        ),
         planted(
             "good_below.rs",
             "    match lockout_refusal(port) {\n        \
              Some(m) => return Err(Error::Refused(m)),\n        None => {}\n    }",
         ),
-        planted("bad.rs", "    return Err(Error::Validation(lockout_refusal(port)));"),
+        planted(
+            "bad.rs",
+            "    return Err(Error::Validation(lockout_refusal(port)));",
+        ),
     ];
     let sites = call_sites(&sources, "lockout_refusal");
     assert_eq!(
@@ -522,7 +527,10 @@ fn the_refusal_scan_rejects_an_unwrapped_builder() {
 
     let excluded = vec![
         planted("def.rs", "pub fn lockout_refusal(port: u16) -> String {"),
-        planted("comment.rs", "    // lockout_refusal(port) used to live here"),
+        planted(
+            "comment.rs",
+            "    // lockout_refusal(port) used to live here",
+        ),
         planted(
             "tests.rs",
             "#[cfg(test)]\nmod t {\n    fn x() { lockout_refusal(1); }\n}",

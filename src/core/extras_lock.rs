@@ -292,8 +292,11 @@ mod tests {
     fn a_scoped_setting_is_a_different_row_from_an_unscoped_one() {
         let mut system = Options::default();
         system.insert("scope", "system");
-        let scoped = extra_key(&Statement::Setting("org.gnome.desktop/theme".into(), system))
-            .expect("a setting is an extra");
+        let scoped = extra_key(&Statement::Setting(
+            "org.gnome.desktop/theme".into(),
+            system,
+        ))
+        .expect("a setting is an extra");
         assert_eq!(
             scoped.to_string(),
             "setting:org.gnome.desktop/theme@scope=system"

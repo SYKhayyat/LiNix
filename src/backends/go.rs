@@ -184,7 +184,12 @@ impl Installable for GoInstallable {
         Ok(())
     }
 
-    async fn remove(&self, names: &[String], _sudo: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
+    async fn remove(
+        &self,
+        names: &[String],
+        _sudo: bool,
+        _reaped: crate::app::sync::guard::Reaped,
+    ) -> Result<()> {
         // Go has no uninstaller; removal deletes the installed binary. Convergent: a binary
         // that is already gone is treated as successfully removed.
         let dir = self.core.bin_dir().await?;

@@ -93,8 +93,10 @@ pub fn parse_zypper_search(output: &str) -> ParseResult {
                 }
 
                 let mut p = Package::new(name, "zypper");
-                p.properties.insert("summary".to_string(), summary.to_string());
-                p.properties.insert("status_raw".to_string(), status.to_string());
+                p.properties
+                    .insert("summary".to_string(), summary.to_string());
+                p.properties
+                    .insert("status_raw".to_string(), status.to_string());
 
                 // If status contains 'i', it's already installed
                 if status.contains('i') {

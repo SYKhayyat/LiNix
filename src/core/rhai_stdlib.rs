@@ -30,7 +30,9 @@ const HTTP_TIMEOUT_SECS: u64 = 30;
 pub fn engine(tag: &'static str) -> Engine {
     let mut engine = Engine::new();
     engine.set_max_operations(MAX_OPERATIONS);
-    engine.register_fn("print", move |msg: &str| tracing::info!("[{}] {}", tag, msg));
+    engine.register_fn("print", move |msg: &str| {
+        tracing::info!("[{}] {}", tag, msg)
+    });
     register_stdlib(&mut engine);
     engine
 }

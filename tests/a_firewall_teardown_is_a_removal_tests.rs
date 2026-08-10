@@ -36,7 +36,11 @@ fn the_token_cannot_be_minted_by_a_caller_who_would_rather_not_ask() {
     // left open: no `Default`, and a scope that survives the crossing so a refusal can name the
     // command a user typed.
     assert_eq!(
-        Reaped::for_reason(GuardScope::PurgeUndeclared, "scope is carried, not inferred").scope(),
+        Reaped::for_reason(
+            GuardScope::PurgeUndeclared,
+            "scope is carried, not inferred"
+        )
+        .scope(),
         GuardScope::PurgeUndeclared
     );
 }

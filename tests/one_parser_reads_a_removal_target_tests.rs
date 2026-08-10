@@ -145,8 +145,7 @@ fn only_the_grammar_decides_what_opens_a_block() {
         scanned += 1;
         // `grammar/mod.rs` holds the two readers; `statement.rs` parses a *statement's* trailing
         // brace as part of a declaration, which is a different question about the same byte.
-        let is_the_reader =
-            path.ends_with(r"grammar\mod.rs") || path.ends_with("grammar/mod.rs");
+        let is_the_reader = path.ends_with(r"grammar\mod.rs") || path.ends_with("grammar/mod.rs");
         for (i, line) in body.lines().enumerate() {
             if line.trim_start().starts_with("//") {
                 continue;

@@ -21,7 +21,6 @@
 //! Driven end to end against the real binary in a disposable config and data directory, because
 //! the defect is in what reaches a file descriptor and no unit test of a formatter can see that.
 
-
 use crate::harness::Fixture;
 
 impl Fixture {

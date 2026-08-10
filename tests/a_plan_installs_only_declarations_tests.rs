@@ -87,7 +87,10 @@ fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
 /// or the instrument fails on itself.
 fn source_file_count() -> usize {
     let mut files = Vec::new();
-    sources(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
+    sources(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut files,
+    );
     files.len()
 }
 

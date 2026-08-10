@@ -192,7 +192,11 @@ impl FlatpakInstallable {
             .installed_refs()
             .await?
             .into_iter()
-            .filter_map(|p| p.properties.get("channel").map(|c| (p.name.clone(), c.clone())))
+            .filter_map(|p| {
+                p.properties
+                    .get("channel")
+                    .map(|c| (p.name.clone(), c.clone()))
+            })
             .collect())
     }
 }
@@ -640,8 +644,10 @@ mod tests {
     }
 
     /// A backend over a mock that has been told nothing.
-    fn scripted_without_a_listing(
-    ) -> (Arc<FlatpakBackendCore>, Arc<crate::core::executor::MockExecutor>) {
+    fn scripted_without_a_listing() -> (
+        Arc<FlatpakBackendCore>,
+        Arc<crate::core::executor::MockExecutor>,
+    ) {
         let vfs = Arc::new(dashmap::DashMap::new());
         let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
         let exec = CommandExecutor::with_layer(
@@ -658,8 +664,12 @@ mod tests {
     }
 
     /// A backend wired to a scripted `flatpak list`.
-    fn scripted(listing: &str) -> (Arc<FlatpakBackendCore>, Arc<crate::core::executor::MockExecutor>)
-    {
+    fn scripted(
+        listing: &str,
+    ) -> (
+        Arc<FlatpakBackendCore>,
+        Arc<crate::core::executor::MockExecutor>,
+    ) {
         let vfs = Arc::new(dashmap::DashMap::new());
         let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
         mock.set_response(
@@ -763,9 +773,7 @@ mod tests {
 
         assert_eq!(
             mock.get_calls().await,
-            vec![
-                "flatpak --system install -y --noninteractive --or-update -- org.blender.Blender"
-            ]
+            vec!["flatpak --system install -y --noninteractive --or-update -- org.blender.Blender"]
         );
     }
 

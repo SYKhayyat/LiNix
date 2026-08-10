@@ -316,11 +316,7 @@ impl ProfileManager {
             )));
         }
         if crate::core::dry_run::active() {
-            crate::would!(
-                "would create profile '{}' at {}.",
-                name,
-                path.display()
-            );
+            crate::would!("would create profile '{}' at {}.", name, path.display());
             return Ok(());
         }
         tokio::fs::create_dir_all(self.layout.profiles_dir())

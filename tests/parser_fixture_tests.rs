@@ -79,7 +79,8 @@ fn the_npm_style_json_parser_reads_both_tools() {
     const PNPM: &str = include_str!("fixtures/pnpm/ls-global-json.txt");
 
     for (label, fixture, backend) in [("npm", NPM, "npm"), ("pnpm", PNPM, "pnpm")] {
-        let pkgs = language::parse_installed(backend, fixture).expect("a captured real listing parses");
+        let pkgs =
+            language::parse_installed(backend, fixture).expect("a captured real listing parses");
         let rows: Vec<(&str, Option<&str>)> = pkgs
             .iter()
             .map(|p| (p.name.as_str(), p.version.as_deref()))

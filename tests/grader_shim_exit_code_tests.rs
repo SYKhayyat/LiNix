@@ -17,7 +17,6 @@
 //! Every scoop verdict then rests on `ExitPolicy` string-matching stdout, which is one
 //! upstream wording change away from silence.
 
-
 /// Which interpreter LiNix would really launch this manager through.
 fn branch_for(mgr: &str) -> String {
     let (prog, argv) = linix::core::executor::effective_command(mgr, &["--version".to_string()]);

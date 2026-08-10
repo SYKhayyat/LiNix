@@ -245,8 +245,12 @@ mod tests {
         let adapters = dir.path().join("adapters");
         std::fs::create_dir_all(&adapters).unwrap();
         std::fs::create_dir_all(dir.path().join("locks")).unwrap();
-        std::fs::write(adapters.join("backends.toml"), "not toml at all
-").unwrap();
+        std::fs::write(
+            adapters.join("backends.toml"),
+            "not toml at all
+",
+        )
+        .unwrap();
         let layout = Layout::new(dir.path().to_path_buf(), dir.path().join("data"));
         let s = survey(&layout)
             .into_iter()
@@ -254,7 +258,10 @@ mod tests {
             .unwrap()
             .standing;
         assert!(matches!(s, Standing::Unapproved(_)), "{s:?}");
-        assert!(s.detail().is_some_and(|d| d.contains("linix lock")), "{s:?}");
+        assert!(
+            s.detail().is_some_and(|d| d.contains("linix lock")),
+            "{s:?}"
+        );
     }
 
     fn standing(files: &[(&str, &str)], name: &str) -> Standing {
@@ -281,7 +288,10 @@ mod tests {
         // no reader opens: no parse error, no warning, and the `mymgr:` line fails much later
         // with a message about an unknown backend.
         assert_eq!(
-            standing(&[("backends", "[[backends]]\nname = \"mymgr\"\n")], "backends"),
+            standing(
+                &[("backends", "[[backends]]\nname = \"mymgr\"\n")],
+                "backends"
+            ),
             Standing::NoRows
         );
     }

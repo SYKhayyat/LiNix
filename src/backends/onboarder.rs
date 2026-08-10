@@ -135,8 +135,9 @@ impl ParserSpec {
     /// U2's claim is that a custom backend is a first-class peer of a built-in. This is part of
     /// paying for that claim.
     pub fn parse(&self, output: &str, backend: &str) -> crate::parsers::ParseResult {
-        let unreadable =
-            |what: String| crate::parsers::or_unrecognised_json(backend, vec![], None, &what, output);
+        let unreadable = |what: String| {
+            crate::parsers::or_unrecognised_json(backend, vec![], None, &what, output)
+        };
 
         match self {
             ParserSpec::Lines { skip_prefixes } => {
@@ -845,10 +846,13 @@ pub fn load_custom_backends_from(
     let parsed: CustomBackendsFile = match toml::from_str(&content) {
         Ok(p) => p,
         Err(e) => {
-            warn!("{}", crate::app::adapters::cannot_use(
-                crate::app::adapters::surface("backends").expect("a declared surface"),
-                e,
-            ));
+            warn!(
+                "{}",
+                crate::app::adapters::cannot_use(
+                    crate::app::adapters::surface("backends").expect("a declared surface"),
+                    e,
+                )
+            );
             return 0;
         }
     };
@@ -978,7 +982,10 @@ pub fn register_custom_backends(
         // Registered either way — refusing a backend over a fixture would make writing one
         // riskier than writing none, which is the opposite of what the field is for.
         for line in fixture_disagreements(&def) {
-            warn!("Custom backend fixture disagrees with its own parser — {}", line);
+            warn!(
+                "Custom backend fixture disagrees with its own parser — {}",
+                line
+            );
         }
         reg.register(Arc::new(build_capabilities(def, exec)));
         count += 1;
@@ -1002,7 +1009,9 @@ pub(crate) fn parser_for(def: &CustomBackendDef) -> Arc<dyn OutputParser> {
         Some(reads) => Arc::new(crate::parsers::named::NamedParser::new(
             &def.name,
             reads,
-            def.searches.as_deref().and_then(crate::parsers::named::search),
+            def.searches
+                .as_deref()
+                .and_then(crate::parsers::named::search),
             def.essential_reads
                 .as_deref()
                 .and_then(crate::parsers::named::names),
@@ -1059,7 +1068,11 @@ pub fn fixture_disagreements(def: &CustomBackendDef) -> Vec<String> {
     }
 
     if let Some(bytes) = &fixture.search {
-        let got: Vec<String> = parser.parse_search(bytes).iter().map(as_expectation).collect();
+        let got: Vec<String> = parser
+            .parse_search(bytes)
+            .iter()
+            .map(as_expectation)
+            .collect();
         if got != fixture.expect_search {
             out.push(format!(
                 "{}: `search` fixture reads as {got:?}, row expects {:?}",
@@ -1289,7 +1302,6 @@ pub(crate) fn build_capabilities(
 mod tests {
     use super::*;
     use crate::core::LockFile;
-    
 
     #[test]
     fn a_name_the_prefix_grammar_already_spends_is_refused() {
@@ -1316,7 +1328,9 @@ mod tests {
             skip_prefixes: vec![],
             quoted: false,
         };
-        let pkgs = spec.parse("ripgrep 13.0.0\nbat 0.24.0\n", "custom").expect("this fixture parses");
+        let pkgs = spec
+            .parse("ripgrep 13.0.0\nbat 0.24.0\n", "custom")
+            .expect("this fixture parses");
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[0].name, "ripgrep");
         assert_eq!(pkgs[0].version.as_deref(), Some("13.0.0"));
@@ -1333,7 +1347,9 @@ mod tests {
             skip_prefixes: vec!["#".to_string()],
             quoted: false,
         };
-        let pkgs = spec.parse("NAME|VER\ngit|2.40\n# comment|x\ncurl|8.1\n", "c").expect("this fixture parses");
+        let pkgs = spec
+            .parse("NAME|VER\ngit|2.40\n# comment|x\ncurl|8.1\n", "c")
+            .expect("this fixture parses");
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[0].name, "git");
         assert_eq!(pkgs[1].name, "curl");
@@ -1381,7 +1397,9 @@ mod tests {
             skip_prefixes: vec![],
             quoted: true,
         };
-        let pkgs = spec.parse("git|\"2.40 (x64)\"\n", "c").expect("this fixture parses");
+        let pkgs = spec
+            .parse("git|\"2.40 (x64)\"\n", "c")
+            .expect("this fixture parses");
         assert_eq!(pkgs[0].version.as_deref(), Some("\"2.40 (x64)\""));
     }
 
@@ -1390,7 +1408,9 @@ mod tests {
         let spec = ParserSpec::Lines {
             skip_prefixes: vec!["==".to_string()],
         };
-        let pkgs = spec.parse("foo\n== legend\nbar\n\n", "c").expect("this fixture parses");
+        let pkgs = spec
+            .parse("foo\n== legend\nbar\n\n", "c")
+            .expect("this fixture parses");
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[0].name, "foo");
         assert_eq!(pkgs[1].name, "bar");
@@ -1418,7 +1438,9 @@ mod tests {
             name_key: default_name_key(),
             version_key: None,
         };
-        let pkgs = spec.parse(r#"{"numpy":[],"pandas":[]}"#, "c").expect("this fixture parses");
+        let pkgs = spec
+            .parse(r#"{"numpy":[],"pandas":[]}"#, "c")
+            .expect("this fixture parses");
         assert_eq!(pkgs.len(), 2);
         assert!(pkgs.iter().any(|p| p.name == "numpy"));
     }
@@ -1430,7 +1452,9 @@ mod tests {
             name_group: 1,
             version_group: Some(2),
         };
-        let pkgs = spec.parse("exa v0.10.1\nripgrep v13.0.0\n", "c").expect("this fixture parses");
+        let pkgs = spec
+            .parse("exa v0.10.1\nripgrep v13.0.0\n", "c")
+            .expect("this fixture parses");
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[1].name, "ripgrep");
         assert_eq!(pkgs[1].version.as_deref(), Some("13.0.0"));
@@ -1659,7 +1683,14 @@ mod tests {
         caps.as_queryable().unwrap().list_installed().await.unwrap();
         caps.as_installable()
             .unwrap()
-            .remove(&["22/tcp".to_string()], false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"))
+            .remove(
+                &["22/tcp".to_string()],
+                false,
+                crate::app::sync::guard::Reaped::for_reason(
+                    crate::app::sync::guard::GuardScope::Remove,
+                    "a unit test of the effector itself",
+                ),
+            )
             .await
             .unwrap();
 

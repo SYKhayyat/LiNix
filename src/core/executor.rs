@@ -264,7 +264,9 @@ fn first_runnable(cmd: &str) -> Option<PathBuf> {
 }
 
 fn has_bytes(path: &Path) -> bool {
-    std::fs::metadata(path).map(|m| m.len() > 0).unwrap_or(false)
+    std::fs::metadata(path)
+        .map(|m| m.len() > 0)
+        .unwrap_or(false)
 }
 
 pub fn program_exists(cmd: &str) -> bool {
@@ -877,7 +879,11 @@ impl MockExecutor {
     /// Registered this way, the stub answers if it is ever reached — so a product that asks the
     /// wrong question gets a wrong-shaped answer rather than empty success — and going unreached
     /// is asserted rather than assumed.
-    pub fn set_response_that_must_not_be_used(&self, cmd_pattern: &str, response: Result<StdOutput>) {
+    pub fn set_response_that_must_not_be_used(
+        &self,
+        cmd_pattern: &str,
+        response: Result<StdOutput>,
+    ) {
         self.responses.insert(cmd_pattern.to_string(), response);
         self.forbidden.insert(cmd_pattern.to_string(), ());
     }
@@ -937,7 +943,10 @@ impl MockExecutor {
   ")
         );
 
-        if self.allow_unmatched.load(std::sync::atomic::Ordering::Relaxed) {
+        if self
+            .allow_unmatched
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return;
         }
         let unused = self.unmatched_registrations();

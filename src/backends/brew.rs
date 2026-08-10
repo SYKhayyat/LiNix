@@ -87,7 +87,12 @@ impl Installable for BrewInstallable {
         Ok(())
     }
 
-    async fn remove(&self, names: &[String], _sudo: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
+    async fn remove(
+        &self,
+        names: &[String],
+        _sudo: bool,
+        _reaped: crate::app::sync::guard::Reaped,
+    ) -> Result<()> {
         if names.is_empty() {
             return Ok(());
         }
@@ -195,8 +200,10 @@ impl Queryable for BrewQueryable {
         // Fallback: use the cellar path
         if !pkg.properties.contains_key("install_path") {
             if let Some(cellar) = first["cellar"].as_str() {
-                pkg.properties
-                    .insert("install_path".to_string(), format!("{}/{}", cellar, pkg_name));
+                pkg.properties.insert(
+                    "install_path".to_string(),
+                    format!("{}/{}", cellar, pkg_name),
+                );
             }
         }
         Ok(Some(pkg))
@@ -362,7 +369,11 @@ mod tests {
             }
             .into()),
         );
-        let found = BrewQueryable { core }.info("jq").await.unwrap().expect("installed");
+        let found = BrewQueryable { core }
+            .info("jq")
+            .await
+            .unwrap()
+            .expect("installed");
         assert_eq!(
             found.version.as_deref(),
             Some("1.6"),
@@ -374,7 +385,10 @@ mod tests {
             "the keg prefix still reaches the caller"
         );
         assert_eq!(
-            found.properties.get("installed_as_dependency").map(String::as_str),
+            found
+                .properties
+                .get("installed_as_dependency")
+                .map(String::as_str),
             Some("false")
         );
     }
@@ -392,7 +406,14 @@ mod tests {
             .await
             .unwrap();
         BrewInstallable { core: core.clone() }
-            .remove(&["ripgrep".to_string()], false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"))
+            .remove(
+                &["ripgrep".to_string()],
+                false,
+                crate::app::sync::guard::Reaped::for_reason(
+                    crate::app::sync::guard::GuardScope::Remove,
+                    "a unit test of the effector itself",
+                ),
+            )
             .await
             .unwrap();
         BrewQueryable { core: core.clone() }
@@ -461,7 +482,14 @@ mod tests {
             .await
             .unwrap();
         BrewInstallable { core: core.clone() }
-            .remove(&["jq".to_string(), "ripgrep".to_string()], false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"))
+            .remove(
+                &["jq".to_string(), "ripgrep".to_string()],
+                false,
+                crate::app::sync::guard::Reaped::for_reason(
+                    crate::app::sync::guard::GuardScope::Remove,
+                    "a unit test of the effector itself",
+                ),
+            )
             .await
             .unwrap();
 

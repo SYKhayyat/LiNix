@@ -125,7 +125,10 @@ async fn every_field_the_summary_reads_survives_the_round_trip() {
         .expect("the failed operation was not recorded");
     assert!(!failed.success);
     assert_eq!(failed.error.as_deref(), Some("exit 100"));
-    assert_eq!(failed.retry_count, 3, "the retry count is what makes a flaky manager visible");
+    assert_eq!(
+        failed.retry_count, 3,
+        "the retry count is what makes a flaky manager visible"
+    );
     assert_eq!(
         failed.batch_size, 4,
         "batch_size is how the summary tells one command covering four packages from four \
@@ -144,7 +147,10 @@ async fn every_field_the_summary_reads_survives_the_round_trip() {
         .iter()
         .find(|(b, ..)| b == "apt")
         .expect("apt is missing from the rollup");
-    assert_eq!(apt.1, 2, "apt's two operations must roll up as two, not one");
+    assert_eq!(
+        apt.1, 2,
+        "apt's two operations must roll up as two, not one"
+    );
     assert!(
         rollup.iter().any(|(b, ..)| b == "brew"),
         "a second backend must appear in its own row: {rollup:?}"
@@ -170,8 +176,7 @@ async fn a_template_whose_source_moved_on_is_planned_as_a_change() {
         .unwrap();
 
     let mut options = linix::config::grammar::Options::default();
-    options.set("target", target_path.to_string_lossy().to_string(),
-    );
+    options.set("target", target_path.to_string_lossy().to_string());
     options.set("template", "true".to_string());
 
     let spec = PackageSpec {

@@ -366,7 +366,11 @@ mod tests {
     #[test]
     fn a_py_provider_finds_this_machines_python_whatever_it_is_called() {
         let argv = interpreter_argv(Path::new("vars.py"));
-        let first = argv.first().expect("an interpreter").to_string_lossy().into_owned();
+        let first = argv
+            .first()
+            .expect("an interpreter")
+            .to_string_lossy()
+            .into_owned();
         match crate::model::script::interpreter_named("python3") {
             Some(_) => assert!(
                 Path::new(&first).is_file(),
@@ -381,7 +385,11 @@ mod tests {
     /// reads the provider as an expression rather than running it as a file.
     #[test]
     fn resolving_the_interpreter_keeps_the_flags_that_follow_it() {
-        for (file, flag) in [("vars.ps1", "-File"), ("vars.bat", "/c"), ("vars.cmd", "/c")] {
+        for (file, flag) in [
+            ("vars.ps1", "-File"),
+            ("vars.bat", "/c"),
+            ("vars.cmd", "/c"),
+        ] {
             let argv = interpreter_argv(Path::new(file));
             assert_eq!(argv.len(), 2, "{}: {:?}", file, argv);
             assert_eq!(argv[1].to_string_lossy(), flag, "{}", file);

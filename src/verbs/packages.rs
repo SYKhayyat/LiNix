@@ -1,6 +1,6 @@
-use crate::verbs::sync::{handle_sync, SyncMode};
 use crate::model::Edit;
 use crate::verbs::prelude::*;
+use crate::verbs::sync::{handle_sync, SyncMode};
 
 /// `teleport PKG BACKEND` — move a declared package to another manager, then sync (II.8).
 pub async fn handle_teleport(app: &App, package: &str, backend: &str) -> Result<()> {
@@ -15,7 +15,9 @@ pub async fn handle_teleport(app: &App, package: &str, backend: &str) -> Result<
     if app.config.dry_run {
         crate::would_print!(
             "would move `{}` to `{}:{}` and sync.",
-            package, backend, package
+            package,
+            backend,
+            package
         );
         return Ok(());
     }
@@ -690,10 +692,7 @@ pub async fn handle_hold(app: &App, packages: &[String]) -> Result<()> {
             n
         );
     } else {
-        crate::would_print!(
-            "would hold {} package(s). Nothing was recorded.",
-            n
-        );
+        crate::would_print!("would hold {} package(s). Nothing was recorded.", n);
     }
     Ok(())
 }
@@ -713,10 +712,7 @@ pub async fn handle_unhold(app: &App, packages: &[String]) -> Result<()> {
     if recorded {
         println!("Released {} hold(s).", n);
     } else {
-        crate::would_print!(
-            "would release {} hold(s). Nothing was recorded.",
-            n
-        );
+        crate::would_print!("would release {} hold(s). Nothing was recorded.", n);
     }
     Ok(())
 }
@@ -906,9 +902,8 @@ pub async fn handle_info(app: &App, package: &str) -> Result<()> {
         // `backend:name` and a hand-rolled split is a bug by the same rule that made it one:
         // `web:https://example/x.deb` has three colons and the last of them is inside the URL,
         // so the suffix after it is `//example/x.deb` — a `linix search` line nobody can use.
-        let (_, bare) = crate::config::parser::split_removal_target(package, |b| {
-            app.registry.get(b).is_some()
-        });
+        let (_, bare) =
+            crate::config::parser::split_removal_target(package, |b| app.registry.get(b).is_some());
         println!(
             "'{}' is not installed on this machine, so there is nothing to describe.\n  \
              `linix search {}` looks for it in the managers you use.",

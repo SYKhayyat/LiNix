@@ -286,7 +286,9 @@ mod tests {
         // The control: nothing is a shim yet, so the first PATH entry wins as it always has.
         let decoy = bin_dir.join(deployed_name("jq"));
         tokio::fs::create_dir_all(&bin_dir).await.unwrap();
-        tokio::fs::write(&decoy, b"someone else's jq").await.unwrap();
+        tokio::fs::write(&decoy, b"someone else's jq")
+            .await
+            .unwrap();
         let path = std::env::join_paths([&bin_dir, &real_dir]).unwrap();
         assert_eq!(
             real_program_on("jq", Some(path.clone())).await,

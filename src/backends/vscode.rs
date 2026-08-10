@@ -141,7 +141,12 @@ impl Installable for VscodeInstallable {
         Ok(())
     }
 
-    async fn remove(&self, names: &[String], _: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
+    async fn remove(
+        &self,
+        names: &[String],
+        _: bool,
+        _reaped: crate::app::sync::guard::Reaped,
+    ) -> Result<()> {
         if names.is_empty() {
             return Ok(());
         }
@@ -274,7 +279,8 @@ impl Searchable for VscodeSearchable {
 
                 let mut p = Package::new(format!("{}.{}", publisher, name), "vscode");
                 if let Some(desc) = ext["shortDescription"].as_str() {
-                    p.properties.insert("description".to_string(), desc.to_string());
+                    p.properties
+                        .insert("description".to_string(), desc.to_string());
                 }
                 results.push(p);
             }
@@ -304,7 +310,12 @@ pub fn register(
 mod tests {
     use super::*;
 
-    fn vscode_with(list_output: &str) -> (Arc<VscodeBackendCore>, Arc<crate::core::executor::MockExecutor>) {
+    fn vscode_with(
+        list_output: &str,
+    ) -> (
+        Arc<VscodeBackendCore>,
+        Arc<crate::core::executor::MockExecutor>,
+    ) {
         let vfs = Arc::new(dashmap::DashMap::new());
         let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
         mock.set_response(
@@ -345,9 +356,16 @@ mod tests {
             "info claimed an uninstalled extension was present — the planner skips its install"
         );
         // One that really is installed, at the version the machine has and not the latest one.
-        let found = q.info("ms-python.python").await.unwrap().expect("installed");
+        let found = q
+            .info("ms-python.python")
+            .await
+            .unwrap()
+            .expect("installed");
         assert_eq!(found.version.as_deref(), Some("2024.2.1"));
-        assert_eq!(found.properties.get("publisher").map(String::as_str), Some("ms-python"));
+        assert_eq!(
+            found.properties.get("publisher").map(String::as_str),
+            Some("ms-python")
+        );
 
         // Extension ids are case-insensitive on the marketplace, so a manifest that spells the
         // publisher's name differently still has to resolve to the installed row.
@@ -387,7 +405,14 @@ mod tests {
             .await
             .unwrap();
         VscodeInstallable { core: core.clone() }
-            .remove(&["ms-python.python".to_string()], false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"))
+            .remove(
+                &["ms-python.python".to_string()],
+                false,
+                crate::app::sync::guard::Reaped::for_reason(
+                    crate::app::sync::guard::GuardScope::Remove,
+                    "a unit test of the effector itself",
+                ),
+            )
             .await
             .unwrap();
 
@@ -442,7 +467,10 @@ mod tests {
                     "tamasfe.even-better-toml".to_string(),
                 ],
                 false,
-                crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"),
+                crate::app::sync::guard::Reaped::for_reason(
+                    crate::app::sync::guard::GuardScope::Remove,
+                    "a unit test of the effector itself",
+                ),
             )
             .await
             .unwrap();

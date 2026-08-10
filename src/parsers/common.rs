@@ -103,7 +103,8 @@ mod tests {
         // `apk search -v` adds ` - description` after the token. Splitting on whitespace
         // alone left the name as `jq-1.7.1-r0`, which never equals the name a line asked
         // for — so apk answered "I don't have it" for everything it had.
-        let res = parse_dash_version_list("jq-1.7.1-r0 - Command-line JSON processor\n", "apk").expect("this fixture parses");
+        let res = parse_dash_version_list("jq-1.7.1-r0 - Command-line JSON processor\n", "apk")
+            .expect("this fixture parses");
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].name, "jq");
         assert_eq!(res[0].version.as_deref(), Some("1.7.1-r0"));
@@ -115,7 +116,8 @@ mod tests {
         // `xz` — and this is the installed lister, so `info()` could never find the real
         // package and `remove` silently did nothing.
         let res =
-            parse_dash_version_list("xz-libs-dev\npy3-requests-2.31.0-r0\nbash-5.2.15\n", "apk").expect("this fixture parses");
+            parse_dash_version_list("xz-libs-dev\npy3-requests-2.31.0-r0\nbash-5.2.15\n", "apk")
+                .expect("this fixture parses");
         assert_eq!(res[0].name, "xz-libs-dev");
         assert_eq!(res[0].version, None);
         assert_eq!(res[1].name, "py3-requests");

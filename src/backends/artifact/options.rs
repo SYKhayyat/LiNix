@@ -31,11 +31,15 @@ impl ArtifactOptions {
             None
         } else {
             Some(
-                FormatOrder::parse_all(raw.iter().map(String::as_str).filter(|s| !s.trim().is_empty()))
-                    .map_err(|e| e.to_string())?
-                    // A `@formats=` the user wrote is an instruction, and the tie-break honours
-                    // it over an asset that merely names the machine well (D2).
-                    .as_user_specified(),
+                FormatOrder::parse_all(
+                    raw.iter()
+                        .map(String::as_str)
+                        .filter(|s| !s.trim().is_empty()),
+                )
+                .map_err(|e| e.to_string())?
+                // A `@formats=` the user wrote is an instruction, and the tie-break honours
+                // it over an asset that merely names the machine well (D2).
+                .as_user_specified(),
             )
         };
 

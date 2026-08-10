@@ -51,7 +51,10 @@ impl Dialect {
         }
         if trimmed.starts_with("#rhai") {
             let rest_of_script = trimmed.find('\n').map(|i| &trimmed[i..]).unwrap_or("");
-            return (Dialect::Rhai, format!("{}{}", &code[..lead], rest_of_script));
+            return (
+                Dialect::Rhai,
+                format!("{}{}", &code[..lead], rest_of_script),
+            );
         }
         (Dialect::Lua, code.to_string())
     }
@@ -422,7 +425,10 @@ mod tests {
             )
         });
 
-        hooks.run_hook("after_install", "pkg").await.expect("the hook ran");
+        hooks
+            .run_hook("after_install", "pkg")
+            .await
+            .expect("the hook ran");
         let wrote = std::fs::read_to_string(&marker).expect("the hook wrote its marker");
         assert_eq!(wrote.trim(), "pkg");
     }
@@ -451,7 +457,10 @@ mod tests {
             marker.to_string_lossy().replace('\\', "/")
         ));
 
-        hooks.run_hook("after_install", "pkg").await.expect("the hook ran");
+        hooks
+            .run_hook("after_install", "pkg")
+            .await
+            .expect("the hook ran");
         let wrote = std::fs::read_to_string(&marker).expect("python wrote its marker");
         assert_eq!(wrote.trim(), "pkg");
     }

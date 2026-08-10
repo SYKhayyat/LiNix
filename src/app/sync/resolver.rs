@@ -464,8 +464,8 @@ impl<'a> StateResolver<'a> {
             let active = self.active_override.clone();
             let priority = priority.clone();
             tokio::task::spawn_blocking(move || {
-                let mut r = crate::model::Resolver::new(&layout, &known, &priority)
-                    .with_facts(facts);
+                let mut r =
+                    crate::model::Resolver::new(&layout, &known, &priority).with_facts(facts);
                 if let Some(body) = active {
                     r = r.as_if_active(body);
                 }
@@ -505,8 +505,9 @@ impl<'a> StateResolver<'a> {
                 // character validator's refusals are the ones a user can least find by
                 // looking — the character at fault is a bidi override, a NUL or an escape —
                 // and they were the only ones arriving without a file and a line.
-                Validator::validate_package_name_for(&spec.name, &spec.backend)
-                    .map_err(|e| located(e, spec.options.one("__source").map(String::from).as_ref()))?;
+                Validator::validate_package_name_for(&spec.name, &spec.backend).map_err(|e| {
+                    located(e, spec.options.one("__source").map(String::from).as_ref())
+                })?;
             }
         }
 
@@ -777,8 +778,7 @@ impl<'a> StateResolver<'a> {
                 one.selector = crate::config::grammar::Selector::Name(name);
                 // The line that produced it, so `why` can say a pattern put this here rather
                 // than leaving a package nobody can find in any file.
-                one.options
-                    .set("__from_regex".to_string(), pattern.clone());
+                one.options.set("__from_regex".to_string(), pattern.clone());
                 let stmt = if present {
                     Statement::Package(one)
                 } else {

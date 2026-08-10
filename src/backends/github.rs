@@ -977,7 +977,12 @@ impl Installable for GithubInstallable {
         Ok(())
     }
 
-    async fn remove(&self, names: &[String], _: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
+    async fn remove(
+        &self,
+        names: &[String],
+        _: bool,
+        _reaped: crate::app::sync::guard::Reaped,
+    ) -> Result<()> {
         let mut state = self.core.load_state_internal().await;
         let mut ledger = ArtifactLedger::load(&self.core.locks_file)?;
         let mut failures = Vec::new();

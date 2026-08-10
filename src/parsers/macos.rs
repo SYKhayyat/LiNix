@@ -101,7 +101,8 @@ pub fn parse_macports_search(output: &str) -> Vec<Package> {
             if let Some((_, desc)) = line.split_once("): ") {
                 let desc = desc.trim();
                 if !desc.is_empty() {
-                    p.properties.insert("description".to_string(), desc.to_string());
+                    p.properties
+                        .insert("description".to_string(), desc.to_string());
                 }
             }
             Some(p)

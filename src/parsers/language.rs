@@ -745,7 +745,10 @@ mod composer_installed_tests {
             r#"{"installed":[]}"#,
             "\n"
         );
-        assert_eq!(parse_installed("composer", empty).expect("readable"), vec![]);
+        assert_eq!(
+            parse_installed("composer", empty).expect("readable"),
+            vec![]
+        );
     }
 }
 

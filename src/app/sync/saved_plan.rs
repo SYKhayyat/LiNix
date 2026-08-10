@@ -159,7 +159,6 @@ pub fn hash_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn spec(backend: &str, name: &str, opt: Option<(&str, &str)>) -> PackageSpec {
         let mut options = crate::config::grammar::Options::default();
@@ -203,7 +202,8 @@ mod tests {
             &crate::app::apply::ResourceChanges::default(),
             Some(1),
         );
-        plan.vars.insert("role".to_string(), Value::Str("travel".into()));
+        plan.vars
+            .insert("role".to_string(), Value::Str("travel".into()));
         plan.vars.insert("cores".to_string(), Value::Num(8.0));
         let json = serde_json::to_string(&plan).unwrap();
         let back: SavedPlan = serde_json::from_str(&json).unwrap();

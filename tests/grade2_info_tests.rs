@@ -52,7 +52,6 @@
 //! was a D. The rule the fix has to satisfy: **a read command answers about the machine, and two
 //! read commands never contradict each other about it.**
 
-
 use crate::harness::Fixture;
 
 /// H-2. One question — "is `nosuchbackend` a manager?" — answered three ways by one binary.

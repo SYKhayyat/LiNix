@@ -1,6 +1,6 @@
 use crate::verbs::plan::compute_full_changes;
-use crate::verbs::sync::{handle_sync, SyncMode};
 use crate::verbs::prelude::*;
+use crate::verbs::sync::{handle_sync, SyncMode};
 
 pub async fn handle_snapshot(app: &App, cmd: &SnapshotCommand) -> Result<()> {
     match cmd {
@@ -223,10 +223,9 @@ pub async fn handle_run(
     let mut parts: Vec<String> = command.split_whitespace().map(str::to_string).collect();
     parts.extend(trailing.iter().cloned());
     let Some((bin, args)) = parts.split_first() else {
-        return Err(crate::core::Error::Validation(
-            "`linix run` needs a command to run".into(),
-        )
-        .into());
+        return Err(
+            crate::core::Error::Validation("`linix run` needs a command to run".into()).into(),
+        );
     };
     app.runner()
         .run(packages, bin, args)

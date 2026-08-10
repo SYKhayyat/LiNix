@@ -42,7 +42,6 @@
 //! about them. E29 was a stale exemption naming a verb that no longer existed; this is the same
 //! failure with a live verb and a false reason.
 
-
 use crate::harness::Fixture;
 
 impl Fixture {

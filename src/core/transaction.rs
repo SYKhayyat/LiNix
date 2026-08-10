@@ -453,7 +453,9 @@ impl Transaction {
                         // used to arrive as the manager's own words about a command the user
                         // never asked for (`Q34`).
                         let origin = match &self.graph[task_data.node_index] {
-                            GraphAction::Install(s) => s.options.one("__source").map(str::to_string),
+                            GraphAction::Install(s) => {
+                                s.options.one("__source").map(str::to_string)
+                            }
                             GraphAction::Remove { .. } => None,
                         };
                         first_failure =
@@ -1086,9 +1088,7 @@ impl Transaction {
                             // work to do again — the transaction's own comment at `:637` claims
                             // rollback "puts this back", and removing something nothing asked it
                             // to remove is the opposite.
-                            if self.plan_intends_present(&spec.backend, &spec.name)
-                                == Some(true)
-                            {
+                            if self.plan_intends_present(&spec.backend, &spec.name) == Some(true) {
                                 info!(
                                     "rollback is leaving {}:{} installed — it succeeded and the                                      manifest still declares it, so removing it would only give                                      the next sync the same work to do again.",
                                     spec.backend, spec.name
@@ -1128,7 +1128,11 @@ impl Transaction {
                                 "rollback checks `protection_of` itself at transaction.rs:993,                                  and compensates only work this run performed",
                             );
                             if let Err(e) = h
-                                .remove(std::slice::from_ref(&spec.name), b.sudo_for_write(), reaped)
+                                .remove(
+                                    std::slice::from_ref(&spec.name),
+                                    b.sudo_for_write(),
+                                    reaped,
+                                )
                                 .await
                             {
                                 error!(
@@ -1355,7 +1359,12 @@ mod batching_tests {
             self.widest.fetch_max(specs.len(), Ordering::SeqCst);
             Ok(())
         }
-        async fn remove(&self, names: &[String], _sudo: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
+        async fn remove(
+            &self,
+            names: &[String],
+            _sudo: bool,
+            _reaped: crate::app::sync::guard::Reaped,
+        ) -> Result<()> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.widest.fetch_max(names.len(), Ordering::SeqCst);
             Ok(())
@@ -1497,7 +1506,11 @@ mod batching_tests {
             S::ExpirySweep,
             S::Heal,
         ] {
-            assert!(scope.reconciles(), "{} removes what nothing declares", scope.as_str());
+            assert!(
+                scope.reconciles(),
+                "{} removes what nothing declares",
+                scope.as_str()
+            );
         }
         // A rebuild's removal phase is the first half of a reinstall of DECLARED packages,
         // split into two transactions so the Remove and the Install cannot race in one graph.

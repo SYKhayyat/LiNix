@@ -913,7 +913,7 @@ mod tests {
         after.insert("role".to_string(), str_val("desktop")); // changed
         after.insert("os".to_string(), str_val("linux")); // case only — not a change
         after.insert("cores".to_string(), Value::Num(8.0)); // added
-                                                       // gpu is gone
+                                                            // gpu is gone
         let d = diff(&before, &after);
         assert_eq!(
             d.len(),

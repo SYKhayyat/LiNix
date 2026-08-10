@@ -367,7 +367,6 @@ impl SnapshotRestore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn reg(pkgs: &[(&str, &str, &str)]) -> StateRegistry {
         let mut r = StateRegistry::default();

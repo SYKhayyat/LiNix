@@ -31,7 +31,11 @@ async fn test_lease_expiration_pruning_logic() {
         "brew",
         "expired-binary",
         Some("1.0.0".into()),
-        { let mut o = linix::config::grammar::Options::default(); o.insert("lease".to_string(), "1h"); o },
+        {
+            let mut o = linix::config::grammar::Options::default();
+            o.insert("lease".to_string(), "1h");
+            o
+        },
         "test",
         false,
     );

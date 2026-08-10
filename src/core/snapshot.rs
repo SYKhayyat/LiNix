@@ -558,10 +558,13 @@ fn config_snapshot_defs(config: &Config) -> Vec<SnapshotProviderDef> {
     match toml::from_str::<SnapshotProviderFile>(&content) {
         Ok(f) => adapter::usable(f.snapshot),
         Err(e) => {
-            warn!("{}", crate::app::adapters::cannot_use(
-                crate::app::adapters::surface("snapshot").expect("a declared surface"),
-                e,
-            ));
+            warn!(
+                "{}",
+                crate::app::adapters::cannot_use(
+                    crate::app::adapters::surface("snapshot").expect("a declared surface"),
+                    e,
+                )
+            );
             Vec::new()
         }
     }

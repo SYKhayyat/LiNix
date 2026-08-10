@@ -63,10 +63,24 @@ async fn a_purge_takes_this_sessions_packages_and_leaves_another_sessions() {
         state.add("brew", "git", None, Default::default(), "test", false);
 
         state.active_session_id = Some(target_session_id.to_string());
-        state.add("brew", "temp-tool-1", None, Default::default(), "test", true);
+        state.add(
+            "brew",
+            "temp-tool-1",
+            None,
+            Default::default(),
+            "test",
+            true,
+        );
 
         state.active_session_id = Some(other_session_id.to_string());
-        state.add("brew", "temp-tool-2", None, Default::default(), "test", true);
+        state.add(
+            "brew",
+            "temp-tool-2",
+            None,
+            Default::default(),
+            "test",
+            true,
+        );
     }
 
     kernel.mock_executor.set_response(

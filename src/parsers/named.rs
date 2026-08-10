@@ -324,7 +324,9 @@ mod tests {
             search("names_only"),
             None,
         );
-        let pkgs = p.parse_installed("zlib 1.3\n").expect("this fixture parses");
+        let pkgs = p
+            .parse_installed("zlib 1.3\n")
+            .expect("this fixture parses");
         assert_eq!(pkgs[0].backend, "spack");
         assert_eq!(pkgs[0].name, "zlib");
         assert_eq!(pkgs[0].version.as_deref(), Some("1.3"));

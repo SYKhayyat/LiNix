@@ -234,7 +234,15 @@ mod tests {
             .await
             .unwrap();
 
-        mgr.remove_shim("jq", crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself")).await.unwrap();
+        mgr.remove_shim(
+            "jq",
+            crate::app::sync::guard::Reaped::for_reason(
+                crate::app::sync::guard::GuardScope::Remove,
+                "a unit test of the effector itself",
+            ),
+        )
+        .await
+        .unwrap();
 
         assert!(
             victim.exists(),
@@ -270,7 +278,15 @@ mod tests {
                  reporting would call a placed shim missing"
             );
 
-            mgr.remove_shim(name, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself")).await.unwrap();
+            mgr.remove_shim(
+                name,
+                crate::app::sync::guard::Reaped::for_reason(
+                    crate::app::sync::guard::GuardScope::Remove,
+                    "a unit test of the effector itself",
+                ),
+            )
+            .await
+            .unwrap();
             assert!(
                 !deployed.exists(),
                 "`{name}` survived removal at {deployed:?} — removal looked somewhere else and \
@@ -327,7 +343,15 @@ mod tests {
         });
         tokio::fs::copy(&exe, &shim).await.unwrap();
 
-        mgr.remove_shim("ripgrep", crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself")).await.unwrap();
+        mgr.remove_shim(
+            "ripgrep",
+            crate::app::sync::guard::Reaped::for_reason(
+                crate::app::sync::guard::GuardScope::Remove,
+                "a unit test of the effector itself",
+            ),
+        )
+        .await
+        .unwrap();
 
         assert!(!shim.exists(), "a real shim must still be removable");
     }

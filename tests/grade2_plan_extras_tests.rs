@@ -61,11 +61,7 @@ impl Fixture {
             let src = sources.join(format!("p{i}"));
             let dst = self.root.join("dest").join(format!("p{i}"));
             std::fs::write(&src, format!("content-{i}\n")).unwrap();
-            module.push_str(&format!(
-                "link:{} @target={}\n",
-                decl(&src),
-                decl(&dst)
-            ));
+            module.push_str(&format!("link:{} @target={}\n", decl(&src), decl(&dst)));
             targets.push(dst);
         }
         std::fs::write(self.cfg().join("modules/starter.txt"), &module).unwrap();

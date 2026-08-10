@@ -172,7 +172,12 @@ impl Installable for ZfsInstallable {
         Ok(())
     }
 
-    async fn remove(&self, names: &[String], sudo: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
+    async fn remove(
+        &self,
+        names: &[String],
+        sudo: bool,
+        _reaped: crate::app::sync::guard::Reaped,
+    ) -> Result<()> {
         for name in names {
             info!("ZFS: destroying dataset {}", name);
             self.core.run(&zfs_destroy(name), sudo).await?;
@@ -463,7 +468,12 @@ impl Installable for LvmInstallable {
         Ok(())
     }
 
-    async fn remove(&self, names: &[String], sudo: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
+    async fn remove(
+        &self,
+        names: &[String],
+        sudo: bool,
+        _reaped: crate::app::sync::guard::Reaped,
+    ) -> Result<()> {
         for name in names {
             let (vg, lv) = split_lvm(name)?;
             info!("LVM: removing logical volume {}/{}", vg, lv);

@@ -19,7 +19,6 @@
 //!   converged, because "the machine matches your files" over something nobody looked at is
 //!   precisely the sentence this finding is about.
 
-
 use crate::harness::{decl, Fixture};
 
 /// The shared root, plus what these tests need in it.
@@ -181,11 +180,7 @@ fn a_resource_that_is_applied_and_present_is_not_reported_as_drift() {
     let src = f.cfg().join("dotfiles").join("f1");
     std::fs::write(&src, "content\n").unwrap();
     let dst = f.root.join("dest").join("f1");
-    f.write_module(&format!(
-        "link:{} @target={}\n",
-        decl(&src),
-        decl(&dst)
-    ));
+    f.write_module(&format!("link:{} @target={}\n", decl(&src), decl(&dst)));
 
     let (out, code) = f.run(&["sync", "-y"]);
     assert_eq!(code, 0, "`sync` failed:\n{out}");

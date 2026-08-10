@@ -275,7 +275,8 @@ pub type PackageReader = std::sync::Arc<dyn Fn(&str) -> Vec<Package> + Send + Sy
 /// list means the machine is bare, which the planner answers by installing every declaration
 /// and dropping every removal — so a listing nobody could parse must not be able to spell
 /// itself that way. See [`crate::parsers::Unrecognised`].
-pub type InstalledReader = std::sync::Arc<dyn Fn(&str) -> crate::parsers::ParseResult + Send + Sync>;
+pub type InstalledReader =
+    std::sync::Arc<dyn Fn(&str) -> crate::parsers::ParseResult + Send + Sync>;
 
 #[derive(Clone)]
 pub struct MachineListing {
@@ -915,7 +916,12 @@ impl Installable for GenericInstallable {
         self.install_group(specs, sudo).await
     }
 
-    async fn remove(&self, names: &[String], sudo: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
+    async fn remove(
+        &self,
+        names: &[String],
+        sudo: bool,
+        _reaped: crate::app::sync::guard::Reaped,
+    ) -> Result<()> {
         // Some managers (e.g. Haskell's cabal/stack) genuinely have no uninstall verb.
         // An empty `remove_args` encodes that — UNLESS the manager removes with a separate
         // binary that is itself the verb (OpenBSD's `pkg_delete <name>`, no subcommand). A
@@ -2650,7 +2656,16 @@ ripgrep 15.2.0
         inst.install(&[spec_with("diff", &[("url", url)])], false)
             .await
             .unwrap();
-        inst.remove(&["diff".to_string()], false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself")).await.unwrap();
+        inst.remove(
+            &["diff".to_string()],
+            false,
+            crate::app::sync::guard::Reaped::for_reason(
+                crate::app::sync::guard::GuardScope::Remove,
+                "a unit test of the effector itself",
+            ),
+        )
+        .await
+        .unwrap();
 
         let calls = mock.get_calls().await;
         assert!(
@@ -2916,7 +2931,17 @@ ripgrep 15.2.0
         let mock = Arc::new(MockExecutor::new(vfs.clone()));
         let core = Arc::new(apt_like_core(mock, vfs)); // apt_like_core sets remove_args: vec![]
         let inst = GenericInstallable { core };
-        match inst.remove(&["ghc".to_string()], false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself")).await {
+        match inst
+            .remove(
+                &["ghc".to_string()],
+                false,
+                crate::app::sync::guard::Reaped::for_reason(
+                    crate::app::sync::guard::GuardScope::Remove,
+                    "a unit test of the effector itself",
+                ),
+            )
+            .await
+        {
             Err(crate::core::Error::Unsupported(name)) => assert_eq!(name, "apt"),
             other => panic!("expected Unsupported, got {:?}", other),
         }
@@ -2964,9 +2989,16 @@ ripgrep 15.2.0
         let vfs = Arc::new(DashMap::new());
         let mock = Arc::new(MockExecutor::new(vfs.clone()));
         let mgr = apk_repo(mock.clone(), vfs);
-        mgr.remove_repo("https://dl-cdn.alpinelinux.org/alpine/edge/testing", false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"))
-            .await
-            .expect("a URL is a repository apk can be told to forget");
+        mgr.remove_repo(
+            "https://dl-cdn.alpinelinux.org/alpine/edge/testing",
+            false,
+            crate::app::sync::guard::Reaped::for_reason(
+                crate::app::sync::guard::GuardScope::Remove,
+                "a unit test of the effector itself",
+            ),
+        )
+        .await
+        .expect("a URL is a repository apk can be told to forget");
         let calls = mock.get_calls().await;
         assert!(
             calls.iter().any(|c| c.contains("dl-cdn.alpinelinux.org")),
@@ -2987,7 +3019,14 @@ ripgrep 15.2.0
         let mock = Arc::new(MockExecutor::new(vfs.clone()));
         let mgr = apk_repo(mock.clone(), vfs);
         let err = mgr
-            .remove_repo("testing", false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"))
+            .remove_repo(
+                "testing",
+                false,
+                crate::app::sync::guard::Reaped::for_reason(
+                    crate::app::sync::guard::GuardScope::Remove,
+                    "a unit test of the effector itself",
+                ),
+            )
             .await
             .expect_err("apk knows no repository called `testing`")
             .to_string();
@@ -3016,7 +3055,16 @@ ripgrep 15.2.0
             c.repo_remove_args = Some(vec!["sources".into(), "-r".into(), "{url}".into()]);
             c.repo_list_args = Some(vec!["sources".into()]);
         });
-        mgr.remove_repo("internal", false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself")).await.unwrap();
+        mgr.remove_repo(
+            "internal",
+            false,
+            crate::app::sync::guard::Reaped::for_reason(
+                crate::app::sync::guard::GuardScope::Remove,
+                "a unit test of the effector itself",
+            ),
+        )
+        .await
+        .unwrap();
         let calls = mock.get_calls().await;
         assert!(
             calls
@@ -3038,7 +3086,14 @@ ripgrep 15.2.0
             c.repo_remove_args = Some(vec!["drop".into(), "{name}".into(), "{channel}".into()]);
         });
         let err = mgr
-            .remove_repo("internal", false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"))
+            .remove_repo(
+                "internal",
+                false,
+                crate::app::sync::guard::Reaped::for_reason(
+                    crate::app::sync::guard::GuardScope::Remove,
+                    "a unit test of the effector itself",
+                ),
+            )
             .await
             .expect_err("an unfilled placeholder is not a repository name")
             .to_string();

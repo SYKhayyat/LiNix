@@ -221,25 +221,26 @@ fn parse_scoop_list(output: &str) -> Option<Vec<Package>> {
         |line| line.contains("Name") && line.contains("Version"),
         &["Name", "Version", "Info"],
     )
-    .map(|rows| rows
-    .into_iter()
-    .filter_map(|row| {
-        let (name, version, info) = (&row[0], &row[1], &row[2]);
-        if name.is_empty() {
-            return None;
-        }
-        // scoop reports the outcome in Info and nowhere else; the row itself stays.
-        if info.to_ascii_lowercase().contains("failed") {
-            return None;
-        }
-        // No version means scoop has a directory for it and no installed manifest —
-        // the same half-state by a different route.
-        if version.is_empty() {
-            return None;
-        }
-        Some(Package::with_version(name, version, "scoop"))
+    .map(|rows| {
+        rows.into_iter()
+            .filter_map(|row| {
+                let (name, version, info) = (&row[0], &row[1], &row[2]);
+                if name.is_empty() {
+                    return None;
+                }
+                // scoop reports the outcome in Info and nowhere else; the row itself stays.
+                if info.to_ascii_lowercase().contains("failed") {
+                    return None;
+                }
+                // No version means scoop has a directory for it and no installed manifest —
+                // the same half-state by a different route.
+                if version.is_empty() {
+                    return None;
+                }
+                Some(Package::with_version(name, version, "scoop"))
+            })
+            .collect()
     })
-    .collect())
 }
 
 /// Parses 'winget search' output table (Name / Id / Version / Match / Source).
@@ -871,13 +872,17 @@ mod scoop_export_tests {
     /// software; `adopt` wrote one into a manifest once.
     #[test]
     fn a_failed_install_is_not_an_installed_package() {
-        assert!(!parse_scoop_export(EXPORT).expect("this fixture parses").iter().any(|p| p.name == "jq"));
+        assert!(!parse_scoop_export(EXPORT)
+            .expect("this fixture parses")
+            .iter()
+            .any(|p| p.name == "jq"));
     }
 
     /// The same half-state by the other route — a directory with no installed manifest.
     #[test]
     fn an_app_with_no_version_is_not_an_installed_package() {
-        assert!(!parse_scoop_export(EXPORT).expect("this fixture parses")
+        assert!(!parse_scoop_export(EXPORT)
+            .expect("this fixture parses")
             .iter()
             .any(|p| p.name == "halfway"));
     }
@@ -903,11 +908,9 @@ mod scoop_export_tests {
 
     #[test]
     fn an_appless_export_is_an_empty_machine_and_a_malformed_one_is_not() {
-        assert!(
-            parse_scoop_export(r#"{"apps":[]}"#)
-                .expect("scoop with no apps exports an empty `apps` array")
-                .is_empty()
-        );
+        assert!(parse_scoop_export(r#"{"apps":[]}"#)
+            .expect("scoop with no apps exports an empty `apps` array")
+            .is_empty());
         // `{"buckets":[]}` has no `apps` key at all. That is not scoop reporting no apps — it
         // is a document this reader does not recognise, and the two were the same answer.
         for broken in ["", "not json", r#"{"buckets":[]}"#] {

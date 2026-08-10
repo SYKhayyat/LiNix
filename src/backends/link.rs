@@ -41,10 +41,7 @@ pub fn backup_path(target: &Path) -> PathBuf {
 /// key was deliberately not added — restore-on-removal already kills the pile-up one would have
 /// been for, so one mechanism answers the whole question.
 pub fn wants_backup(spec: &PackageSpec) -> bool {
-    !matches!(
-        spec.options.one("backup"),
-        Some("no") | Some("false")
-    )
+    !matches!(spec.options.one("backup"), Some("no") | Some("false"))
 }
 
 /// Refuse a decrypted secret whose destination is inside the config repo (T2).
@@ -316,7 +313,8 @@ impl LinkBackendCore {
         if self.executor.dry_run {
             crate::would!(
                 "Link: would back up existing {:?} to {:?} before writing the managed version.",
-                target, backup
+                target,
+                backup
             );
             return Ok(());
         }
@@ -431,7 +429,9 @@ impl Installable for LinkInstallable {
                 if self.core.executor.dry_run {
                     crate::would!(
                         "Link: would decrypt {:?} with {} and write to {:?}",
-                        source, tool, target_path
+                        source,
+                        tool,
+                        target_path
                     );
                     continue;
                 }
@@ -503,10 +503,7 @@ impl Installable for LinkInstallable {
                 }
 
                 if self.core.executor.dry_run {
-                    crate::would!(
-                        "Would remove existing file/link at {:?}",
-                        target_path
-                    );
+                    crate::would!("Would remove existing file/link at {:?}", target_path);
                 } else {
                     crate::utils::file::remove_deployed_path(&target_path)
                         .await
@@ -550,7 +547,12 @@ impl Installable for LinkInstallable {
     /// backup file removed, so a `link:` line that comes and goes leaves the machine as it found
     /// it and nothing accumulates. With no backup there was nothing there before, so the target
     /// is removed.
-    async fn remove(&self, names: &[String], _: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
+    async fn remove(
+        &self,
+        names: &[String],
+        _: bool,
+        _reaped: crate::app::sync::guard::Reaped,
+    ) -> Result<()> {
         for name in names {
             let path = Path::new(name);
             let exists = tokio::fs::try_exists(path).await.unwrap_or(false);
@@ -610,10 +612,13 @@ pub fn register(
         |body| match toml::from_str::<crate::model::secret::SecretProviderFile>(&body) {
             Ok(f) => Some(crate::model::secret::providers(f.secret)),
             Err(e) => {
-                tracing::warn!("{}", crate::app::adapters::cannot_use(
-                    crate::app::adapters::surface("secret").expect("a declared surface"),
-                    e,
-                ));
+                tracing::warn!(
+                    "{}",
+                    crate::app::adapters::cannot_use(
+                        crate::app::adapters::surface("secret").expect("a declared surface"),
+                        e,
+                    )
+                );
                 None
             }
         },
@@ -636,7 +641,7 @@ pub fn register(
 mod tests {
     use super::*;
     use crate::core::CommandExecutor;
-    
+
     use tempfile::tempdir;
 
     fn installer() -> LinkInstallable {

@@ -102,16 +102,19 @@ fn no_raw_stdout_read_escapes_the_rule() {
     });
 
     let found: BTreeSet<String> = raw.keys().cloned().collect();
-    Ledger::of("reading a command's stdout without sanitizing it", "ALLOWED")
-        .pairs(ALLOWED)
-        .scanning_at_least(100)
-        .detailing(|site| raw.get(site).map(|lines| lines.join("\n        ")))
-        .remedy(
-            "Read through `CommandExecutor::run_output`/`search_output`, which sanitize, or wrap \
+    Ledger::of(
+        "reading a command's stdout without sanitizing it",
+        "ALLOWED",
+    )
+    .pairs(ALLOWED)
+    .scanning_at_least(100)
+    .detailing(|site| raw.get(site).map(|lines| lines.join("\n        ")))
+    .remedy(
+        "Read through `CommandExecutor::run_output`/`search_output`, which sanitize, or wrap \
              the read in `crate::utils::text::sanitize`. If the bytes are a FILE rather than a \
              report, that is the one case where sanitizing is wrong — trimming a file changes it.",
-        )
-        .audit(files_seen, &found);
+    )
+    .audit(files_seen, &found);
 }
 
 /// Does this line read a command's stdout without sanitizing it?

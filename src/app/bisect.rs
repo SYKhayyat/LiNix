@@ -81,7 +81,9 @@ pub async fn bisect(app: &App, test: &str, assume_yes: bool) -> Result<()> {
     }
 
     if app.config.dry_run {
-        crate::would_print!("Would binary-search snapshots (restoring + testing each) to find the culprit.");
+        crate::would_print!(
+            "Would binary-search snapshots (restoring + testing each) to find the culprit."
+        );
         return Ok(());
     }
     if !assume_yes {

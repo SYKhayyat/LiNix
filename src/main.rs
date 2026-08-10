@@ -18,7 +18,10 @@ use tracing_subscriber::EnvFilter;
 //
 // This glob stays honest only while it is the dispatcher's. If a *tenth* consumer appears, it
 // is a sibling and it should import by name.
-use linix::verbs::{check::*, cleanup::*, declare::*, history::*, packages::*, plan::*, setup::*, sync::*, upgrade::*};
+use linix::verbs::{
+    check::*, cleanup::*, declare::*, history::*, packages::*, plan::*, setup::*, sync::*,
+    upgrade::*,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -358,14 +361,16 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
             json,
             temp,
             into,
-        } => handle_install(
-            app,
-            packages,
-            Output::from_json_flag(*json),
-            temp.as_deref(),
-            into.as_deref(),
-        )
-        .await,
+        } => {
+            handle_install(
+                app,
+                packages,
+                Output::from_json_flag(*json),
+                temp.as_deref(),
+                into.as_deref(),
+            )
+            .await
+        }
         Commands::Uninstall {
             packages,
             json,
@@ -398,13 +403,15 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
             backend,
             json,
             outdated,
-        } => handle_list(
-            app,
-            backend.as_deref(),
-            Output::from_json_flag(*json),
-            *outdated,
-        )
-        .await,
+        } => {
+            handle_list(
+                app,
+                backend.as_deref(),
+                Output::from_json_flag(*json),
+                *outdated,
+            )
+            .await
+        }
         Commands::Info { package } => handle_info(app, package).await,
         Commands::RemoveOrphans => handle_remove_orphans(app).await,
         Commands::CleanCache { all } => handle_clean_cache(app, *all).await,
@@ -1292,10 +1299,28 @@ mod log_level_tests {
             .collect();
 
         let expected: std::collections::BTreeSet<String> = [
-            "Adapters", "Check", "Completions", "Config", "Diff", "Edit", "Eval", "Export",
+            "Adapters",
+            "Check",
+            "Completions",
+            "Config",
+            "Diff",
+            "Edit",
+            "Eval",
+            "Export",
             "Fleet",
-            "History", "Info", "List", "Path", "Plan", "Policy", "Protected", "Repl", "Sbom",
-            "Search", "Try", "Vars", "Why",
+            "History",
+            "Info",
+            "List",
+            "Path",
+            "Plan",
+            "Policy",
+            "Protected",
+            "Repl",
+            "Sbom",
+            "Search",
+            "Try",
+            "Vars",
+            "Why",
         ]
         .iter()
         .map(|s| s.to_string())

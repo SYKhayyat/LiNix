@@ -175,7 +175,11 @@ impl Writes {
             .map_err(|e| crate::core::Error::Io(format!("writing {}: {e}", p.display())))
     }
 
-    pub async fn copy(self, from: &std::path::Path, to: &std::path::Path) -> crate::core::Result<()> {
+    pub async fn copy(
+        self,
+        from: &std::path::Path,
+        to: &std::path::Path,
+    ) -> crate::core::Result<()> {
         if self.previewing() {
             return Ok(());
         }

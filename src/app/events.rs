@@ -316,9 +316,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         write_repo_hook(tmp.path(), Event::OnDrift, "#!/bin/sh\necho repo\n");
         let mut config = config_at(tmp.path());
-        config
-            .events
-            .insert("on_drift".to_string(), "#!/bin/sh\necho machine\n".to_string());
+        config.events.insert(
+            "on_drift".to_string(),
+            "#!/bin/sh\necho machine\n".to_string(),
+        );
 
         let hooks = EventHooks::load(&config);
         let drift: Vec<&EventHook> = hooks
@@ -342,7 +343,9 @@ mod tests {
         let body = "#!/bin/sh\ntrue\n";
         write_repo_hook(tmp.path(), Event::AfterSync, body);
         let mut config = config_at(tmp.path());
-        config.events.insert("after_sync".to_string(), body.to_string());
+        config
+            .events
+            .insert("after_sync".to_string(), body.to_string());
 
         let hooks = EventHooks::load(&config);
         assert_eq!(hooks.all().len(), 2);

@@ -92,7 +92,12 @@ impl Installable for NixInstallable {
         Ok(())
     }
 
-    async fn remove(&self, names: &[String], sudo: bool, _reaped: crate::app::sync::guard::Reaped) -> Result<()> {
+    async fn remove(
+        &self,
+        names: &[String],
+        sudo: bool,
+        _reaped: crate::app::sync::guard::Reaped,
+    ) -> Result<()> {
         let installed = self.core.list_installed_internal().await?;
 
         // `nix profile` identifies elements by their array position ("index"). Each
@@ -229,7 +234,8 @@ fn parse_nix_search(output: &str) -> Result<Vec<Package>> {
             }
             if let Some(d) = meta.get("description").and_then(|v| v.as_str()) {
                 if !d.is_empty() {
-                    p.properties.insert("description".to_string(), d.to_string());
+                    p.properties
+                        .insert("description".to_string(), d.to_string());
                 }
             }
             p.properties.insert("attr_path".to_string(), attr.clone());

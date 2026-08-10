@@ -62,7 +62,10 @@ fn every_adapter_surface_is_in_the_table() {
                 rest = &rest[i + 14..];
                 let Some(end) = rest.find('"') else { break };
                 named.push((
-                    path.file_name().unwrap_or_default().to_string_lossy().into(),
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into(),
                     rest[..end].to_string(),
                 ));
                 rest = &rest[end..];

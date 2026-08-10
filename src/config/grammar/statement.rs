@@ -177,7 +177,11 @@ impl std::str::FromStr for ResourceKind {
     type Err = ();
 
     fn from_str(s: &str) -> std::result::Result<Self, ()> {
-        Self::ALL.iter().copied().find(|k| k.as_str() == s).ok_or(())
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|k| k.as_str() == s)
+            .ok_or(())
     }
 }
 
@@ -3496,7 +3500,10 @@ mod exec_tests {
             assert_eq!(k.to_string(), k.as_str());
             assert!(seen.insert(k.as_str()), "two kinds answer `{k}`");
         }
-        assert!("apt".parse::<ResourceKind>().is_err(), "a backend is not a kind");
+        assert!(
+            "apt".parse::<ResourceKind>().is_err(),
+            "a backend is not a kind"
+        );
         assert!("".parse::<ResourceKind>().is_err());
     }
 
@@ -3757,7 +3764,9 @@ mod firewall_tests {
     fn a_firewall_rule_is_an_extra_with_a_teardown_key() {
         let stmt = pv("firewall:22/tcp").unwrap();
         assert_eq!(
-            crate::core::extra_key(&stmt).map(|k| k.to_string()).as_deref(),
+            crate::core::extra_key(&stmt)
+                .map(|k| k.to_string())
+                .as_deref(),
             Some("firewall:22/tcp")
         );
     }

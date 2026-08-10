@@ -226,8 +226,10 @@ fn mutation_sites() -> BTreeMap<String, Vec<(usize, String)>> {
                 .take(4)
                 .take_while(|l| !l.trim_start().starts_with("fn "))
                 .collect::<Vec<_>>()
-                .join("
-");
+                .join(
+                    "
+",
+                );
             if is_mutation_call_in(line, &rest) {
                 found
                     .entry(rel.clone())

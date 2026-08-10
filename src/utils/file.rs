@@ -522,7 +522,10 @@ mod tests {
             real.join("keep-me").exists(),
             "removing the link deleted what it pointed at"
         );
-        assert!(std::fs::symlink_metadata(&link).is_err(), "the link survived");
+        assert!(
+            std::fs::symlink_metadata(&link).is_err(),
+            "the link survived"
+        );
     }
 
     #[test]
@@ -560,12 +563,18 @@ mod tests {
     fn appending_to_a_file_that_ends_cleanly_adds_no_blank_line() {
         let dir = TempDir::new().unwrap();
         let f = dir.path().join("list");
-        std::fs::write(&f, b"one
-").unwrap();
+        std::fs::write(
+            &f, b"one
+",
+        )
+        .unwrap();
         append_line(&f, "two").unwrap();
-        assert_eq!(std::fs::read_to_string(&f).unwrap(), "one
+        assert_eq!(
+            std::fs::read_to_string(&f).unwrap(),
+            "one
 two
-");
+"
+        );
     }
 
     #[test]
@@ -573,16 +582,25 @@ two
         let dir = TempDir::new().unwrap();
         let f = dir.path().join("list");
         assert!(read_lines_filtered(&f).unwrap().is_empty());
-        std::fs::write(&f, b"  # a note
+        std::fs::write(
+            &f,
+            b"  # a note
 
   keep  
 #*.commented-out
-").unwrap();
+",
+        )
+        .unwrap();
         assert_eq!(read_lines_filtered(&f).unwrap(), vec!["keep".to_string()]);
-        assert_eq!(filtered_lines("a
+        assert_eq!(
+            filtered_lines(
+                "a
 # b
 
-c"), vec!["a".to_string(), "c".to_string()]);
+c"
+            ),
+            vec!["a".to_string(), "c".to_string()]
+        );
     }
 
     #[test]

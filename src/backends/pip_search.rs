@@ -48,7 +48,8 @@ fn parse_pypi(json: &serde_json::Value, fallback_name: &str, backend: &str) -> P
     }
     if let Some(d) = info["summary"].as_str() {
         if !d.is_empty() {
-            p.properties.insert("description".to_string(), d.to_string());
+            p.properties
+                .insert("description".to_string(), d.to_string());
         }
     }
     p

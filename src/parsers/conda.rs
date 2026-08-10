@@ -119,7 +119,8 @@ mod tests {
           ],
           "prefix": "/opt/conda"
         }"#;
-        let names: Vec<String> = parse_conda_history(input).expect("this fixture parses")
+        let names: Vec<String> = parse_conda_history(input)
+            .expect("this fixture parses")
             .into_iter()
             .map(|p| p.name)
             .collect();

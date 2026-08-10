@@ -778,7 +778,9 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             // ` - description`. Splitting on whitespace alone kept `jq-1.7.1-r0` as the name,
             // so a search result could never equal the name asked for — which made apk
             // invisible to every unpinned line, the way dnf was on Fedora.
-            search_fn: |o| crate::parsers::common::parse_dash_version_list(o, "apk").unwrap_or_default(),
+            search_fn: |o| {
+                crate::parsers::common::parse_dash_version_list(o, "apk").unwrap_or_default()
+            },
         }),
     });
     let core = with_manager_policy(core);
@@ -2997,7 +2999,16 @@ mod tests {
 
             let installed = inst.install(&[spec], false).await;
             let after_install = mock.get_calls().await.len();
-            let removed = inst.remove(&[case.subject.to_string()], false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself")).await;
+            let removed = inst
+                .remove(
+                    &[case.subject.to_string()],
+                    false,
+                    crate::app::sync::guard::Reaped::for_reason(
+                        crate::app::sync::guard::GuardScope::Remove,
+                        "a unit test of the effector itself",
+                    ),
+                )
+                .await;
             let calls = mock.get_calls().await;
 
             check(
@@ -3394,9 +3405,16 @@ mod tests {
             rm.add_repo("linixprobe", "https://example.invalid/r", false)
                 .await
                 .unwrap_or_else(|e| panic!("{name} add_repo: {e}"));
-            rm.remove_repo("linixprobe", false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself"))
-                .await
-                .unwrap_or_else(|e| panic!("{name} remove_repo: {e}"));
+            rm.remove_repo(
+                "linixprobe",
+                false,
+                crate::app::sync::guard::Reaped::for_reason(
+                    crate::app::sync::guard::GuardScope::Remove,
+                    "a unit test of the effector itself",
+                ),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{name} remove_repo: {e}"));
             let _ = rm.list_repos().await;
 
             let calls = mock.get_calls().await;
@@ -3432,7 +3450,16 @@ mod tests {
         let rm = reg.get("dnf").unwrap().as_repo_manager().unwrap().clone();
         for escape in ["../../etc/cron.d/x", "..", "", "a/b"] {
             assert!(
-                rm.remove_repo(escape, false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself")).await.is_err(),
+                rm.remove_repo(
+                    escape,
+                    false,
+                    crate::app::sync::guard::Reaped::for_reason(
+                        crate::app::sync::guard::GuardScope::Remove,
+                        "a unit test of the effector itself"
+                    )
+                )
+                .await
+                .is_err(),
                 "`{escape}` became part of `/etc/yum.repos.d/<name>.repo` unchallenged"
             );
         }
@@ -3442,7 +3469,16 @@ mod tests {
             mock.get_calls().await
         );
         // The control: a real name still works, so this is not a check that refuses everything.
-        rm.remove_repo("epel", false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself")).await.expect("a plain name");
+        rm.remove_repo(
+            "epel",
+            false,
+            crate::app::sync::guard::Reaped::for_reason(
+                crate::app::sync::guard::GuardScope::Remove,
+                "a unit test of the effector itself",
+            ),
+        )
+        .await
+        .expect("a plain name");
     }
 
     /// A pinned version rides where that manager puts it, and still behind the terminator.
@@ -3857,7 +3893,16 @@ mod tests {
         )
         .await
         .unwrap();
-        inst.remove(&["phx_new".to_string()], false, crate::app::sync::guard::Reaped::for_reason(crate::app::sync::guard::GuardScope::Remove, "a unit test of the effector itself")).await.unwrap();
+        inst.remove(
+            &["phx_new".to_string()],
+            false,
+            crate::app::sync::guard::Reaped::for_reason(
+                crate::app::sync::guard::GuardScope::Remove,
+                "a unit test of the effector itself",
+            ),
+        )
+        .await
+        .unwrap();
 
         let calls = mock.get_calls().await;
         // **Behind the terminator, both of them.** mix's version is a bare operand, so `--`

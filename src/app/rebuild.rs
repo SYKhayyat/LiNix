@@ -206,7 +206,6 @@ pub fn without_protected(plan: &mut Plan, protection: &dyn Fn(&str, &str) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn spec(backend: &str, name: &str) -> PackageSpec {
         PackageSpec {

@@ -539,7 +539,10 @@ mod tests {
         for (backend, reader, header) in cases {
             let pkgs = reader(header, backend)
                 .unwrap_or_else(|e| panic!("{backend}: a bare header was refused — {e:?}"));
-            assert!(pkgs.is_empty(), "{backend}: read {pkgs:?} out of a header row");
+            assert!(
+                pkgs.is_empty(),
+                "{backend}: read {pkgs:?} out of a header row"
+            );
         }
     }
 
@@ -696,7 +699,8 @@ mod tests {
         const NO_PLUGINS: &str = include_str!("../../tests/fixtures/asdf/list-no-plugins.txt");
 
         assert_eq!(
-            asdf_list(INSTALLED, "asdf").expect("this fixture parses")
+            asdf_list(INSTALLED, "asdf")
+                .expect("this fixture parses")
                 .iter()
                 .map(|p| p.name.as_str())
                 .collect::<Vec<_>>(),
@@ -704,11 +708,15 @@ mod tests {
             "the control: a plugin WITH a version is installed"
         );
         assert!(
-            asdf_list(EMPTY_PLUGIN, "asdf").expect("this fixture parses").is_empty(),
+            asdf_list(EMPTY_PLUGIN, "asdf")
+                .expect("this fixture parses")
+                .is_empty(),
             "a plugin with no versions was reported as an installed package"
         );
         assert!(
-            asdf_list(NO_PLUGINS, "asdf").expect("this fixture parses").is_empty(),
+            asdf_list(NO_PLUGINS, "asdf")
+                .expect("this fixture parses")
+                .is_empty(),
             "asdf's own empty-state sentence was read as a package"
         );
     }
@@ -758,13 +766,15 @@ mod tests {
             "No global environments found.
 ",
             "pixi"
-        ).expect("this fixture parses")
+        )
+        .expect("this fixture parses")
         .is_empty());
         assert!(names_only(
             "No packages found.
 ",
             "spack"
-        ).expect("this fixture parses")
+        )
+        .expect("this fixture parses")
         .is_empty());
 
         // A real listing that merely starts with a package beginning "no" still parses.
@@ -773,7 +783,8 @@ mod tests {
 nom
 ",
             "spack",
-        ).expect("this fixture parses");
+        )
+        .expect("this fixture parses");
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[0].name, "nodejs");
     }
@@ -788,7 +799,9 @@ nom
                       └── @{Version} ({CheckSum})[Special Versions (if any)] ({InstallPath})
 ";
         assert!(
-            nimble_list(legend, "nimble").expect("this fixture parses").is_empty(),
+            nimble_list(legend, "nimble")
+                .expect("this fixture parses")
+                .is_empty(),
             "{:?}",
             nimble_list(legend, "nimble").expect("this fixture parses")
         );
@@ -903,7 +916,8 @@ mod pixi_real_output_tests {
     /// was the defect, and this says what that cost on real output.
     #[test]
     fn names_only_on_pixi_output_is_what_the_bug_looked_like() {
-        let junk: Vec<String> = names_only(SEARCH, "pixi").expect("this fixture parses")
+        let junk: Vec<String> = names_only(SEARCH, "pixi")
+            .expect("this fixture parses")
             .into_iter()
             .map(|p| p.name)
             .collect();
@@ -1066,11 +1080,9 @@ mod pixi_json_tests {
     #[test]
     fn an_empty_array_is_an_empty_machine_and_everything_else_is_unread() {
         // The one real empty answer: pixi has no global environments.
-        assert!(
-            pixi_list_json("[]", "pixi")
-                .expect("an empty array is pixi saying it has none")
-                .is_empty()
-        );
+        assert!(pixi_list_json("[]", "pixi")
+            .expect("an empty array is pixi saying it has none")
+            .is_empty());
 
         // And the three that are not. `""` is what `4d4a890` measured a cold `winget list`
         // producing three times in sixteen tries, having written zero bytes — the input this
@@ -1083,8 +1095,8 @@ mod pixi_json_tests {
                 "JSON of a shape this does not read — a schema change",
             ),
         ] {
-            let err = pixi_list_json(input, "pixi")
-                .expect_err(&format!("{why} is not an empty machine"));
+            let err =
+                pixi_list_json(input, "pixi").expect_err(&format!("{why} is not an empty machine"));
             assert_eq!(err.backend, "pixi");
         }
     }

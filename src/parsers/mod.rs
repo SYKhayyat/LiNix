@@ -425,7 +425,8 @@ mod tests {
         let pkgs = parse_bare_names(
             "# comment\nbusybox>=1.36\nnodejs@edge\nbash=5.2\n!conflicting\n\ncurl\n",
             "apk",
-        ).expect("this fixture parses");
+        )
+        .expect("this fixture parses");
         let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, vec!["busybox", "nodejs", "bash", "curl"]);
     }

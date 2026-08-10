@@ -43,7 +43,6 @@
 //! found the first time anyone asked a different backend; the shape of the answer is a backend
 //! saying *"this name does not exist here"* in a way the caller can read without parsing prose.
 
-
 use crate::harness::Fixture;
 
 impl Fixture {

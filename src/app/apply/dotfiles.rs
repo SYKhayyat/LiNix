@@ -203,7 +203,10 @@ impl Dotfiles<'_> {
             .flat_map(|tree| {
                 tree.plan.placements.iter().map(move |placement| {
                     let mut opts = Options::default();
-                    opts.insert("target".to_string(), placement.destination.display().to_string());
+                    opts.insert(
+                        "target".to_string(),
+                        placement.destination.display().to_string(),
+                    );
                     (
                         Statement::Link(placement.source.display().to_string(), opts),
                         tree.origin.clone(),

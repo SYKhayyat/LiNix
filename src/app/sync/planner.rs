@@ -1555,15 +1555,25 @@ mod tests {
 
     #[test]
     fn scope_match_is_exact_entry() {
-        let scopes = |names: &[&str]| -> Vec<String> { names.iter().map(|s| s.to_string()).collect() };
+        let scopes =
+            |names: &[&str]| -> Vec<String> { names.iter().map(|s| s.to_string()).collect() };
 
-        assert!(ChangePlanner::in_scope(&scopes(&["module:dev"]), "module:dev"));
+        assert!(ChangePlanner::in_scope(
+            &scopes(&["module:dev"]),
+            "module:dev"
+        ));
 
         // Never a substring: `--module dev` must not sweep up `dev-tools`, and a scoped
         // upgrade acting on a package nobody named is the shape of the bug this repo is
         // named for.
-        assert!(!ChangePlanner::in_scope(&scopes(&["module:dev-tools"]), "module:dev"));
-        assert!(!ChangePlanner::in_scope(&scopes(&["module:dev"]), "module:dev-tools"));
+        assert!(!ChangePlanner::in_scope(
+            &scopes(&["module:dev-tools"]),
+            "module:dev"
+        ));
+        assert!(!ChangePlanner::in_scope(
+            &scopes(&["module:dev"]),
+            "module:dev-tools"
+        ));
 
         // A package belongs to every scope that declared it: the module that holds it and
         // the profile that reaches it. These were one `;`-joined string until the spec's

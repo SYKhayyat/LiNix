@@ -265,7 +265,11 @@ async fn a_failed_plan_does_not_undo_the_part_that_worked_and_is_still_declared(
             .await
             .expect("plans")
     };
-    assert_eq!(changes.total_install(), 2, "both lines are new to this machine");
+    assert_eq!(
+        changes.total_install(),
+        2,
+        "both lines are new to this machine"
+    );
     let engine = app.sync_engine().await;
     let outcome = engine
         .sync(changes, linix::app::sync::guard::GuardScope::Sync)
@@ -282,7 +286,9 @@ async fn a_failed_plan_does_not_undo_the_part_that_worked_and_is_still_declared(
     // converges, and it is the one mechanism in the program that provably un-converges.
     let calls = kernel.mock_executor.get_calls().await;
     assert!(
-        !calls.iter().any(|c| c.contains("uninstall") && c.contains("fd")),
+        !calls
+            .iter()
+            .any(|c| c.contains("uninstall") && c.contains("fd")),
         "rollback removed `fd`, which installed cleanly and is still in the manifest. \
          `Prior::Absent` says the package was not here before this run; it does not say \
          nobody wants it, and the manifest holds that second fact. Calls: {:?}",

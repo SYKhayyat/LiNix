@@ -602,7 +602,8 @@ fn declarations_of(config: &ResolvedConfig, backend: &str, name: &str) -> Declar
         out.declarations.push(Declaration {
             at: spec
                 .options
-                .one("__source").map(str::to_string)
+                .one("__source")
+                .map(str::to_string)
                 .unwrap_or_else(|| "an unknown file".to_string()),
             scopes: spec.options.all("__scopes").to_vec(),
             from_regex: spec.options.one("__from_regex").map(str::to_string),

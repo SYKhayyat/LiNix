@@ -1,5 +1,5 @@
-use crate::verbs::sync::{handle_sync, SyncMode};
 use crate::verbs::prelude::*;
+use crate::verbs::sync::{handle_sync, SyncMode};
 
 pub async fn handle_repo(app: &App, cmd: &RepoCommand) -> Result<()> {
     let explicit = match cmd {
@@ -123,14 +123,9 @@ pub async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
                  # Nothing here happens until a profile reaches it: `use {}`.\n",
                 name, name
             );
-            let verb = crate::verbs::write_unless_previewing(
-                app,
-                &path,
-                &body,
-                "Created",
-                "would create",
-            )
-            .await?;
+            let verb =
+                crate::verbs::write_unless_previewing(app, &path, &body, "Created", "would create")
+                    .await?;
             println!("{} {}", verb, path.display());
             println!(
                 "  Add it to a profile with `use {}` — nothing reads a module no profile names.",
@@ -164,14 +159,9 @@ pub async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
                 );
             }
 
-            let verb = crate::verbs::write_unless_previewing(
-                app,
-                &path,
-                &body,
-                "Added",
-                "would add",
-            )
-            .await?;
+            let verb =
+                crate::verbs::write_unless_previewing(app, &path, &body, "Added", "would add")
+                    .await?;
             let count = module_registry::count_entries(&body);
             println!(
                 "{} module `{}` ({} entries) from {}\n  saved to {}\n  \
@@ -434,14 +424,10 @@ pub async fn record_hooked_target(
                     (local_file_stem(target), "local-file".to_string(), false)
                 }
             };
-            app.state.lock().await.add(
-                manager,
-                &name,
-                None,
-                Default::default(),
-                &source,
-                false,
-            );
+            app.state
+                .lock()
+                .await
+                .add(manager, &name, None, Default::default(), &source, false);
             if declarative {
                 app.declare(
                     &format!("{manager}:{name}"),
@@ -608,14 +594,9 @@ pub async fn handle_schedule(app: &App, cmd: &ScheduleCommand) -> Result<()> {
             // Parse what was just written before it is written: a bad cron or an unknown key
             // must be refused at the door, naming the line, not discovered at provision time.
             crate::config::grammar::parse_document(&file, &updated, &known)?;
-            let verb = crate::verbs::write_unless_previewing(
-                app,
-                &file,
-                &updated,
-                "Added",
-                "would add",
-            )
-            .await?;
+            let verb =
+                crate::verbs::write_unless_previewing(app, &file, &updated, "Added", "would add")
+                    .await?;
             println!("{} `schedule:{}` to {}.", verb, name, file.display());
         }
         ScheduleCommand::Remove { name } => {

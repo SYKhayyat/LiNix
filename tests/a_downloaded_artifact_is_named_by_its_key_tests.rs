@@ -72,9 +72,16 @@ async fn an_appimage_is_reported_under_the_url_its_state_is_keyed_by() {
     // …and the name it reported is a name removal answers to. A no-op removal is the failure:
     // it means the record was not found and the file stays on disk with no state row.
     let i = appimage::AppImageInstallable { core };
-    i.remove(&[URL.to_string()], false, Reaped::for_reason(GuardScope::Sync, "an identity test for the effector, not for the guard"))
-        .await
-        .expect("removing a recorded AppImage");
+    i.remove(
+        &[URL.to_string()],
+        false,
+        Reaped::for_reason(
+            GuardScope::Sync,
+            "an identity test for the effector, not for the guard",
+        ),
+    )
+    .await
+    .expect("removing a recorded AppImage");
     assert_eq!(
         reported(q.fetch_installed().await.expect("a readable state file")),
         Vec::<String>::new(),
@@ -110,9 +117,16 @@ async fn a_web_resource_is_reported_under_the_url_its_state_is_keyed_by() {
     );
 
     let i = web::WebInstallable { core };
-    i.remove(&[URL.to_string()], false, Reaped::for_reason(GuardScope::Sync, "an identity test for the effector, not for the guard"))
-        .await
-        .expect("removing a recorded web resource");
+    i.remove(
+        &[URL.to_string()],
+        false,
+        Reaped::for_reason(
+            GuardScope::Sync,
+            "an identity test for the effector, not for the guard",
+        ),
+    )
+    .await
+    .expect("removing a recorded web resource");
     assert_eq!(
         reported(q.fetch_installed().await.expect("a readable state file")),
         Vec::<String>::new()
@@ -152,9 +166,16 @@ async fn a_github_package_is_reported_under_the_repo_its_state_is_keyed_by() {
     );
 
     let i = github::GithubInstallable { core };
-    i.remove(&[repo.to_string()], false, Reaped::for_reason(GuardScope::Sync, "an identity test for the effector, not for the guard"))
-        .await
-        .expect("removing a recorded GitHub package");
+    i.remove(
+        &[repo.to_string()],
+        false,
+        Reaped::for_reason(
+            GuardScope::Sync,
+            "an identity test for the effector, not for the guard",
+        ),
+    )
+    .await
+    .expect("removing a recorded GitHub package");
     assert_eq!(
         reported(q.fetch_installed().await.expect("a readable state file")),
         Vec::<String>::new()
