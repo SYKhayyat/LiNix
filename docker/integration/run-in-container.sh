@@ -2045,6 +2045,11 @@ crash_run() {
                     echo "        a $_c is running: $_d state=$(awk '{print $3}' "$_d/stat" 2>/dev/null)" ;;
             esac
         done
+        # And what `heal` said when it ran, a few lines earlier. It is captured into `$_hout`
+        # for three assertions and then dropped, so the one command whose job is to undo what
+        # the crash did was the only step of this sequence with no visible output at all.
+        printf '%s
+' "$_hout" | sed 's/^/        heal said: /' | head -12
     fi
 
     # The group kill leaves the PACKAGE MANAGER half-written, which is the whole point of it —
