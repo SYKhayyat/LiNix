@@ -635,7 +635,18 @@ pub async fn handle_heal(app: &App) -> Result<()> {
 /// half can be tested against a machine that is not this one.
 pub async fn clear_stale_manager_locks(app: &App) -> Vec<String> {
     let mut fixed = Vec::new();
-    for stale in crate::app::stale_lock::find_on_this_machine() {
+    let survey = crate::app::stale_lock::find_on_this_machine();
+    // Said, not skipped. A lock left in place is the likeliest reason the next command fails,
+    // and reporting only removals is what made this decision invisible on the one run where it
+    // mattered.
+    for left in &survey.left {
+        fixed.push(format!(
+            "left {} alone — {}",
+            left.path.display(),
+            left.because
+        ));
+    }
+    for stale in survey.stale {
         if crate::core::dry_run::active() {
             fixed.push(format!(
                 "would remove {} — {}",

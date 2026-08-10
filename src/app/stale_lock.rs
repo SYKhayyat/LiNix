@@ -110,6 +110,25 @@ pub struct Stale {
     pub because: String,
 }
 
+/// A lock that is there and is being left alone, with the reason.
+///
+/// **`heal` is never silent about a lock it examined.** The first version reported only what it
+/// removed, so the run where it decided *not* to — the one that then failed on that very lock —
+/// printed nothing at all, and the reason had to be inferred from a machine where the decision
+/// went the other way. Twice, wrongly. A decision this consequential says itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeftAlone {
+    pub path: PathBuf,
+    pub because: String,
+}
+
+/// Everything the scan concluded: what may go, and what may not and why.
+#[derive(Debug, Default)]
+pub struct Survey {
+    pub stale: Vec<Stale>,
+    pub left: Vec<LeftAlone>,
+}
+
 /// Ask the running system whether a process is there.
 ///
 /// A trait rather than a direct `/proc` read so the decision can be tested against a machine
@@ -120,6 +139,28 @@ pub trait Processes {
     fn pid_alive(&self, pid: u32) -> bool;
     /// Is any process running under this program name?
     fn any_named(&self, name: &str) -> bool;
+}
+
+/// **A zombie holds nothing.** It is a process that has already exited and whose parent has not
+/// yet collected its status; the kernel released every file it had open at the moment it died.
+/// It nonetheless keeps its `/proc/<pid>` entry, and `comm` still reads `pacman`.
+///
+/// This cost a green CI run. A killed sync leaves its `pacman` reaped a moment later, and `heal`
+/// runs inside that moment — asking "is a pacman running", getting yes from a corpse, and
+/// leaving the lock. The scan that said no pacman was there looked nine seconds afterwards,
+/// which is how it read as a contradiction rather than as a race.
+///
+/// Field 3 of `/proc/<pid>/stat` is the state letter. It is read after the last `)` because a
+/// process name can contain spaces and parentheses — `(pac man)` would shift every field if the
+/// line were split from the left.
+fn is_zombie(proc_dir: &Path) -> bool {
+    std::fs::read_to_string(proc_dir.join("stat"))
+        .ok()
+        .and_then(|stat| {
+            let after_name = stat.rsplit_once(')')?.1;
+            after_name.split_whitespace().next().map(str::to_string)
+        })
+        .is_some_and(|state| state == "Z")
 }
 
 /// The real answer, from `/proc`. Nothing else has to be installed — `pgrep` is absent from
@@ -143,6 +184,7 @@ impl Processes for ProcFs {
                 .is_some_and(|n| n.chars().all(|c| c.is_ascii_digit()))
                 && std::fs::read_to_string(e.path().join("comm"))
                     .is_ok_and(|comm| comm.trim() == name)
+                && !is_zombie(&e.path())
         })
     }
 }
@@ -152,31 +194,61 @@ impl Processes for ProcFs {
 /// `read` is how the file's contents are obtained, so the decision can be tested without a
 /// filesystem. Nothing here removes anything — finding and acting are separate so `heal
 /// --dry-run` can report exactly what the real run would do.
-pub fn find(procs: &dyn Processes, read: &dyn Fn(&Path) -> Option<String>) -> Vec<Stale> {
-    let mut out = Vec::new();
+pub fn find(procs: &dyn Processes, read: &dyn Fn(&Path) -> Option<String>) -> Survey {
+    let mut out = Survey::default();
     for lock in MANAGER_LOCKS {
         for path in lock.paths {
             let path = Path::new(path);
             let Some(body) = read(path) else {
+                // A lock that is there and unreadable is not a lock to be silent about — it is
+                // the strongest hint a reader could get about why a manager is refusing.
+                if path.exists() {
+                    out.left.push(LeftAlone {
+                        path: path.to_path_buf(),
+                        because: "it is there and could not be read, so nothing can be proved \
+                                  about it"
+                            .into(),
+                    });
+                }
                 continue;
             };
             let because = match (lock.carries_pid, body.trim().parse::<u32>()) {
                 // A pid that is still running: the lock is held, and this is the case the whole
                 // module exists to not get wrong.
-                (true, Ok(pid)) if procs.pid_alive(pid) => continue,
+                (true, Ok(pid)) if procs.pid_alive(pid) => {
+                    out.left.push(LeftAlone {
+                        path: path.to_path_buf(),
+                        because: format!("pid {pid} is running and holds it"),
+                    });
+                    continue;
+                }
                 (true, Ok(pid)) => format!(
                     "it names pid {pid}, and no such process is running — the run that took it \
                      was killed"
                 ),
                 // A pid file with no readable pid is not evidence of anything; leave it.
-                (true, Err(_)) => continue,
-                (false, _) if procs.any_named(lock.holder) => continue,
+                (true, Err(_)) => {
+                    out.left.push(LeftAlone {
+                        path: path.to_path_buf(),
+                        because: "it should name a pid and does not, which proves nothing either \
+                                  way"
+                        .into(),
+                    });
+                    continue;
+                }
+                (false, _) if procs.any_named(lock.holder) => {
+                    out.left.push(LeftAlone {
+                        path: path.to_path_buf(),
+                        because: format!("a `{}` is running, so it is held", lock.holder),
+                    });
+                    continue;
+                }
                 (false, _) => format!(
                     "it carries no pid and no `{}` is running, so nothing holds it",
                     lock.holder
                 ),
             };
-            out.push(Stale {
+            out.stale.push(Stale {
                 path: path.to_path_buf(),
                 holder: lock.holder,
                 because,
@@ -187,7 +259,7 @@ pub fn find(procs: &dyn Processes, read: &dyn Fn(&Path) -> Option<String>) -> Ve
 }
 
 /// The same question against the real machine.
-pub fn find_on_this_machine() -> Vec<Stale> {
+pub fn find_on_this_machine() -> Survey {
     find(&ProcFs, &|p| std::fs::read_to_string(p).ok())
 }
 
@@ -228,9 +300,9 @@ mod tests {
             },
             &reader(&[("/var/lib/pacman/db.lck", "")]),
         );
-        assert_eq!(found.len(), 1, "{found:?}");
-        assert_eq!(found[0].holder, "pacman");
-        assert!(found[0].because.contains("no `pacman` is running"));
+        assert_eq!(found.stale.len(), 1, "{found:?}");
+        assert_eq!(found.stale[0].holder, "pacman");
+        assert!(found.stale[0].because.contains("no `pacman` is running"));
     }
 
     /// **And the case that must never be got wrong.** A pacman is mid-transaction; the lock is
@@ -245,7 +317,7 @@ mod tests {
             },
             &reader(&[("/var/lib/pacman/db.lck", "")]),
         );
-        assert!(found.is_empty(), "{found:?}");
+        assert!(found.stale.is_empty(), "{found:?}");
     }
 
     /// A pid file answers for itself, and the answer is about that pid — not about whether any
@@ -260,7 +332,7 @@ mod tests {
             },
             &reader(&[("/var/cache/dnf/metadata_lock.pid", "4242\n")]),
         );
-        assert!(held.is_empty(), "a live pid holds its lock: {held:?}");
+        assert!(held.stale.is_empty(), "a live pid holds its lock: {held:?}");
 
         let stale = find(
             &Fake {
@@ -269,11 +341,11 @@ mod tests {
             },
             &reader(&[("/var/cache/dnf/metadata_lock.pid", "4242\n")]),
         );
-        assert_eq!(stale.len(), 1, "{stale:?}");
+        assert_eq!(stale.stale.len(), 1, "{stale:?}");
         assert!(
-            stale[0].because.contains("4242"),
+            stale.stale[0].because.contains("4242"),
             "the reason has to name the pid it looked for: {}",
-            stale[0].because
+            stale.stale[0].because
         );
     }
 
@@ -289,20 +361,70 @@ mod tests {
             },
             &reader(&[("/run/zypp.pid", "not a pid")]),
         );
-        assert!(found.is_empty(), "{found:?}");
+        assert!(found.stale.is_empty(), "{found:?}");
     }
 
     /// A lock that is not there is not a problem. The common case, and it must cost nothing.
     #[test]
     fn a_machine_with_no_locks_has_nothing_to_clear() {
-        assert!(find(
+        let found = find(
             &Fake {
                 alive: vec![],
-                running: vec![]
+                running: vec![],
             },
-            &reader(&[])
-        )
-        .is_empty());
+            &reader(&[]),
+        );
+        assert!(found.stale.is_empty());
+        // And nothing to say about it either: the ordinary machine gets no output at all.
+        assert!(found.left.is_empty());
+    }
+
+    /// **A lock left in place says why.** The whole of `Q50`'s misdiagnosis came from the one
+    /// run where the answer was "no" printing nothing, so the reason had to be guessed from a
+    /// machine where the answer was "yes".
+    #[test]
+    fn a_lock_that_is_left_alone_is_still_reported() {
+        let found = find(
+            &Fake {
+                alive: vec![],
+                running: vec!["pacman"],
+            },
+            &reader(&[("/var/lib/pacman/db.lck", "")]),
+        );
+        assert!(found.stale.is_empty());
+        assert_eq!(found.left.len(), 1, "{found:?}");
+        assert!(
+            found.left[0].because.contains("a `pacman` is running"),
+            "{}",
+            found.left[0].because
+        );
+    }
+
+    /// **The bug that cost a green CI run, as a unit test.** `is_zombie` reads
+    /// `/proc/<pid>/stat`, whose third field is the state letter — after the last `)`, because
+    /// a process name may itself contain spaces and parentheses.
+    ///
+    /// A killed `pacman` keeps its `/proc` entry, and `comm` still says `pacman`, until its
+    /// parent reaps it. `heal` runs inside that window: it asked "is a pacman running", a corpse
+    /// said yes, and the lock stayed. The scan that found no pacman ran nine seconds later,
+    /// which made a race look like a contradiction.
+    #[test]
+    fn a_zombie_is_read_out_of_stat_whatever_the_process_was_called() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let write = |body: &str| {
+            std::fs::write(dir.path().join("stat"), body).unwrap();
+            is_zombie(dir.path())
+        };
+        assert!(write("4242 (pacman) Z 1 4242 4242 0 -1 4194560"));
+        assert!(!write("4242 (pacman) S 1 4242 4242 0 -1 4194560"));
+        assert!(!write("4242 (pacman) R 1 4242 4242 0 -1 4194560"));
+        // The name is the reason the field is found from the right: split from the left and
+        // `(pac man)` moves every field along by one.
+        assert!(write("4242 (pac man) Z 1 4242"));
+        assert!(!write("4242 (pac man) S 1 4242"));
+        // A stat nobody can read proves nothing, and "proves nothing" must not read as "dead":
+        // that would clear a lock on the strength of a failed read.
+        assert!(!is_zombie(std::path::Path::new("/no/such/proc/entry")));
     }
 
     /// **The apt/dpkg family is excluded, and the exclusion is checked.** Those files exist
@@ -325,6 +447,7 @@ mod tests {
                     },
                     &reader(&[(path, "")])
                 )
+                .stale
                 .is_empty(),
                 "{path} was reported as clearable"
             );
