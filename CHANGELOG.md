@@ -60,6 +60,19 @@ crash.*
   preview TUIs, `git` after every sync, a `--help` probe, an external `vars` provider, and the
   data-directory lock's two-minute poll each held a thread for their whole duration.
 
+### A `dnf` failure that read as success
+
+- **`dnf` reported success over a transaction that never happened** (`S83`). `dnf check-update`
+  exits 100 when it *finds* updates, so LiNix rightly forgives that code — but with no failure
+  phrasing able to contradict it, every dnf run ending on 100 read as a success, including one
+  that did nothing. It is the same defect that once let choco's 3010 stand over an install that
+  installed no package. Fixed by giving dnf its own words, measured in the Fedora image rather
+  than guessed: `Failed to resolve the transaction`.
+- **The gate that should have caught it was only ever pointed at Windows.** It walked the
+  backends that register on the machine running the test, so it audited choco, winget and scoop —
+  and never apt, dnf or pacman. It now walks the policy table, so all eighteen managers are
+  audited on every platform.
+
 ### Supply chain
 
 - **One advisory is silenced, and it says so.** `RUSTSEC-2026-0249` — `smartstring` is
