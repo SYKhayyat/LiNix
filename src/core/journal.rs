@@ -149,6 +149,15 @@ pub struct Journal {
 }
 
 impl Journal {
+    /// The WAL of an ordinary run: LiNix's data directory, wherever `LINIX_DATA_DIR` and the
+    /// platform say that is.
+    ///
+    /// **The journal lives beside the registry**, and a run that places the registry itself —
+    /// a test kernel, an isolated CI root — passes that directory to [`Journal::at`] instead.
+    /// The rule used to be a comment above the caller that derived both paths by hand, which is
+    /// how the registry came to be isolated and the WAL not: every `cargo test` appended to the
+    /// developer's real journal, 733 KB of it, until a `PackageSpec` format change made the file
+    /// unparseable and bricked every test at bootstrap.
     pub fn new() -> Result<Self> {
         Self::at(crate::utils::safe_data_dir().join(Self::FILE_NAME))
     }

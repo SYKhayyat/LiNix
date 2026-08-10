@@ -56,19 +56,27 @@ pub fn append_line(path: &Path, line: &str) -> Result<bool> {
         return Ok(false);
     }
     if let Some(dir) = path.parent() {
-        if !dir.exists() {
-            fs::create_dir_all(dir).map_err(Error::from)?;
-        }
+        ensure_dir(dir)?;
     }
     let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
         .map_err(Error::from)?;
+    // A file whose last line was written without one — a `.gitignore` a user edited by hand,
+    // a log a crash truncated — would otherwise have this appended onto the end of it.
+    if ends_mid_line(path) {
+        file.write_all(b"\n").map_err(Error::from)?;
+    }
     file.write_all(line.as_bytes()).map_err(Error::from)?;
     file.write_all(b"\n").map_err(Error::from)?;
     file.sync_data().map_err(Error::from)?;
     Ok(true)
+}
+
+/// Whether `path` has content that does not end in a newline. A missing or empty file does not.
+fn ends_mid_line(path: &Path) -> bool {
+    fs::read(path).is_ok_and(|b| !b.is_empty() && b.last() != Some(&b'\n'))
 }
 
 /// The bytes, atomically, with no policy. **Private on purpose** — [`persist`] is the way in,
@@ -109,9 +117,7 @@ pub(crate) fn durable_write(
         Error::Io(err.to_string())
     })?;
 
-    if !dir.exists() {
-        fs::create_dir_all(dir).map_err(Error::from)?;
-    }
+    ensure_dir(dir)?;
 
     let mut temp_file = NamedTempFile::new_in(dir).map_err(Error::from)?;
     temp_file
@@ -125,36 +131,97 @@ pub(crate) fn durable_write(
     Ok(())
 }
 
+/// Create `path` and its parents, and say which directory failed if it does.
+///
+/// **The error is the reason this exists.** `create_dir_all(p)?` on a read-only mount or a
+/// path under a directory the user cannot write produces `Access is denied. (os error 5)` and
+/// nothing else — no path, in a program that has just touched a dozen of them. It is also
+/// why the old body's `if !path.exists()` guard is gone: `create_dir_all` is already a no-op on
+/// an existing directory, so the check bought nothing and lost the race between the two calls.
 pub fn ensure_dir(path: &Path) -> Result<()> {
-    if !path.exists() {
-        fs::create_dir_all(path).map_err(Error::from)?;
-    }
-    Ok(())
+    fs::create_dir_all(path).map_err(|e| dir_error(path, &e))
 }
 
+/// [`ensure_dir`] for a caller already inside an async context, so the two cannot report the
+/// same failure two ways.
+pub async fn ensure_dir_async(path: &Path) -> Result<()> {
+    tokio::fs::create_dir_all(path)
+        .await
+        .map_err(|e| dir_error(path, &e))
+}
+
+fn dir_error(path: &Path, e: &std::io::Error) -> Error {
+    Error::Io(format!("could not create {}: {e}", path.display()))
+}
+
+/// The lines of a list file, with blanks and `#` comments dropped.
+///
+/// A missing file is an empty list, not an error: every caller reads an optional file that the
+/// user has simply not written yet.
 pub fn read_lines_filtered(path: &Path) -> Result<Vec<String>> {
     if !path.exists() {
         return Ok(vec![]);
     }
 
     let content = fs::read_to_string(path).map_err(Error::from)?;
-    Ok(content
+    Ok(filtered_lines(&content))
+}
+
+/// The filter itself, for a caller that already holds the text.
+pub fn filtered_lines(content: &str) -> Vec<String> {
+    content
         .lines()
         .map(|line| line.trim())
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
         .map(|line| line.to_string())
-        .collect())
+        .collect()
 }
 
+/// Delete `path` whether it is a file or a directory, and treat "it was not there" as done.
+///
+/// **`symlink_metadata`, and the `is_symlink` clause, are the whole function.** `path.is_dir()`
+/// follows the link, so a symlink pointing at a directory answered yes and got `remove_dir_all`
+/// — which deletes the *target's* contents and leaves the link. `link:` removes exactly this
+/// kind of path for a living, which is why its two copies of this branch already had the
+/// clause and the one here did not.
 pub fn force_remove(path: &Path) -> Result<()> {
-    if path.exists() {
-        if path.is_dir() {
-            fs::remove_dir_all(path).map_err(Error::from)?;
-        } else {
-            fs::remove_file(path).map_err(Error::from)?;
-        }
+    let meta = match fs::symlink_metadata(path) {
+        Ok(m) => m,
+        // Not `if path.exists()` first: between the check and the delete the path can go, and
+        // a removal that fails because the thing is already gone has done its job.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(removal_error(path, &e)),
+    };
+    match remove_by_kind(path, &meta) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(removal_error(path, &e)),
     }
-    Ok(())
+}
+
+/// Delete what `meta` describes, never what it points at.
+///
+/// **Windows needs the symlink arm split out**: `remove_file` cannot delete a directory symlink
+/// (`Access is denied`) and `remove_dir` cannot delete a file one, and `symlink_metadata`
+/// reports both as neither file nor directory. `try the file form, then the directory form` is
+/// the whole rule, and it covers a dangling link — whose target kind cannot be asked for at all.
+fn remove_by_kind(path: &Path, meta: &fs::Metadata) -> std::io::Result<()> {
+    if meta.is_symlink() {
+        return match fs::remove_file(path) {
+            Err(e) if !cfg!(windows) => Err(e),
+            Err(_) => fs::remove_dir(path),
+            ok => ok,
+        };
+    }
+    if meta.is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    }
+}
+
+fn removal_error(path: &Path, e: &std::io::Error) -> Error {
+    Error::Io(format!("could not remove {}: {e}", path.display()))
 }
 
 /// The path inside `bin_dir` that an `@bin=` value names, refused if it names anywhere else
@@ -357,14 +424,14 @@ pub async fn remove_deployed_path(path: impl AsRef<Path>) -> std::result::Result
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(format!("{}: {}", path.display(), e)),
     };
-    let outcome = if meta.is_dir() {
-        tokio::fs::remove_dir_all(path).await
-    } else {
-        tokio::fs::remove_file(path).await
-    };
-    match outcome {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+    // Blocking, deliberately: this is one `unlink`, and it is the same decision tree as the
+    // synchronous remover — two copies of *which* removal call a symlink needs is how one of
+    // them ends up with the Windows arm and the other without it.
+    let owned = path.to_path_buf();
+    match tokio::task::spawn_blocking(move || remove_by_kind(&owned, &meta)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(Err(e)) => Err(format!("{}: {}", path.display(), e)),
         Err(e) => Err(format!("{}: {}", path.display(), e)),
     }
 }
@@ -429,6 +496,128 @@ mod tests {
         let src = owned.join("fd");
         tokio::fs::write(&src, b"#!/bin/sh\ntrue\n").await.unwrap();
         (dir, src, bin)
+    }
+
+    #[test]
+    fn removing_a_link_to_a_directory_removes_the_link_and_not_the_directory() {
+        // `path.is_dir()` follows the link, so the old body answered yes here and called
+        // `remove_dir_all` — which empties the *target* and leaves the link behind. `link:`
+        // deploys exactly this shape.
+        let dir = TempDir::new().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join("keep-me"), b"x").unwrap();
+        let link = dir.path().join("link");
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_dir(&real, &link).is_ok();
+        #[cfg(not(windows))]
+        let made = std::os::unix::fs::symlink(&real, &link).is_ok();
+        if !made {
+            // Unprivileged Windows without developer mode cannot make one; the file arm below
+            // still runs, and CI covers this on Linux.
+            return;
+        }
+        force_remove(&link).unwrap();
+        assert!(
+            real.join("keep-me").exists(),
+            "removing the link deleted what it pointed at"
+        );
+        assert!(std::fs::symlink_metadata(&link).is_err(), "the link survived");
+    }
+
+    #[test]
+    fn removing_something_that_is_already_gone_is_done_not_an_error() {
+        let dir = TempDir::new().unwrap();
+        force_remove(&dir.path().join("never-existed")).unwrap();
+    }
+
+    #[test]
+    fn removing_a_directory_takes_the_whole_tree() {
+        let dir = TempDir::new().unwrap();
+        let tree = dir.path().join("a").join("b");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(tree.join("c"), b"x").unwrap();
+        force_remove(&dir.path().join("a")).unwrap();
+        assert!(!dir.path().join("a").exists());
+    }
+
+    #[test]
+    fn appending_to_a_file_that_ends_mid_line_does_not_join_onto_it() {
+        // A `.gitignore` a user edited by hand is the case: without the newline, adding
+        // `*.linix-backup` to a file ending `target` produces `target*.linix-backup`, which
+        // ignores neither.
+        let dir = TempDir::new().unwrap();
+        let f = dir.path().join(".gitignore");
+        std::fs::write(&f, b"target").unwrap();
+        append_line(&f, "*.linix-backup").unwrap();
+        assert_eq!(
+            read_lines_filtered(&f).unwrap(),
+            vec!["target".to_string(), "*.linix-backup".to_string()]
+        );
+    }
+
+    #[test]
+    fn appending_to_a_file_that_ends_cleanly_adds_no_blank_line() {
+        let dir = TempDir::new().unwrap();
+        let f = dir.path().join("list");
+        std::fs::write(&f, b"one
+").unwrap();
+        append_line(&f, "two").unwrap();
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "one
+two
+");
+    }
+
+    #[test]
+    fn a_missing_list_is_an_empty_list_and_comments_are_not_entries() {
+        let dir = TempDir::new().unwrap();
+        let f = dir.path().join("list");
+        assert!(read_lines_filtered(&f).unwrap().is_empty());
+        std::fs::write(&f, b"  # a note
+
+  keep  
+#*.commented-out
+").unwrap();
+        assert_eq!(read_lines_filtered(&f).unwrap(), vec!["keep".to_string()]);
+        assert_eq!(filtered_lines("a
+# b
+
+c"), vec!["a".to_string(), "c".to_string()]);
+    }
+
+    #[test]
+    fn a_directory_that_cannot_be_created_says_which_one() {
+        // `Access is denied. (os error 5)` with no path is the failure this replaces: a sync
+        // touches a dozen directories and the message named none of them.
+        let dir = TempDir::new().unwrap();
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, b"not a directory").unwrap();
+        let err = ensure_dir(&blocker.join("under")).unwrap_err().to_string();
+        assert!(
+            err.contains("blocker"),
+            "the error does not name the directory: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_async_remover_treats_a_link_the_same_way() {
+        // `link:` removes user paths through this one, and the two removers disagreeing about
+        // what a symlink is would be the whole point of sharing them, lost.
+        let dir = TempDir::new().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join("keep-me"), b"x").unwrap();
+        let link = dir.path().join("link");
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_dir(&real, &link).is_ok();
+        #[cfg(not(windows))]
+        let made = std::os::unix::fs::symlink(&real, &link).is_ok();
+        if !made {
+            return;
+        }
+        remove_deployed_path(&link).await.unwrap();
+        assert!(real.join("keep-me").exists());
+        assert!(std::fs::symlink_metadata(&link).is_err());
     }
 
     #[tokio::test]

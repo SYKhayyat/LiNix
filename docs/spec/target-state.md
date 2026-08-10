@@ -3079,3 +3079,23 @@ upgrade }` rather than two adjacent `bool`s; `CliOverrides { .. }` rather than s
 command line; the merge is `|=`, because an absent flag means *the file decides* and there is no
 way for a user to spell *off* on the command line. Any new flag in that pair joins the table in
 `config::tests::flag_pairs` — all five are asserted together, not one of them chosen.
+
+## II.45 One predicate, one remover, one block reader (`S76`, V.176)
+
+**A policy has one predicate for "does this delete anything".** `RetentionPolicy::prunes` is
+it. A pin list (`keep`) is a veto inside a rule that is already on; it never turns deletion on
+by itself, because pinning is how a user says *keep this*.
+
+**A path is deleted by `utils::file::force_remove` or its async twin `remove_deployed_path`,
+and neither follows a symlink.** They share `remove_by_kind`: a symlink is removed as itself
+(file form, then directory form, because Windows needs both and reports a link as neither), a
+directory recursively, anything else as a file. An already-absent path is a completed removal.
+
+**A directory is created by `utils::file::ensure_dir` / `ensure_dir_async`**, which name the
+directory in the error. `create_dir_all(p)?` on its own reports `Access is denied` and no path.
+
+**`grammar::block_header` and `grammar::when_predicate` decide what opens a block**, everywhere
+— reader, writer, REPL. `only_the_grammar_decides_what_opens_a_block` fails on a sixth copy.
+
+**One `Writes`.** `model::Writes` is whether writes reach the disk, for every subsystem that
+previews. A second enum answering that question is a second answer to it.

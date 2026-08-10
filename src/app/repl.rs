@@ -80,8 +80,8 @@ async fn evaluate(app: &App, resolver: &StateResolver<'_>, input: &str) -> Comma
         _ => {}
     }
 
-    if let Some(pred) = input.strip_prefix("when ") {
-        eval_when(resolver, pred.trim()).await;
+    if let Some(pred) = crate::config::grammar::when_predicate(input) {
+        eval_when(resolver, pred).await;
         return Command::Continue;
     }
 

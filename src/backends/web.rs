@@ -251,9 +251,7 @@ impl Installable for WebInstallable {
                     .await
                     .map_err(Error::from)?;
             }
-            tokio::fs::create_dir_all(&dest_dir)
-                .await
-                .map_err(Error::from)?;
+            crate::utils::file::ensure_dir_async(&dest_dir).await?;
 
             let filename = spec.name.split('/').next_back().unwrap_or("resource");
             // The vocabulary, not a fifth hand-written list. This one was matched with

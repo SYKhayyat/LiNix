@@ -124,12 +124,18 @@ impl Edit {
     }
 }
 
-/// Whether an editor's writes reach the disk.
+/// Whether writes reach the disk.
 ///
 /// Not a flag each verb remembers to check. `--dry-run uninstall` deleted the declaration for
 /// real because the flag was consulted per-verb and this verb did not consult it, so the
 /// decision now lives once, at the only place that opens a file for writing. Every [`Edit`] is
 /// returned either way: a preview that reports nothing is as useless as one that writes.
+///
+/// **`bundle.rs` had a second one of these**, spelled `ToDisk | Preview`, with the same
+/// `for_run(dry_run)` constructor and the same job — Q15, where `--dry-run bundle` wrote all
+/// nine files and reported them in the past tense. Two enums for one question is two answers to
+/// it: the next `--dry-run` verb would have had to pick a side, and a reader comparing them
+/// would have had to work out whether `Preview` and `Planned` meant the same thing. They did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Writes {
     ToDisk,
@@ -144,6 +150,36 @@ impl Writes {
         } else {
             Writes::ToDisk
         }
+    }
+
+    pub fn previewing(self) -> bool {
+        self == Writes::Planned
+    }
+
+    /// The three filesystem effects a preview must not have. They live on the type rather than
+    /// beside each caller so that a write added later inherits the check by calling the same
+    /// thing everything else calls — which is the whole argument of the paragraph above.
+    pub async fn mkdir(self, p: &std::path::Path) -> crate::core::Result<()> {
+        if self.previewing() {
+            return Ok(());
+        }
+        crate::utils::file::ensure_dir_async(p).await
+    }
+
+    pub async fn write(self, p: &std::path::Path, contents: &str) -> crate::core::Result<()> {
+        if self.previewing() {
+            return Ok(());
+        }
+        tokio::fs::write(p, contents)
+            .await
+            .map_err(|e| crate::core::Error::Io(format!("writing {}: {e}", p.display())))
+    }
+
+    pub async fn copy(self, from: &std::path::Path, to: &std::path::Path) -> crate::core::Result<()> {
+        if self.previewing() {
+            return Ok(());
+        }
+        crate::utils::file::copy_over(from, to).await
     }
 }
 

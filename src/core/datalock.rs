@@ -27,7 +27,7 @@ impl DataLock {
     /// Waiting with no reason given is indistinguishable from hanging, so the wait announces
     /// the holder — the lock file carries the pid and the command that took it.
     pub fn acquire(data_dir: &Path, command: &str, timeout: Duration) -> Result<Self> {
-        std::fs::create_dir_all(data_dir).map_err(Error::from)?;
+        crate::utils::file::ensure_dir(data_dir)?;
         let path = data_dir.join("linix.lock");
         let owner_path = data_dir.join("linix.lock.owner");
 

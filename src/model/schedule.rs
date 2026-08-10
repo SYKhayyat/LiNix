@@ -207,7 +207,7 @@ fn find_block(body: &str, name: &str) -> Option<(usize, usize)> {
         if rest.starts_with(|c: char| c.is_alphanumeric() || c == '-' || c == '_') {
             continue;
         }
-        if !rest.trim_end().ends_with('{') {
+        if crate::config::grammar::block_header(rest).is_none() {
             return Some((i, i));
         }
         for (j, close) in lines.iter().enumerate().skip(i + 1) {

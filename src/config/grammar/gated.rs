@@ -96,7 +96,7 @@ fn read_inner(
                 open_body = None;
                 continue;
             }
-            if trimmed.ends_with('{') {
+            if super::block_header(trimmed).is_some() {
                 return Err(GrammarError::new(
                     origin,
                     format!("a `{{` block inside the `{}` block", header),
@@ -128,8 +128,7 @@ fn read_inner(
         }
 
         // A name carrying an options body, where the file allows one.
-        if let (Some(hint), Some(header)) = (vocab.body, line.strip_suffix('{')) {
-            let name = header.trim();
+        if let (Some(hint), Some(name)) = (vocab.body, super::block_header(line)) {
             if !name.is_empty() && !name.starts_with("when ") {
                 if name.split_whitespace().count() > 1 {
                     return Err(GrammarError::new(
@@ -150,9 +149,8 @@ fn read_inner(
             }
         }
 
-        if let Some(header) = line.strip_suffix('{') {
-            let header = header.trim();
-            let Some(pred) = header.strip_prefix("when ") else {
+        if let Some(header) = super::block_header(line) {
+            let Some(pred) = super::when_predicate(header) else {
                 return Err(GrammarError::new(
                     origin,
                     format!("`{}` is not a `when` block", header),
@@ -165,7 +163,6 @@ fn read_inner(
                         .with_hint(vocab.nesting.to_string()),
                 );
             }
-            let pred = pred.trim();
             let hit = match facts {
                 Some(facts) => eval_when(pred, facts)
                     .map_err(|e| GrammarError::new(Origin::new(file, idx + 1), e.to_string()))?,

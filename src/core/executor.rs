@@ -1417,7 +1417,7 @@ impl CommandExecutor {
         // Created once per process, not once per lock: this runs on every exclusive command,
         // for a directory that exists after the first one.
         if LOCK_DIRS.insert(dir.to_path_buf()) {
-            std::fs::create_dir_all(dir).map_err(Error::from)?;
+            crate::utils::file::ensure_dir(dir)?;
         }
         // A lock key is a backend name, and a backend name comes from a config file. Anything
         // that is not a plain name would otherwise pick the directory the lock lands in.

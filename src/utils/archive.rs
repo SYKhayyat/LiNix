@@ -6,7 +6,7 @@ use tracing::debug;
 
 pub fn extract_archive(archive_path: &Path, dest_dir: &Path) -> Result<()> {
     if !dest_dir.exists() {
-        fs::create_dir_all(dest_dir).map_err(Error::from)?;
+        crate::utils::file::ensure_dir(dest_dir)?;
     }
 
     let file = fs::File::open(archive_path).map_err(Error::from)?;
@@ -68,7 +68,7 @@ pub fn create_tar_gz(src_dir: &Path, dest_file: &Path, root_name: &str) -> Resul
 
     if let Some(parent) = dest_file.parent() {
         if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent).map_err(Error::from)?;
+            crate::utils::file::ensure_dir(parent)?;
         }
     }
     let out = fs::File::create(dest_file).map_err(Error::from)?;

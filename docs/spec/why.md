@@ -5683,3 +5683,50 @@ been `dry_run`, and a test for `dry_run` alone would pass over the four siblings
 decides whether the guard has a ceiling. The table in `flag_pairs` is the unit under test: a
 sixth flag added tomorrow has to join it, because `a_flag_that_was_passed_turns_the_setting_on`
 is written over the table rather than over any one name.
+
+**V.176 — Why the second copy is the bug, not the duplication.**
+
+**Two predicates is not redundancy, it is a fork.** `prunes()` and `is_active()` differed by one
+clause and were called from different places — the caller in `verbs::mod` used the first to
+decide whether to prune at all, and `select_deletions` used the second to decide what to delete.
+So the safe reading and the destructive reading of the same policy both existed, and which one
+you got depended on how the pruning was reached. That is worse than either being wrong on its
+own: a keep-only policy was harmless through `sync` and destructive through the history prune,
+and no amount of reading one function tells you that.
+
+**Why the symlink clause is the function.** `path.is_dir()` is a question about the *target*.
+Asking it in order to decide how to delete the *link* is a category error that reads as
+completely ordinary code, and its consequence — `remove_dir_all` on the target — is silent, total
+and outside anything LiNix declared. `link:` had already been written twice with the clause,
+which is the tell: the code that meets real symlinks knew, and the shared helper written away
+from it never learned.
+
+**Why the Windows arm arrived with the fix and not before.** `symlink_metadata` on a directory
+symlink reports `is_symlink()` true and `is_dir()` false, so the corrected branch sent it to
+`remove_file`, which Windows refuses. The bug and its repair have opposite platform signatures —
+Unix would have passed the whole way through — and only a test that makes a real directory
+symlink and deletes it sees either. That test is why `remove_deployed_path`, which `link:` was
+just routed through, did not ship broken on Windows.
+
+**Why a writer and a reader of the same file must share the header parser.** `active` is read by
+`gated.rs` and rewritten by `profiles.rs`. The reader refuses a non-`when` block header; the
+writer treated one as a `when` with an empty predicate, which evaluates false, which means the
+names inside it are off. The two are only reachable together — you read the file, then you edit
+it — so the disagreement is not theoretical, it is one command away, and it fails in the
+direction where a user's declarations quietly stop applying.
+
+**Why "wire it in" beat "delete it" for the three dead helpers.** Each was the *better* version
+of something the tree already did longhand: `ensure_dir` had the error message the two dozen
+inline `create_dir_all`s lacked, `force_remove` had the already-gone-is-fine rule five call sites
+each re-derived, `read_lines_filtered` had the comment rule that `.gitignore` handling was
+open-coding against the raw text. Deleting them would have removed the answer and left the
+question in twenty-odd places. Giving them the one improvement each needed — a path in the error,
+a symlink clause, a pure half — and then routing the longhand through them removes the question
+instead.
+
+**Why `Journal::new` was kept and given a caller.** It is not a spare constructor; it is where
+the rule *the WAL lives beside the registry* belongs. That rule was a comment above a caller
+which derived both paths by hand, and the last time it was left to a caller the registry got
+isolated for tests and the WAL did not — 733 KB of test noise appended to a developer's real
+journal, and then a format change made the file unparseable and bricked every test at bootstrap.
+A rule enforced by a comment above one call site is not enforced.

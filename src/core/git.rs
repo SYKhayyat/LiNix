@@ -179,24 +179,18 @@ impl GitManager {
             );
             return Ok(());
         }
-        std::fs::create_dir_all(&self.root).map_err(Error::from)?;
+        crate::utils::file::ensure_dir(&self.root)?;
         if !self.is_repo() {
             self.run_checked(&["init"])?;
         }
         let ignore = self.root.join(".gitignore");
-        let existing = std::fs::read_to_string(&ignore).unwrap_or_default();
-        let mut body = existing.clone();
+        // A pattern the user has commented out is not a pattern they have, which is why this
+        // reads the meaningful lines rather than searching the text.
+        let present = crate::utils::file::read_lines_filtered(&ignore)?;
         for pat in ["*.linix-backup"] {
-            if !existing.lines().any(|l| l.trim() == pat) {
-                if !body.is_empty() && !body.ends_with('\n') {
-                    body.push('\n');
-                }
-                body.push_str(pat);
-                body.push('\n');
+            if !present.iter().any(|l| l == pat) {
+                crate::utils::file::append_line(&ignore, pat)?;
             }
-        }
-        if body != existing {
-            let _ = std::fs::write(&ignore, body);
         }
         Ok(())
     }

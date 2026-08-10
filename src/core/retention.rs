@@ -1,15 +1,16 @@
-// Declarative retention policy shared by the three histories LiNix keeps: archived
-// manifests, generations, and filesystem snapshots. Each history configures its own
-// policy independently (they cost wildly different amounts of disk), but they all apply
-// the same rules through this one engine.
+// Declarative retention for the one history LiNix stores itself: filesystem snapshots.
+// Archived manifests and generations were the other two, and both are git's job now — this
+// file opened by naming all three for a phase after they went, which is how a reader ends up
+// looking for the other two policies.
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-/// How long to retain entries of one history. All three knobs combine as a UNION: an
-/// entry survives if it matches *any* rule. An all-zero / empty policy is inactive and
-/// keeps everything (the safe default — retention never deletes unless asked to).
+/// How long to retain entries of one history. The two *rules* combine as a UNION: an entry
+/// survives if it matches either. `keep` is not a rule but a veto — it can save an entry, never
+/// condemn one. Both rules at zero is an inactive policy, which keeps everything (the safe
+/// default — retention never deletes unless asked to).
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct RetentionPolicy {
     /// Keep the N most-recent entries (0 = rule disabled).
@@ -24,8 +25,16 @@ pub struct RetentionPolicy {
 }
 
 impl RetentionPolicy {
-    /// Whether this policy prunes anything at all. Both rules off is how a user says "keep
+    /// Whether this policy deletes anything at all. Both rules off is how a user says "keep
     /// everything" — there is no second on/off switch beside it (II.13: one engine).
+    ///
+    /// **`keep` is not one of the rules, and that is the whole point.** There were two of these
+    /// predicates: this one, which the caller in `verbs::mod` used to decide whether to prune at
+    /// all, and an `is_active` that counted a non-empty `keep` as a rule. Under the second, a
+    /// policy reading only `keep = ["known-good"]` — a pin list, and nothing else — turned
+    /// deletion *on*, matched nothing against a count rule of zero or an age rule of zero, and
+    /// so deleted every snapshot but the pinned one and the newest. Pinning a snapshot is how a
+    /// user says *keep this*; it can never be how they say *delete the others*.
     pub fn prunes(&self) -> bool {
         self.keep_last > 0 || self.keep_days > 0
     }
@@ -83,14 +92,15 @@ impl RetentionItem {
             pinned: false,
         }
     }
+
+    /// The entry's human name, which `keep` may match as well as the id.
+    pub fn labelled(mut self, label: impl Into<String>) -> Self {
+        self.label = label.into();
+        self
+    }
 }
 
 impl RetentionPolicy {
-    /// True if any rule is configured. An inactive policy deletes nothing.
-    pub fn is_active(&self) -> bool {
-        self.keep_last > 0 || self.keep_days > 0 || !self.keep.is_empty()
-    }
-
     /// Return the ids that should be DELETED, given all current `items` and the current
     /// time. Guarantees:
     /// - An inactive policy returns nothing.
@@ -100,7 +110,7 @@ impl RetentionPolicy {
     /// - Otherwise an entry survives iff it is within `keep_last` OR younger than
     ///   `keep_days` (union). Entries matching no rule are deleted.
     pub fn select_deletions(&self, items: &[RetentionItem], now: DateTime<Utc>) -> Vec<String> {
-        if !self.is_active() || items.is_empty() {
+        if !self.prunes() || items.is_empty() {
             return Vec::new();
         }
 
@@ -155,6 +165,65 @@ mod tests {
 
     fn item(id: &str, days_ago: i64) -> RetentionItem {
         RetentionItem::new(id, at(days_ago))
+    }
+
+    #[test]
+    fn a_pin_list_on_its_own_is_not_permission_to_delete() {
+        // Two predicates disagreed about this policy: `prunes()` said it deletes nothing, and
+        // an `is_active()` beside it counted a non-empty `keep` as a rule — under which every
+        // snapshot except the pin and the newest was reaped, on the strength of a line whose
+        // whole meaning is *keep*.
+        let p = RetentionPolicy {
+            keep: vec!["known-good".into()],
+            ..Default::default()
+        };
+        let items = vec![
+            item("newest", 1),
+            item("known-good", 300),
+            item("ordinary", 400),
+        ];
+        assert!(!p.prunes());
+        assert!(
+            p.select_deletions(&items, now()).is_empty(),
+            "a policy that only pins deleted something"
+        );
+    }
+
+    #[test]
+    fn a_pin_beside_a_rule_still_only_saves() {
+        // The other half: once a real rule is on, `keep` is a veto within it and nothing more.
+        let p = RetentionPolicy {
+            keep_last: 1,
+            keep: vec!["known-good".into()],
+            ..Default::default()
+        };
+        let items = vec![
+            item("newest", 1),
+            item("known-good", 300),
+            item("ordinary", 400),
+        ];
+        assert_eq!(
+            p.select_deletions(&items, now()),
+            vec!["ordinary".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_label_is_matched_the_same_way_an_id_is() {
+        let p = RetentionPolicy {
+            keep_last: 1,
+            keep: vec!["golden".into()],
+            ..Default::default()
+        };
+        let items = vec![
+            item("newest", 1),
+            item("some-id", 300).labelled("golden"),
+            item("ordinary", 400),
+        ];
+        assert_eq!(
+            p.select_deletions(&items, now()),
+            vec!["ordinary".to_string()]
+        );
     }
 
     #[test]

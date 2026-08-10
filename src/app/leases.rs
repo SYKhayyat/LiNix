@@ -102,10 +102,10 @@ impl Leases<'_> {
                     info!("Lease expired: removing {}:{}", backend, name);
                     if let Err(e) = crate::core::journalled(
                         self.journal,
-                        vec![crate::core::JournalAction::Remove {
-                            name: name.clone(),
-                            backend: backend.clone(),
-                        }],
+                        crate::core::journal::removals_of(
+                            &backend,
+                            std::slice::from_ref(&name),
+                        ),
                         inst.remove(std::slice::from_ref(&name), b.sudo_for_write(), reaped),
                     )
                     .await

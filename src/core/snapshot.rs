@@ -739,7 +739,7 @@ impl SnapshotManager {
             Some(p) => p,
             None => return Ok(vec![]),
         };
-        if !policy.is_active() {
+        if !policy.prunes() {
             return Ok(vec![]);
         }
         let list: Vec<Snapshot> = p
@@ -750,11 +750,9 @@ impl SnapshotManager {
             .collect();
         let items: Vec<crate::core::RetentionItem> = list
             .iter()
-            .map(|s| crate::core::RetentionItem {
-                id: s.id.clone(),
-                label: s.description.clone(),
-                timestamp: s.parse_time().unwrap_or(now),
-                pinned: false,
+            .map(|s| {
+                crate::core::RetentionItem::new(s.id.clone(), s.parse_time().unwrap_or(now))
+                    .labelled(s.description.clone())
             })
             .collect();
         let doomed = policy.select_deletions(&items, now);

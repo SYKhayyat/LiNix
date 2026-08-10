@@ -58,10 +58,10 @@ impl AppImageBackendCore {
             .await
             .unwrap_or(false)
         {
-            tokio::fs::create_dir_all(&self.install_dir).await?;
+            crate::utils::file::ensure_dir_async(&self.install_dir).await?;
         }
         if !tokio::fs::try_exists(&self.bin_dir).await.unwrap_or(false) {
-            tokio::fs::create_dir_all(&self.bin_dir).await?;
+            crate::utils::file::ensure_dir_async(&self.bin_dir).await?;
         }
         Ok(self.bin_dir.clone())
     }

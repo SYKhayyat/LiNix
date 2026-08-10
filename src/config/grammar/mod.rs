@@ -333,6 +333,24 @@ impl Document {
 ///
 /// `#` inside a `{ }` block VALUE is data whatever it follows (V.9); that case never reaches
 /// here, because block values are read by `options::parse_block_line`.
+/// The header of the block this line opens, or `None` if it opens none: everything before a
+/// trailing `{`, trimmed.
+pub fn block_header(line: &str) -> Option<&str> {
+    line.trim_end().strip_suffix('{').map(str::trim)
+}
+
+/// The predicate of a `when` header, or `None` if the header is not one.
+///
+/// **One reader, because the copies disagreed about the same line.** `profiles.rs` wrote
+/// `strip_prefix("when ").unwrap_or("")`, which turns *any* other block header into a `when`
+/// with an empty predicate — a gate that evaluates to false and silently drops everything it
+/// holds. The `active` writer walks blocks that way while `gated.rs`, which reads the same
+/// file, refuses a non-`when` header outright; one of those two is wrong about the file and it
+/// cannot be settled by reading either of them alone.
+pub fn when_predicate(header: &str) -> Option<&str> {
+    header.trim().strip_prefix("when ").map(str::trim)
+}
+
 pub fn strip_comment(line: &str) -> &str {
     let bytes = line.as_bytes();
     for (i, c) in line.char_indices() {
@@ -382,8 +400,8 @@ fn parse_items(
         }
 
         // A `{` at the end makes this a block header. The header decides the body kind.
-        if let Some(header) = line.strip_suffix('{') {
-            items.push(parse_block(file, header.trim(), lines, backends, &origin)?);
+        if let Some(header) = block_header(line) {
+            items.push(parse_block(file, header, lines, backends, &origin)?);
             continue;
         }
 
@@ -453,8 +471,7 @@ fn parse_block(
         ));
     }
 
-    if let Some(pred) = header.strip_prefix("when ") {
-        let pred = pred.trim();
+    if let Some(pred) = when_predicate(header) {
         if pred.is_empty() {
             return Err(GrammarError::new(
                 origin.clone(),

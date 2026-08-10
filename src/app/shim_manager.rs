@@ -17,7 +17,7 @@ impl ShimManager {
     pub async fn with_bin_dir(bin_dir: PathBuf) -> Result<Self> {
         if !tokio::fs::try_exists(&bin_dir).await.unwrap_or(false) {
             debug!("Creating shim directory at {:?}", bin_dir);
-            fs::create_dir_all(&bin_dir).await.map_err(Error::from)?;
+            crate::utils::file::ensure_dir_async(&bin_dir).await?;
         }
 
         Ok(Self { bin_dir })

@@ -8,6 +8,7 @@
 
 use crate::app::App;
 use crate::core::{Error, Result};
+use crate::model::Writes;
 use crate::utils::file::copy_over;
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -56,59 +57,6 @@ pub fn offline_fetch_command(
         "pacman" => v("pacman", &["-Sw", "--noconfirm"], name),
         "apk" => v("apk", &["fetch"], name),
         _ => None,
-    }
-}
-
-/// Whether this run puts the bundle on disk.
-///
-/// **Q15, ruled 2026-07-30: a preview does not write the file it was told to write.** A bundle
-/// outlives the run and is meant to be carried to another machine, so one made by a preview is
-/// indistinguishable from one made deliberately — and `--dry-run bundle` wrote all nine files
-/// and reported *"Bundle written to X"* in the past tense.
-///
-/// It is a type rather than a check at the top of `create_bundle` because the report has to
-/// stay the report: a preview that says nothing is worse than one that writes. Every write in
-/// the bundle goes through here, counts what it would have done, and produces the same summary
-/// with the tense fixed. A write added later that skips this facade is the only way to
-/// reintroduce the bug, which is why there is exactly one of them.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Writes {
-    ToDisk,
-    Preview,
-}
-
-impl Writes {
-    fn for_run(dry_run: bool) -> Self {
-        if dry_run {
-            Writes::Preview
-        } else {
-            Writes::ToDisk
-        }
-    }
-
-    fn previewing(self) -> bool {
-        self == Writes::Preview
-    }
-
-    async fn mkdir(self, p: &Path) -> Result<()> {
-        if self.previewing() {
-            return Ok(());
-        }
-        tokio::fs::create_dir_all(p).await.map_err(Error::from)
-    }
-
-    async fn write(self, p: &Path, contents: &str) -> Result<()> {
-        if self.previewing() {
-            return Ok(());
-        }
-        tokio::fs::write(p, contents).await.map_err(Error::from)
-    }
-
-    async fn copy(self, from: &Path, to: &Path) -> Result<()> {
-        if self.previewing() {
-            return Ok(());
-        }
-        copy_over(from, to).await
     }
 }
 
@@ -269,9 +217,7 @@ pub async fn create_bundle(
         }
     } else if include_artifacts {
         let dest_root = out.join("artifacts");
-        tokio::fs::create_dir_all(&dest_root)
-            .await
-            .map_err(Error::from)?;
+        crate::utils::file::ensure_dir_async(&dest_root).await?;
         for (backend, name, _) in &managed {
             let dest = dest_root.join(backend);
             match offline_fetch_command(backend, name, &dest.to_string_lossy()) {
@@ -407,9 +353,7 @@ pub async fn restore_bundle(
 
     // Copy the config, entry by entry, skipping the bundle's own metadata files so the
     // restored root is a config root and not a bundle.
-    tokio::fs::create_dir_all(config_root)
-        .await
-        .map_err(Error::from)?;
+    crate::utils::file::ensure_dir_async(config_root).await?;
     let mut rd = tokio::fs::read_dir(bundle_dir).await.map_err(Error::from)?;
     while let Some(entry) = rd.next_entry().await.map_err(Error::from)? {
         let name = entry.file_name();
@@ -424,7 +368,7 @@ pub async fn restore_bundle(
             report.config_files += copy_dir_recursive(&from, &to, None, Writes::ToDisk).await?;
         } else {
             if let Some(p) = to.parent() {
-                tokio::fs::create_dir_all(p).await.map_err(Error::from)?;
+                crate::utils::file::ensure_dir_async(p).await?;
             }
             copy_over(&from, &to).await?;
             report.config_files += 1;
@@ -435,7 +379,7 @@ pub async fn restore_bundle(
     let bundled_registry = bundle_dir.join("registry.json");
     if bundled_registry.exists() {
         if let Some(p) = registry_path.parent() {
-            tokio::fs::create_dir_all(p).await.map_err(Error::from)?;
+            crate::utils::file::ensure_dir_async(p).await?;
         }
         copy_over(&bundled_registry, registry_path).await?;
         report.registry_restored = true;

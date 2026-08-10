@@ -1,23 +1,18 @@
 use crate::config::config::ScheduleConfig;
 use crate::core::{CommandExecutor, Error, Result};
 use async_trait::async_trait;
-use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::debug;
 
 /// Delete a unit file LiNix generated. A file that is already gone is the wanted end state;
 /// any other failure leaves a schedule armed that LiNix is about to report as removed.
 fn remove_generated(path: &Path) -> Result<()> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(Error::Io(format!(
-            "could not remove the generated file {} ({}). The schedule may still be armed; \
-             remove the file by hand and re-run `linix sync`.",
-            path.display(),
-            e
-        ))),
-    }
+    crate::utils::file::force_remove(path).map_err(|e| {
+        Error::Io(format!(
+            "{e}. The schedule may still be armed; remove the file by hand and re-run \
+             `linix sync`."
+        ))
+    })
 }
 
 #[async_trait]
@@ -113,9 +108,7 @@ impl TaskProvisioner for LinuxSystemdProvisioner {
             .join("systemd")
             .join("user");
 
-        if !systemd_dir.exists() {
-            fs::create_dir_all(&systemd_dir).map_err(Error::from)?;
-        }
+        crate::utils::file::ensure_dir(&systemd_dir)?;
 
         let unit_name = format!("linix-{}", config.name);
         let service_path = systemd_dir.join(format!("{}.service", unit_name));
@@ -707,17 +700,56 @@ mod tests {
 
     #[test]
     fn a_removal_that_cannot_happen_is_an_error_naming_the_file() {
-        // A directory is not removable by `remove_file` on any platform, which stands in for
-        // the real case (a unit file the user cannot delete) without needing to drop
-        // privileges. The point is that the failure is reported at all: swallowing it left a
-        // timer armed under a schedule LiNix had just reported as removed.
+        // The point is that the failure is reported at all: swallowing it left a timer armed
+        // under a schedule LiNix had just reported as removed. Making a path undeletable is
+        // the platform-specific part; the assertion is not.
+        //
+        // It used to be a directory, back when the removal was `remove_file` and a directory
+        // was therefore undeletable by it. `force_remove` deletes directories on purpose, so
+        // that stand-in silently became a success — a test asserting an error over a call that
+        // could no longer produce one.
         let dir = tempfile::tempdir().unwrap();
-        let occupied = dir.path().join("linix-nightly.timer");
-        std::fs::create_dir(&occupied).unwrap();
-        let err = remove_generated(&occupied).unwrap_err().to_string();
+        let unit = dir.path().join("linix-nightly.timer");
+        std::fs::write(&unit, b"[Timer]\n").unwrap();
+
+        // Windows: an open handle with no sharing at all. `File::open` will not do — Rust's
+        // default share mode includes `FILE_SHARE_DELETE`, so a plain open leaves the file
+        // perfectly deletable, which is how the first attempt at this test passed nothing.
+        #[cfg(windows)]
+        let _held = {
+            use std::os::windows::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(&unit)
+                .unwrap()
+        };
+        // Unix: a parent nobody may write. Root ignores the mode, so the check below can be
+        // vacuous in a container running as root — Windows carries this one in CI.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+        }
+
+        let outcome = remove_generated(&unit);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+            if outcome.is_ok() {
+                return; // running as root; the path was deletable after all
+            }
+        }
+        let err = outcome.unwrap_err().to_string();
         assert!(
             err.contains("linix-nightly.timer"),
             "the error does not name the file: {}",
+            err
+        );
+        assert!(
+            err.contains("still be armed"),
+            "the error does not say what is left behind: {}",
             err
         );
     }

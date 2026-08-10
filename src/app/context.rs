@@ -55,11 +55,10 @@ impl App {
 
         // The journal lives beside the registry: both are LiNix's record of what it did,
         // so isolating one and not the other left the WAL pointing at real user data.
-        let journal_path = state_path
+        let journal_dir = state_path
             .as_ref()
             .and_then(|p| p.parent())
-            .map(|d| d.join(Journal::FILE_NAME))
-            .unwrap_or_else(|| crate::utils::safe_data_dir().join(Journal::FILE_NAME));
+            .map(|d| d.to_path_buf());
 
         // Overlapped, because none of these four needs any of the others. Startup was a
         // straight line of independent I/O — the backend registrations, a state-file read, the
@@ -86,9 +85,12 @@ impl App {
             .map_err(|e| Error::Other(format!("Kernel Thread Panic during state load: {}", e)))?
         };
         let open_journal = {
-            let path = journal_path.clone();
+            let dir = journal_dir.clone();
             async move {
-                tokio::task::spawn_blocking(move || Journal::at(path))
+                tokio::task::spawn_blocking(move || match dir {
+                    Some(d) => Journal::at(d.join(Journal::FILE_NAME)),
+                    None => Journal::new(),
+                })
                     .await
                     .map_err(|e| {
                         Error::Other(format!("Kernel Thread Panic opening the WAL: {}", e))

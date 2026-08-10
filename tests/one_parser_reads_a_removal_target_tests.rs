@@ -108,3 +108,80 @@ fn every_call_site_shape_round_trips_to_something_a_backend_can_be_given() {
         );
     }
 }
+
+/// **One reader decides what a `when` header is**, in the same spirit as the rest of this file.
+///
+/// Five places asked *does this line open a block, and with what predicate*, and they did not
+/// agree. `profiles.rs`'s `active` writer wrote `strip_prefix("when ").unwrap_or("")`, which
+/// makes any other block header a `when` with an empty predicate — a gate that evaluates false
+/// and quietly drops what it holds — while `gated.rs`, reading the same file, refuses a
+/// non-`when` header outright. `grammar::block_header` and `grammar::when_predicate` are the
+/// two questions, asked in one place.
+#[test]
+fn only_the_grammar_decides_what_opens_a_block() {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p);
+            }
+        }
+    }
+    walk(&src, &mut files);
+    files.sort();
+
+    let mut offenders = Vec::new();
+    let mut scanned = 0usize;
+    let mut callers = 0usize;
+    for path in &files {
+        let body = std::fs::read_to_string(path).unwrap_or_default();
+        scanned += 1;
+        // `grammar/mod.rs` holds the two readers; `statement.rs` parses a *statement's* trailing
+        // brace as part of a declaration, which is a different question about the same byte.
+        let is_the_reader =
+            path.ends_with(r"grammar\mod.rs") || path.ends_with("grammar/mod.rs");
+        for (i, line) in body.lines().enumerate() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            if line.contains("block_header(") || line.contains("when_predicate(") {
+                callers += 1;
+            }
+            if is_the_reader {
+                continue;
+            }
+            if line.contains("strip_suffix('{')") || line.contains(r#"strip_prefix("when ")"#) {
+                offenders.push(format!(
+                    "{}:{}  {}",
+                    path.file_name().unwrap_or_default().to_string_lossy(),
+                    i + 1,
+                    line.trim()
+                ));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "these decide for themselves what a block header is:\n  {}\n\nAsk \
+         `grammar::block_header` and `grammar::when_predicate`. Five copies of this question \
+         gave four answers.",
+        offenders.join("\n  ")
+    );
+    assert!(
+        scanned > 50,
+        "the scan read only {scanned} source files; it is not reading `src/`"
+    );
+    assert!(
+        callers >= 8,
+        "only {callers} references to the two readers; the callers have drifted back to \
+         hand-rolling it"
+    );
+}

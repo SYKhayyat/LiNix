@@ -62,8 +62,7 @@ pub trait LockFile: Default + Serialize + DeserializeOwned + Sized {
     fn save(&self, path: &Path) -> Result<()> {
         if !crate::core::dry_run::active() {
             if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir)
-                    .map_err(|e| Error::Io(format!("creating {}: {}", dir.display(), e)))?;
+                crate::utils::file::ensure_dir(dir)?;
             }
         }
         let body = toml::to_string_pretty(self)

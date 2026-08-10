@@ -380,8 +380,11 @@ pub fn remove_from_active(
         let line_no = idx + 1;
         let text = bare(raw);
 
-        if let Some(header) = text.strip_suffix('{') {
-            let predicate = header.trim().strip_prefix("when ").unwrap_or("").trim();
+        if let Some(header) = crate::config::grammar::block_header(&text) {
+            // A header that is not a `when` reaches this writer only from a file `gated::read`
+            // has already refused, so an empty predicate here is the absent one, not a false
+            // gate hiding what the block holds.
+            let predicate = crate::config::grammar::when_predicate(header).unwrap_or("");
             open = Some(Open {
                 header: raw.to_string(),
                 line: line_no,
@@ -476,10 +479,10 @@ pub fn blocks_in_active(body: &str) -> Vec<BlockDrop> {
     let mut out = Vec::new();
     for (idx, raw) in body.lines().enumerate() {
         let text = crate::config::grammar::strip_comment(raw).trim();
-        if let Some(header) = text.strip_suffix('{') {
-            if let Some(pred) = header.trim().strip_prefix("when ") {
+        if let Some(header) = crate::config::grammar::block_header(text) {
+            if let Some(pred) = crate::config::grammar::when_predicate(header) {
                 out.push(BlockDrop {
-                    predicate: pred.trim().to_string(),
+                    predicate: pred.to_string(),
                     line: idx + 1,
                 });
             }

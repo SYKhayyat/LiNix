@@ -508,18 +508,9 @@ impl Installable for LinkInstallable {
                         target_path
                     );
                 } else {
-                    let metadata = tokio::fs::symlink_metadata(&target_path)
+                    crate::utils::file::remove_deployed_path(&target_path)
                         .await
-                        .map_err(Error::from)?;
-                    if metadata.is_dir() && !metadata.is_symlink() {
-                        tokio::fs::remove_dir_all(&target_path)
-                            .await
-                            .map_err(Error::from)?;
-                    } else {
-                        tokio::fs::remove_file(&target_path)
-                            .await
-                            .map_err(Error::from)?;
-                    }
+                        .map_err(Error::Io)?;
                 }
             }
 
@@ -581,14 +572,9 @@ impl Installable for LinkInstallable {
             }
 
             if exists || is_symlink {
-                let metadata = tokio::fs::symlink_metadata(path)
+                crate::utils::file::remove_deployed_path(path)
                     .await
-                    .map_err(Error::from)?;
-                if metadata.is_dir() && !metadata.is_symlink() {
-                    tokio::fs::remove_dir_all(path).await.map_err(Error::from)?;
-                } else {
-                    tokio::fs::remove_file(path).await.map_err(Error::from)?;
-                }
+                    .map_err(Error::Io)?;
             }
 
             if has_backup {

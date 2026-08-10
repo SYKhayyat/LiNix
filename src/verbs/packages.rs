@@ -633,10 +633,7 @@ pub async fn suspend_for_session(app: &App, packages: &[String]) -> Result<()> {
             // act on — so the removal is recorded before it runs, like every other.
             crate::core::journalled(
                 &app.journal,
-                vec![crate::core::JournalAction::Remove {
-                    name: bare_name.clone(),
-                    backend: b.name().to_string(),
-                }],
+                crate::core::journal::removals_of(b.name(), std::slice::from_ref(&bare_name)),
                 inst.remove(std::slice::from_ref(&bare_name), b.sudo_for_write(), reaped),
             )
             .await?;

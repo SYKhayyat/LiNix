@@ -229,9 +229,7 @@ pub async fn export(
     }
 
     if !dry_run {
-        tokio::fs::create_dir_all(out_dir)
-            .await
-            .map_err(Error::from)?;
+        crate::utils::file::ensure_dir_async(out_dir).await?;
     }
     for f in formats {
         let name = f.filename().to_string();

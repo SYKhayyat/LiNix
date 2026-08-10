@@ -76,10 +76,7 @@ fn strip_module_ext(s: &str) -> String {
 /// Count the meaningful (non-blank, non-comment) entries in a fetched module body, for a
 /// friendly summary after `module add`. Pure.
 pub fn count_entries(body: &str) -> usize {
-    body.lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .count()
+    crate::utils::file::filtered_lines(body).len()
 }
 
 /// Heuristic guard: a fetched module that starts with `<` is almost certainly an HTML error

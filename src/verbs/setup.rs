@@ -63,7 +63,7 @@ pub async fn handle_add(app: &App, source: &str, trust: bool, force: bool) -> Re
                 format!("{}.txt", name)
             };
             let dir = scratch.path().join("modules");
-            std::fs::create_dir_all(&dir).map_err(crate::core::Error::from)?;
+            crate::utils::file::ensure_dir(&dir)?;
             info!("downloading {}...", url);
             let body = reqwest::get(url)
                 .await
@@ -125,7 +125,7 @@ pub async fn handle_add(app: &App, source: &str, trust: bool, force: bool) -> Re
     for pl in &plan.placements {
         let to = root.join(&pl.to);
         if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent).map_err(crate::core::Error::from)?;
+            crate::utils::file::ensure_dir(parent)?;
         }
         std::fs::copy(fetched.join(&pl.from), &to)
             .map_err(|e| crate::core::Error::Io(format!("copying {}: {}", pl.to.display(), e)))?;

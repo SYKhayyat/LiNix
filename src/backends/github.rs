@@ -678,9 +678,7 @@ impl Installable for GithubInstallable {
                         .await
                         .map_err(Error::from)?;
                 }
-                tokio::fs::create_dir_all(&pkg_dir)
-                    .await
-                    .map_err(Error::from)?;
+                crate::utils::file::ensure_dir_async(&pkg_dir).await?;
 
                 let reason =
                     artifact::selection_reason(wanted.asset.is_some(), formats.is_user_specified())
@@ -750,9 +748,7 @@ impl Installable for GithubInstallable {
                     .await
                     .map_err(Error::from)?;
             }
-            tokio::fs::create_dir_all(&pkg_dir)
-                .await
-                .map_err(Error::from)?;
+            crate::utils::file::ensure_dir_async(&pkg_dir).await?;
 
             let repo_name = spec.name.split('/').next_back().unwrap_or(&spec.name);
             let bin_dir = self.core.bin_dir.clone();
@@ -795,9 +791,7 @@ impl Installable for GithubInstallable {
                 // One subdirectory per artifact: two archives under one declaration can both
                 // contain `bin/`, and unpacking them over each other loses one of them.
                 let unpack_dir = pkg_dir.join(artifact_dir_name(&pick.asset.name));
-                tokio::fs::create_dir_all(&unpack_dir)
-                    .await
-                    .map_err(Error::from)?;
+                crate::utils::file::ensure_dir_async(&unpack_dir).await?;
 
                 let dl_path_archive = dl_path.clone();
                 let unpack_archive = unpack_dir.clone();

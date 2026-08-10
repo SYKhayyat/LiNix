@@ -281,9 +281,7 @@ impl Dotfiles<'_> {
             // is why this belongs to the tree and not to the backend.
             for placement in &tree.plan.placements {
                 if let Some(parent) = placement.destination.parent() {
-                    tokio::fs::create_dir_all(parent)
-                        .await
-                        .map_err(Error::from)?;
+                    crate::utils::file::ensure_dir_async(parent).await?;
                 }
             }
             // Both arms are the same refusal, because both mean the same thing to a user: the
