@@ -649,3 +649,116 @@ fn the_matrix_scan_objects_to_the_shape_that_shipped() {
 ";
     assert_eq!(collapses_to_one_job(sound), None);
 }
+
+/// **A `--test <name>` that names nothing is a job that fails in three seconds, every night.**
+///
+/// `Cargo.toml` declares exactly one test target — `suite`, with `autotests = false` — because
+/// 101 auto-discovered targets each fat-LTO-linked against a 100k-line crate filled a 944 GB
+/// disk. That conversion renamed every target to `suite` and updated the workflow step that
+/// happened to be read at the time. It missed three others, in the nightly jobs, which have
+/// invoked deleted targets ever since:
+///
+/// ```text
+/// error: no test target named `argv_drift_tests` in default-run packages
+/// ```
+///
+/// Five consecutive scheduled runs were red before anyone looked, and they were red instantly —
+/// not one assertion in those jobs has been evaluated since the conversion. The upstream-drift
+/// sweep, which is the only thing that notices a manager changing its flags, has been off.
+///
+/// Cargo already fails loudly on this; what it cannot do is fail *where somebody is reading*.
+#[test]
+fn every_test_target_ci_invokes_is_one_that_exists() {
+    let manifest = read("Cargo.toml");
+    let declared: BTreeSet<String> = manifest
+        .split("[[test]]")
+        .skip(1)
+        .filter_map(|block| {
+            block
+                .lines()
+                .find_map(|l| l.trim().strip_prefix("name = "))
+                .map(|n| n.trim().trim_matches('"').to_string())
+        })
+        .collect();
+    assert!(
+        declared.contains("suite"),
+        "no `[[test]]` target named `suite` in Cargo.toml — this scan has stopped matching it: \
+         {declared:?}"
+    );
+
+    let mut invoked: Vec<(String, String)> = Vec::new();
+    for w in files_in(".github/workflows", &[".yml", ".yaml"]) {
+        let body = read(&format!(".github/workflows/{}", base(&w)));
+        for name in test_targets_named(&body) {
+            invoked.push((base(&w), name));
+        }
+    }
+    assert!(
+        !invoked.is_empty(),
+        "no `--test` invocation found in any workflow; this scan is reading nothing"
+    );
+
+    let missing: Vec<String> = invoked
+        .iter()
+        .filter(|(_, n)| !declared.contains(n))
+        .map(|(f, n)| format!("{f}: --test {n}"))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "these CI steps name a cargo test target that does not exist, so the job fails in \
+         seconds having evaluated nothing:\n  {}\n\nThe only target is `suite`; a file inside \
+         it is selected as `--test suite <module>::`.",
+        missing.join("\n  ")
+    );
+}
+
+/// Every `--test <name>` in a workflow body, in order.
+fn test_targets_named(body: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in body.lines() {
+        let mut rest = line;
+        while let Some(at) = rest.find("--test ") {
+            rest = &rest[at + "--test ".len()..];
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+                .collect();
+            if !name.is_empty() {
+                out.push(name);
+            }
+        }
+    }
+    out
+}
+
+/// **The scan, shown catching the line that shipped.** Three nightly jobs invoked
+/// `--test argv_drift_tests` for weeks after that target was deleted, and a scan that has never
+/// objected to anything reads exactly like a clean tree.
+#[test]
+fn the_test_target_scan_sees_the_line_that_was_broken() {
+    let broken = "      run: cargo test --release --test argv_drift_tests -- --nocapture";
+    assert_eq!(
+        test_targets_named(broken),
+        vec!["argv_drift_tests".to_string()]
+    );
+
+    // Two on one line, which is how the tools nightly wrote it.
+    let two = "  \"cd /src && cargo test --test argv_drift_tests --test terminator_probe_tests\"";
+    assert_eq!(
+        test_targets_named(two),
+        vec![
+            "argv_drift_tests".to_string(),
+            "terminator_probe_tests".to_string()
+        ]
+    );
+
+    // The fixed form names the real target and selects a module inside it.
+    assert_eq!(
+        test_targets_named("run: cargo test --test suite -- argv_drift_tests:: --nocapture"),
+        vec!["suite".to_string()]
+    );
+
+    // And a line with no `--test` at all contributes nothing, so the scan is not matching
+    // everything it reads.
+    assert!(test_targets_named("run: cargo build --release").is_empty());
+}

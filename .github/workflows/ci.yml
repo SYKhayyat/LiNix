@@ -363,7 +363,7 @@ jobs:
           -e TERMINATOR_PROBE=1 -e CARGO_TARGET_DIR=/tmp/target \
           -v "$PWD:/src" \
           linix-it-tools -c \
-          "cd /src && cargo test --test argv_drift_tests --test terminator_probe_tests -- --nocapture"
+          "cd /src && cargo test --test suite -- argv_drift_tests:: terminator_probe_tests:: --nocapture"
 
   # The storage effectors, on real block devices. `btrfs`, `lvm` and `zfs` operate on volumes
   # and cannot be exercised by any amount of mocking; before 2026-07-30 none of them had ever
@@ -466,7 +466,7 @@ jobs:
     - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@stable
     - name: Ask every installed manager whether it still has these subcommands
-      run: cargo test --release --test argv_drift_tests -- --nocapture
+      run: "cargo test --release --test suite -- argv_drift_tests:: --nocapture"
 
     # The same question one layer down: not "does this subcommand exist" but "does `--` still
     # mean options-end-here to this parser". Four rows of that table have been wrong, each one
@@ -476,7 +476,7 @@ jobs:
     - name: Ask them whether `--` still ends their options
       env:
         TERMINATOR_PROBE: '1'
-      run: cargo test --release --test terminator_probe_tests -- --nocapture
+      run: "cargo test --release --test suite -- terminator_probe_tests:: --nocapture"
 
   # A harness is trustworthy because its checks CAN go red, not because they are green. This
   # replaces `linix` with a binary that does nothing and exits 0: every check that still
