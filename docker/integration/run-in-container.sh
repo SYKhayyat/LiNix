@@ -37,6 +37,23 @@ export LINIX_DATA_DIR="/tmp/linix-it-state"
 rm -rf "$LINIX_CONFIG_DIR" "$LINIX_DATA_DIR"
 mkdir -p "$LINIX_CONFIG_DIR" "$LINIX_DATA_DIR"
 
+# **A wait budget equal to the caller's whole timeout leaves nothing for the work.**
+# `manager_lock_wait_secs` defaults to 300 — sized for a person's `dnf upgrade`, with no outer
+# clock — and `$TO` above is `timeout 300`. A run that waits out an orphaned manager therefore
+# hits the harness's own limit at the exact second the wait would have expired, and is killed
+# mid-transaction with nothing installed: measured on fedora as `crash/midway: the cleanup
+# uninstall left 3 of pv dos2unix ncdu still on PATH`, a sentence about a cleanup that never got
+# to run. Every crash section here kills LiNix on purpose and so manufactures exactly this
+# orphan, over and over.
+#
+# Thirty seconds: long enough that the wait is genuinely exercised (the checks that watch for
+# `linix: waiting for` still see it), short enough to leave the command nine tenths of its
+# clock. The product's default is not the thing under test here; that it waits at all, and says
+# so, is.
+cat > "$LINIX_CONFIG_DIR/preferences.toml" <<'PREFS'
+manager_lock_wait_secs = 30
+PREFS
+
 # --- The coverage ledger. Files, not variables: `grep_ok` runs its command in a
 # pipeline, and a pipeline is a subshell whose variable writes die with it — so a
 # ledger kept in a variable would silently forget every command greped for.
@@ -2317,10 +2334,23 @@ else
             hard "lock: a run after a killed holder failed (rc=$_rc) instead of taking the free lock"
             echo "        heal said: $(tr '\n' ' ' < /tmp/lock-corpse-heal.out | tail -c 300)"
             excerpt /tmp/lock-corpse.out 6
-        elif [ "$_took" -ge 30 ]; then
-            hard "lock: the next run waited ${_took}s on a holder that was already dead — the stale stamp file was believed over the lock"
+        # **What must not happen is a wait on the DATA DIRECTORY**, and that is what is
+        # asserted — not a stopwatch. A killed holder also orphans the package manager it had
+        # started, and the next run legitimately waits for that manager to finish (II.51),
+        # announcing it as it goes. On opensuse that was 62 seconds of correct behaviour, and a
+        # bare `>= 30` reported it as "the stale stamp file was believed over the lock" — a
+        # sentence about a mechanism that had not run. The wait LiNix is forbidden from making
+        # here is the one on its own lock, and it says which wait it is making.
+        elif grep -q "waiting for the data directory" /tmp/lock-corpse.out 2>/dev/null; then
+            hard "lock: the next run waited on the data directory after the holder was killed — the stale stamp file was believed over the lock (${_took}s)"
+            excerpt /tmp/lock-corpse.out 6
+        elif [ "$_took" -ge 120 ]; then
+            hard "lock: the next run took ${_took}s, which is the data-lock timeout, without saying it was waiting for anything"
+            excerpt /tmp/lock-corpse.out 6
         else
-            PASS=$((PASS + 1)); echo "  PASS  lock: a killed holder's lock died with it — the next run took ${_took}s, not the 120s timeout"
+            _why=""
+            grep -q "linix: waiting for" /tmp/lock-corpse.out 2>/dev/null && _why=" (it waited for the package manager the killed run had started, and said so)"
+            PASS=$((PASS + 1)); echo "  PASS  lock: a killed holder's lock died with it — the next run took ${_took}s, not the 120s timeout${_why}"
         fi
     fi
     crash_wipe
