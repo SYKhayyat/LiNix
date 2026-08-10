@@ -13,7 +13,7 @@ which point nobody could find a decision in it and 84 of them had no recorded an
 | [`spec/why.md`](spec/why.md) | V | The reason behind every Part II rule — each one the scar of a real bug. | **Before changing any Part II rule.** |
 | [`spec/plan.md`](spec/plan.md) | III + IV | The work in dependency order, each phase with its exit condition; then the proofs. | When picking up work. |
 | [`spec/bugs.md`](spec/bugs.md) | VI | Bugs killed by this design, and bugs carried forward. | Before building anything. |
-| [`spec/decisions.md`](spec/decisions.md) | — | **All 182 decisions. 174 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 3 BUILT NEVER RULED, 1 OPEN.** Counted, not typed — `scripts/decision-count.sh --check`. | Before proposing anything. |
+| [`spec/decisions.md`](spec/decisions.md) | — | **All 183 decisions. 176 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 3 BUILT NEVER RULED, 0 OPEN.** Counted, not typed — `scripts/decision-count.sh --check`. | Before proposing anything. |
 | [`attic/lessons.md`](attic/lessons.md) | — | Thirty-one lessons, each the residue of a shipped defect. For a person, once. | **Never.** It says so at the top, and it means agents. |
 
 **Parts VIII–XIII were proposal documents — artifacts and channels (`D1`–`D17`), `when`

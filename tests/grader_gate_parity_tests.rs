@@ -98,7 +98,7 @@ fn every_gate_ci_runs_is_run_locally_with_the_same_target() {
     assert!(
         missing.is_empty(),
         "a local gate measures less than the CI gate of the same name:\n  {}\n\n\
-         harness-logic-test.sh's parity predicate compares basenames, so it cannot see this.",
+         `the_review_apparatus_is_rust_tests` checks parity over gate SCRIPTS; a job whose \n         steps run a command directly is invisible to it, which is what this one is for.",
         missing.join("\n  ")
     );
 }

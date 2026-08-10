@@ -3099,3 +3099,19 @@ directory in the error. `create_dir_all(p)?` on its own reports `Access is denie
 
 **One `Writes`.** `model::Writes` is whether writes reach the disk, for every subsystem that
 previews. A second enum answering that question is a second answer to it.
+
+## II.46 A rule about this repo's files is a Rust gate (`S77`, V.177)
+
+**A predicate that reads repo files as text belongs in `tests/`, not in a shell script.** It runs
+in `cargo test`, where the other gates that read this repo run, and it fails on a developer
+machine before a release script is reached.
+
+**What stays in shell is what shell alone can answer**: lifting a harness function body and
+running it under the interpreter CI uses. Reimplementing that in Rust would be testing a copy.
+
+**Before writing a gate, look for the one that exists.** Gate parity had a Rust successor
+already, stronger than the shell predicate being replaced; a third copy would have been the
+defect the change was made to remove.
+
+**An exemption list is audited by the gate that reads it.** A name in `NOT_GATES` that matches no
+file is a claim about nothing, and it is how an exemption outlives the thing it excused.

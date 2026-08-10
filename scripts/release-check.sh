@@ -97,8 +97,9 @@ fi
 
 # CI runs both of these and this script ran neither, so a local GO could still be a CI NO-GO —
 # the same asymmetry E3/E4 found in `cargo fmt`, one file over. release-check.ps1 runs the
-# predicates; parity between the two release scripts is asserted by harness-logic-test.sh
-# itself, from ci.yml, so a gate added to CI fails until it is added here too.
+# predicates; parity between the two release scripts is asserted from ci.yml by
+# `tests/the_review_apparatus_is_rust_tests.rs`, so a gate added to CI fails until it is added
+# here too.
 echo "-> scripts/harness-logic-test.sh"
 if LINIX_BIN="$REPO_ROOT/target/release/linix" bash scripts/harness-logic-test.sh; then
     pass "harness predicates"
@@ -111,8 +112,8 @@ if bash scripts/harness-mutation-test.sh --check; then
     pass "harness mutation budget"
 else fail "harness mutation budget EXCEEDED — checks that examine nothing"; fi
 
-# And the OTHER harness (G-4). CI mutation-tests both; this script tested one, and
-# `harness-logic-test.sh` reported parity because it compared basenames. The four-distro
+# And the OTHER harness (G-4). CI mutation-tests both; this script tested one, and the parity
+# gate reported ok because it compared basenames. The four-distro
 # harness runs on every push against 136 checks and was measured in exactly one place.
 # Needs no Docker: the harness is shell, and the point is to run it against a stub.
 echo "-> scripts/harness-mutation-test.sh docker/integration/run-in-container.sh --check"

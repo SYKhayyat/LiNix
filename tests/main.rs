@@ -137,6 +137,7 @@ mod terminator_probe_tests;
 mod the_engine_runs_the_graph_in_order_tests;
 mod the_kernel_assembles_what_it_was_configured_with_tests;
 mod the_log_covers_what_cannot_be_recomputed_tests;
+mod the_review_apparatus_is_rust_tests;
 mod time_travel_tests;
 mod unknown_backend_family_tests;
 mod verbs_are_reachable_tests;

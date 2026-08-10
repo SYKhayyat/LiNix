@@ -5730,3 +5730,43 @@ which derived both paths by hand, and the last time it was left to a caller the 
 isolated for tests and the WAL did not — 733 KB of test noise appended to a developer's real
 journal, and then a format change made the file unparseable and bricked every test at bootstrap.
 A rule enforced by a comment above one call site is not enforced.
+
+**V.177 — Why shell was the wrong language for six of these, and why one of them stayed put.**
+
+**A shell pipeline fails silently in the direction of "pass".** `grep -c` prints `0` and exits 1
+when it matches nothing, so `COUNT=$(grep -c … || echo 0)` captures the two-line string `0\n0`,
+both numeric guards die with *integer expected*, `[` returning an error takes the else branch of
+each `if`, and the script reaches its success message. That is not a hypothetical: it is written
+in this repo's own comments, about this repo's own mutation gate, in exactly the total-collapse
+case the guards exist to catch. Rust does not have a comparison operator that treats a parse
+failure as *the good branch*.
+
+**And a shell pipeline can be blind to the byte it is looking for.** MSYS grep opens a file in
+text mode and normalises CRLF before matching, so the CRLF gate never fired on Windows — the one
+platform where a developer's editor writes CRLF into the working tree. The shell version needed a
+self-test that plants a CRLF file and checks its own detector before believing a `no`. Reading
+the bytes needs no such ceremony.
+
+**Timing is the other half.** These predicates ran at the end of a release script or in CI, which
+means the feedback arrives after the work is done, from a log. In `cargo test` they run beside
+the twenty-seven other gates that read `ci.yml`, `target-state.md` and `src/` — the same second,
+the same command, the same failure format.
+
+**Why gate parity stayed where it was.** It had already been ported, when the shell predicate was
+caught comparing basenames while CI ran the mutation gate against two different harnesses. The
+Rust successor keys on the whole invocation. Writing a second Rust version because the shell one
+was on the list would have produced three implementations of one question inside the change whose
+entire subject is that pattern — and it would have looked like progress, because the count of
+shell lines would have gone down.
+
+**Why the floors are not optional here.** Every one of these gates reads a *list*: the scripts in
+a directory, the mounts in a workflow, the Dockerfiles in a folder, the functions in a harness. A
+list that comes back empty makes every one of them pass. That is II.23's shape, and it is the
+specific way the predicates being replaced had failed before.
+
+**Why the register's arithmetic was wrong and how that was found.** Running the trimmed script
+end to end — which nothing had done during the compaction — reported that `decisions.md` and
+`SPEC.md` each stated 174 ANSWERED, 3 BUILT NEVER RULED and 1 OPEN, while the register itself
+held 176, 2 and 0, and the index still listed `Z1` as OPEN four days after it was ruled. The
+number is counted, not typed, and the check for it exists; what did not happen is anybody running
+it. A gate is only as good as the last time it was allowed to speak.

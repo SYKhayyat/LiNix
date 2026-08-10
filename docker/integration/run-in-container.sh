@@ -2290,7 +2290,7 @@ sudo_blocker() {
     # developer's git identity and thirteen commits went out under it. A sudoer is worse.
     #
     # `LINIX_IT_IMAGE` is set by every integration Dockerfile and by nothing else, and
-    # `harness-logic-test.sh` already asserts each image declares it — so it is the one marker
+    # `the_review_apparatus_is_rust_tests` asserts each image declares it — so it is the one marker
     # that means "this machine is disposable" and cannot drift without a red gate.
     [ -n "${LINIX_IT_IMAGE:-}" ] \
         || { echo "this is not a disposable image (no LINIX_IT_IMAGE), and these checks add a user and a sudoers file"; return 0; }

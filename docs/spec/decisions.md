@@ -1,4 +1,4 @@
-# The decision register — all 182, one of them open
+# The decision register — all 183, none of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -15,9 +15,9 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **3** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **174** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **176** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -73,10 +73,10 @@ status loses that, so it is kept here:
 
 ## Index
 
-**One is open — `Z1`, raised 2026-08-03, a licence choice. `Y18` is RULED in full as of
-2026-08-09: `@source=` on a `shim:` line is read, and `Y23` — flatpak's unreadable channel — was
-ruled and built beside it.** All 182 are accounted
-for: **174 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 3 BUILT NEVER RULED, 1 OPEN** — and this line
+**Nothing is open. `Z1` — the licence — was ruled 2026-08-09, and `Y18` is RULED in full as of
+the same day: `@source=` on a `shim:` line is read, and `Y23` — flatpak's unreadable channel —
+was ruled and built beside it.** All 183 are accounted
+for: **176 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 3 BUILT NEVER RULED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -166,7 +166,7 @@ there). It is when the question stopped being open, not when the code landed.
 | **K17** | How does `setting:` reach a store nobody wrote an adapter for? | 2026-07-23 |
 | **K18** | Should LiNix use a backend's own atomic swap where one exists (nix, rpm-ostree)? | 2026-07-24 |
 
-### N — `firewall:` (Part XI) — 7
+### N — `firewall:` (Part XI) — 8
 
 | | question | answered |
 |---|---|---|
@@ -177,6 +177,7 @@ there). It is when the question stopped being open, not when the code landed.
 | **N5** | What does removing a firewall rule restore? | 2026-07-24 |
 | **N6** | What if a config declares both `firewall:` lines and a `link:` to the ruleset? | 2026-07-24 |
 | **N7** | Does `watch` revert firewall drift unattended, or only report it? | 2026-07-24 |
+| **N8** | Is closing an undeclared port a removal, and does it count against `max_removals`? | **BUILT, NEVER RULED** 2026-08-09 |
 
 ### T — secrets (Part XII) — 7
 
@@ -310,7 +311,7 @@ without asking. Two are not mine: one is a legal choice and one changes a publis
 
 | | question | answered |
 |---|---|---|
-| **Z1** | There is no `LICENSE` file and no `license` key in `Cargo.toml`, for a tool with an install script and a `self-upgrade` verb. Which licence? | **OPEN** |
+| **Z1** | There is no `LICENSE` file and no `license` key in `Cargo.toml`, for a tool with an install script and a `self-upgrade` verb. Which licence? | **ANSWERED** — ruled 2026-08-09 |
 | **Z2** | `lock` and `unlock` touch unrelated files and are not inverses; `unlock` can cause package churn. Rename it, or give `lock` a real inverse? | **ANSWERED** — both verbs name their axis (`versions`/`backends`/`scripts`/`all`), and every path that moves a version re-records it |
 
 ### Y — the efficiency pass — 24
@@ -1675,6 +1676,38 @@ a firewall rule nobody declared is drift. The single exception is the one that c
 from the far end of an SSH connection — there LiNix reports and leaves it, because an
 un-reverted rule is a thing you fix tomorrow and a reverted one can be a machine you cannot
 reach.
+
+---
+
+## N8
+
+**Status: BUILT, NEVER RULED** (built 2026-08-09 with the `Reaping` accumulator; raised by the
+whole-repo review the same day, which found it was not an unanswered decision but an *unasked*
+one — `N1`–`N7` settle exclusivity, restoration, SSH lockout, dual ownership and the unattended
+tick, and none of them asks this).
+
+**N8 — Is closing an undeclared port a removal, and does it count against `max_removals`?**
+`readme.md` promised every path that removes anything goes through one guard, and `firewall:`
+was the seventh resource kind with the word `guard` nowhere in its file — no import, no call, no
+comment. Three bespoke refusals had been written above it instead (unreadable baseline, SSH
+lockout, linked ruleset), which is the tell: the danger was understood and the guard two hundred
+lines away was not called.
+
+**What shipped:** `apply/firewall.rs` calls `enforce_extras` with the run's `Reaping`
+accumulator, so a closed port is counted, is subject to `protected`, and is reported. That
+answers this question in the affirmative *by construction*, and the answer was not ruled.
+
+**What it costs if it is the wrong answer.** A machine with ten undeclared ports open and one
+`firewall:` line reaches the default ceiling of `max_removals = 20` on its first sync — together
+with any package removals in the same run — and refuses. Before the accumulator, the hardcoded
+`0` at the old call site was answering the same question the other way, by accident, and `N7`'s
+*revert by default on an unattended tick* is what made that accident load-bearing.
+
+**The two honest positions.** Either a port is a removal like any other and the ceiling is the
+point — a run about to close ten things a user did not declare is exactly the run that should
+stop and ask — or reachability is a different axis from software and wants its own ceiling.
+There is no third answer where the port is guarded but uncounted: `protected` and the count come
+from the same call.
 
 ---
 

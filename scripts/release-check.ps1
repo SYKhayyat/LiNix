@@ -142,8 +142,8 @@ if ($null -eq $bashForMutation) {
     & $bashForMutation "scripts/harness-mutation-test.sh" "--check"
     if ($LASTEXITCODE -eq 0) { Pass "harness mutation budget" } else { Fail "harness mutation budget EXCEEDED - checks that examine nothing" }
 
-    # And the OTHER harness (G-4). CI mutation-tests both; this script tested one, and
-    # harness-logic-test.sh reported parity because it compared basenames. The four-distro
+    # And the OTHER harness (G-4). CI mutation-tests both; this script tested one, and the
+    # parity gate reported ok because it compared basenames. The four-distro
     # harness runs on every push against 136 checks and was measured in exactly one place.
     # Needs no Docker: the harness is shell, and the point is to run it against a stub.
     Write-Host "-> scripts/harness-mutation-test.sh docker/integration/run-in-container.sh --check"
