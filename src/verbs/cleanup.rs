@@ -697,7 +697,14 @@ pub async fn handle_protected(app: &App, packages: &[String], out: Output) -> Re
             serde_json::to_string_pretty(&serde_json::json!({
                 "protected_packages": cfg.guard.protected_packages,
                 "unprotected_packages": cfg.guard.unprotected_packages,
+                // Every ceiling, not the one this command was written before the others
+                // existed: a consumer asking "what will this machine refuse" got a third of
+                // the answer and no way to tell it was a third.
                 "max_removals": cfg.guard.max_removals,
+                "max_extra_removals": cfg.guard.max_extra_removals,
+                "max_port_closures": cfg.guard.max_port_closures,
+                "max_installs": cfg.guard.max_installs,
+                "max_total_changes": cfg.guard.max_total_changes,
             }))?
         );
         return Ok(());
@@ -725,21 +732,34 @@ pub async fn handle_protected(app: &App, packages: &[String], out: Output) -> Re
             println!("  {}", p);
         }
     }
-    match cfg.guard.max_removals {
-        0 => println!("\nMaximum removals in one command: unlimited (max_removals = 0)."),
-        n => println!("\nMaximum removals in one command: {} (max_removals).", n),
+    // Every ceiling, in one column, because a user reading this to answer "what stops a big
+    // change" needs the one that will stop theirs — and which one that is depends on what they
+    // are changing.
+    println!("\nCeilings for one command:");
+    for (key, value) in [
+        ("max_removals", cfg.guard.max_removals),
+        ("max_extra_removals", cfg.guard.max_extra_removals),
+        ("max_port_closures", cfg.guard.max_port_closures),
+        ("max_installs", cfg.guard.max_installs),
+        ("max_total_changes", cfg.guard.max_total_changes),
+    ] {
+        match value {
+            0 => println!("  {:<20} unlimited (0)", key),
+            n => println!("  {:<20} {}", key, n),
+        }
     }
 
     println!(
         "\nPackages the OS itself reports as essential are also refused, on top of this list.\n\
          Every command that removes is guarded — there is no way to opt one out.\n\
-         Edit `protected_packages`, `unprotected_packages` or `max_removals` under [guard] in {}.\n\
+         Edit `protected_packages`, `unprotected_packages` or any ceiling under [guard] in {}.\n\
          Check one package:      linix protected apt:python3\n\
          Machine-readable:       linix protected --json\n\
          Allow a big removal:    linix <command> --allow-mass-removal (the count only —\n\
                                  it never lets a protected or essential package through)\n\
          Allow a big install:    linix <command> --allow-mass-install (answers `max_installs`,\n\
-                                 off unless you set it)",
+                                 off unless you set it)\n\
+         Either flag answers `max_total_changes`; neither answers a protected name.",
         cfg.preferences_file.display()
     );
     Ok(())

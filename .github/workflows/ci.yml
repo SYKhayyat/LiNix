@@ -145,8 +145,12 @@ jobs:
     # does when a human is at a terminal — which is where a defect sat that emptied the output
     # of every command LiNix runs. `cargo test` already includes this file; it is named as its
     # own step so a regression is legible in the job list instead of buried in 1,300 results.
+    # Quoted, and it has to be: a module filter ends in `::`, which YAML reads as a mapping key
+    # and refuses. An unparseable workflow does not fail a job — it fails the *run*, in zero
+    # seconds, with no job to open and no log to read, so ten commits landed on a CI that had
+    # never executed a step. Every `run:` whose value ends in a colon needs these quotes.
     - name: Terminal (pty) behaviour
-      run: cargo test --release --target ${{ matrix.target }} --test suite pty_tests::
+      run: "cargo test --release --target ${{ matrix.target }} --test suite pty_tests::"
       if: matrix.os == 'ubuntu-latest'
 
     - name: Check formatting
@@ -196,24 +200,48 @@ jobs:
     - name: Download all artifacts
       uses: actions/download-artifact@v4
 
+    # **A release asset is named by its basename, and every build target produces `linix`.**
+    # Four artifact directories carrying one filename between them upload as one asset that
+    # three of the four overwrite — a release page offering a single `linix` binary with no way
+    # to tell which platform won. The name has to carry the target before anything is published,
+    # and it has to be the name the installers ask for.
+    - name: Name each binary after the target it was built for
+      run: |
+        set -eu
+        mkdir -p dist
+        for d in linix-*/; do
+          target=${d%/}; target=${target#linix-}
+          if [ -f "${d}linix.exe" ]; then
+            cp "${d}linix.exe" "dist/linix-${target}.exe"
+          else
+            cp "${d}linix" "dist/linix-${target}"
+            chmod +x "dist/linix-${target}"
+          fi
+        done
+        ls -l dist
+
     # The assertion the tagged path never makes because `action-gh-release` fails on its own if
     # the glob is empty — by which point the tag exists and the release is half-made. Here it is
     # a check, before anything is published, on every dispatch.
+    #
+    # One per matrix row, by name. A count alone passed when two Apple targets collided into one
+    # file, which is the failure this job actually had.
     - name: The binaries the release would publish are present
       run: |
         set -eu
-        found=$(find . -path './linix-*/linix' -o -path './linix-*/linix.exe' | sort)
-        echo "$found"
-        test -n "$found" || { echo "no artifacts matched linix-*/linix[.exe]" >&2; exit 1; }
-        test "$(echo "$found" | wc -l)" -ge 3           || { echo "expected one binary per build target" >&2; exit 1; }
+        missing=
+        for target in x86_64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin; do
+          test -f "dist/linix-${target}" || missing="${missing} linix-${target}"
+        done
+        test -f dist/linix-x86_64-pc-windows-msvc.exe || missing="${missing} linix-x86_64-pc-windows-msvc.exe"
+        test -z "$missing" || { echo "the release is missing:${missing}" >&2; exit 1; }
+        echo "all four targets present"
 
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/v')
       uses: softprops/action-gh-release@v1
       with:
-        files: |
-          linix-*/linix
-          linix-*/linix.exe
+        files: dist/*
         generate_release_notes: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

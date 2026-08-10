@@ -86,7 +86,10 @@ fn every_script_is_run_by_something_or_is_declared_not_to_be_a_gate() {
         ("install.sh", "what a user pipes from the web"),
         ("install.ps1", "what a user pipes from the web"),
         ("release-check.sh", "the top of the chain; a person runs it"),
-        ("release-check.ps1", "the top of the chain; a person runs it"),
+        (
+            "release-check.ps1",
+            "the top of the chain; a person runs it",
+        ),
         (
             "measure-batching.sh",
             "a measuring instrument, run by hand against a real container when a batching \
@@ -409,5 +412,103 @@ fn every_integration_image_declares_its_own_identity() {
         "image identity missing or wrong:\n  {}\n\nThe ratchet then files this image under its \
          base distro's record.",
         wrong.join("\n  ")
+    );
+}
+
+/// **A workflow that does not parse fails the run, not a job** — so nothing in this repo could
+/// see it (`S79`).
+///
+/// `S67` ended a step with a module filter, `--test suite pty_tests::`, and YAML read the
+/// trailing colon as a mapping key. GitHub answered by refusing the whole file: no jobs, no
+/// steps, no log, a red dot with a zero-second duration and the words *"likely failed because of
+/// a workflow file issue"*. **Ten commits landed on top of it** — each of them reporting a local
+/// build, test and clippy run as its verification, each of them correct about that and wrong
+/// about CI, because a workflow that never starts produces no failing check to notice.
+///
+/// This is a text scan and says so: the repo has no YAML parser and is not acquiring one for a
+/// gate. It checks the class the defect belongs to — a plain (unquoted) scalar that YAML will
+/// re-read as a key, which is any value ending in `:` or containing `: `. That is not every way
+/// to write invalid YAML; it is the way this repo has actually written it.
+#[test]
+fn every_workflow_value_that_yaml_would_read_as_a_key_is_quoted() {
+    let workflows = files_in(".github/workflows", &[".yml", ".yaml"]);
+    assert!(
+        !workflows.is_empty(),
+        "no workflow files found; the scan is not reading the directory"
+    );
+
+    /// The offending values in one file, as `line number: text`.
+    fn offenders(body: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        // A block scalar's body is shell, not YAML, and shell is full of colons. Everything
+        // indented under `run: |` is skipped until the indentation returns.
+        let mut block_indent: Option<usize> = None;
+        for (i, line) in body.lines().enumerate() {
+            let indent = line.len() - line.trim_start().len();
+            if let Some(open) = block_indent {
+                if line.trim().is_empty() || indent > open {
+                    continue;
+                }
+                block_indent = None;
+            }
+            let trimmed = line.trim_start().trim_start_matches("- ").trim_start();
+            if trimmed.starts_with('#') || trimmed.is_empty() {
+                continue;
+            }
+            let Some((key, value)) = trimmed.split_once(':') else {
+                continue;
+            };
+            if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+                continue;
+            }
+            let value = value.trim();
+            if value.starts_with('|') || value.starts_with('>') {
+                block_indent = Some(indent);
+                continue;
+            }
+            // Quoted is the fix, so quoted is not a finding. `#` starts a comment, and a value
+            // that is only a comment is an empty value.
+            if value.is_empty()
+                || value.starts_with('"')
+                || value.starts_with('\'')
+                || value.starts_with('#')
+            {
+                continue;
+            }
+            let value = value.split(" #").next().unwrap_or(value).trim();
+            if value.ends_with(':') || value.contains(": ") {
+                out.push(format!("{}: {}", i + 1, line.trim()));
+            }
+        }
+        out
+    }
+
+    // The floor, and it is not decoration: this scan's whole failure mode is quietly matching
+    // nothing. Fed the byte sequence that killed CI, it must object.
+    let planted = offenders("jobs:\n  build:\n    steps:\n    - run: cargo test pty_tests::\n");
+    assert_eq!(
+        planted.len(),
+        1,
+        "the scan cannot see the defect it exists for: {planted:?}"
+    );
+    assert!(
+        offenders(
+            "    - run: \"cargo test pty_tests::\"\n    - if: matrix.os == 'ubuntu-latest'\n"
+        )
+        .is_empty(),
+        "the scan objects to the fix, or to an ordinary conditional"
+    );
+
+    let mut found: Vec<String> = Vec::new();
+    for w in &workflows {
+        for o in offenders(&read(&format!(".github/workflows/{}", base(w)))) {
+            found.push(format!("{}:{}", base(w), o));
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "these values end in a colon or contain `: ` unquoted, which YAML reads as a mapping \
+         key and GitHub answers by refusing the entire file:\n  {}\n\nQuote the value.",
+        found.join("\n  ")
     );
 }

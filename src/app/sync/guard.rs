@@ -332,25 +332,24 @@ impl GuardReport {
     /// A refusal that says what is wrong and how to proceed. Leads with the count, since
     /// that is the fact that explains the rest.
     pub fn message(&self, scope: GuardScope, kind: RemovalKind) -> String {
-        let noun = match kind {
-            RemovalKind::Package => "packages",
-            RemovalKind::Extra => "managed resources",
-        };
         let mut out = format!("{}: refusing this removal.\n", scope.as_str());
 
-        if let Some(Objection::TooMany {
-            count,
-            limit,
-            setting,
-        }) = self
-            .objections
-            .iter()
-            .find(|o| matches!(o, Objection::TooMany { .. }))
-        {
-            out.push_str(&format!(
-                "  - it removes {} {}, over the limit of {} ([guard] {})\n",
-                count, noun, limit, setting
-            ));
+        // Every count that objected, not the first: a set can be over its own ceiling and over
+        // the total at once, and naming one of them sends a user to raise a number that leaves
+        // them refused by the other.
+        for o in &self.objections {
+            if let Objection::TooMany {
+                count,
+                limit,
+                setting,
+            } = o
+            {
+                let (verb, noun) = counted_as(setting);
+                out.push_str(&format!(
+                    "  - it {} {} {}, over the limit of {} ([guard] {})\n",
+                    verb, count, noun, limit, setting
+                ));
+            }
         }
 
         let protected: Vec<&Objection> = self
@@ -370,6 +369,7 @@ impl GuardReport {
                 match kind {
                     RemovalKind::Package => "package",
                     RemovalKind::Extra => "resource",
+                    RemovalKind::Port => "port",
                 }
             ));
         }
@@ -395,6 +395,18 @@ impl GuardReport {
                  linix plan                     see exactly what would be undone\n  \
                  put the line back              if the deletion was not what you meant\n  \
                  <command> --allow-mass-removal carry out this teardown anyway\n  \
+                 [guard] unprotected_packages    exempt one permanently (preferences.toml)",
+            ),
+            // Never `put the line back`: nobody declared these — that is *why* they are closing.
+            // The act that keeps a port open is declaring it, which is the opposite instruction.
+            RemovalKind::Port => out.push_str(
+                "\nThese ports are open on the machine and no `firewall:` line declares them, \
+                 so `sync` closes them (`N1`). A machine you reach over the network is a \
+                 machine this can cut you off from — read the list before you clear it.\n\n\
+                 What to do:\n  \
+                 linix plan                     see exactly what would be closed\n  \
+                 firewall:<port>/<proto>        declare a port you meant to keep open\n  \
+                 <command> --allow-mass-removal close this many anyway\n  \
                  [guard] unprotected_packages    exempt one permanently (preferences.toml)",
             ),
         }
@@ -458,24 +470,41 @@ pub async fn inspect(
     registry: &Arc<BackendRegistry>,
     removals: &[(String, String)],
 ) -> GuardReport {
-    inspect_removals(config, registry, removals, RemovalKind::Package, 0).await
+    // A fresh ledger: this is the preview, and a preview that spent a budget would report a
+    // different answer the second time it was asked.
+    inspect_removals(
+        config,
+        registry,
+        removals,
+        RemovalKind::Package,
+        &Reaping::new(),
+    )
+    .await
 }
 
-/// The one place `--allow-mass-removal` is honoured, and the one thing it clears.
+/// The one place the mass flags are honoured over a removal report, and the one thing they
+/// clear.
 ///
-/// II.10: the flag answers exactly one refusal — the count. It used to clear every objection,
+/// II.10: a mass flag answers exactly one refusal — the count. It used to clear every objection,
 /// so the flag meaning "yes, 50 packages is what I meant" also deleted python3. A confirmation
 /// asks; a refusal says no, and protection is a refusal (V.26): nothing overrides it.
 ///
-/// Both ceilings answer to it, because the question it answers is the same question (`Y20`).
+/// Every removal ceiling answers to `--allow-mass-removal`, because the question it answers is
+/// one question (`Y20`). `max_total_changes` answers to that flag *and* to
+/// `--allow-mass-install`, because a total is made of both (`N8`) — and to nothing else, which
+/// is why this is a match on the setting rather than a blanket retain.
 fn allow_the_count(config: &Config, report: &mut GuardReport, scope: GuardScope, noun: &str) {
-    if !config.allow_mass_removal {
+    if !config.allow_mass_removal && !config.allow_mass_install {
         return;
     }
     let before = report.objections.len();
-    report
-        .objections
-        .retain(|o| !matches!(o, Objection::TooMany { .. }));
+    report.objections.retain(|o| match o {
+        // `--allow-mass-install` clears the total, because a total is made of installs too, and
+        // it clears nothing else: the flag that means "yes, install that many" must not also
+        // answer "yes, remove that many". That conflation is II.10's whole point, one ceiling up.
+        Objection::TooMany { setting, .. } => !(config.allow_mass_removal || *setting == TOTAL_KEY),
+        _ => true,
+    });
     if before != report.objections.len() {
         warn!(
             "the {} count for '{}' was allowed by --allow-mass-removal.",
@@ -485,20 +514,21 @@ fn allow_the_count(config: &Config, report: &mut GuardReport, scope: GuardScope,
     }
 }
 
-/// What is being taken away. Both kinds answer to `protected_packages`, to OS-essential and
-/// to `max_removals`; they differ in one check and in what a refusal tells you to do.
+/// What is being taken away. Every kind answers to `protected_packages` and to a ceiling; they
+/// differ in one check, in which ceiling, and in what a refusal tells you to do.
 ///
-/// The distinction exists because [`protection_of`]'s declarability test asks "could a package
-/// line ever have held this name?", and for an extra the answer is structurally no — a
-/// `link:`/`service:`/`setting:` key is not a package line and never parses as one. Running
-/// that test over an extra marks every extra `Undeclarable` and refuses every teardown
+/// The package/extra distinction exists because [`protection_of`]'s declarability test asks
+/// "could a package line ever have held this name?", and for an extra the answer is structurally
+/// no — a `link:`/`service:`/`setting:` key is not a package line and never parses as one.
+/// Running that test over an extra marks every extra `Undeclarable` and refuses every teardown
 /// forever, which is a guard that has stopped being about the user's intent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemovalKind {
     Package,
-    /// A `link:`/`service:`/`setting:`/`shim:`/`schedule:`/`repo:` resource leaving the model,
-    /// or a port closed because no `firewall:` line declares it.
+    /// A `link:`/`service:`/`setting:`/`shim:`/`schedule:`/`repo:` resource leaving the model.
     Extra,
+    /// A port closed because no `firewall:` line declares it (`N8`).
+    Port,
 }
 
 impl RemovalKind {
@@ -508,6 +538,7 @@ impl RemovalKind {
         match self {
             Self::Package => "max_removals",
             Self::Extra => "max_extra_removals",
+            Self::Port => "max_port_closures",
         }
     }
 
@@ -515,7 +546,24 @@ impl RemovalKind {
         match self {
             Self::Package => config.guard.max_removals,
             Self::Extra => config.guard.max_extra_removals,
+            Self::Port => config.guard.max_port_closures,
         }
+    }
+}
+
+/// The `[guard]` key for the ceiling over everything one command changes (`N8`).
+const TOTAL_KEY: &str = "max_total_changes";
+
+/// What a ceiling counted, as the verb and noun a refusal says it with. Derived from the setting
+/// rather than from the caller, so the sentence and the key it names cannot describe different
+/// things — a message reading `removes 40 packages` above `[guard] max_port_closures` is worse
+/// than no message.
+fn counted_as(setting: &str) -> (&'static str, &'static str) {
+    match setting {
+        "max_removals" => ("removes", "packages"),
+        "max_extra_removals" => ("removes", "managed resources"),
+        "max_port_closures" => ("closes", "ports"),
+        _ => ("makes", "changes in total"),
     }
 }
 
@@ -532,15 +580,23 @@ impl RemovalKind {
 /// One value, owned by the command, incremented where the guard clears a removal. A caller
 /// cannot pass the wrong number because a caller no longer passes a number.
 ///
-/// **Two counts, because there are two ceilings** (`Y20`). `max_removals` is about software
-/// leaving the machine; `max_extra_removals` is about the resources a declaration put in place.
-/// Sharing one budget would make the stricter of the two govern both, so a server whose first
-/// firewall declaration closes forty ports could not also remove a package. Both are answered by
-/// `--allow-mass-removal`, because "yes, that many, I meant it" is one question.
+/// **A count per kind, because there is a ceiling per kind** (`Y20`, `N8`). `max_removals` is
+/// about software leaving the machine; `max_extra_removals` is about the resources a declaration
+/// put in place; `max_port_closures` is about reachability. Sharing one budget makes the
+/// strictest govern all of them, so a server whose first firewall declaration closes forty ports
+/// could not also remove a package. All are answered by `--allow-mass-removal`, because "yes,
+/// that many, I meant it" is one question.
+///
+/// **And one count of everything, because a command can pass every per-kind ceiling and still
+/// do more than anyone meant** (`N8`). `additions` is what the per-kind ceilings do not cover —
+/// installs and upgrades, resources created, ports opened — held here rather than anywhere else
+/// because `max_total_changes` is a budget for the command, and the command is what owns this.
 #[derive(Debug, Default)]
 pub struct Reaping {
     packages: std::sync::atomic::AtomicUsize,
     extras: std::sync::atomic::AtomicUsize,
+    ports: std::sync::atomic::AtomicUsize,
+    additions: std::sync::atomic::AtomicUsize,
 }
 
 impl Reaping {
@@ -550,7 +606,18 @@ impl Reaping {
 
     /// How many of this kind the command has already cleared.
     pub fn so_far(&self, kind: RemovalKind) -> usize {
-        self.counter(kind).load(std::sync::atomic::Ordering::Relaxed)
+        self.counter(kind)
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Everything the command has changed so far, of every kind — what `max_total_changes` is
+    /// measured against.
+    pub fn changes_so_far(&self) -> usize {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.packages.load(Relaxed)
+            + self.extras.load(Relaxed)
+            + self.ports.load(Relaxed)
+            + self.additions.load(Relaxed)
     }
 
     /// Record a cleared set. Called by the `enforce*` family and by nothing else: a removal
@@ -561,12 +628,36 @@ impl Reaping {
             .fetch_add(n, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Record changes that are not removals — installs and upgrades, resources created, ports
+    /// opened. They answer to no ceiling of their own beyond `max_installs`, but they are
+    /// changes, and `max_total_changes` counts changes.
+    fn record_addition(&self, n: usize) {
+        self.additions
+            .fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+    }
+
     fn counter(&self, kind: RemovalKind) -> &std::sync::atomic::AtomicUsize {
         match kind {
             RemovalKind::Package => &self.packages,
             RemovalKind::Extra => &self.extras,
+            RemovalKind::Port => &self.ports,
         }
     }
+}
+
+/// The `max_total_changes` objection, or `None` when the command still has room.
+///
+/// One function, called by every gate, because a total assembled at some gates and not others
+/// is a total that reports whichever subset happened to run — the `also_removing: usize` shape
+/// that `S55` was, one level up.
+fn too_many_changes(config: &Config, reaping: &Reaping, adding: usize) -> Option<Objection> {
+    let limit = config.guard.max_total_changes;
+    let total = reaping.changes_so_far() + adding;
+    (limit > 0 && total > limit).then_some(Objection::TooMany {
+        count: total,
+        limit,
+        setting: TOTAL_KEY,
+    })
 }
 
 /// The identities a `protected_packages` rule is matched against for one removal.
@@ -587,18 +678,19 @@ fn protected_names(kind: RemovalKind, name: &str) -> Vec<&str> {
     names
 }
 
-/// Inspect a removal set of one kind, counting `already` items of that kind the command has
-/// cleared before it against the same ceiling.
+/// Inspect a removal set of one kind against its own ceiling and against the command's total,
+/// reading what the command has already cleared off `reaping`.
 ///
-/// **This is the pure half and it stays pure**: a preview may ask it without spending anyone's
-/// budget. The `enforce*` family is what reads `already` off the command's [`Reaping`] and
-/// writes back to it, so nothing outside this module hand-assembles the number.
+/// **This is the pure half and it stays pure**: it reads the ledger and never writes to it, so a
+/// preview may ask without spending anyone's budget. The `enforce*` family is what records.
+/// Taking the ledger rather than a number is the point — `already: usize` was a parameter three
+/// callers assembled by hand and one answered with a `0` (`S55`).
 pub async fn inspect_removals(
     config: &Config,
     registry: &Arc<BackendRegistry>,
     removals: &[(String, String)],
     kind: RemovalKind,
-    already: usize,
+    reaping: &Reaping,
 ) -> GuardReport {
     let mut report = GuardReport::default();
     if removals.is_empty() {
@@ -611,18 +703,21 @@ pub async fn inspect_removals(
             essential_names(registry, &backends, config.max_parallel).await
         }
         // `service`/`link`/`setting` are not package managers and have no essential list to
-        // ask for; querying them would be a round trip that can only return nothing.
-        RemovalKind::Extra => HashSet::new(),
+        // ask for; querying them would be a round trip that can only return nothing. Neither is
+        // a firewall.
+        RemovalKind::Extra | RemovalKind::Port => HashSet::new(),
     };
 
     for (backend, name) in removals {
         let protection = match kind {
             RemovalKind::Package => protection_of(config, Some(backend), name, &os_essential),
-            RemovalKind::Extra => protected_names(kind, name).into_iter().find_map(|n| {
-                config
-                    .protection_rule(n)
-                    .map(|r| Protection::Rule(r.to_string()))
-            }),
+            RemovalKind::Extra | RemovalKind::Port => {
+                protected_names(kind, name).into_iter().find_map(|n| {
+                    config
+                        .protection_rule(n)
+                        .map(|r| Protection::Rule(r.to_string()))
+                })
+            }
         };
         if let Some(p) = protection {
             report.objections.push(Objection::Protected {
@@ -632,7 +727,7 @@ pub async fn inspect_removals(
         }
     }
 
-    let total = removals.len() + already;
+    let total = removals.len() + reaping.so_far(kind);
     let limit = kind.ceiling(config);
     if limit > 0 && total > limit {
         report.objections.push(Objection::TooMany {
@@ -641,6 +736,11 @@ pub async fn inspect_removals(
             setting: kind.ceiling_key(),
         });
     }
+    // Both ceilings, when both are busted: a refusal naming one number a user raises, only to
+    // meet the other on the next run, is a refusal that lied about what it wanted.
+    report
+        .objections
+        .extend(too_many_changes(config, reaping, removals.len()));
 
     report
 }
@@ -695,6 +795,75 @@ pub async fn enforce_extras(
     .await
 }
 
+/// What `apply` would refuse about this plan, as messages, changing nothing.
+///
+/// **Here rather than in `verbs/plan.rs`, because the preview's only value is being the same
+/// question.** The call site there ran one `inspect` over both removal lists, which put the
+/// package rules over resource keys and predicted a refusal `apply` did not perform; then it
+/// asked kind by kind with a hand-written `also_removing` for each. Both were the preview
+/// drifting from the enforcer while looking like it agreed. One ledger, the kinds in the order
+/// the engine gates them, and the numbers come off the ledger.
+///
+/// **Firewall ports are absent on purpose**: they are computed against the live machine at
+/// apply time, so a plan file cannot hold them and this cannot count them. A perimeter change
+/// can therefore push a run over `max_total_changes` that previewed clean — which is the same
+/// thing `plan` has always said about a machine that moves under it.
+pub async fn preview_refusals(
+    config: &Config,
+    registry: &Arc<BackendRegistry>,
+    installs: usize,
+    package_removals: &[(String, String)],
+    extra_removals: &[(String, String)],
+    scope: GuardScope,
+) -> Vec<String> {
+    let reaping = Reaping::new();
+    let mut refusals = Vec::new();
+    // The engine's order: packages, then the install ceiling, then the extras teardown.
+    for (pairs, kind) in [
+        (package_removals, RemovalKind::Package),
+        (extra_removals, RemovalKind::Extra),
+    ] {
+        let mut report = inspect_removals(config, registry, pairs, kind, &reaping).await;
+        allow_the_count(config, &mut report, scope, "removal");
+        if !report.is_empty() {
+            refusals.push(report.message(scope, kind));
+        }
+        // Recorded whether or not it objected. A refused phase stops the engine, so the later
+        // ones would never run — but a preview that reported the first refusal and went quiet
+        // about the rest would have to be run once per fix.
+        reaping.record(kind, pairs.len());
+    }
+    if let Err(e) = enforce_installs(config, installs, &reaping, scope).await {
+        refusals.push(e.to_string());
+    }
+    refusals
+}
+
+/// Enforce the guard over the ports a sync is about to close because no `firewall:` line
+/// declares them (`N8`).
+///
+/// Its own entry point rather than a `RemovalKind` argument at the call site, for the reason the
+/// other two are: a caller that picks the kind is a caller that can pick it wrong, and a port
+/// reported as an extra spends the resource budget and names the wrong `[guard]` key in the
+/// refusal.
+pub async fn enforce_ports(
+    config: &Config,
+    registry: &Arc<BackendRegistry>,
+    removals: &[(String, String)],
+    reaping: &Reaping,
+    scope: GuardScope,
+) -> Result<Reaped> {
+    enforce_kind(
+        config,
+        registry,
+        removals,
+        RemovalKind::Port,
+        reaping,
+        scope,
+    )
+    .await
+}
+
 /// Both halves of the guard, which differ only in which ceiling they answer to and in what the
 /// refusal tells you to do.
 ///
@@ -710,14 +879,7 @@ async fn enforce_kind(
     reaping: &Reaping,
     scope: GuardScope,
 ) -> Result<Reaped> {
-    let mut report = inspect_removals(
-        config,
-        registry,
-        removals,
-        kind,
-        reaping.so_far(kind),
-    )
-    .await;
+    let mut report = inspect_removals(config, registry, removals, kind, reaping).await;
 
     allow_the_count(
         config,
@@ -726,6 +888,7 @@ async fn enforce_kind(
         match kind {
             RemovalKind::Package => "removal",
             RemovalKind::Extra => "teardown",
+            RemovalKind::Port => "port closure",
         },
     );
 
@@ -828,8 +991,17 @@ pub fn describe_objection(o: &Objection) -> String {
 /// Unlike removals, installs have no protection or OS-essential dimension — nothing is
 /// *installed* that the system forbids here — so the only question is the count, and `0`
 /// (unset) disables it.
-pub async fn enforce_installs(config: &Config, count: usize, scope: GuardScope) -> Result<()> {
+pub async fn enforce_installs(
+    config: &Config,
+    count: usize,
+    reaping: &Reaping,
+    scope: GuardScope,
+) -> Result<()> {
+    // The total counts installs, so this gate answers `max_total_changes` before its own
+    // ceiling: a run that is inside `max_installs` and past the total is still past the total.
+    enforce_total(config, count, reaping, scope, "install")?;
     if config.guard.max_installs == 0 || count <= config.guard.max_installs {
+        reaping.record_addition(count);
         return Ok(());
     }
     if config.allow_mass_install {
@@ -838,6 +1010,7 @@ pub async fn enforce_installs(config: &Config, count: usize, scope: GuardScope) 
             scope.as_str(),
             count
         );
+        reaping.record_addition(count);
         return Ok(());
     }
 
@@ -853,6 +1026,74 @@ pub async fn enforce_installs(config: &Config, count: usize, scope: GuardScope) 
         count,
         config.guard.max_installs,
         scope.as_str(),
+    ))
+}
+
+/// The gate for changes that take nothing away — a resource created or rewritten, a port opened.
+///
+/// They answer to no ceiling of their own: `max_total_changes` is the only number that counts
+/// them, and nothing here can be `protected` (a thing that does not exist yet cannot be a thing
+/// you asked LiNix to keep). It exists so the total is a total. Before it, a sync could install
+/// forty packages, write forty links and open forty ports under a `max_total_changes` of ten,
+/// because the only gates on the way counted removals.
+pub async fn enforce_additions(
+    config: &Config,
+    count: usize,
+    reaping: &Reaping,
+    scope: GuardScope,
+) -> Result<()> {
+    if count == 0 {
+        return Ok(());
+    }
+    enforce_total(config, count, reaping, scope, "change")?;
+    reaping.record_addition(count);
+    Ok(())
+}
+
+/// `max_total_changes`, for the gates that have no per-kind ceiling of their own.
+///
+/// The removal gates check it inside [`inspect_removals`] instead, where it joins the rest of
+/// the report and gets rendered with the protections and the per-kind count in one refusal.
+fn enforce_total(
+    config: &Config,
+    count: usize,
+    reaping: &Reaping,
+    scope: GuardScope,
+    noun: &str,
+) -> Result<()> {
+    let Some(Objection::TooMany { count, limit, .. }) = too_many_changes(config, reaping, count)
+    else {
+        return Ok(());
+    };
+    // Either flag answers it, because both say the same sentence — "yes, that many, I meant it"
+    // (`Y20`) — and a total is made of removals and installs both. A third flag for the third
+    // ceiling would be a third way to say one thing.
+    if config.allow_mass_removal || config.allow_mass_install {
+        warn!(
+            "the {} count for '{}' ({}) was allowed past [guard] {}.",
+            noun,
+            scope.as_str(),
+            count,
+            TOTAL_KEY
+        );
+        return Ok(());
+    }
+    refuse(format!(
+        "{}: refusing this {}.\n  \
+         - it makes {} changes in total, over the limit of {} ([guard] {})\n\n\
+         This ceiling counts everything one command does — installs and upgrades, packages \
+         removed, resources torn down or written, ports opened and closed. The per-kind limits \
+         each passed; the total did not.\n\n\
+         What to do:\n  \
+         linix plan                     see exactly what would change\n  \
+         [guard] {}       raise or clear the total (preferences.toml)\n  \
+         <command> --allow-mass-removal carry out this run anyway",
+        scope.as_str(),
+        noun,
+        count,
+        limit,
+        TOTAL_KEY,
+        TOTAL_KEY,
     ))
 }
 
@@ -1013,7 +1254,7 @@ mod tests {
             &registry,
             &[("service".to_string(), "sshd".to_string())],
             RemovalKind::Extra,
-            0,
+            &Reaping::new(),
         )
         .await;
         assert!(
@@ -1049,10 +1290,10 @@ mod tests {
         ));
     }
 
-    /// Both ceilings set to the same number, so a test that says "a limit of two" means it for
-    /// whichever kind it is about. `Y20` split them; a helper that moved only one would have
-    /// left every extras test measuring against the default of twenty and passing for no
-    /// reason.
+    /// Every per-kind ceiling set to the same number, so a test that says "a limit of two" means
+    /// it for whichever kind it is about. `Y20` split them and `N8` split ports off again; a
+    /// helper that moved only one would have left the other kinds' tests measuring against the
+    /// untouched default of twenty and passing for no reason.
     fn config_with(max: usize) -> Config {
         Config {
             guard: crate::config::GuardSettings {
@@ -1060,6 +1301,7 @@ mod tests {
                 unprotected_packages: Vec::new(),
                 max_removals: max,
                 max_extra_removals: max,
+                max_port_closures: max,
                 ..Default::default()
             },
             ..Config::default()
@@ -1140,9 +1382,15 @@ mod tests {
         let reg = Arc::new(BackendRegistry::new());
         let mut cfg = config_with(20);
         cfg.yes = true;
-        assert!(enforce(&cfg, &reg, &pairs(&["python3"]), &Reaping::new(), GuardScope::Apply)
-            .await
-            .is_err());
+        assert!(enforce(
+            &cfg,
+            &reg,
+            &pairs(&["python3"]),
+            &Reaping::new(),
+            GuardScope::Apply
+        )
+        .await
+        .is_err());
     }
 
     #[tokio::test]
@@ -1156,17 +1404,29 @@ mod tests {
 
         // The count alone: allowed, because that is what the flag is for.
         assert!(
-            enforce(&cfg, &reg, &pairs(&["jq", "htop", "bat"]), &Reaping::new(), GuardScope::Sync)
-                .await
-                .is_ok(),
+            enforce(
+                &cfg,
+                &reg,
+                &pairs(&["jq", "htop", "bat"]),
+                &Reaping::new(),
+                GuardScope::Sync
+            )
+            .await
+            .is_ok(),
             "the flag must let a big-but-ordinary removal through"
         );
 
         // A protected package, even when the flag is set and the count is fine.
         assert!(
-            enforce(&cfg, &reg, &pairs(&["python3"]), &Reaping::new(), GuardScope::Sync)
-                .await
-                .is_err(),
+            enforce(
+                &cfg,
+                &reg,
+                &pairs(&["python3"]),
+                &Reaping::new(),
+                GuardScope::Sync
+            )
+            .await
+            .is_err(),
             "nothing overrides protection — not even --allow-mass-removal"
         );
 
@@ -1306,16 +1566,18 @@ mod tests {
         // max_installs defaults to 0 (unset). Installs are additive and far less dangerous
         // than removals, so the ceiling stays off until a user asks for it.
         let cfg = config_with(20); // max_installs is 0 here
-        assert!(enforce_installs(&cfg, 10_000, GuardScope::Sync)
-            .await
-            .is_ok());
+        assert!(
+            enforce_installs(&cfg, 10_000, &Reaping::new(), GuardScope::Sync)
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
     async fn install_over_the_ceiling_is_refused() {
         let mut cfg = config_with(20);
         cfg.guard.max_installs = 50;
-        let err = enforce_installs(&cfg, 51, GuardScope::Sync)
+        let err = enforce_installs(&cfg, 51, &Reaping::new(), GuardScope::Sync)
             .await
             .expect_err("51 installs over a limit of 50 must be refused");
         let msg = err.to_string();
@@ -1329,7 +1591,11 @@ mod tests {
         // The limit is inclusive: exactly `max_installs` is fine; over it is not.
         let mut cfg = config_with(20);
         cfg.guard.max_installs = 50;
-        assert!(enforce_installs(&cfg, 50, GuardScope::Sync).await.is_ok());
+        assert!(
+            enforce_installs(&cfg, 50, &Reaping::new(), GuardScope::Sync)
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -1338,9 +1604,11 @@ mod tests {
         let mut cfg = config_with(20);
         cfg.guard.max_installs = 50;
         cfg.allow_mass_install = true;
-        assert!(enforce_installs(&cfg, 5_000, GuardScope::Sync)
-            .await
-            .is_ok());
+        assert!(
+            enforce_installs(&cfg, 5_000, &Reaping::new(), GuardScope::Sync)
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -1349,9 +1617,11 @@ mod tests {
         let mut cfg = config_with(20);
         cfg.guard.max_installs = 50;
         cfg.yes = true;
-        assert!(enforce_installs(&cfg, 5_000, GuardScope::Sync)
-            .await
-            .is_err());
+        assert!(
+            enforce_installs(&cfg, 5_000, &Reaping::new(), GuardScope::Sync)
+                .await
+                .is_err()
+        );
     }
 
     fn desired(
@@ -1438,7 +1708,8 @@ mod tests {
             "schedule:nightly-sync",
             "repo:apt:ppa:x/y",
         ]);
-        let report = inspect_removals(&cfg, &reg, &all_six, RemovalKind::Extra, 0).await;
+        let report =
+            inspect_removals(&cfg, &reg, &all_six, RemovalKind::Extra, &Reaping::new()).await;
         assert!(
             report.is_empty(),
             "an ordinary teardown of one of each kind must be allowed: {:?}",
@@ -1463,7 +1734,14 @@ mod tests {
             "schedule:keep",
             "setting:keep",
         ] {
-            let report = inspect_removals(&cfg, &reg, &extras(&[key]), RemovalKind::Extra, 0).await;
+            let report = inspect_removals(
+                &cfg,
+                &reg,
+                &extras(&[key]),
+                RemovalKind::Extra,
+                &Reaping::new(),
+            )
+            .await;
             assert!(
                 matches!(report.objections.as_slice(), [Objection::Protected { .. }]),
                 "`{}` was not protected by `protected_packages = [\"keep\"]`: {:?}",
@@ -1479,7 +1757,7 @@ mod tests {
             &reg,
             &extras(&["link:/home/u/other"]),
             RemovalKind::Extra,
-            0,
+            &Reaping::new(),
         )
         .await;
         assert!(report.is_empty(), "{:?}", report.objections);
@@ -1543,11 +1821,15 @@ mod tests {
         cfg.guard.max_extra_removals = 3;
         let reaping = Reaping::new();
 
-        assert!(
-            enforce(&cfg, &reg, &pairs(&["a", "b", "c"]), &reaping, GuardScope::Sync)
-                .await
-                .is_ok()
-        );
+        assert!(enforce(
+            &cfg,
+            &reg,
+            &pairs(&["a", "b", "c"]),
+            &reaping,
+            GuardScope::Sync
+        )
+        .await
+        .is_ok());
         assert!(
             enforce_extras(
                 &cfg,
@@ -1597,9 +1879,15 @@ mod tests {
             "the flag must let a big-but-ordinary teardown through"
         );
         assert!(
-            enforce_extras(&cfg, &reg, &extras(&["link:/keep"]), &Reaping::new(), GuardScope::Sync)
-                .await
-                .is_err(),
+            enforce_extras(
+                &cfg,
+                &reg,
+                &extras(&["link:/keep"]),
+                &Reaping::new(),
+                GuardScope::Sync
+            )
+            .await
+            .is_err(),
             "nothing overrides protection — not even --allow-mass-removal"
         );
     }
@@ -1644,5 +1932,310 @@ mod tests {
         let first_pkg = msg.find("apt:pkg0").expect("a package listed");
         assert!(count_line < first_pkg, "the count must lead");
         assert!(msg.contains("…and 15 more"), "the list must be capped");
+    }
+
+    fn ports(specs: &[&str]) -> Vec<(String, String)> {
+        specs
+            .iter()
+            .map(|s| ("firewall".to_string(), s.to_string()))
+            .collect()
+    }
+
+    /// **`N8`: a port closure is a removal, and it answers to its own ceiling.** Under `Y20` it
+    /// spent `max_extra_removals`, so the run that first declares a perimeter consumed a budget
+    /// meant for `link:`/`service:` teardowns and refused a resource change it had nothing to
+    /// do with.
+    #[tokio::test]
+    async fn a_port_closure_answers_to_the_port_ceiling_and_no_other() {
+        let reg = Arc::new(BackendRegistry::new());
+        let mut cfg = config_with(3);
+        cfg.guard.max_port_closures = 2;
+        let reaping = Reaping::new();
+
+        let err = enforce_ports(
+            &cfg,
+            &reg,
+            &ports(&["22/tcp", "80/tcp", "443/tcp"]),
+            &reaping,
+            GuardScope::Sync,
+        )
+        .await
+        .expect_err("three closures over a limit of two must be refused");
+        let msg = err.to_string();
+        assert!(msg.contains("closes 3 ports"), "{msg}");
+        assert!(
+            msg.contains("max_port_closures"),
+            "the refusal must name the setting the reader changes: {msg}"
+        );
+        assert!(
+            !msg.contains("max_extra_removals") && !msg.contains("max_removals"),
+            "a port refusal must not send the reader to another kind's setting: {msg}"
+        );
+        assert_eq!(
+            reaping.so_far(RemovalKind::Port),
+            0,
+            "refused, so not spent"
+        );
+    }
+
+    /// The three removal budgets are three budgets. Nineteen of each passes; the count that
+    /// objects is the total, and only when one is set.
+    #[tokio::test]
+    async fn each_removal_kind_spends_only_its_own_budget() {
+        let reg = Arc::new(BackendRegistry::new());
+        let cfg = config_with(3);
+        let reaping = Reaping::new();
+
+        assert!(enforce(
+            &cfg,
+            &reg,
+            &pairs(&["a", "b", "c"]),
+            &reaping,
+            GuardScope::Sync
+        )
+        .await
+        .is_ok());
+        assert!(
+            enforce_extras(
+                &cfg,
+                &reg,
+                &extras(&["link:/a", "link:/b", "link:/c"]),
+                &reaping,
+                GuardScope::Sync
+            )
+            .await
+            .is_ok(),
+            "packages must not have spent the teardown budget"
+        );
+        assert!(
+            enforce_ports(
+                &cfg,
+                &reg,
+                &ports(&["22/tcp", "80/tcp", "443/tcp"]),
+                &reaping,
+                GuardScope::Sync
+            )
+            .await
+            .is_ok(),
+            "neither of the first two may have spent the port budget"
+        );
+        assert_eq!(reaping.so_far(RemovalKind::Package), 3);
+        assert_eq!(reaping.so_far(RemovalKind::Extra), 3);
+        assert_eq!(reaping.so_far(RemovalKind::Port), 3);
+        assert_eq!(reaping.changes_so_far(), 9);
+    }
+
+    /// **`N8`: the ceiling over everything.** Nine changes pass three ceilings of three and are
+    /// still nine changes. Off by default, so this is what setting it buys.
+    #[tokio::test]
+    async fn the_total_catches_what_every_per_kind_ceiling_passes() {
+        let reg = Arc::new(BackendRegistry::new());
+        let mut cfg = config_with(3);
+        cfg.guard.max_total_changes = 8;
+        let reaping = Reaping::new();
+
+        assert!(enforce(
+            &cfg,
+            &reg,
+            &pairs(&["a", "b", "c"]),
+            &reaping,
+            GuardScope::Sync
+        )
+        .await
+        .is_ok());
+        assert!(enforce_extras(
+            &cfg,
+            &reg,
+            &extras(&["link:/a", "link:/b", "link:/c"]),
+            &reaping,
+            GuardScope::Sync
+        )
+        .await
+        .is_ok());
+        let err = enforce_ports(
+            &cfg,
+            &reg,
+            &ports(&["22/tcp", "80/tcp", "443/tcp"]),
+            &reaping,
+            GuardScope::Sync,
+        )
+        .await
+        .expect_err("nine changes over a total of eight must be refused");
+        let msg = err.to_string();
+        assert!(msg.contains("makes 9 changes in total"), "{msg}");
+        assert!(msg.contains("max_total_changes"), "{msg}");
+        assert!(
+            !msg.contains("max_port_closures"),
+            "three ports are inside the port ceiling — naming it would send the reader to a \
+             number that is not the problem: {msg}"
+        );
+    }
+
+    /// Zero is off, and off is the default. A machine that never asked for a total must not
+    /// start refusing the sync it ran yesterday.
+    #[tokio::test]
+    async fn the_total_is_off_by_default_and_when_zero() {
+        assert_eq!(Config::default().guard.max_total_changes, 0);
+        let reg = Arc::new(BackendRegistry::new());
+        let cfg = config_with(0);
+        let reaping = Reaping::new();
+        let many: Vec<String> = (0..500).map(|i| format!("pkg{}", i)).collect();
+        let refs: Vec<&str> = many.iter().map(|s| s.as_str()).collect();
+        assert!(
+            enforce(&cfg, &reg, &pairs(&refs), &reaping, GuardScope::Sync)
+                .await
+                .is_ok()
+        );
+        assert!(enforce_installs(&cfg, 5_000, &reaping, GuardScope::Sync)
+            .await
+            .is_ok());
+        assert!(enforce_additions(&cfg, 5_000, &reaping, GuardScope::Sync)
+            .await
+            .is_ok());
+    }
+
+    /// The total counts what the per-kind ceilings never look at: installs and upgrades,
+    /// resources written, ports opened. A total that only counted removals would be the removal
+    /// ceiling with a longer name.
+    #[tokio::test]
+    async fn the_total_counts_additions_as_well_as_removals() {
+        let reg = Arc::new(BackendRegistry::new());
+        let mut cfg = config_with(0);
+        cfg.guard.max_total_changes = 10;
+        let reaping = Reaping::new();
+
+        assert!(enforce_installs(&cfg, 6, &reaping, GuardScope::Sync)
+            .await
+            .is_ok());
+        assert!(enforce_additions(&cfg, 3, &reaping, GuardScope::Sync)
+            .await
+            .is_ok());
+        assert_eq!(reaping.changes_so_far(), 9);
+
+        let err = enforce(&cfg, &reg, &pairs(&["a", "b"]), &reaping, GuardScope::Sync)
+            .await
+            .expect_err("nine changes plus two removals is eleven, over ten");
+        assert!(
+            err.to_string().contains("makes 11 changes in total"),
+            "{err}"
+        );
+
+        // And the additive gates answer to it in their own right.
+        let err = enforce_additions(&cfg, 2, &reaping, GuardScope::Sync)
+            .await
+            .expect_err("nine plus two is eleven whichever gate counts it");
+        assert!(err.to_string().contains("max_total_changes"), "{err}");
+    }
+
+    /// Either flag answers the total, because a total is made of both. Neither answers a
+    /// protection, and `--allow-mass-install` does not answer a removal count.
+    #[tokio::test]
+    async fn both_mass_flags_answer_the_total_and_only_the_total() {
+        let reg = Arc::new(BackendRegistry::new());
+        let mut cfg = config_with(2);
+        cfg.guard.max_total_changes = 2;
+        cfg.allow_mass_install = true;
+
+        assert!(
+            enforce_installs(&cfg, 50, &Reaping::new(), GuardScope::Sync)
+                .await
+                .is_ok(),
+            "--allow-mass-install must answer the total"
+        );
+        let err = enforce(
+            &cfg,
+            &reg,
+            &pairs(&["a", "b", "c"]),
+            &Reaping::new(),
+            GuardScope::Sync,
+        )
+        .await
+        .expect_err("the install flag must not answer a removal count");
+        assert!(err.to_string().contains("max_removals"), "{err}");
+        assert!(
+            !err.to_string().contains("max_total_changes"),
+            "the total it *did* answer must not still be in the refusal: {err}"
+        );
+
+        cfg.allow_mass_install = false;
+        cfg.allow_mass_removal = true;
+        assert!(
+            enforce(
+                &cfg,
+                &reg,
+                &pairs(&["a", "b", "c"]),
+                &Reaping::new(),
+                GuardScope::Sync
+            )
+            .await
+            .is_ok(),
+            "--allow-mass-removal answers both counts at once"
+        );
+    }
+
+    /// A refusal that names two ceilings when two are busted. Naming one sends a user to raise
+    /// a number and meet the other on the next run.
+    #[tokio::test]
+    async fn a_set_over_two_ceilings_is_told_about_both() {
+        let reg = Arc::new(BackendRegistry::new());
+        let mut cfg = config_with(2);
+        cfg.guard.max_total_changes = 2;
+        let err = enforce(
+            &cfg,
+            &reg,
+            &pairs(&["a", "b", "c"]),
+            &Reaping::new(),
+            GuardScope::Sync,
+        )
+        .await
+        .expect_err("three is over both");
+        let msg = err.to_string();
+        assert!(msg.contains("max_removals"), "{msg}");
+        assert!(msg.contains("max_total_changes"), "{msg}");
+    }
+
+    /// Protection reaches a port the same way it reaches a resource: `protected_packages` names
+    /// the thing, and the count is not what is being asked.
+    #[tokio::test]
+    async fn a_protected_port_is_refused_whatever_the_count() {
+        let reg = Arc::new(BackendRegistry::new());
+        let mut cfg = config_with(20);
+        cfg.guard.protected_packages = vec!["22/tcp".into()];
+        cfg.allow_mass_removal = true;
+        let err = enforce_ports(
+            &cfg,
+            &reg,
+            &ports(&["22/tcp"]),
+            &Reaping::new(),
+            GuardScope::Sync,
+        )
+        .await
+        .expect_err("a protected port is a refusal, not a count");
+        assert!(err.to_string().contains("22/tcp"), "{err}");
+    }
+
+    /// The preview is the enforcer's question, asked without spending anything — including the
+    /// total, which is what a two-list preview with a hand-written `also_removing` could never
+    /// get right.
+    #[tokio::test]
+    async fn the_preview_sees_the_total_the_enforcer_will() {
+        let reg = Arc::new(BackendRegistry::new());
+        let mut cfg = config_with(0);
+        cfg.guard.max_total_changes = 5;
+        let refusals = preview_refusals(
+            &cfg,
+            &reg,
+            2,
+            &pairs(&["a", "b"]),
+            &extras(&["link:/a", "link:/b"]),
+            GuardScope::Apply,
+        )
+        .await;
+        assert!(
+            refusals
+                .iter()
+                .any(|r| r.contains("makes 6 changes in total")),
+            "two installs, two packages and two teardowns is six: {refusals:?}"
+        );
     }
 }

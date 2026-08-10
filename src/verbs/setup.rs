@@ -444,6 +444,16 @@ max_removals = 20
 # 0 (the default) leaves it off — installs are additive and far less dangerous.
 # max_installs = 500
 
+# The same, for resource teardowns and for ports closed because nothing declares
+# them. Each is its own budget: raising one says nothing about the others.
+# max_extra_removals = 20
+# max_port_closures = 20
+
+# Refuse any single command that changes more than this many things ALL TOLD —
+# installs, upgrades, removals, teardowns, ports opened and closed. The numbers
+# above each bound one kind, and twenty of each is sixty. 0 (the default) is off.
+# max_total_changes = 0
+
 # Names removal must never touch, ADDED to the built-in list (`linix protected`
 # prints the full effective set). Matching is exact and case-insensitive, or a
 # prefix if the entry ends in `*` — so `libpam*` covers libpam0g, while `libc`

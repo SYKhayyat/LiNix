@@ -22,10 +22,34 @@ function Err($m) { Write-Host "linix " -ForegroundColor Red  -NoNewline; Write-H
 
 Say "bootstrapping - detecting toolchain..."
 
-if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
-    Err "Rust/cargo not found."
-    Err "Install Rust from https://rustup.rs and re-run this script."
-    exit 1
+# Download the published binary for this platform. Returns $false for no asset, no network, or
+# a body too small to be a binary - each of which means "build it instead".
+#
+# **The twin of install.sh's `fetch_binary`, and the reason both exist.** Both headers promise a
+# 30-second first run, and the only path either had was a source build: 448 crates under fat LTO
+# on a stranger's machine. A published release makes the promise keepable, so the promise runs
+# first and the compiler is the fallback. Windows builds one target, so there is no detection to
+# do here - which is exactly why the twin's `uname` logic must not be copied in.
+function Get-PublishedBinary($destination, $tag) {
+    $asset = 'linix-x86_64-pc-windows-msvc.exe'
+    $url = if ($tag) { "$repo/releases/download/$tag/$asset" }
+           else      { "$repo/releases/latest/download/$asset" }
+    # Progress rendering makes Invoke-WebRequest an order of magnitude slower in 5.1, on the one
+    # step this whole change exists to make fast.
+    $previous = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
+    try {
+        Invoke-WebRequest -Uri $url -OutFile $destination -UseBasicParsing -ErrorAction Stop
+    } catch {
+        return $false
+    } finally {
+        $ProgressPreference = $previous
+    }
+    # A 404 page saved to a file is still a file, and running one fails three steps later with a
+    # message about something else.
+    if (-not (Test-Path $destination)) { return $false }
+    if ((Get-Item $destination).Length -lt 1000000) { return $false }
+    return $true
 }
 
 # WHICH LiNix — the twin of install.sh's rule. `HEAD` is whatever was pushed last, which is not
@@ -52,6 +76,35 @@ if (-not $ref) {
         }
     }
     if (-not $ref) { Say "no release tag published yet - installing from the default branch instead." }
+}
+
+# The published binary first, into the same place the source path installs to, so a user who set
+# LINIX_BIN_DIR gets the same answer whichever path ran.
+$installDir =
+    if ($env:LINIX_BIN_DIR) { $env:LINIX_BIN_DIR }
+    elseif ($env:CARGO_HOME) { Join-Path $env:CARGO_HOME 'bin' }
+    else { Join-Path $HOME '.cargo\bin' }
+$downloaded = $false
+$temp = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
+if (Get-PublishedBinary $temp $ref) {
+    New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+    Move-Item $temp (Join-Path $installDir 'linix.exe') -Force
+    Say "installed the published binary to $installDir."
+    $downloaded = $true
+} else {
+    if (Test-Path $temp) { Remove-Item -Force $temp }
+    Say "no published binary for this platform - building from source."
+}
+
+if (-not $downloaded) {
+
+# Only the source path needs a compiler, and the check belongs where the need is. Demanding Rust
+# before knowing whether a binary was available turned "install this program" into "install a
+# toolchain first" for every user on a platform that has a published build.
+if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+    Err "Rust/cargo not found, and no published binary was available."
+    Err "Install Rust from https://rustup.rs and re-run this script."
+    exit 1
 }
 
 # `--locked`, and no fallback. The retry without it was described as covering an unavailable
@@ -98,10 +151,9 @@ if ($stage) {
     Say "installed to $binDir (LINIX_BIN_DIR)"
 }
 
-$cargoBin =
-    if ($binDir) { $binDir }
-    elseif ($env:CARGO_HOME) { Join-Path $env:CARGO_HOME 'bin' }
-    else { Join-Path $HOME '.cargo\bin' }
+}  # end of the build-from-source path
+
+$cargoBin = $installDir
 # The binary just installed, by path, in preference to whatever `linix` resolves to on this
 # session's PATH — that could be an older install elsewhere, and the health check below is
 # supposed to vouch for the one this script produced.

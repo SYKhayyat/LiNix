@@ -91,8 +91,15 @@ protected_packages = [
 ]
 # max_removals = 20        # refuse removing more than this many PACKAGES at once (0 = off)
 # max_extra_removals = 20  # the same, for link:/service:/setting:/shim:/schedule:/repo:
-#                          # teardowns and firewall ports. Its own budget (Y20).
+#                          # teardowns. Its own budget (Y20).
+# max_port_closures = 20   # the same, for ports closed because no firewall: line declares
+#                          # them. Its own budget too (N8).
 # max_installs = 500       # refuse installing more than this at once (0 = off, default)
+# max_total_changes = 0    # refuse a command that changes more than this many things ALL
+#                          # TOLD — installs, upgrades, removals, teardowns, ports opened
+#                          # and closed. 0 (the default) is off. The four numbers above each
+#                          # bound one kind; twenty of each is sixty. This is the one that
+#                          # objects to sixty.
 # deny_packages = ["leftpad"]
 # pinned_only = false      # every install must carry an explicit @version=
 # require_snapshot = false # refuse to change anything unless a snapshot can be taken

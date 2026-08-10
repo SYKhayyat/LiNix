@@ -4,6 +4,36 @@ All notable changes to LiNix are documented here.
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-08-10 — the first published binaries
+
+**The first release anyone can install without a Rust toolchain.** `0.7.0` named the rewrite in
+this file and was never tagged, so no binary was ever published and `install.sh` compiled 448
+crates on every machine that ran it. This is the one that ships: `linix-<target>` binaries for
+x86_64 Linux, both Apple architectures and x86_64 Windows, and installers that download them.
+
+### Guard
+
+- **A removal ceiling per kind, and one over every change** (`N8`). `max_port_closures`
+  (default 20) splits ports out of `max_extra_removals`; `max_total_changes` (default 0, off)
+  counts everything one command does — installs and upgrades, removals of every kind, resources
+  written, ports opened and closed. A refusal now names every ceiling it hit rather than the
+  first, and `linix protected` prints all five instead of `max_removals` alone.
+
+### Looking
+
+- **`linix check adapters`**, the ninth section: extension files that are written and not in
+  use. A malformed `adapters/*.toml` still warns and is skipped mid-sync — a typo in an optional
+  file must not stop you installing a package — so this is where it is a non-zero exit instead.
+
+### Shipping
+
+- **CI ran for the first time in ten commits.** A step ending in `pty_tests::` made the workflow
+  file unparseable, which fails the run rather than a job: zero seconds, no log, nothing to open.
+  A `cargo test` gate now reads every workflow for the class of scalar YAML re-reads as a key.
+- **Release assets are named for their target.** All four builds produce a file called `linix`,
+  so the release job as written would have published one binary and let three platforms download
+  the wrong architecture.
+
 ### Performance
 
 *The whole of `docs/INEFFICIENCIES.md`, which audited every place in the tree slower than it has

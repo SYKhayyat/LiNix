@@ -16,8 +16,8 @@ not in this paragraph.
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
-| **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **3** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **176** |
+| **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **2** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **177** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -76,7 +76,7 @@ status loses that, so it is kept here:
 **Nothing is open. `Z1` — the licence — was ruled 2026-08-09, and `Y18` is RULED in full as of
 the same day: `@source=` on a `shim:` line is read, and `Y23` — flatpak's unreadable channel —
 was ruled and built beside it.** All 183 are accounted
-for: **176 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 3 BUILT NEVER RULED, 0 OPEN** — and this line
+for: **177 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 2 BUILT NEVER RULED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -177,7 +177,7 @@ there). It is when the question stopped being open, not when the code landed.
 | **N5** | What does removing a firewall rule restore? | 2026-07-24 |
 | **N6** | What if a config declares both `firewall:` lines and a `link:` to the ruleset? | 2026-07-24 |
 | **N7** | Does `watch` revert firewall drift unattended, or only report it? | 2026-07-24 |
-| **N8** | Is closing an undeclared port a removal, and does it count against `max_removals`? | **BUILT, NEVER RULED** 2026-08-09 |
+| **N8** | Is closing an undeclared port a removal, and does it count against `max_removals`? | 2026-08-10 |
 
 ### T — secrets (Part XII) — 7
 
@@ -1681,33 +1681,52 @@ reach.
 
 ## N8
 
-**Status: BUILT, NEVER RULED** (built 2026-08-09 with the `Reaping` accumulator; raised by the
-whole-repo review the same day, which found it was not an unanswered decision but an *unasked*
-one — `N1`–`N7` settle exclusivity, restoration, SSH lockout, dual ownership and the unattended
-tick, and none of them asks this).
+**Status: ANSWERED — ruled 2026-08-10.**
 
 **N8 — Is closing an undeclared port a removal, and does it count against `max_removals`?**
-`readme.md` promised every path that removes anything goes through one guard, and `firewall:`
-was the seventh resource kind with the word `guard` nowhere in its file — no import, no call, no
-comment. Three bespoke refusals had been written above it instead (unreadable baseline, SSH
-lockout, linked ruleset), which is the tell: the danger was understood and the guard two hundred
-lines away was not called.
+Recorded 2026-08-09 as BUILT, NEVER RULED, on the whole-repo review's finding that `N1`–`N7`
+never ask it. **That finding was half wrong and worth recording as such**: the question had been
+asked, under `Y20` — *"closing an undeclared port is one of them. Should it count against
+`max_removals`?"* — and answered by the owner the same day. It was searched for in the `N`
+series, and it was living in the `Y` series, because it arrived through the removal-guard work
+rather than through the firewall work. A register indexed by where a question came from is a
+register you can search correctly and still miss.
 
-**What shipped:** `apply/firewall.rs` calls `enforce_extras` with the run's `Reaping`
-accumulator, so a closed port is counted, is subject to `protected`, and is reported. That
-answers this question in the affirmative *by construction*, and the answer was not ruled.
+So the substance of `N8` was ruled by `Y20` on 2026-08-09 (**yes, it is a removal; yes, it
+counts; against its own ceiling**), and what remained was the part `Y20` did not ask: ports were
+lumped in with resource teardowns, and nothing bounded a command's changes as a whole.
 
-**What it costs if it is the wrong answer.** A machine with ten undeclared ports open and one
-`firewall:` line reaches the default ceiling of `max_removals = 20` on its first sync — together
-with any package removals in the same run — and refuses. Before the accumulator, the hardcoded
-`0` at the old call site was answering the same question the other way, by accident, and `N7`'s
-*revert by default on an unattended tick* is what made that accident load-bearing.
+**RULED 2026-08-10 (owner): a ceiling per category, and a ceiling over all of them.** The owner's
+words: *"you should be able to set a max (per category and all in all) in the config"*, and then
+*"there is a max per all changes also — including install, uninstall, etc."*
 
-**The two honest positions.** Either a port is a removal like any other and the ceiling is the
-point — a run about to close ten things a user did not declare is exactly the run that should
-stop and ask — or reachability is a different axis from software and wants its own ceiling.
-There is no third answer where the port is guarded but uncounted: `protected` and the count come
-from the same call.
+What is binding:
+
+1. **`max_port_closures` is new**, default 20, and covers a port closed because no `firewall:`
+   line declares it. `max_extra_removals` no longer does. Reachability is its own axis: the run
+   that first declares a perimeter closes far more ports than a settled machine ever tears down
+   resources, and it must not spend a teardown allowance to do it.
+2. **`max_total_changes` is new**, default **0 (off)**, and counts **everything one command
+   changes** — installs and upgrades, package removals, resource teardowns, resources written,
+   ports opened and ports closed. Three ceilings of twenty permit fifty-seven changes; this is
+   the number that objects to fifty-seven.
+3. **It is off by default.** A total is a statement about how much churn a particular machine
+   tolerates, which LiNix does not know. Any non-zero default would refuse syncs that ran
+   yesterday on machines that never asked, and would be turned off before it caught anything.
+4. **Every gate answers the total, including the ones that only add.** `enforce_additions` has no
+   ceiling of its own and refuses nothing on its own account; it exists so that a total is a
+   total rather than a removal ceiling with a longer name.
+5. **Both mass flags answer the total** — it is made of installs and removals both — and no third
+   flag is added. `--allow-mass-install` answers the total and the install count and **no removal
+   count**: the flag that means *install* that many must never also mean *remove* that many.
+6. **A refusal names every ceiling it hit**, not the first. A set can be over its own number and
+   over the total at once, and naming one sends the reader to raise it and meet the other.
+
+**The cost this ruling accepts, unchanged from `Y20`:** a machine with forty ports open and one
+`firewall:22/tcp` line still refuses on its first sync — now at `max_port_closures`. Forty ports
+closing at once is the shape a ceiling exists to interrupt, and the answer is one flag.
+
+The mechanism is in `S79`; the rule is in **II.28**; the reason is in **V.159**.
 
 ---
 
@@ -7190,6 +7209,8 @@ What is binding:
 2. **`max_extra_removals` is new**, default 20, and covers every resource teardown —
    `link:`, `service:`, `setting:`, `shim:`, `schedule:`, `repo:` — plus a port closed because
    no `firewall:` line declares it. A `dotfiles:` tree's files are `link:` lines and go here too.
+   *(Amended 2026-08-10 by `N8`: ports leave this budget for `max_port_closures`, and a
+   `max_total_changes` sits over every ceiling here. The rest of this clause stands.)*
 3. **Both are budgets for the whole command, not for a phase.** A sync tears extras down in two
    places (the firewall, then the ledger's drift) and both spend the same `max_extra_removals`.
 4. **Neither spends the other's budget.** That is the whole point of splitting them: one number
@@ -7202,7 +7223,7 @@ What is binding:
 
 The cost this ruling accepts, stated plainly: **a machine with forty ports open and one
 `firewall:22/tcp` line still refuses on its first sync**, now at `max_extra_removals` rather than
-at `max_removals`. Forty ports closing at once is the shape a ceiling exists to interrupt, and
+at `max_removals` (and at `max_port_closures` since `N8`). Forty ports closing at once is the shape a ceiling exists to interrupt, and
 the answer is one flag.
 
 The mechanism is in `S55`; the rule is in **II.28**; the reason is in **V.159**.

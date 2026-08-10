@@ -69,15 +69,45 @@ pub async fn handle_check(app: &App, section: Option<&str>, out: Output) -> Resu
         Section::Health => check_health(app, out).await,
         Section::Security => handle_audit(app, out).await,
         Section::Approvals => check_approvals(app, out).await,
+        Section::Adapters => check_adapters(app, out).await,
     }
+}
+
+/// How many extension surfaces this machine has written and LiNix is not using.
+///
+/// `Absent` is not one of them: not extending LiNix is the ordinary case, and a check that
+/// reported it as work would be a check every machine fails on its first run.
+fn adapters_not_in_use(app: &App) -> usize {
+    crate::app::adapters::survey(&app.config.layout())
+        .iter()
+        .filter(|e| e.standing.is_wrong())
+        .count()
+}
+
+/// `check adapters` — the extension files a reader could not use.
+///
+/// **The exit code is the whole point.** A malformed `adapters/*.toml` warns and is skipped
+/// mid-`sync` (ruled: a typo in an optional file must not stop you installing a package), and a
+/// warning inside a sync is a warning nobody sees twice. This is where the same fact is a
+/// non-zero exit — free to be loud, because looking changes nothing.
+pub async fn check_adapters(app: &App, out: Output) -> Result<()> {
+    crate::verbs::setup::handle_adapters(app, None, out).await?;
+    if adapters_not_in_use(app) == 0 {
+        return Ok(());
+    }
+    // U21's exit 2, as every other section uses it: a read-only command that looked and found
+    // work. The listing is already on stdout.
+    Err(crate::core::Error::Differences(String::new()).into())
 }
 
 /// `check approvals` — the event hooks that will not run because they are unapproved (II.12).
 ///
-/// Only event hooks: they warn-and-skip, so they are the one supply-chain item that fails
-/// silently. The others (`exec:`, adapters, the `vars` provider, package hooks) block a sync
-/// loudly, so a user meets those the moment they run `sync` — this is for the ones nobody meets
-/// until the machine drifts and the hook that should have told them does nothing.
+/// Only event hooks. `exec:`, the `vars` provider and package hooks block a sync loudly, so a
+/// user meets those the moment they run `sync`; this is for the ones nobody meets until the
+/// machine drifts and the hook that should have told them does nothing.
+///
+/// An unapproved *adapter* warns and skips like a hook does — the sentence here claimed
+/// otherwise — and it has its own section, `check adapters`, because it fails the same way.
 pub async fn check_approvals(app: &App, out: Output) -> Result<()> {
     let hooks = crate::app::events::EventHooks::load(&app.config);
     let unapproved = hooks.unapproved();
@@ -400,6 +430,22 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
         .counting([("unapproved", unapproved)]),
     );
 
+    // adapters — extension files that are written and inert. The readers warn and carry on, so
+    // this is the surface where that fact is not a line in a log nobody re-reads.
+    let inert = adapters_not_in_use(app);
+    findings.push(
+        if inert == 0 {
+            Finding::ok(Section::Adapters, "nothing written that LiNix cannot use")
+        } else {
+            Finding::attention(
+                Section::Adapters,
+                format!("{} extension file(s) written but not in use", inert),
+                "linix adapters",
+            )
+        }
+        .counting([("not_in_use", inert)]),
+    );
+
     if out.is_json() {
         let rows: Vec<_> = findings
             .iter()
@@ -649,10 +695,7 @@ pub async fn handle_absent(app: &App) -> Result<()> {
     );
     println!("{:<15} {:<25} SOURCE", "BACKEND", "PACKAGE");
     for spec in absent {
-        let source = spec
-            .options
-            .one("__source")
-            .unwrap_or("?");
+        let source = spec.options.one("__source").unwrap_or("?");
         println!("{:<15} {:<25} {}", spec.backend, spec.name, source);
     }
     Ok(())

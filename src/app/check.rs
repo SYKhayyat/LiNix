@@ -36,10 +36,18 @@ pub enum Section {
     Security,
     /// Is any code the repo can run (an event hook) unapproved, and so silently dead? (II.12)
     Approvals,
+    /// Is any `adapters/*.toml` file written but not in use — malformed, unapproved, or holding
+    /// rows of the wrong kind?
+    ///
+    /// **The other half of `Approvals`' reason.** A reader that cannot use its adapter file
+    /// warns and carries on, which is the right call mid-`sync` on a working machine and the
+    /// wrong place to learn about it: the warning scrolls past, the file stays inert, and the
+    /// tool it was teaching LiNix about goes unmanaged. Loud where loud is free.
+    Adapters,
 }
 
 impl Section {
-    pub const ALL: [Section; 8] = [
+    pub const ALL: [Section; 9] = [
         Section::Config,
         Section::Drift,
         Section::Unmanaged,
@@ -48,6 +56,7 @@ impl Section {
         Section::Health,
         Section::Security,
         Section::Approvals,
+        Section::Adapters,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -60,6 +69,7 @@ impl Section {
             Section::Health => "health",
             Section::Security => "security",
             Section::Approvals => "approvals",
+            Section::Adapters => "adapters",
         }
     }
 

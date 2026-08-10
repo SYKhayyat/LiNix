@@ -60,20 +60,39 @@ pub struct GuardSettings {
     #[serde(default = "default_max_removals")]
     pub max_removals: usize,
     /// The same ceiling for the resources a declaration put in place — a `link:`, `service:`,
-    /// `setting:`, `shim:`, `schedule:` or `repo:` line leaving the model, and a port closed
-    /// because no `firewall:` line declares it. `0` disables the check.
+    /// `setting:`, `shim:`, `schedule:` or `repo:` line leaving the model. `0` disables the
+    /// check.
     ///
     /// **Its own number, because it is its own kind of loss** (`Y20`). Software leaving a
-    /// machine and a perimeter being tightened are different events, and a machine that wants
-    /// to be told about three packages does not necessarily want to be stopped by forty ports
-    /// closing on the run that first declares a firewall. Counted over the whole command, and
-    /// answered by the same `--allow-mass-removal`.
+    /// machine and a resource being torn down are different events. Counted over the whole
+    /// command, and answered by the same `--allow-mass-removal`.
     #[serde(default = "default_max_extra_removals")]
     pub max_extra_removals: usize,
+    /// The same ceiling for ports closed because no `firewall:` line declares them (`N8`).
+    /// `0` disables the check.
+    ///
+    /// **Reachability is its own axis** — a machine losing a link and a machine losing the
+    /// port you reach it on fail differently, and the run that first declares a perimeter
+    /// closes far more ports than a settled machine ever tears down resources. Sharing the
+    /// resource budget made the first `firewall:` line spend a teardown allowance it has
+    /// nothing to do with.
+    #[serde(default = "default_max_port_closures")]
+    pub max_port_closures: usize,
     /// Refuse a plan that installs more than this many packages at once unless explicitly
     /// opted into. `0` (unset) disables it — installs are additive and far less dangerous.
     #[serde(default)]
     pub max_installs: usize,
+    /// The ceiling over **everything one command changes** — installs and upgrades, package
+    /// removals, resource teardowns, ports opened and closed, resources created. `0` (the
+    /// default) disables it.
+    ///
+    /// The four ceilings above each bound one kind, and a command can pass all four while
+    /// doing far more in total than anyone meant: nineteen packages, nineteen resources and
+    /// nineteen ports is fifty-seven changes that no per-kind number objects to. This is the
+    /// number that objects. Off by default, because a machine that has not asked for a total
+    /// must not start refusing syncs it ran yesterday.
+    #[serde(default)]
+    pub max_total_changes: usize,
 
     // --- The install/change rules (were policy.toml until the consolidation) ---
     /// Package names that may never be installed (matched case-insensitively).
@@ -127,7 +146,9 @@ impl Default for GuardSettings {
             unprotected_packages: Vec::new(),
             max_removals: default_max_removals(),
             max_extra_removals: default_max_extra_removals(),
+            max_port_closures: default_max_port_closures(),
             max_installs: 0,
+            max_total_changes: 0,
             deny_packages: Vec::new(),
             pinned_only: false,
             require_snapshot: false,
@@ -593,6 +614,12 @@ fn default_max_extra_removals() -> usize {
     20
 }
 
+/// And the same twenty for port closures (`N8`), on the same reasoning: equal today, and a
+/// separate number so raising one says nothing about the others.
+fn default_max_port_closures() -> usize {
+    20
+}
+
 fn default_protected_packages() -> Vec<String> {
     let mut packages = vec!["sudo".into(), "bash".into(), "linix".into()];
     #[cfg(target_os = "linux")]
@@ -941,12 +968,7 @@ mod tests {
                 (|c: &mut Config| c.dry_run = true) as fn(&mut Config),
                 (|c: &Config| c.dry_run) as fn(&Config) -> bool,
             ),
-            (
-                "yes",
-                |o| o.yes = true,
-                |c| c.yes = true,
-                |c| c.yes,
-            ),
+            ("yes", |o| o.yes = true, |c| c.yes = true, |c| c.yes),
             (
                 "verbose",
                 |o| o.verbose = true,

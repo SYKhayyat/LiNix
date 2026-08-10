@@ -23,18 +23,58 @@ err() { printf '\033[1;31mlinix\033[0m %s\n' "$1" >&2; }
 
 say "bootstrapping — detecting toolchain..."
 
-if ! command -v cargo >/dev/null 2>&1; then
-  err "Rust/cargo not found."
-  err "Install Rust from https://rustup.rs and re-run this script."
-  exit 1
-fi
+# The build target this machine wants, empty when no release binary is published for it.
+# `uname -m` on arm64 macOS says `arm64`; the Rust triple says `aarch64`.
+target_triple() {
+  case "$(uname -s 2>/dev/null || echo unknown)" in
+    Linux)  [ "$(uname -m)" = "x86_64" ] && echo x86_64-unknown-linux-gnu ;;
+    Darwin) case "$(uname -m)" in
+              arm64|aarch64) echo aarch64-apple-darwin ;;
+              x86_64)        echo x86_64-apple-darwin ;;
+            esac ;;
+  esac
+}
+
+# Download the published binary for this platform. Prints nothing and returns non-zero when
+# there is no asset, no downloader, or no network — every one of which means "build it".
+#
+# **The reason this exists.** The header of this file promises a 30-second first run and the
+# script's only path was `cargo install --git`, which resolves 448 crates and compiles them
+# under fat LTO on a stranger's laptop. Nobody measured 30 seconds doing that. A published
+# release makes the promise keepable, so the promise is what runs first and the compiler is the
+# fallback.
+fetch_binary() {
+  triple="$(target_triple)"
+  [ -n "$triple" ] || return 1
+  # `/releases/latest/download/` resolves to the newest release; a pinned `LINIX_REF` asks for
+  # exactly that tag, because "install v0.7.0" must not quietly hand over v0.8.0.
+  if [ -n "$REF" ]; then
+    url="$REPO/releases/download/$REF/linix-$triple"
+  else
+    url="$REPO/releases/latest/download/linix-$triple"
+  fi
+  out="$1"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url" -o "$out" 2>/dev/null || return 1
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$out" "$url" 2>/dev/null || return 1
+  else
+    return 1
+  fi
+  # A 404 saved to a file is still a file. An ELF/Mach-O binary is megabytes; an error page is
+  # not, and running one is a confusing failure three steps later.
+  [ -s "$out" ] || return 1
+  size=$(wc -c < "$out")
+  [ "$size" -gt 1000000 ] || return 1
+  chmod 755 "$out"
+}
 
 # WHICH LiNix. `HEAD` is whatever was pushed last, which is not a thing anyone can ask for
 # twice — two machines installed an hour apart got different programs and neither could say
 # which. The default is the newest release TAG, and `LINIX_REF` overrides it:
 #
 #   LINIX_REF=main   ...install.sh | sh     # follow the branch, deliberately
-#   LINIX_REF=v0.7.0 ...install.sh | sh     # a specific release
+#   LINIX_REF=v0.8.0 ...install.sh | sh     # a specific release
 #
 # A repo with no tags yet falls back to the branch and SAYS SO, rather than silently
 # installing something else than it promised.
@@ -44,6 +84,34 @@ if [ -z "$REF" ]; then
   if [ -z "$REF" ]; then
     say "no release tag published yet — installing from the default branch instead."
   fi
+fi
+
+# The published binary first. Where it lands is `LINIX_BIN_DIR` if given, and cargo's bin
+# directory otherwise — the same two places the source path installs to, so a user who set the
+# variable gets the same answer whichever path ran.
+CARGO_BIN="${LINIX_BIN_DIR:-${CARGO_HOME:-$HOME/.cargo}/bin}"
+STAGE="$(mktemp -d)"
+if fetch_binary "$STAGE/linix"; then
+  mkdir -p "$CARGO_BIN"
+  mv "$STAGE/linix" "$CARGO_BIN/linix"
+  rm -rf "$STAGE"
+  say "installed the published binary to $CARGO_BIN."
+  DOWNLOADED=1
+else
+  rm -rf "$STAGE"
+  DOWNLOADED=
+  say "no published binary for this platform — building from source."
+fi
+
+if [ -z "$DOWNLOADED" ]; then
+
+# Only the source path needs a compiler, and the check belongs where the need is. Demanding
+# Rust before knowing whether a binary was available turned "install this program" into
+# "install a toolchain first" for every user on a platform that has a published build.
+if ! command -v cargo >/dev/null 2>&1; then
+  err "Rust/cargo not found, and no published binary matched this platform."
+  err "Install Rust from https://rustup.rs and re-run this script."
+  exit 1
 fi
 
 if [ -n "$REF" ]; then
@@ -97,6 +165,9 @@ else
   # cargo installs into ~/.cargo/bin; make sure the user can find it.
   CARGO_BIN="${CARGO_HOME:-$HOME/.cargo}/bin"
 fi
+
+fi  # end of the build-from-source path
+
 # The shell caches where it found a name. Upgrading over an older `linix` on PATH leaves the
 # cache pointing at the binary that was just replaced, and every line below would then run
 # the old one — including the health check that is supposed to vouch for the new.

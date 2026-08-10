@@ -1,6 +1,6 @@
 use crate::verbs::perform_maintenance;
-use crate::verbs::sync::{enforce_policy, print_vars_changed};
 use crate::verbs::prelude::*;
+use crate::verbs::sync::{enforce_policy, print_vars_changed};
 
 /// SEC2: once an install finishes, a verified package and an unverified one are
 /// indistinguishable on disk. `@unverified` is only a real decision if it stays visible after
@@ -289,49 +289,23 @@ pub async fn handle_plan(app: &App, out: &str) -> Result<()> {
         // here, where there is still time to fix the manifest, rather than letting the
         // refusal be a surprise at apply time.
         //
-        // **Asked the way `apply` asks it, kind by kind.** One `inspect` over both lists ran
-        // the package rules over resource keys, and `protection_of` opens by asking whether a
-        // package line could hold the name — which no `link:`/`service:` key can. So every
-        // teardown came back `Undeclarable`: `plan` predicted a refusal for undeclaring three
-        // dotfiles, `apply` performed it at rc=0, and the explanation a user read was a
-        // sentence about package names. The guard carries a unit test asserting exactly that
-        // cannot happen; it exercises `RemovalKind::Extra`, and this call site passed
-        // `Package`.
-        //
-        // Each list still counts the other against the same ceiling, because the ceiling is a
-        // property of the command: a sync dropping three packages and three links removes six
-        // things. The `also_removing` split matches `sync`'s (`guard::enforce` then
-        // `enforce_extras`), so the preview and the enforcer refuse on the same machine.
+        // The question itself belongs to the guard (`preview_refusals`): a preview whose only
+        // value is agreeing with the enforcer must not be a second implementation of it.
         let package_pairs: Vec<(String, String)> = plan
             .removals
             .iter()
             .map(|r| (r.backend.clone(), r.name.clone()))
             .collect();
         let extra_pairs = crate::app::sync::guard::extra_removal_pairs(&plan.resources.undo);
-        let scope = crate::app::sync::guard::GuardScope::Apply;
-        let mut refusals = Vec::new();
-        for (pairs, kind, also) in [
-            (
-                &package_pairs,
-                crate::app::sync::guard::RemovalKind::Package,
-                0,
-            ),
-            // Zero, not `package_pairs.len()`: since `Y20` the two kinds answer to two
-            // ceilings, so a package removal no longer spends a teardown's budget.
-            (&extra_pairs, crate::app::sync::guard::RemovalKind::Extra, 0),
-        ] {
-            let report = crate::app::sync::guard::inspect_removals(
-                &app.config,
-                &app.registry,
-                pairs,
-                kind,
-                also,
-            )
-            .await;
-            if !report.is_empty() {
-                refusals.push(report.message(scope, kind));
-            }
-        }
+        let refusals = crate::app::sync::guard::preview_refusals(
+            &app.config,
+            &app.registry,
+            plan.installs.len(),
+            &package_pairs,
+            &extra_pairs,
+            crate::app::sync::guard::GuardScope::Apply,
+        )
+        .await;
         if !refusals.is_empty() {
             println!(
                 "\nWARNING: `linix apply` will refuse this plan.\n{}",
@@ -1115,9 +1089,7 @@ pub async fn approve_health_checks(app: &App, state: &crate::model::DesiredState
     let mut commands: Vec<String> = Vec::new();
     for specs in state.packages.values() {
         for spec in specs {
-            if let Some(Probe::Command(cmd)) =
-                spec.options.one("health").and_then(Probe::parse)
-            {
+            if let Some(Probe::Command(cmd)) = spec.options.one("health").and_then(Probe::parse) {
                 commands.push(cmd);
             }
         }

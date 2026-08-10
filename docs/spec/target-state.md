@@ -1207,7 +1207,7 @@ config is pinned to managers it does not have has converged nothing.
 | `adopt [PKG]` | take over the machine, or one package |
 | `sync` | make the machine match |
 | `plan` | show what sync would do |
-| `check` | **the one looking command** (U9). Eight sections — `config`, `drift`, `unmanaged`, `absent`, `conflicts`, `health`, `security`, `approvals` — one line each by default, detail when a section is named |
+| `check` | **the one looking command** (U9). Nine sections — `config`, `drift`, `unmanaged`, `absent`, `conflicts`, `health`, `security`, `approvals`, `adapters` — one line each by default, detail when a section is named |
 | `heal` | **the one acting-on-what-check-found command.** `doctor --fix`'s repairs live here |
 | `rebuild` | remove and reinstall what is declared, one backend at a time (II.11b) |
 | `lock [AXIS] [NAME…] [--list]` | freeze one of the three ledgers, or all of them: `versions`, `backends`, `scripts` (II.6) |
@@ -1573,8 +1573,10 @@ opinion about the packages that keep the machine running.
 | OS-essential | never remove what the OS says is load-bearing |
 | undeclarable | never remove a name no package line can hold — **not even `unprotected_packages` releases this one** |
 | `max_removals` (default **20**) | never remove more than this many packages at once |
-| `max_extra_removals` (default **20**) | the same for resource teardowns and firewall ports — its own budget (`Y20`) |
+| `max_extra_removals` (default **20**) | the same for resource teardowns — its own budget (`Y20`) |
+| `max_port_closures` (default **20**) | the same for ports closed because nothing declares them — its own budget (`N8`) |
 | `max_installs` (default **unset**) | never install more than this at once |
+| `max_total_changes` (default **unset**) | never make more changes of every kind together than this in one command (`N8`) |
 | `deny_packages` | never install this |
 | `pinned_only` (default **off**) | never install anything without an explicit `@version=` |
 | `require_snapshot` (default **off**) | never change anything when no snapshot can be taken |
@@ -1604,11 +1606,12 @@ in `src/` and fails on any that no ledger entry accounts for. **Both directions,
 **The guard covers resources, not only packages** *(owner ruling, 2026-07-28 — Q7)*. A `link:`,
 `service:`, `setting:`, `shim:`, `schedule:` or `repo:` line that leaves the model is torn down
 under `protected_packages` and against `max_extra_removals`, counted **once for the whole
-command** rather than once per phase. That ceiling is its own (`Y20`): software leaving a machine
-and a perimeter tightening are different events, and one budget for both would make the stricter
-govern both — a server whose first `firewall:` line closes forty ports could not also remove a
-package. Both are answered by the same `--allow-mass-removal`, because "yes, that many, I meant
-it" is one question. A `protected_packages` entry matches a resource by
+command** rather than once per phase. That ceiling is its own (`Y20`), and since `N8` so is the
+firewall's: software leaving a machine, a resource being torn down and a perimeter tightening are
+three different events, and one budget for all of them would make the strictest govern all — a
+server whose first `firewall:` line closes forty ports could not also remove a package. All are
+answered by the same `--allow-mass-removal`, because "yes, that many, I meant it" is one
+question. A `protected_packages` entry matches a resource by
 its key and also by the final component of a path key, so `protected_packages = ["vimrc"]`
 protects `link:/home/u/.vimrc` — a user names the thing, not the path LiNix keys it by. The two
 checks that do **not** carry over are OS-essential (no resource manager publishes such a list)
@@ -1724,7 +1727,9 @@ false**, and a table that quietly stops describing its own function is how the l
 | sync shows the plan and asks | **skips** |
 | `max_removals` exceeded | **cannot skip.** `--allow-mass-removal` |
 | `max_extra_removals` exceeded | **cannot skip.** `--allow-mass-removal` |
+| `max_port_closures` exceeded | **cannot skip.** `--allow-mass-removal` |
 | `max_installs` exceeded | **cannot skip.** `--allow-mass-install` |
+| `max_total_changes` exceeded | **cannot skip.** either mass flag |
 | hook script new or changed | **cannot skip.** `linix lock` |
 | protected / OS-essential | **nothing overrides** |
 | `purge-undeclared` | **cannot skip.** Typed confirmation |
@@ -2704,32 +2709,49 @@ helper building the same `Unrecognised` by hand, and seven sites carried the
 the shared helper held the weak one is how the five backends using the shared helper became the
 unprotected ones.
 
-## II.28 A removal ceiling is a budget for the command, and there are two of them (`S55`, `Y20`, V.159)
+## II.28 A ceiling is a budget for the command: one per kind, and one over all of them (`S55`, `Y20`, `N8`, V.159)
 
-**One value per command counts what has been taken away, and the `enforce*` family is the only
-thing that reads or writes it.** Not a `usize` each caller assembles: a sync removes in four
+**One value per command counts what it has changed, and the `enforce*` family is the only thing
+that reads or writes it.** Not a `usize` each caller assembles: a sync changes things in six
 places, and a number three callers compute is a number one of them computes wrong.
 
-**Two counts, two ceilings** (`Y20`):
+**A count per kind, a ceiling per kind** (`Y20`, `N8`):
 
 - **`max_removals`** (default 20) — packages. Software leaving the machine.
 - **`max_extra_removals`** (default 20) — every resource teardown: `link:`, `service:`,
-  `setting:`, `shim:`, `schedule:`, `repo:`, a `dotfiles:` tree's files, and a port closed
-  because no `firewall:` line declares it.
+  `setting:`, `shim:`, `schedule:`, `repo:`, and a `dotfiles:` tree's files.
+- **`max_port_closures`** (default 20) — a port closed because no `firewall:` line declares it.
+  Reachability is its own axis: the run that first declares a perimeter closes more ports than a
+  settled machine ever tears down resources, and it must not spend a teardown allowance to do it.
 
-**Neither spends the other's budget**, and each is spent across the whole command. The firewall
-phase and the extras teardown are both extras, so fifteen ports followed by ten links is
-twenty-five against one ceiling and is refused — the failure that made this a rule was two
-phases each passing a limit the run exceeded once.
+**And one ceiling over everything the command changes** (`N8`):
 
-**A refusal names the ceiling it hit.** `[guard] max_removals` printed over a port closure sends
-the reader to the wrong line.
+- **`max_total_changes`** (default **0**, off) — installs and upgrades, every removal of every
+  kind, resources written, ports opened and closed. Nineteen packages, nineteen resources and
+  nineteen ports pass all three per-kind ceilings and are fifty-seven changes; this is the number
+  that objects. **Off by default**, because a machine that has not asked for a total must not
+  start refusing the sync it ran yesterday.
+
+**No kind spends another kind's budget**, and every budget is spent across the whole command, not
+per phase — the failure that made this a rule was two phases each passing a limit the run
+exceeded once.
+
+**Every gate answers the total, including the ones that only add.** Installs go through
+`enforce_installs`; resources placed and ports opened go through `enforce_additions`, which has
+no ceiling of its own and exists so that a total is a total.
+
+**A refusal names every ceiling it hit.** `[guard] max_removals` printed over a port closure
+sends the reader to the wrong line; naming one of two sends them to raise a number and meet the
+other on the next run.
 
 **A refused set is not recorded.** A removal that was never allowed must not raise the total the
 next phase is measured against.
 
-**`--allow-mass-removal` answers both counts and nothing else.** Protection remains a refusal
-(V.26): nothing overrides it, on either kind.
+**`--allow-mass-removal` answers every removal count and the total; `--allow-mass-install`
+answers the install count and the total, and no removal count.** Both say "yes, that many, I
+meant it", and a total is made of both — but the flag that means *install* that many must never
+also mean *remove* that many. Protection remains a refusal (V.26): nothing overrides it, on any
+kind.
 
 ## II.29 A kind is a type, and every dispatch over it is exhaustive (`S56`, V.160)
 
@@ -2858,6 +2880,16 @@ deferred, not rejected (`U41`).
 reads is one it documents.** `install.sh` and `install.ps1` are piped from the internet: their
 header list is the whole interface, and a name in it that nothing reads is a promise, not a
 comment.
+
+**An installer installs a binary; compiling is the fallback** (`S79`). Both scripts promised a
+*30-second first run* and both did `cargo install --git`, which resolves 448 crates and builds
+them under fat LTO on a stranger's machine — so the promise in the header was contradicted by
+the next twenty lines, and a toolchain was a precondition for using a package manager. The
+published asset comes first; the source build runs when there is no asset for the platform, no
+downloader, or no network, and only that path requires Rust. **A release asset is named for the
+target it was built for.** Four build targets producing one filename upload as one asset that
+three of them overwrite, which is a release page that looks complete and serves the wrong
+binary to three platforms out of four.
 
 **A gate whose input is missing must fail, not pass.** `grep -q "^$MSRV"` with an empty `$MSRV`
 matches every line. Any check built from an interpolated value tests the value first.
@@ -3134,6 +3166,15 @@ reader parses perfectly and is read by nothing.
 **A surface that cannot be used is reported by `adapters::cannot_use`**, which names the file,
 what a row there teaches, how a row opens, and the command that lists all eight. A reader does
 not write its own sentence.
+
+**A malformed adapter file warns and is skipped; `check adapters` is where it is loud** *(owner
+ruling, 2026-08-10)*. Refusing the whole `sync` was the alternative and it was rejected: the file
+is optional, the failure fires mid-sync on a working machine, and a typo in an extension must not
+stop you installing a package. So the sync degrades — and because a warning inside a sync is a
+warning nobody reads twice, the same fact is a **non-zero exit** from `linix check`, where being
+loud costs nothing because looking changes nothing. Note what a skip actually costs: the built-in
+adapters still ship, so an unusable file does not switch a surface off — it silently returns you
+to stock behaviour, which is worse to miss than an outage.
 
 **The readme names every surface.** A plugin surface nobody can find is not one, and the docs
 were the other place the list lived only by hand.

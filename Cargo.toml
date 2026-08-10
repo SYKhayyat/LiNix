@@ -1,6 +1,6 @@
 [package]
 name = "linix"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 # The oldest toolchain this is known to build on.
 #

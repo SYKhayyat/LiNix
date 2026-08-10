@@ -126,6 +126,10 @@ impl Firewall<'_> {
             return Ok(());
         }
 
+        // Opening a port takes nothing away, so it answers to no ceiling of its own — but it is
+        // a change, and `max_total_changes` counts changes (`N8`).
+        crate::app::sync::guard::enforce_additions(self.config, to_open.len(), self.reaping, scope)
+            .await?;
         for rule in &to_open {
             if let Rule::Port { port, proto } = rule {
                 let argv = adapter.allow_command(*port, *proto);
@@ -150,7 +154,7 @@ impl Firewall<'_> {
                 .iter()
                 .map(|r| ("firewall".to_string(), r.to_string()))
                 .collect();
-            let reaped = crate::app::sync::guard::enforce_extras(
+            let reaped = crate::app::sync::guard::enforce_ports(
                 self.config,
                 self.registry,
                 &removals,
@@ -211,10 +215,13 @@ impl Firewall<'_> {
         match toml::from_str::<crate::backends::firewall::FirewallAdapterFile>(&body) {
             Ok(f) => f.firewall,
             Err(e) => {
-                warn!("{}", crate::app::adapters::cannot_use(
-                    crate::app::adapters::surface("firewall").expect("a declared surface"),
-                    e,
-                ));
+                warn!(
+                    "{}",
+                    crate::app::adapters::cannot_use(
+                        crate::app::adapters::surface("firewall").expect("a declared surface"),
+                        e,
+                    )
+                );
                 Vec::new()
             }
         }
@@ -277,4 +284,3 @@ impl Firewall<'_> {
         self.run_firewall(argv).await
     }
 }
-

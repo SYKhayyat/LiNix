@@ -19,7 +19,6 @@
 //! **Every file, not the one that was reported.** A rule that covered `modules/` only would send
 //! the next user to the same message from `priority`, which is exactly where the advice points.
 
-
 const BOM: &str = "\u{feff}";
 
 use crate::harness::Fixture;
@@ -121,8 +120,12 @@ fn the_preferences_file_may_carry_one() {
         code, 0,
         "a `preferences.toml` saved by Notepad stopped the program:\n{out}"
     );
+    // The number, on the line naming the setting it came from. Asserted as the pair rather than
+    // as a whole sentence: this test is about a byte-order mark, and pinning the phrasing of a
+    // report makes it fail for reasons that have nothing to do with one.
     assert!(
-        out.contains("Maximum removals in one command: 7"),
+        out.lines()
+            .any(|l| l.contains("max_removals") && l.contains('7')),
         "the setting behind the mark was not read:\n{out}"
     );
 }

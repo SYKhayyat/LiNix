@@ -279,6 +279,28 @@ pub async fn apply_non_package_phases(
     // teardown half is counted from what `reconcile` actually attempted, below.
     let resources = app.extras().changes(state).await?;
 
+    // Placing a resource takes nothing away, so it answers to no ceiling of its own — but it is
+    // a change, and `max_total_changes` counts changes (`N8`). Here because this is the one
+    // place that knows how many before any of them happen; the five appliers below each know
+    // only their own share, and five gates is five chances to add a sixth applier without one.
+    //
+    // **Not on a preview**, and this is the opposite of the teardown gate one function over,
+    // which deliberately runs on both. A dry run reaches here without the engine having run, so
+    // the ledger holds no packages and no installs — the total this gate could compute is a
+    // fraction of the one the real run computes, and a preview that measures a smaller number
+    // says *yes* where the run says *no*. `linix plan` previews the ceilings properly, over one
+    // ledger in the engine's own order (`guard::preview_refusals`); a half-answer here would be
+    // the second implementation of that, and the wrong one.
+    if !app.config.dry_run {
+        crate::app::sync::guard::enforce_additions(
+            &app.config,
+            resources.place.len(),
+            &app.reaping,
+            scope,
+        )
+        .await?;
+    }
+
     for phase in Phase::all() {
         match phase {
             // Not this list's, and each for a reason rather than by omission: `Resolution` is
@@ -307,9 +329,9 @@ pub async fn apply_non_package_phases(
     // Not a `Phase` — a phase is where a *declaration's* work happens, and this is the half
     // that runs on the declarations that are gone.
     //
-    // It runs after `Phase::Firewall`, and both spend the same `max_extra_removals` budget:
-    // `app.reaping` carries the ports already closed into this call, so a run that closes
-    // fifteen and then tears down ten is refused at twenty-five rather than passing twice.
+    // It runs after `Phase::Firewall`. Since `N8` the two spend different budgets — ports answer
+    // to `max_port_closures`, resources to `max_extra_removals` — but `app.reaping` carries both
+    // into this call, because they still spend one `max_total_changes` between them.
     let undone = app.extras().reconcile(state, scope).await?;
     Ok(resources.place.len() + undone)
 }

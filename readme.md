@@ -39,8 +39,13 @@ curl -fsSL https://raw.githubusercontent.com/SYKhayyat/LiNix/HEAD/scripts/instal
 irm https://raw.githubusercontent.com/SYKhayyat/LiNix/HEAD/scripts/install.ps1 | iex
 ```
 
-Either script installs the binary, runs `linix check`, and offers to `adopt` the packages
-already on the machine. From a checkout, LiNix is written in Rust:
+Either script downloads the published binary for your platform, runs `linix check`, and offers
+to `adopt` the packages already on the machine. Nothing else is needed — no toolchain, no
+compiler. Published builds are x86_64 Linux, both Apple architectures, and x86_64 Windows;
+anywhere else the script falls back to building from source, which needs
+[Rust](https://rustup.rs) and takes rather longer than thirty seconds.
+
+`LINIX_REF=v0.8.0` installs an exact release instead of the newest. From a checkout:
 
 ```bash
 cargo build --release
@@ -358,20 +363,25 @@ Drift is derived from managed state, and managed state can be wrong — a mis-sc
 state file from another machine. So **every path that removes anything** goes through one guard.
 That covers packages *and* the resources a declaration puts in place — a `link:`, `service:`,
 `setting:`, `shim:`, `schedule:` or `repo:` line that leaves your modules is torn down under the
-same rules, and counts against the same limit. The sentence you just read is checked by
+same rules, against its own limit. The sentence you just read is checked by
 `tests/removal_guard_enumeration_tests.rs`, which counts the removal paths in the source on every
 run; it was written because the sentence was false for the whole resource family until
 2026-07-28, and nothing had re-counted since it was first written.
 
 The guard refuses when a removal:
 
-- exceeds `max_removals` (default 20),
+- exceeds a ceiling. There is one per kind and one over all of them: `max_removals`
+  (packages, default 20), `max_extra_removals` (resource teardowns, 20), `max_port_closures`
+  (ports nothing declares, 20), `max_installs` (off by default) and `max_total_changes` —
+  everything one command does, installs and upgrades included, off by default. A refusal names
+  every ceiling it hit, because a set can be over two at once,
 - touches a protected package — a built-in list, anything you add, **and** the OS's own
   essential flags where it has them (`dpkg`'s `Essential` / `Priority: required`),
 - or trips one of the `[guard]` policy rules.
 
-`linix protected` prints the effective rules. The only override for the count is
-`--allow-mass-removal`. **`--yes` is deliberately not an override**, because every script and CI
+`linix protected` prints the effective rules, every ceiling included. The override for a
+removal count is `--allow-mass-removal`, for an install count `--allow-mass-install`, and either
+answers the total — a total is made of both. **`--yes` is deliberately not an override**, because every script and CI
 job passes `-y`, and an unattended run is exactly the one that cannot notice a system being
 taken apart. Protection is a refusal, not a confirmation: nothing overrides it.
 

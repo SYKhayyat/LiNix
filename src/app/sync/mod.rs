@@ -221,21 +221,16 @@ impl<'a> SyncEngine<'a> {
                     .await?
                 }
                 _ => {
-                    guard::enforce(
-                        self.config,
-                        &self.registry,
-                        &removals,
-                        &self.reaping,
-                        scope,
-                    )
-                    .await?
+                    guard::enforce(self.config, &self.registry, &removals, &self.reaping, scope)
+                        .await?
                 }
             };
 
             // The install-side ceiling (II.10): a mis-globbed manifest schedules a flood of
             // installs, and the count is the fact that explains it. Off by default; when set,
             // only `--allow-mass-install` clears it.
-            guard::enforce_installs(self.config, changes.total_install(), scope).await?;
+            guard::enforce_installs(self.config, changes.total_install(), &self.reaping, scope)
+                .await?;
 
             // 7f: a declared health check with no way to revert is refused here, before the
             // first package is touched — the only moment the answer is still actionable.
@@ -288,7 +283,8 @@ impl<'a> SyncEngine<'a> {
 
         let result = {
             let mut state_guard = self.state.lock().await;
-            self.execute_transaction(&changes, &mut state_guard, reaped).await
+            self.execute_transaction(&changes, &mut state_guard, reaped)
+                .await
         };
         // Set below, once the transaction has succeeded and the out-of-tree modules have been
         // rebuilt. Declared here so it survives the block.
@@ -670,9 +666,7 @@ impl<'a> SyncEngine<'a> {
             .graph
             .node_weights()
             .filter_map(|w| match w {
-                GraphAction::Install(spec) => {
-                    Some(format!("{}:{}", spec.backend, spec.name))
-                }
+                GraphAction::Install(spec) => Some(format!("{}:{}", spec.backend, spec.name)),
                 _ => None,
             })
             .collect();
@@ -832,18 +826,12 @@ impl<'a> SyncEngine<'a> {
                         crate::would!("  reinstall {}:{}", spec.backend, spec.name)
                     }
                     Some(GraphAction::Remove { name, backend }) => {
-                        crate::would!(
-                            "  remove {}:{} (subject to the guard)",
-                            backend, name
-                        )
+                        crate::would!("  remove {}:{} (subject to the guard)", backend, name)
                     }
                     // Nothing to replay, so the preview says the only true thing there is:
                     // what was interrupted. Reporting it is the whole of the real run's
                     // action too, so preview and run describe the same machine.
-                    None => crate::would!(
-                        "  report: {}",
-                        entry.action.describe_interruption()
-                    ),
+                    None => crate::would!("  report: {}", entry.action.describe_interruption()),
                 }
             }
             return Ok(());
@@ -1101,8 +1089,7 @@ impl<'a> SyncEngine<'a> {
                         // when nobody is watching.
                         match &action {
                             GraphAction::Install(spec) => {
-                                let source =
-                                    spec.options.one("__source").unwrap_or("sync");
+                                let source = spec.options.one("__source").unwrap_or("sync");
                                 let mut state = self.state.lock().await;
                                 state.add(
                                     &spec.backend,

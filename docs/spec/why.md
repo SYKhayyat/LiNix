@@ -4913,6 +4913,43 @@ guard says yes. A removal that was refused must not make the next phase's budget
 command is about to stop anyway, and the alternative is a counter that punishes a plan for what
 it was not allowed to do.
 
+**The third ceiling, and the one over all of them** *(ruled by the owner, 2026-08-10 — `N8`)*.
+`Y20` split the count in two and left the ports inside the resource half. That was one lump too
+few. The run that first declares a perimeter is precisely the run that closes the most ports, and
+under `Y20` it spent a budget meant for `link:`/`service:` teardowns to do it — so declaring a
+firewall could refuse a dotfile change that had nothing to do with the firewall. Ports get
+`max_port_closures`, on the same reasoning that gave resources their own number: **the kinds fail
+differently, so they get different tolerances.**
+
+**Why a total on top of that, when three ceilings already exist.** Because three ceilings of
+twenty permit fifty-seven changes, and nobody who wrote `20` three times was thinking of
+fifty-seven. Per-kind numbers answer *how much of this kind is too much*; none of them answers
+*how much is too much*. `max_total_changes` is that number, and it counts what the removal
+ceilings never look at — installs and upgrades, resources written, ports opened — because a
+total that only counted removals would be the removal ceiling with a longer name. That is also
+why `enforce_additions` exists at all: it has no ceiling of its own and refuses nothing on its
+own account. It is there so the total is a total.
+
+**Why it is off by default when the other four are not.** The three removal ceilings protect
+against a class of accident — a manifest edit that deletes more than you meant — and twenty is a
+number a machine can carry without noticing. A total is a statement about how much churn *this
+machine* tolerates, which is not a thing LiNix knows. Shipping it at any non-zero number would
+refuse syncs that ran yesterday, on machines whose owners never asked for it, and the first
+thing every one of them would do is turn it off. A default that is turned off before it catches
+anything is worse than no default.
+
+**Why both mass flags answer it and no third flag exists.** The total is made of installs and
+removals both, so either "yes, that many, I meant it" covers it. A `--allow-mass-change` would be
+a third spelling of one sentence, and the moment it exists a user has to remember which of three
+flags a refusal wants. What does **not** carry over: `--allow-mass-install` answers the total and
+the install count and nothing else. The flag that means *install* that many must never quietly
+also mean *remove* that many — that conflation is II.10's original bug, one ceiling up.
+
+**Why a refusal names every ceiling it hit rather than the first.** A set can be over its own
+number and over the total at once. Reporting one of them sends the reader to raise it, run again,
+and meet the other — twice the interruption for one decision, and the second one arrives looking
+like the fix did not work.
+
 ---
 
 **V.160 — Why the kind is a type, and what the two catch-alls were quietly doing.**
@@ -5204,7 +5241,28 @@ failed run may leave your software deleted*.
 ---
 
 **V.165 — Why the shipping surface accumulated six of these, and what they have in common.**
-*(Rule in II.34. Fixed 2026-08-09, `S61`; licence ruled as `Z1`, `S62`.)*
+*(Rule in II.34. Fixed 2026-08-09, `S61`; licence ruled as `Z1`, `S62`; the installers made
+installers 2026-08-10, `S79`.)*
+
+**The seventh, found when the first release was actually attempted.** Both installers opened
+with *"the 30-second first run"* and then ran `cargo install --git`, which resolves 448 crates
+and compiles them under fat LTO. Nobody has ever measured thirty seconds doing that. The header
+was not a lie anyone told; it is what happens when the shipping surface is *read* — the sentence
+was written for the program that was going to exist, and the release that would have made it
+true had never been cut. So the claim aged into a falsehood in a file whose whole audience pipes
+it, unread, from a URL.
+
+Two things had to be true at once for the fix, and only one of them was code. The release job
+had never run — its only trigger is a `v*` tag — and it would have published four binaries all
+named `linix`, because a GitHub asset takes the basename and every target builds that same
+basename. Three platforms out of four would have received the wrong architecture from a release
+page that looked complete. **An untested release job is not a risk that shows up as a failure;
+it is one that shows up as a success serving the wrong file.**
+
+And the ordering, which reads backwards until you see it: the toolchain check moved *after* the
+download attempt. Requiring Rust before knowing whether a prebuilt binary was available made
+"install this program" mean "install a toolchain first" for every user on a platform that has a
+published build — a package manager whose own installation needed a compiler.
 
 None of the six is hard. That is the point of collecting them under one reason: they are all in
 the part of the repository that **nothing else in the repository checks**, and each of them
@@ -5803,8 +5861,22 @@ say that the rest of the file is inert. Worse, the eight were subtly different �
 *"Ignoring malformed"*, one said *"ignoring the settings adapters in"* — so grepping your own
 terminal for the word you half-remember finds seven of eight.
 
-**Why a malformed adapter still only warns.** Making it fatal is defensible and might be right:
-a file the user wrote and LiNix cannot read is a declaration that is not happening. But the path
-it would fire on is a `sync` on a working machine, and turning a degradation into a refusal
-there is a behaviour change a user notices — the fourth thing `CLAUDE.md` says to stop and ask
-about. The report exists now; the ruling is the owner's.
+**Why a malformed adapter only warns, and where it is loud instead** *(ruled by the owner,
+2026-08-10)*. Making it fatal is defensible: a file the user wrote and LiNix cannot read is a
+declaration that is not happening. It lost on where it would fire — a `sync` on a working
+machine, where a typo in an optional extension file would stop you installing a package. The
+degradation stays.
+
+What the ruling adds is the surface where being loud is free. `check adapters` is a section of
+its own and exits non-zero on any file that is written and not in use, so the fact lives
+somewhere a person or a CI job can ask about it, rather than only in a warning that scrolls past
+once per sync. A sibling was fixed with it: `check_approvals` carried a sentence claiming
+adapters *"block a sync loudly"* and used that as the reason event hooks needed the section to
+themselves. They do not block; they warn and skip, exactly like a hook. The comment had been
+arguing for the section on a fact that was not true, and the true version of that fact is an
+argument for one more section rather than for eight readers staying quiet.
+
+**And what a skipped adapter actually costs, which is easy to get backwards.** Not that the
+surface stops working — the built-in adapters still ship, so `ufw` and `firewalld` are still
+driven. It is that a row *overriding* a built-in silently stops overriding it, and the machine
+quietly returns to stock behaviour. An outage announces itself. This does not.
