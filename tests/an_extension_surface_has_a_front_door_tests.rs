@@ -206,3 +206,38 @@ fn a_repo_with_no_adapters_directory_is_surveyed_without_complaint() {
     assert!(found.iter().all(|e| e.standing == Standing::Absent));
     assert!(found.iter().all(|e| !e.standing.is_wrong()));
 }
+
+/// **The ruling of 2026-08-10, as an exit code.** A malformed `adapters/*.toml` warns and is
+/// skipped; it does not refuse the run. The alternative was on the table and lost on where it
+/// would fire — a `sync` on a working machine, where a typo in an optional extension file would
+/// stop you installing a package.
+///
+/// Here rather than only in the container harness: there, the same claim can only be made as
+/// "the command exited 0", which is a check a binary that does nothing also passes — the
+/// mutation gate says so and is right. The container asserts the words a user reads; this
+/// asserts the code a script branches on.
+#[test]
+fn a_malformed_adapter_does_not_refuse_a_sync() {
+    let f = crate::harness::Fixture::new("adapters-malformed-degrades");
+    f.write("priority", "cargo\n");
+    f.write_module("cargo:ripgrep\n");
+    f.write("adapters/backends.toml", "this is not toml at all\n");
+
+    let (out, code) = f.run(&["sync", "--dry-run"]);
+    assert_eq!(
+        code, 0,
+        "a malformed adapter file refused the run; the ruling is that it degrades:\n{out}"
+    );
+
+    // And the other half of the ruling: the fact is not lost, it moves to the command whose
+    // exit code is free to be loud.
+    let (out, code) = f.run(&["check", "adapters"]);
+    assert_ne!(
+        code, 0,
+        "`check adapters` reported nothing wrong about a file nothing can read:\n{out}"
+    );
+    assert!(
+        out.contains("malformed"),
+        "the report has to say which way it is unusable:\n{out}"
+    );
+}

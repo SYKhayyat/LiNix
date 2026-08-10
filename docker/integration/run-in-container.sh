@@ -1595,9 +1595,9 @@ ok "check approvals is clean with no hooks" lx check approvals
 # `adapters` (S78) — the eight extension surfaces. The container starts with no `adapters/`
 # directory at all, which is the state almost every machine is in and the one a survey must
 # report without complaining about.
-ok "adapters reports every surface" lx adapters
+grep_ok "adapters names every surface it knows" "firewall" lx adapters
 grep_ok "adapters says an unextended machine has extended nothing" "extended nothing" lx adapters
-nok "adapters refuses a name that is not a surface" lx adapters nosuchsurface
+grep_ok "adapters refuses a name that is not a surface, and lists the real ones" "is not an extension surface" lx adapters nosuchsurface
 # **The failure a plugin system has that a built-in does not**: a file that is present,
 # approved, valid TOML and read by nobody, because the array key is `backends` and the reader
 # wants `backend`. Every other signal says fine. `rows in force` is the only one that does not.
@@ -1612,11 +1612,22 @@ grep_ok "a row of the right kind is in force" "in use" lx adapters backends
 # Malformed degrades rather than refusing (owner ruling, 2026-08-10), and `check adapters` is
 # where that fact is an exit code instead of a warning nobody re-reads.
 printf 'this is not toml at all\n' > "$LINIX_CONFIG_DIR/adapters/backends.toml"
+# Approved first, and that ordering is the point: `standing_of` asks II.12 before it asks the
+# parser, so an unapproved file reads `unapproved` whatever is inside it. Without this line the
+# check below tests the approval ledger and calls it a parse result.
+lx lock >/dev/null 2>&1
 grep_ok "an unreadable adapter file is reported malformed" "malformed" lx adapters backends
-ok "a malformed adapter does not stop a sync" lx sync --dry-run
-nok "check adapters exits non-zero on a file that is not in use" lx check adapters
+# The ruling: `sync` degrades rather than refusing. Asserted on the words LiNix prints, not on
+# exit 0 — a check that only wants exit 0 is a check a do-nothing binary passes, which is what
+# the mutation gate exists to say. The exit code half is `a_malformed_adapter_does_not_refuse_a_
+# sync` in the Rust suite, where it is a real assertion rather than a survivor.
+grep_ok "a malformed adapter warns, naming the file, and the sync goes on" "is not in use" lx sync --dry-run
+# The exit code is `a_malformed_adapter_does_not_refuse_a_sync` in the Rust suite. Here it is
+# the report, because a `nok` cannot tell a refusal from a crash — which is the second thing the
+# mutation gate measures, and it was right about these two as well.
+grep_ok "check adapters names a file that is not in force" "not in force" lx check adapters
 rm -f "$LINIX_CONFIG_DIR/adapters/backends.toml"
-ok "check adapters is clean once the file is gone" lx check adapters
+grep_ok "check adapters is clean once the file is gone" "extended nothing" lx check adapters
 # `add` vendors a source's modules. A local path with a module is the network-free case; it
 # copies the module in and reports it.
 mkdir -p /tmp/linix-share/modules
