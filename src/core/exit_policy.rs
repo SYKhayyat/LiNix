@@ -597,6 +597,23 @@ pub fn pixi() -> ExitPolicy {
 /// An unknown name yields the default policy, which classifies nothing. That is the safe
 /// direction — an unclassified failure keeps the declaration — and it is not a silent one: a
 /// manager missing from this table is a manager the coverage test names.
+/// Every manager [`for_manager`] answers for, as data.
+///
+/// **A policy is not a platform.** The exit codes `dnf` uses are facts about dnf, true on a Mac
+/// that will never run it — but the gates that audit these policies walked the *registry*, which
+/// only holds the backends that register on the machine running the test. On macOS that meant
+/// zero managers with a `benign_exits` entry, and `benign_exit_contradiction_tests` failed on its
+/// own anti-vacuity floor: *"measuring an empty table rather than the property it claims"*. It
+/// was right. The table was empty because the walk was platform-shaped, and nobody had noticed
+/// because macOS had never compiled a test in this repo.
+///
+/// Kept beside the match and checked against it, so a manager cannot gain a policy here and stay
+/// unaudited, or lose one and leave a name behind.
+pub const MANAGERS_WITH_A_POLICY: &[&str] = &[
+    "apt", "dnf", "yum", "pacman", "apk", "brew", "choco", "winget", "cargo", "scoop", "nimble",
+    "luarocks", "helm", "npm", "gem", "pipx", "go", "pixi",
+];
+
 pub fn for_manager(name: &str) -> ExitPolicy {
     match name {
         "apt" => apt(),
@@ -1075,5 +1092,41 @@ mod outdated_exit_tests {
             !p.is_benign(Some(internal)),
             "worth retrying and `not a failure` are different claims"
         );
+    }
+}
+
+#[cfg(test)]
+mod policy_table_tests {
+    use super::*;
+
+    /// **The list and the match must not drift.** `MANAGERS_WITH_A_POLICY` is what the auditing
+    /// gates walk, so a name that lost its policy would leave them auditing a bare default and
+    /// reporting nothing — the shape of failure this whole file's gates exist to refuse.
+    #[test]
+    fn every_manager_named_in_the_table_actually_has_a_policy() {
+        let bare = ExitPolicy::default();
+        for name in MANAGERS_WITH_A_POLICY {
+            let p = for_manager(name);
+            assert!(
+                p.reads_output() || !p.benign_exits.is_empty() || !p.transient_exits.is_empty(),
+                "`{name}` is in MANAGERS_WITH_A_POLICY and `for_manager` hands back a policy \
+                 that answers nothing — either the match arm went, or the name should"
+            );
+            assert!(
+                !(p.benign_exits == bare.benign_exits
+                    && p.transient_exits == bare.transient_exits
+                    && !p.reads_output()),
+                "`{name}` resolves to the default policy"
+            );
+        }
+    }
+
+    /// And a name nobody wrote a policy for gets the bare default rather than somebody else's —
+    /// the control, so the assertion above is not passing because everything answers yes.
+    #[test]
+    fn a_manager_with_no_policy_gets_the_bare_default() {
+        let p = for_manager("a-manager-nobody-has-written-a-policy-for");
+        assert!(!p.reads_output());
+        assert!(p.benign_exits.is_empty() && p.transient_exits.is_empty());
     }
 }

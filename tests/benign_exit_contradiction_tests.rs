@@ -18,9 +18,7 @@
 //! shape is a bound now, and a policy that gains a `benign_exits` entry without gaining a way
 //! to contradict it turns this red instead of waiting for a runner to notice.
 
-use linix::backends::create_default_registry;
 use linix::core::exit_policy;
-use std::sync::Arc;
 
 /// Backends that forgive a code and cannot contradict it, with the reason each is allowed to.
 ///
@@ -37,28 +35,20 @@ const FORGIVES_WITHOUT_CONTRADICTING: &[&str] = &[];
 async fn a_policy_that_forgives_an_exit_code_can_still_call_the_command_failed() {
     // The registry, not a hand-written list of manager names: a backend registered with a
     // policy nobody enumerated is exactly the case that goes unnoticed.
-    let vfs = Arc::new(dashmap::DashMap::new());
-    let mock = Arc::new(linix::core::executor::MockExecutor::new(vfs.clone()));
-    let exec = linix::core::CommandExecutor::with_layer(
-        true,
-        false,
-        mock,
-        vfs,
-        Arc::new(dashmap::DashMap::new()),
-    );
-    let config = linix::config::Config::default();
-    let registry = create_default_registry(
-        exec,
-        &config,
-        Arc::new(linix::app::hooks::LuaHooks::new(&config).expect("hooks")),
-    )
-    .await;
-
+    // **The policies, not the registry.** A policy is a fact about a manager - the exit codes
+    // dnf uses are true on a Mac that will never run it - but this walked the backends that
+    // register on the machine running the test. On macOS none of the forgiving managers exists,
+    // so the table came back empty and this gate failed on its own anti-vacuity floor, which was
+    // right to fire: it was measuring nothing. Nobody had seen it because the build matrix
+    // produced one target out of four and macOS had never compiled a test in this repo.
+    //
+    // `MANAGERS_WITH_A_POLICY` is the same list `for_manager` matches on, checked against it by
+    // `policy_table_tests`, so this walk is the same on every platform.
     let mut forgiving: Vec<String> = Vec::new();
     let mut mute: Vec<String> = Vec::new();
 
-    for backend in registry.all() {
-        let name = backend.name().to_string();
+    for name in exit_policy::MANAGERS_WITH_A_POLICY {
+        let name = name.to_string();
         let policy = exit_policy::for_manager(&name);
         if policy.benign_exits.is_empty() {
             continue;
