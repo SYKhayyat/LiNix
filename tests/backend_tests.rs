@@ -62,13 +62,18 @@ async fn test_apt_backend_hermetic_logic() {
     let kernel = TestKernel::new().await;
     let backend = kernel.app.registry.get("apt").expect("Missing apt backend");
 
-    // Set expected sudo-prefixed responses for Linux
+    // **The argv the product actually emits**, measured rather than remembered. This test is
+    // `cfg(target_os = "linux")` and the build matrix produced one target out of four, so it had
+    // never once executed — and in that time the product moved twice underneath it: `--` now
+    // terminates the options before a package name (E29), and removal is `remove` rather than
+    // `purge`, which became opt-in. A stub nobody matches proves nothing, which is the whole
+    // reason the mock refuses to stay quiet about one.
     kernel.mock_executor.set_response(
-        "sudo apt install -y curl",
+        "sudo apt install -y -- curl",
         Ok(DryRunOutput::default().into()),
     );
     kernel.mock_executor.set_response(
-        "sudo apt purge -y -- curl",
+        "sudo apt remove -y -- curl",
         Ok(DryRunOutput::default().into()),
     );
 
@@ -88,11 +93,11 @@ async fn test_pacman_backend_hermetic_logic() {
         .expect("Missing pacman backend");
 
     kernel.mock_executor.set_response(
-        "sudo pacman -S --noconfirm --needed git",
+        "sudo pacman -S --noconfirm --needed -- git",
         Ok(DryRunOutput::default().into()),
     );
     kernel.mock_executor.set_response(
-        "sudo pacman -Rs --noconfirm git",
+        "sudo pacman -Rs --noconfirm -- git",
         Ok(DryRunOutput::default().into()),
     );
 

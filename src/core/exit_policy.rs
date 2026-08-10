@@ -245,6 +245,20 @@ pub fn dnf() -> ExitPolicy {
         // `dnf check-update` exits 100 when it FINDS updates. It is dnf's answer, not its
         // failure, and unmarked it makes a successful update check look like a broken one.
         benign_exits: vec![100],
+        // **And a forgiven code must still be contradictable.** `benign_exits` above says "100
+        // is not a failure", and without a phrasing that can say otherwise, *every* dnf run
+        // ending on it reads as a success — including one that did nothing, which is the choco
+        // 3010 defect `benign_exit_contradiction_tests` was written for.
+        //
+        // Measured, not guessed: `dnf install -y no-such-package-xyz` in the Fedora 41
+        // integration image prints
+        //
+        //     Failed to resolve the transaction:
+        //     No match for argument: no-such-package-xyz
+        //
+        // The first line is dnf's own words for "the transaction did not happen", and it is the
+        // sentence that has to outrank a forgiven exit code.
+        failure_markers: vec!["failed to resolve the transaction"],
         transient_markers: vec![
             "failed to synchronize cache",
             "cannot download",
