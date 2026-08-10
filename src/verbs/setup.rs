@@ -6,6 +6,112 @@ use crate::verbs::plan::{
 use crate::verbs::prelude::*;
 use crate::verbs::sync::{enforce_policy, print_flight_plan};
 
+/// `adapters` — the eight ways to extend LiNix, and what this machine has on each.
+///
+/// **The surfaces all worked; there was no way to ask about them.** A `[[backend]]` row teaches a
+/// package manager, a `[[snapshot]]` row teaches a rollback provider, and every one of the eight
+/// goes through II.12's ledger — but they were eight paths, eight readers and eight
+/// `warn!("ignoring adapters/x.toml: …")` lines, and nothing in the program could answer *what
+/// have I extended, and is it working?*
+///
+/// The column that matters is the last one. A file can be present, approved and valid TOML and
+/// still be doing nothing, which is what `[[backends]]` for a `[[backend]]` reader produces:
+/// valid TOML describing a table nobody opens. Rows-in-force is the number that tells you.
+pub async fn handle_adapters(app: &App, surface: Option<&str>, out: Output) -> Result<()> {
+    use crate::app::adapters::{self, Standing};
+
+    let layout = app.config.layout();
+    let mut found = adapters::survey(&layout);
+
+    if let Some(name) = surface {
+        if adapters::surface(name).is_none() {
+            let known: Vec<&str> = adapters::SURFACES.iter().map(|s| s.name).collect();
+            return Err(crate::core::Error::Validation(format!(
+                "`{name}` is not an extension surface. There are {}: {}.",
+                known.len(),
+                known.join(", ")
+            ))
+            .into());
+        }
+        found.retain(|e| e.surface.name == name);
+    }
+
+    if out.is_json() {
+        let rows: Vec<Value> = found
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "surface": e.surface.name,
+                    "row": e.surface.row(),
+                    "teaches": e.surface.teaches,
+                    "file": e.path.display().to_string(),
+                    "standing": e.standing.word(),
+                    "rows_in_force": match e.standing {
+                        Standing::InUse { rows } => rows,
+                        _ => 0,
+                    },
+                    "detail": e.standing.detail(),
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+        return Ok(());
+    }
+
+    println!(
+        "Extension surfaces — a row in one of these teaches LiNix something it does not ship.\n"
+    );
+    println!("{:<11} {:<18} {:<12} ROWS", "SURFACE", "ROW", "STANDING");
+    for e in &found {
+        let rows = match e.standing {
+            Standing::InUse { rows } => rows.to_string(),
+            _ => "-".to_string(),
+        };
+        println!(
+            "{:<11} {:<18} {:<12} {}",
+            e.surface.name,
+            e.surface.row(),
+            e.standing.word(),
+            rows
+        );
+    }
+
+    // The detail goes below the table rather than in it, because a serde message is a
+    // paragraph and a table that wraps is a table nobody reads.
+    let wrong: Vec<&adapters::Extension> = found.iter().filter(|e| e.standing.is_wrong()).collect();
+    if !wrong.is_empty() {
+        println!("\n{} surface(s) are not in force:", wrong.len());
+        for e in &wrong {
+            println!("\n  {} — {}", e.path.display(), e.standing.word());
+            match &e.standing {
+                Standing::NoRows => println!(
+                    "    the file holds no `{}` rows. A row of another name is valid TOML and \
+                     is read by nothing.",
+                    e.surface.row()
+                ),
+                // Re-indented line by line: the ledger's refusal is three lines and pasting it
+                // whole puts lines two and three hard against the left margin, under a heading
+                // they belong to.
+                _ => {
+                    for line in e.standing.detail().unwrap_or_default().lines() {
+                        println!("    {}", line.trim_start());
+                    }
+                }
+            }
+        }
+    }
+
+    if found.iter().all(|e| e.standing == Standing::Absent) {
+        println!(
+            "\nThis machine has extended nothing. Write `{}` to \
+             {} and run `linix sync`; the first run asks you to approve it.",
+            adapters::SURFACES[0].row(),
+            adapters::SURFACES[0].path_in(&layout).display()
+        );
+    }
+    Ok(())
+}
+
 /// `absent` (II.8): every `absent:` line in force, and the module it comes from — what LiNix
 /// keeps OFF this machine, and where each rule is written. Read-only.
 /// `vars` (Part IX, W12): the variables resolved on this machine, so a `when $name` block that

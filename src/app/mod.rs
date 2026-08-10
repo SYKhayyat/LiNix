@@ -1,3 +1,4 @@
+pub mod adapters;
 pub mod adopt;
 pub mod apply;
 pub mod bisect;

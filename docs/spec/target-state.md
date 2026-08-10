@@ -3115,3 +3115,25 @@ defect the change was made to remove.
 
 **An exemption list is audited by the gate that reads it.** A name in `NOT_GATES` that matches no
 file is a claim about nothing, and it is how an exemption outlives the thing it excused.
+
+## II.47 A way to extend LiNix is a row in a table the program can read (`S78`, V.178)
+
+**`app::adapters::SURFACES` is the list of extension surfaces**, and there is no other. A reader
+that opens a file under `adapters/` without a row there is invisible to `linix adapters` and
+absent from the docs; `every_adapter_surface_is_in_the_table` fails on it.
+
+**`Layout::adapter_file` is the only way to name one.** No caller joins the path by hand — that
+is how `firewall:` came to be the surface with no accessor, and a list built from the accessors
+would have been a list with a hole in it.
+
+**A user can ask what this machine has extended.** `linix adapters` reports, per surface, the
+file, whether the approval ledger cleared it, and **how many rows are actually in force**. The
+last is not the same question as *does the file parse*: a `[[backends]]` for a `[[backend]]`
+reader parses perfectly and is read by nothing.
+
+**A surface that cannot be used is reported by `adapters::cannot_use`**, which names the file,
+what a row there teaches, how a row opens, and the command that lists all eight. A reader does
+not write its own sentence.
+
+**The readme names every surface.** A plugin surface nobody can find is not one, and the docs
+were the other place the list lived only by hand.

@@ -435,6 +435,9 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
         Commands::PurgeUndeclared { allow_mass_purge } => {
             handle_purge_undeclared(app, *allow_mass_purge).await
         }
+        Commands::Adapters { surface, json } => {
+            handle_adapters(app, surface.as_deref(), Output::from_json_flag(*json)).await
+        }
         Commands::Protected { packages, json } => {
             handle_protected(app, packages, Output::from_json_flag(*json)).await
         }
@@ -1289,7 +1292,8 @@ mod log_level_tests {
             .collect();
 
         let expected: std::collections::BTreeSet<String> = [
-            "Check", "Completions", "Config", "Diff", "Edit", "Eval", "Export", "Fleet",
+            "Adapters", "Check", "Completions", "Config", "Diff", "Edit", "Eval", "Export",
+            "Fleet",
             "History", "Info", "List", "Path", "Plan", "Policy", "Protected", "Repl", "Sbom",
             "Search", "Try", "Vars", "Why",
         ]

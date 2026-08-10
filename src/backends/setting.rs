@@ -185,10 +185,10 @@ pub fn user_adapters(cfg: &crate::config::Config) -> Vec<SettingAdapter> {
         Some(body) => match toml::from_str::<SettingStoreFile>(&body) {
             Ok(f) => f.setting_store,
             Err(e) => {
-                warn!(
-                    "ignoring the settings adapters in adapters/settings.toml: {}",
-                    e
-                );
+                warn!("{}", crate::app::adapters::cannot_use(
+                    crate::app::adapters::surface("settings").expect("a declared surface"),
+                    e,
+                ));
                 Vec::new()
             }
         },

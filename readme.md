@@ -993,6 +993,47 @@ declaration rather than a command that runs on every sync — and `reset` is wha
 line does. A machine whose store has no row gets an error naming what LiNix looked for, never a
 key that silently did nothing.
 
+### The eight things you can teach it
+
+Everything above is one of these. A row in one of eight files in your repo teaches LiNix
+something it does not ship, and a thing you teach it is a full peer of a thing it ships — the
+built-in package managers go through the same table your `[[backend]]` row goes through, which
+is the only reason that sentence is true rather than aspirational.
+
+| file | row | teaches |
+|---|---|---|
+| `adapters/backends.toml` | `[[backend]]` | how to drive a package manager |
+| `adapters/settings.toml` | `[[setting_store]]` | how to read and write a settings store |
+| `adapters/init.toml` | `[[init]]` | how to drive an init system |
+| `adapters/firewall.toml` | `[[firewall]]` | how to drive a firewall |
+| `adapters/snapshot.toml` | `[[snapshot]]` | how to take and restore a filesystem snapshot |
+| `adapters/secret.toml` | `[[secret]]` | how to decrypt a secret |
+| `adapters/prereq.toml` | `[[prereq]]` | the setup a manager needs before it can install |
+| `adapters/bootstrap.toml` | `[[bootstrap]]` | how to obtain a manager this machine lacks |
+
+**`linix adapters` says what this machine has on each**, and the column that matters is the
+last one:
+
+```
+SURFACE     ROW                STANDING     ROWS
+backends    [[backend]]        in use       2
+settings    [[setting_store]]  absent       -
+init        [[init]]           absent       -
+firewall    [[firewall]]       no rows      -
+...
+```
+
+`no rows` is the one worth having a command for. A file can be present, approved and perfectly
+valid TOML and still be doing nothing: write `[[backends]]` where the reader wants
+`[[backend]]` and you have described a table nobody opens — no parse error, no warning, and a
+`mymgr:` line that fails much later with a message about an unknown backend. `linix adapters
+<surface>` narrows to one, and `--json` is the same answer for a script.
+
+Every one of these files runs on your machine, so every one goes through the approval ledger:
+the first `sync` after you write or change one refuses it by name and tells you to run `linix
+lock`. That is the same rule hooks and `exec:` scripts follow, and it is why a repo you cloned
+cannot teach your machine anything you have not read.
+
 ## Configuration
 
 `linix config init` writes a commented `preferences.toml` into your repo; `linix edit

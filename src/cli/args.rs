@@ -26,7 +26,7 @@ The map (every command above, by what you are doing):
 
   Look at things
     list · search · info · why · diff · eval · history · protected
-    policy · vars · sbom · export · repl
+    policy · vars · sbom · export · repl · adapters
 
   Undo and time travel
     snapshot · rollback · bisect · teleport · restore · bundle · git
@@ -312,6 +312,19 @@ pub enum Commands {
         /// Packages to forget ("apt:jq", or a bare name to search every backend)
         #[arg(required = true)]
         packages: Vec<String>,
+
+        /// Emit JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// List the eight ways this repo can extend LiNix, and what this machine has on each:
+    /// which surface, which file, whether the approval ledger cleared it, and how many rows
+    /// are actually in force
+    Adapters {
+        /// One surface by name (`backends`, `settings`, `init`, `firewall`, `snapshot`,
+        /// `secret`, `prereq`, `bootstrap`) instead of all eight
+        surface: Option<String>,
 
         /// Emit JSON
         #[arg(long)]
@@ -920,6 +933,7 @@ impl Commands {
             | Self::Completions { .. }
             | Self::Eval { .. }
             | Self::Repl { .. }
+            | Self::Adapters { .. }
             | Self::Protected { .. }
             | Self::Policy { .. }
             | Self::Path { .. }

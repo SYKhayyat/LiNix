@@ -5770,3 +5770,41 @@ end to end — which nothing had done during the compaction — reported that `d
 held 176, 2 and 0, and the index still listed `Z1` as OPEN four days after it was ruled. The
 number is counted, not typed, and the check for it exists; what did not happen is anybody running
 it. A gate is only as good as the last time it was allowed to speak.
+
+**V.178 — Why the surfaces needed a front door rather than a ninth surface.**
+
+**The mechanism was complete and the discoverability was zero.** Nothing here adds a capability:
+every one of the eight already loaded, already went through the ledger, already had its
+behaviour tested. What did not exist was any way — from inside the program or from the command
+line — to enumerate them. That is a real defect and not a documentation one, because *the list
+itself* was the thing being maintained by hand in three places at once: the `Layout` accessors,
+the readme's prose, and whatever a reader happened to remember. Three hand-maintained copies of
+one list is the shape this repo has a rule about, and the fix is the same as it always is: one
+table, and gates that fail when something disagrees with it.
+
+**Why rows-in-force is the number that matters.** The failure mode a plugin system has that a
+built-in does not is *the extension that silently does nothing*. Present, approved, valid TOML,
+and read by nobody, because the array key is `backends` and the reader wants `backend`. Every
+signal a user has says fine — the file is there, `linix lock` approved it, no warning appears —
+and the symptom shows up later, somewhere else, as a line that names an unknown backend. A
+standing of `no rows` is the only report that describes what is actually happening.
+
+**Why `firewall:` proves the table has to be the definition.** It was the one surface with no
+`Layout` method, because its reader joined the path inline. Nothing was broken by that; the
+firewall adapters worked. What it cost is that any list derived from the accessors — which is
+the obvious way to build one — would have been seven surfaces, and every gate over that list
+would have passed. The table is written out by hand *and* checked against the source, in that
+order, because the source is the thing that can quietly grow a ninth.
+
+**Why one voice for the failures.** The eight `warn!("ignoring adapters/x.toml: {e}")` lines were
+each individually reasonable and collectively useless: a serde error names a line number in a
+file the user may not have known LiNix reads, offers no example of a correct row, and does not
+say that the rest of the file is inert. Worse, the eight were subtly different — one said
+*"Ignoring malformed"*, one said *"ignoring the settings adapters in"* — so grepping your own
+terminal for the word you half-remember finds seven of eight.
+
+**Why a malformed adapter still only warns.** Making it fatal is defensible and might be right:
+a file the user wrote and LiNix cannot read is a declaration that is not happening. But the path
+it would fire on is a `sync` on a working machine, and turning a degradation into a refusal
+there is a behaviour change a user notices — the fourth thing `CLAUDE.md` says to stop and ask
+about. The report exists now; the ruling is the owner's.

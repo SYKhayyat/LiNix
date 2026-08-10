@@ -532,7 +532,10 @@ pub fn register(
     .and_then(|body| match toml::from_str::<InitProviderFile>(&body) {
         Ok(f) => Some(f.init),
         Err(e) => {
-            warn!("ignoring adapters/init.toml: {}", e);
+            warn!("{}", crate::app::adapters::cannot_use(
+                crate::app::adapters::surface("init").expect("a declared surface"),
+                e,
+            ));
             None
         }
     })

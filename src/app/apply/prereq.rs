@@ -31,7 +31,15 @@ impl Prereqs<'_> {
         ) {
             match toml::from_str::<crate::model::prereq::PrereqFile>(&body) {
                 Ok(f) => rows.extend(f.prereq),
-                Err(e) => warn!("ignoring adapters/prereq.toml: {}", e),
+                Err(e) => {
+                    warn!(
+                        "{}",
+                        crate::app::adapters::cannot_use(
+                            crate::app::adapters::surface("prereq").expect("a declared surface"),
+                            e,
+                        )
+                    );
+                }
             }
         }
         match toml::from_str::<crate::model::prereq::PrereqFile>(BUILTIN) {

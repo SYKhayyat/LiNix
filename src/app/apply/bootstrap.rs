@@ -22,7 +22,10 @@ impl Bootstrap<'_> {
         match toml::from_str::<crate::model::bootstrap::BootstrapFile>(&body) {
             Ok(f) => f.bootstrap,
             Err(e) => {
-                warn!("ignoring adapters/bootstrap.toml: {}", e);
+                warn!("{}", crate::app::adapters::cannot_use(
+                    crate::app::adapters::surface("bootstrap").expect("a declared surface"),
+                    e,
+                ));
                 Vec::new()
             }
         }

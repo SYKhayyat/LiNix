@@ -183,6 +183,10 @@ const EXEMPT: &[(&str, &str)] = &[
     ("vars", "read-only — prints this host's resolved variables"),
     ("purge-undeclared", "needs an adopted machine; refuses on the ratio check first"),
     ("protected", "read-only — explains why a name is guarded"),
+    (
+        "adapters",
+        "read-only — reads the eight adapters/ files and reports what each is doing",
+    ),
     // Q15: `plan` is the whole exemption, and the reason is not that the user named the path —
     // they name it for `bundle` too. Its file IS the preview, so a `--dry-run plan` that wrote
     // nothing would be a command with no output.

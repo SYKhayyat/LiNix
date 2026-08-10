@@ -845,7 +845,10 @@ pub fn load_custom_backends_from(
     let parsed: CustomBackendsFile = match toml::from_str(&content) {
         Ok(p) => p,
         Err(e) => {
-            warn!("Ignoring malformed adapters/backends.toml: {}", e);
+            warn!("{}", crate::app::adapters::cannot_use(
+                crate::app::adapters::surface("backends").expect("a declared surface"),
+                e,
+            ));
             return 0;
         }
     };

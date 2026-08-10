@@ -202,7 +202,7 @@ impl Firewall<'_> {
     /// goes through (7a/II.12).
     fn firewall_adapter_rows(&self) -> Vec<crate::backends::firewall::FirewallAdapter> {
         let layout = self.config.layout();
-        let path = layout.adapters_dir().join("firewall.toml");
+        let path = layout.adapter_firewall_file();
         let Some(body) =
             crate::backends::onboarder::read_approved_definitions(&path, &layout.locks_dir())
         else {
@@ -211,7 +211,10 @@ impl Firewall<'_> {
         match toml::from_str::<crate::backends::firewall::FirewallAdapterFile>(&body) {
             Ok(f) => f.firewall,
             Err(e) => {
-                warn!("ignoring adapters/firewall.toml: {}", e);
+                warn!("{}", crate::app::adapters::cannot_use(
+                    crate::app::adapters::surface("firewall").expect("a declared surface"),
+                    e,
+                ));
                 Vec::new()
             }
         }

@@ -52,6 +52,7 @@ mod absent_marker_coverage_tests;
 mod adapter_tables_share_one_mechanism_tests;
 mod an_ephemeral_shell_leaves_nothing_behind_tests;
 mod an_exemption_table_is_audited_the_same_way_tests;
+mod an_extension_surface_has_a_front_door_tests;
 mod an_option_list_survives_the_seam_tests;
 mod argv_drift_tests;
 mod automation_lifecycle_tests;

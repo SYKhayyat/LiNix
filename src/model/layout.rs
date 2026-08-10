@@ -125,51 +125,70 @@ impl Layout {
     /// What you have taught LiNix: managers it does not ship, settings stores it has no
     /// adapter for, and how to obtain a manager that is missing (U10, ruled 2026-07-24).
     ///
-    /// One folder, three files, **in the repo** — a definition that cannot travel makes every
-    /// line that uses it fail on every machine but the one where somebody hand-wrote it,
-    /// including the fresh machine the repo exists to set up. Three files rather than one
-    /// because they answer three questions: how to *drive* a manager, how to *drive* a
-    /// settings store, and how to *get* a manager.
+    /// One folder, **in the repo** — a definition that cannot travel makes every line that uses
+    /// it fail on every machine but the one where somebody hand-wrote it, including the fresh
+    /// machine the repo exists to set up. One file per surface rather than one file, because
+    /// each answers a different question and each is approved separately.
+    ///
+    /// This doc said *three files* and named them for as long as there have been eight, which is
+    /// the small version of the same problem `app::adapters::SURFACES` exists to fix: nowhere in
+    /// the program listed the extension points, so nothing noticed when the list grew.
     pub fn adapters_dir(&self) -> PathBuf {
         self.config_root.join("adapters")
     }
 
+    /// One extension surface's file, by the name `app::adapters::SURFACES` gives it.
+    ///
+    /// The named accessors below are this, spelled out, and they stay because a caller reading
+    /// `adapter_secret_file()` should not have to know a string. What does not stay is the ninth
+    /// surface written as `adapters_dir().join("firewall.toml")` inline — `firewall:` was read
+    /// that way, so it had no accessor, and a table of surfaces built from the accessors would
+    /// have been a table with seven rows and no way to notice.
+    pub fn adapter_file(&self, surface: &str) -> PathBuf {
+        self.adapters_dir().join(format!("{surface}.toml"))
+    }
+
     /// `[[backend]]` — how to drive a package manager LiNix does not ship (XIII.2).
     pub fn adapter_backends_file(&self) -> PathBuf {
-        self.adapters_dir().join("backends.toml")
+        self.adapter_file("backends")
+    }
+
+    /// `[[firewall]]` — how to drive a firewall LiNix does not ship (N3).
+    pub fn adapter_firewall_file(&self) -> PathBuf {
+        self.adapter_file("firewall")
     }
 
     /// `[[setting_store]]` — how to read and write a settings store (K17).
     pub fn adapter_settings_file(&self) -> PathBuf {
-        self.adapters_dir().join("settings.toml")
+        self.adapter_file("settings")
     }
 
     /// `[[bootstrap]]` — how to obtain a manager this machine does not have (7c).
     pub fn adapter_bootstrap_file(&self) -> PathBuf {
-        self.adapters_dir().join("bootstrap.toml")
+        self.adapter_file("bootstrap")
     }
 
     /// `[[prereq]]` — the setup a manager needs before it can install anything (Q10/Q11/Q13).
     /// LiNix ships rows for the three that were measured; this is where a user adds a fourth.
     pub fn adapter_prereq_file(&self) -> PathBuf {
-        self.adapters_dir().join("prereq.toml")
+        self.adapter_file("prereq")
     }
 
     /// `[[init]]` — how to drive an init system LiNix does not ship a built-in for (U36).
     pub fn adapter_init_file(&self) -> PathBuf {
-        self.adapters_dir().join("init.toml")
+        self.adapter_file("init")
     }
 
     /// `[[snapshot]]` — how to drive a snapshot/rollback provider from data (U27). A row that
     /// does not declare it can restore a running system is create-only, never `Live` (V.60).
     pub fn adapter_snapshot_file(&self) -> PathBuf {
-        self.adapters_dir().join("snapshot.toml")
+        self.adapter_file("snapshot")
     }
 
     /// `[[secret]]` — how to decrypt with a provider LiNix does not ship (U38). A row that does
     /// not promise the plaintext reaches stdout only is refused, never trusted with a secret.
     pub fn adapter_secret_file(&self) -> PathBuf {
-        self.adapters_dir().join("secret.toml")
+        self.adapter_file("secret")
     }
 
     /// What everything resolved to. Generated, in git, yours. One file per backend.

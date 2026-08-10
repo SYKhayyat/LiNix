@@ -610,7 +610,10 @@ pub fn register(
         |body| match toml::from_str::<crate::model::secret::SecretProviderFile>(&body) {
             Ok(f) => Some(crate::model::secret::providers(f.secret)),
             Err(e) => {
-                tracing::warn!("ignoring adapters/secret.toml: {}", e);
+                tracing::warn!("{}", crate::app::adapters::cannot_use(
+                    crate::app::adapters::surface("secret").expect("a declared surface"),
+                    e,
+                ));
                 None
             }
         },

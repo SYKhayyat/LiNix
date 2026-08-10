@@ -43,6 +43,7 @@ const NOT_A_PACKAGE_SPEC: &[(&str, &str)] = &[
     ("activate", "a profile name"),
     ("deactivate", "a profile name"),
     ("add", "an adapter source — a path or a URL"),
+    ("adapters", "an extension surface — one of the eight `adapters/*.toml` files"),
     ("apply", "a saved plan file"),
     ("check", "a section of `check`"),
     ("completions", "a shell name"),
