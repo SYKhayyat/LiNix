@@ -897,6 +897,19 @@ impl Installable for GenericInstallable {
                 return self.install_group(&rest, sudo).await;
             }
         }
+        // `@system` splits a batch for the same reason and it is a sharper one: the flag says
+        // *write into the environment the OS owns*, and handing one line's permission to the
+        // next would install packages into a system python that nobody said that about (`Q49`).
+        if capability::os_owned_env_arg(&self.core.name).is_some() {
+            let (opted, rest): (Vec<PackageSpec>, Vec<PackageSpec>) = specs
+                .iter()
+                .cloned()
+                .partition(crate::core::download::is_system);
+            if !opted.is_empty() && !rest.is_empty() {
+                self.install_group(&opted, sudo).await?;
+                return self.install_group(&rest, sudo).await;
+            }
+        }
         // A leading-flag pin belongs to the subcommand, not to an operand, so it cannot be
         // shared: `cargo install --version 1.0 --version 2.0 -- a b` is not two pinned
         // installs. One command per spec, and only for the managers that spell it that way.
@@ -1034,6 +1047,26 @@ impl GenericInstallable {
             }
         }
 
+        // Also before the terminator, and asked of the tool for the same reason the flag above
+        // is: `--break-system-packages` arrived in pip 23.0.1, and an older pip answers
+        // `no such option`, which would turn a refusal a user can act on into an argv defect
+        // they cannot (`Q49`).
+        let into_os_env = specs.iter().any(crate::core::download::is_system);
+        if into_os_env {
+            if let Some(arg) = capability::os_owned_env_arg(&self.core.name) {
+                let chain: Vec<String> = final_args
+                    .iter()
+                    .take_while(|a| !a.starts_with('-'))
+                    .cloned()
+                    .collect();
+                if crate::core::tool_help::accepts_flag(self.core.binary(), &chain, arg)
+                    != Some(false)
+                {
+                    final_args.push(arg.to_string());
+                }
+            }
+        }
+
         if trailing_option {
             final_args.extend(names);
         } else {
@@ -1059,8 +1092,59 @@ impl GenericInstallable {
             .take_while(|a| !a.starts_with('-'))
             .cloned()
             .collect();
-        outcome.map_err(|e| self.explain_verification(e, opting_out, &chain))?;
+        outcome
+            .map_err(|e| self.explain_verification(e, opting_out, &chain))
+            .map_err(|e| self.explain_os_owned_environment(e))?;
         Ok(())
+    }
+
+    /// PEP 668, in words that name the two things a user can actually do (`Q49`).
+    ///
+    /// pip's own refusal is a wall of text about `--break-system-packages`, virtual
+    /// environments and `pipx`, addressed to somebody typing `pip install` — not to somebody
+    /// who wrote a line in a manifest and does not know which of those LiNix supports. Both
+    /// answers it names here are ones a declaration can hold: `pipx:` is a backend LiNix ships,
+    /// and `@system=true` is the flag that flips this exact refusal.
+    fn explain_os_owned_environment(&self, e: crate::core::Error) -> crate::core::Error {
+        if capability::os_owned_env_arg(&self.core.name).is_none() {
+            return e;
+        }
+        let crate::core::Error::CommandFailed {
+            message,
+            retry,
+            absent_name,
+        } = e
+        else {
+            return e;
+        };
+        // The marker pip prints, and nothing else: matching on "externally managed" prose alone
+        // would also catch a package whose description contains it.
+        if !message.contains("externally-managed-environment") {
+            return crate::core::Error::CommandFailed {
+                message,
+                retry,
+                absent_name,
+            };
+        }
+        crate::core::Error::CommandFailed {
+            message: format!(
+                "{}\n  This Python belongs to the operating system's package manager, which is \
+                 what PEP 668's marker file says, and `{}` will not write into it.\n  \
+                 What a declaration can do about it:\n    \
+                 pipx:{name}         install it in its own environment — the tool built for \
+                 this, and a backend LiNix already drives\n    \
+                 {backend}:{name}@system=true   write into the system Python anyway, on this \
+                 line only",
+                message.trim_end(),
+                self.core.binary(),
+                backend = self.core.name,
+                // The refusal is about a set; naming one of them is enough to show the shape,
+                // and a list of forty would bury the two verbs that matter.
+                name = "<package>",
+            ),
+            retry,
+            absent_name,
+        }
     }
 
     /// A manager that refuses an unsignable source names its own flag, which no declaration
@@ -2688,6 +2772,90 @@ ripgrep 15.2.0
                 .any(|c| c.contains("plugin uninstall") && c.contains("diff")),
             "remove must send the name: {:?}",
             calls
+        );
+    }
+
+    /// A pip core, for the `@system` opt-in (`Q49`).
+    fn pip_core(
+        mock: Arc<MockExecutor>,
+        vfs: Arc<DashMap<std::path::PathBuf, String>>,
+    ) -> GenericBackendCore {
+        let exec = CommandExecutor::with_layer(true, false, mock, vfs, Arc::new(DashMap::new()));
+        let mut core = apt_like_core_named("pip", exec);
+        core.config.install_args = vec!["install".into()];
+        core
+    }
+
+    fn pip_spec(name: &str, system: bool) -> PackageSpec {
+        PackageSpec {
+            name: name.into(),
+            backend: "pip".into(),
+            options: if system {
+                [("system".to_string(), "true".to_string())]
+                    .into_iter()
+                    .collect()
+            } else {
+                Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// **`@system` reaches pip as `--break-system-packages`, and only for the line that said
+    /// it** (`Q49`, owner ruling 2026-08-10).
+    ///
+    /// The batch split is the half that matters. Without it, one line's permission to write
+    /// into an OS-owned Python would be handed to every other package in the same wave — which
+    /// is the exact failure `@unverified` is partitioned to avoid, with a worse blast radius:
+    /// packages nobody said that about, installed into the system interpreter.
+    #[tokio::test]
+    async fn system_reaches_pip_as_its_own_flag_and_is_never_shared() {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let inst = GenericInstallable {
+            core: Arc::new(pip_core(mock.clone(), vfs)),
+        };
+
+        inst.install(&[pip_spec("black", true), pip_spec("httpie", false)], false)
+            .await
+            .unwrap();
+
+        let calls = mock.get_calls().await;
+        let opted: Vec<&String> = calls.iter().filter(|c| c.contains("black")).collect();
+        let plain: Vec<&String> = calls.iter().filter(|c| c.contains("httpie")).collect();
+        assert!(
+            opted.iter().all(|c| c.contains("--break-system-packages")),
+            "the line that opted in must carry the flag: {calls:?}"
+        );
+        assert!(
+            plain.iter().all(|c| !c.contains("--break-system-packages")),
+            "the line that did NOT opt in must not inherit it: {calls:?}"
+        );
+        assert!(
+            !calls
+                .iter()
+                .any(|c| c.contains("black") && c.contains("httpie")),
+            "the two must not share a command at all: {calls:?}"
+        );
+    }
+
+    /// And with nobody opting in, the flag is simply absent — the default is the refusal.
+    #[tokio::test]
+    async fn pip_without_the_opt_in_sends_no_flag() {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let inst = GenericInstallable {
+            core: Arc::new(pip_core(mock.clone(), vfs)),
+        };
+        inst.install(&[pip_spec("black", false)], false)
+            .await
+            .unwrap();
+        assert!(
+            mock.get_calls()
+                .await
+                .iter()
+                .all(|c| !c.contains("--break-system-packages")),
+            "nothing asked for it"
         );
     }
 

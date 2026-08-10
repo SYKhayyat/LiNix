@@ -604,6 +604,14 @@ pub async fn handle_config(app: &App, cmd: &ConfigCommand) -> Result<()> {
 }
 
 pub async fn handle_heal(app: &App) -> Result<()> {
+    // **Before the WAL heal, and the ordering is the repair** (`Q50`). While pacman's `db.lck`
+    // is on disk every manager command on this machine fails — including the ones the recovery
+    // below runs — and `heal()` ends in a `?`, so a lock cleared *after* it is a lock cleared
+    // on the runs that did not need it. First written the other way round, under a comment
+    // claiming it went first.
+    for fixed in clear_stale_manager_locks(app).await {
+        println!("heal: {}", fixed);
+    }
     app.sync_engine().await.heal().await?;
     // U9: `check` looks, `heal` acts. These three repairs used to be `doctor --fix`, which
     // made one command both the diagnosis and the treatment — and a command that changes
@@ -614,6 +622,46 @@ pub async fn handle_heal(app: &App) -> Result<()> {
         println!("heal: {}", fixed);
     }
     Ok(())
+}
+
+/// The package manager's own lock, left behind by a run that was killed (`Q50`).
+///
+/// **Only in `heal`, never in `sync`.** Deleting another package manager's file is a repair
+/// somebody asked for by name, not something a converge does on the way past — and `heal` is
+/// the command whose whole subject is *a run was interrupted*.
+///
+/// Which locks may be cleared, and the proof that one is not held, are
+/// [`crate::app::stale_lock`]'s: this is the half that acts, and it is separate so the deciding
+/// half can be tested against a machine that is not this one.
+pub async fn clear_stale_manager_locks(app: &App) -> Vec<String> {
+    let mut fixed = Vec::new();
+    for stale in crate::app::stale_lock::find_on_this_machine() {
+        if crate::core::dry_run::active() {
+            fixed.push(format!(
+                "would remove {} — {}",
+                stale.path.display(),
+                stale.because
+            ));
+            continue;
+        }
+        // Through the executor, so it is elevated the way every other privileged step is and
+        // shows up in the same log. A failure here is reported and does not stop the rest: a
+        // lock LiNix could not remove is still a lock the user can remove, now that they have
+        // been told which one and why.
+        let path = stale.path.display().to_string();
+        match app.executor.run("rm", &["-f", &path], true).await {
+            Ok(_) => fixed.push(format!(
+                "removed {}'s stale lock at {} — {}",
+                stale.holder, path, stale.because
+            )),
+            Err(e) => warn!(
+                "{}'s lock at {} is stale ({}) and could not be removed: {}. \
+                 Remove it by hand and re-run.",
+                stale.holder, path, stale.because, e
+            ),
+        }
+    }
+    fixed
 }
 
 /// Put right what `check` can only report: the II.1 directories, the version lockfile, and a

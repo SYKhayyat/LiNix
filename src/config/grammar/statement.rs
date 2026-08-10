@@ -1811,6 +1811,9 @@ pub(crate) const PACKAGE_OPTION_KEYS: &[&str] = &[
     "channel",
     "allow_http",
     "unverified",
+    // Q49. "Write into the environment the OS owns" — legal only where a manager can be told
+    // that, and refused by name everywhere else. `capability::OS_OWNED_ENV` is the one table.
+    "system",
     "health",
     "download_only",
     // U39. Legal only on a backend that installs from something other than the name, and
@@ -2015,6 +2018,19 @@ pub fn validate_backend_options(origin: &Origin, backend: Option<&str>, o: &Opti
                 "it relaxes a rule about downloading and running a file, which only {} do. \
                  Everywhere else the package manager chose the URL, not the declaration.",
                 capability::download_backends()
+            )));
+        }
+    }
+
+    if o.contains("system") {
+        if let Some(backend) = backend.filter(|b| !capability::accepts_system(b)) {
+            return Err(GrammarError::new(
+                origin.clone(),
+                format!("`@system` is not an option on `{}`", backend),
+            )
+            .with_hint(format!(
+                "it says this line may install into an environment the operating system owns,                  which is only a decision where the OS claims one: {}. Everywhere else there is                  nothing to override.",
+                capability::system_backends()
             )));
         }
     }
@@ -3047,7 +3063,9 @@ mod artifact_option_tests {
     fn known(name: &str) -> bool {
         matches!(
             name,
-            "apt" | "cargo" | "web" | "github" | "snap" | "flatpak" | "appimage" | "helm"
+            // `pip` is here for `@system` (`Q49`), which is legal on exactly one backend: a
+            // stand-in registry that omits it could only ever assert the refusal half.
+            "apt" | "cargo" | "web" | "github" | "snap" | "flatpak" | "appimage" | "helm" | "pip"
         )
     }
 
@@ -3211,6 +3229,27 @@ mod artifact_option_tests {
         // No prefix means `priority` decides the backend, so the grammar cannot know yet
         // whether `formats` is legal — refusing here would break every unprefixed line.
         assert!(p("fd@formats=deb").is_ok());
+    }
+
+    /// `Q49`. `@system` is legal exactly where a manager can be told to write into an
+    /// environment the OS owns, and refused by name everywhere else — an option accepted on a
+    /// backend that has no such notion is an option that does nothing and says nothing.
+    #[test]
+    fn system_is_legal_on_pip_and_refused_by_name_elsewhere() {
+        assert_eq!(
+            options_of("pip:black@system=true").one("system"),
+            Some("true")
+        );
+
+        for line in ["apt:jq@system=true", "cargo:ripgrep@system=true"] {
+            let err = p(line).expect_err("`@system` means nothing here and must be refused");
+            let text = format!("{err}");
+            assert!(text.contains("@system"), "{text}");
+            assert!(
+                text.contains("pip"),
+                "the refusal has to name where it IS legal: {text}"
+            );
+        }
     }
 
     /// Q5. `@unverified` is legal wherever *something* verifies bytes and the line can say

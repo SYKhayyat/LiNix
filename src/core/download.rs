@@ -33,6 +33,15 @@ pub fn is_unverified(spec: &PackageSpec) -> bool {
     flag(spec, "unverified")
 }
 
+/// `@system=true` — this line may write into an environment the OS owns (`Q49`).
+///
+/// Here beside `is_unverified` because it is the same shape of thing: a per-line opt-in to a
+/// refusal that exists for a good reason, read once so no caller re-derives it from the option
+/// map. It is not about downloads; it is about the flag readers this module already owns.
+pub fn is_system(spec: &PackageSpec) -> bool {
+    flag(spec, "system")
+}
+
 /// Refuse a URL that is not `https://`, unless this spec opted out.
 ///
 /// Applied to **every URL actually fetched, not only the one that was typed**: reqwest follows

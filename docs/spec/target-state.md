@@ -3178,3 +3178,46 @@ to stock behaviour, which is worse to miss than an outage.
 
 **The readme names every surface.** A plugin surface nobody can find is not one, and the docs
 were the other place the list lived only by hand.
+
+## II.49 An environment the OS owns is written into only when a line says so (`Q49`, V.179)
+
+**A manager that refuses to write into a distro-owned environment is right, and LiNix does not
+argue with it.** Debian, Ubuntu, Alpine, openSUSE and Fedora mark their Python `EXTERNALLY-
+MANAGED` (PEP 668); pip then refuses every install, `--user` included. Two package managers
+writing one site-packages is how a system python stops booting.
+
+**The refusal names what a declaration can do about it.** pip's own text is addressed to a
+person typing `pip install` and offers venvs, `pipx` and a flag; LiNix adds the two answers a
+*manifest line* can hold — `pipx:<name>`, a backend it already drives, and `@system=true`.
+
+**`@system=true` is per line and splits the batch.** It says *write into the OS-owned
+environment*, and one line's permission is never handed to the packages beside it. A batch
+containing both forms becomes two commands.
+
+**The flag is asked of the tool before it is sent.** `--break-system-packages` arrived in pip
+23.0.1; an older pip answers `no such option`. A flag emitted blind trades a refusal the user
+can act on for an argv defect they cannot.
+
+**`@system` is legal on the backends that have such a notion and refused by name elsewhere.**
+`capability::OS_OWNED_ENV` is the one table.
+
+## II.50 `heal` clears a manager lock it can prove nothing holds (`Q50`, V.180)
+
+**A killed run leaves the manager's lock behind, and every later run fails.** `heal` is the
+command whose subject is *a run was interrupted*; clearing that lock is its work.
+
+**`heal` only, never `sync`.** Deleting another package manager's file is a repair asked for by
+name, not something a converge does on the way past.
+
+**Only locks whose existence IS the lock.** pacman's `db.lck`, dnf's `metadata_lock.pid`,
+zypper's `/run/zypp.pid` are created around a transaction and removed at its end. **apt's and
+dpkg's are not**, and they are named in `stale_lock::NEVER_REMOVE` rather than merely left out:
+those files exist permanently, are held with `flock(2)` — which the kernel releases when the
+holder dies — and deleting one deletes what the next `apt` expects to lock.
+
+**Staleness is proved, not assumed.** A lock naming a pid is stale when that pid is not running;
+a lock naming nothing is stale when no process of that manager is running at all. Anything else,
+including a pid file with nothing readable in it, is left alone.
+
+**Every removal is reported by name and with its reason**, and a removal that fails is reported
+too — a lock LiNix could not clear is one the user can now clear themselves.

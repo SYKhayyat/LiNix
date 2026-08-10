@@ -189,8 +189,21 @@ per-directive keys like `cron`/`run` on `schedule:` or
 [Secrets](#secrets).
 
 Some keys belong to one family of backends and are refused, by name, anywhere else — `@classic`
-on a snap, and the storage keys below. An option no backend would read is an error rather than a
-line that quietly does nothing.
+on a snap, `@system` on pip, and the storage keys below. An option no backend would read is an
+error rather than a line that quietly does nothing.
+
+**`pip:` on Ubuntu, Debian, Alpine, openSUSE or Fedora.** Those distros mark their Python as
+belonging to the system package manager (PEP 668), and pip refuses to install into it — rightly,
+because two package managers writing one `site-packages` is how a system python stops working.
+LiNix refuses with them and names the two things a line can do instead:
+
+```
+pipx:black                 # its own environment — the tool built for this, and LiNix drives it
+pip:black@system=true      # write into the system Python anyway, on this line only
+```
+
+`@system` applies to the line that carries it and to nothing else: a wave containing both forms
+becomes two commands, so one package's permission is never handed to the ones beside it.
 
 **Adding `@classic` to a snap you already installed re-confines it** on the next sync, rather than
 waiting for a reinstall. Taking it away manages nothing — LiNix will not silently reconfine a

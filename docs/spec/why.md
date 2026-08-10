@@ -5880,3 +5880,57 @@ argument for one more section rather than for eight readers staying quiet.
 surface stops working — the built-in adapters still ship, so `ufw` and `firewalld` are still
 driven. It is that a row *overriding* a built-in silently stops overriding it, and the machine
 quietly returns to stock behaviour. An outage announces itself. This does not.
+
+**V.179 — Why `pip:` had no answer on the distros most people run.** *(Rule in II.49. Ruled by
+the owner 2026-08-10 as `Q49`.)*
+
+PEP 668 is four years old and LiNix had never met it, because nothing in this project had run a
+real `pip install` on a current Ubuntu. The integration images had, once — the lifecycle ratchet
+recorded 7 for ubuntu on 2026-07-30 — and then the images moved and the number fell to 6 and no
+CI run happened again for eleven days. The gap was not discovered by reasoning about Python
+packaging. It was discovered by a coverage number falling.
+
+**Why the refusal is kept rather than routed around.** The marker means the distro's package
+manager owns that site-packages, and it is not a formality: apt and pip both writing there is
+the failure mode that ends with a python that cannot import its own stdlib, on a machine where
+python is what `apt` is written in. A tool whose pitch is *be careful what gets installed on
+your machine* does not get to be the one that overrides it by default.
+
+**Why `pipx:` is the thing pointed at rather than a venv LiNix manages.** pipx already does it,
+LiNix already drives pipx, and it lifecycles on every one of these images. Building a second
+implementation of per-application environments — LiNix owning a venv, its path, its cleanup —
+to avoid naming a backend that ships in the same binary is the shape this repo keeps deleting.
+
+**Why the flag is per line and splits the batch.** `--break-system-packages` is not a
+preference, it is permission to write into something someone else owns, and permission that
+leaks is not permission. The batch split is the same mechanism `@unverified` uses (V.104) with a
+worse blast radius: sharing an opt-out weakens one check on one package, sharing this one
+installs packages nobody said it about into the system interpreter.
+
+**V.180 — Why a lock file outlives the process that took it, and what that costs.**
+*(Rule in II.50. Ruled by the owner 2026-08-10 as `Q50`.)*
+
+Kill a sync — Ctrl-C, a lost battery, a container torn down — and pacman dies holding
+`/var/lib/pacman/db.lck`. The file is the lock: pacman creates it on start and deletes it on
+exit, and there is no kernel involvement to clean up after it. So every LiNix run afterwards
+fails, with pacman's own advice about removing a file the user has never heard of, and the
+machine's package manager is simply broken until somebody reads that sentence.
+
+LiNix was already *good* at this failure. The retry classifier notices the error does not change
+between attempts and says so — *"this is not the transient failure its output looks like"* —
+which is more than pacman manages. Being articulate about a wedged machine is not the same as
+unwedging it, and `heal` exists for exactly the difference.
+
+**Why apt and dpkg are excluded, and why the exclusion is data.** Their locks are `flock(2)` on
+files that exist permanently. The presence of `/var/lib/dpkg/lock-frontend` says nothing at all
+— it is there on every Debian ever booted — and the kernel releases the lock the moment the
+holder dies, so there is nothing stale to clear. Deleting it deletes what the next `apt` expects
+to lock. The distinction between *this file being here means a run is in progress* and *this
+file is always here* is the whole safety argument, and a table that merely omitted apt would
+re-admit it the first time someone extended the list by pattern-matching on the word "lock".
+
+**Why staleness is proved rather than assumed.** The failure mode of getting this wrong is not a
+failed command; it is a package database with two writers. So a pid file is judged by its own
+pid, a lock with no pid is judged by whether that manager is running at all, and a pid file with
+nothing readable in it — half-written by a process that died between `create` and `write` — is
+evidence of nothing and is left alone. Not proved is not stale.

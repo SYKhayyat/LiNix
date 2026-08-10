@@ -1,4 +1,4 @@
-# The decision register — all 183, none of them open
+# The decision register — all 185, none of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -17,7 +17,7 @@ not in this paragraph.
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **2** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **177** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **179** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -75,8 +75,8 @@ status loses that, so it is kept here:
 
 **Nothing is open. `Z1` — the licence — was ruled 2026-08-09, and `Y18` is RULED in full as of
 the same day: `@source=` on a `shim:` line is read, and `Y23` — flatpak's unreadable channel —
-was ruled and built beside it.** All 183 are accounted
-for: **177 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 2 BUILT NEVER RULED, 0 OPEN** — and this line
+was ruled and built beside it.** All 185 are accounted
+for: **179 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 2 BUILT NEVER RULED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -239,7 +239,7 @@ there). It is when the question stopped being open, not when the code landed.
 | **U42** | Do the overlapping command clusters get consolidated? | 2026-07-27 |
 | **U43** | How much does an ordinary run say about itself? | 2026-07-27 |
 
-### Q — the production-readiness round and the grading rounds after it — 47
+### Q — the production-readiness round and the grading rounds after it — 49
 
 *Not a proposal part. These are the questions the readiness assessment forced — behaviour a
 user notices, or a published contract — raised because `CLAUDE.md` requires a ruling for them
@@ -334,6 +334,8 @@ II.19 and the reasons in V.115–V.118.*
 | **Y8** | Nine managers started 5.4 s into a 9.1 s `check drift` and the run was idle before they did — why did it not overlap? — RULED: **ask every manager the run will ask, at once.** Not slower children: unasked ones. 9.1 s → 3.9 s, 2.7× → 5.4×, same report. | 2026-08-03 |
 | **Y9** | The planner asked seven backends what each declared package depends on and installed the answers — which took ownership of packages nobody declared, and split the one command line it had a reason to keep. RULED: **no.** LiNix installs what you declared, and `@requires` keeps splitting the wave. | 2026-08-06 |
 | **Y10** | The write-ahead log had two variants and all nine `apply/` modules referenced it zero times, while a `dotfiles:` tree destroyed the user's file with no backup, no ledger row and therefore no teardown — four documents said otherwise. RULED: **the log covers what cannot be recomputed**, and **a tree is the `link:` lines it stands for.** | 2026-08-06 |
+| **Q49** | `pip:` cannot install on a PEP 668 distro, and LiNix has no answer for it. | 2026-08-10 |
+| **Q50** | A killed run leaves the package manager's own lock behind, and every later run fails. | 2026-08-10 |
 | **Q48** | Every `link:` on Windows took the cross-drive COPY fallback, same drive or not: `is_same_drive` compared a verbatim prefix against a plain one — and the limitation it guarded does not exist, since a Windows symlink spans volumes. RULED: **a `link:` links; only a missing privilege gets a copy, and it says so.** | 2026-08-06 |
 | **Y11** | Two backends built install and remove argv by hand and lost the `--` terminator; forty backends could not clear a cache because no row could say how; one manager took two locks over one database. The argv table recorded all of it and checked none of it. RULED: **one path per backend, and a capability the machinery lacks is a field.** | 2026-08-06 |
 | **Y12** | `ChangePlanner::plan` took `Option<Scope>`, where `None` meant both "do not filter the desired set" and "reap every backend on the box"; five of eight callers passed it and four wanted only the first — the transient shell, whose desired set is its own requests, planned a removal for every other package on the machine. RULED: **a plan says what it is computed over, and the case that reaps cannot be written without the list that bounds it.** | 2026-08-06 |
@@ -5122,6 +5124,83 @@ where the cure is a checkbox.
 today — behaviour a user would notice, rule 2 of *asking while building*. The ownership predicate
 was fixed instead, which stopped a run backing up its own copy every sync under a summary reading
 `already up to date`, and made the bug wasteful rather than latent. `V.141`, `why.md`.
+
+---
+
+## Q49
+
+**Status: ANSWERED — ruled 2026-08-10.** Raised by the first CI run that ever executed.
+
+**Q49 — `pip:` does not work on a PEP 668 distro. What should LiNix do about it?** Ubuntu,
+Debian, Alpine, openSUSE and Fedora ship an `EXTERNALLY-MANAGED` marker beside their Python,
+which tells pip the interpreter belongs to the distro's package manager. pip then refuses every
+install — `--user` included — and it is right to: two package managers writing one
+site-packages is how a system python stops booting. What a user saw was pip's own wall of text,
+addressed to somebody typing `pip install` rather than to somebody who wrote a line in a
+manifest.
+
+It surfaced as coverage: the ubuntu, alpine and openSUSE lifecycle ratchets each fell 7 → 6,
+because the images had moved and pip could no longer complete a real install → list → remove.
+
+**RULED (owner, 2026-08-10): the refusal names `pipx:`, and `@system=true` is the per-line
+escape hatch.**
+
+1. **The default stays a refusal**, because the marker is right. LiNix adds its own sentence to
+   pip's, naming the two things a *declaration* can do — neither of which pip's text mentions,
+   since pip does not know it is being driven by one.
+2. **`pipx:` is the answer pointed at.** LiNix already drives it, it works on every one of those
+   distros, and installing each application in its own environment is the thing it exists for.
+3. **`@system=true` writes into the system Python anyway**, passing pip's
+   `--break-system-packages`. Per line, never a global switch, and it splits the batch: one
+   line's permission must never be handed to the packages beside it, which is the same rule
+   `@unverified` follows and with a worse blast radius here.
+4. **The flag is asked of the tool before it is sent.** `--break-system-packages` arrived in pip
+   23.0.1; an older pip answers `no such option`, and emitting it blind would trade a refusal a
+   user can act on for an argv defect they cannot.
+5. **`@system` is legal on `pip` and refused by name everywhere else.** An option accepted where
+   nothing reads it is an option that does nothing and says nothing.
+
+The rule is in **II.49**; the reason is in **V.179**.
+
+---
+
+## Q50
+
+**Status: ANSWERED — ruled 2026-08-10.** Raised by the first CI run that ever executed.
+
+**Q50 — A killed run leaves the package manager's own lock behind, and every later run fails.
+Should `heal` clear it?** The arch integration leg kills LiNix mid-sync on purpose. pacman dies
+with it, `/var/lib/pacman/db.lck` stays on disk, and from that point every command on that
+machine fails:
+
+```text
+error: failed to init transaction (unable to lock database)
+error: could not lock database: File exists
+```
+
+LiNix's diagnosis is already good — it relays pacman's advice and adds *"tried 4 times; the
+failure did not change, so this is not the transient failure its output looks like"*. It simply
+could not act, and the same crash on a laptop leaves a user with a package manager that never
+works again until they find that sentence and act on it themselves.
+
+**RULED (owner, 2026-08-10): `heal` clears a manager lock it can prove nothing holds.**
+
+1. **`heal` only, never `sync`.** Deleting another package manager's file is a repair somebody
+   asked for by name, not something a converge does on the way past.
+2. **Only locks whose *existence* is the lock** — pacman's `db.lck`, dnf's
+   `metadata_lock.pid`, zypper's `/run/zypp.pid`. **apt and dpkg are excluded and the exclusion
+   is data**, not an omission: those files exist permanently and are locked with `flock(2)`, the
+   kernel drops the lock when the holder dies, and deleting one deletes what the next `apt`
+   expects to lock.
+3. **Staleness is proved.** A lock carrying a pid is stale when that pid is not running; one
+   carrying no pid is stale when no process of that manager is running at all. Not proved is not
+   stale — a half-written pid file is left alone.
+4. **Every removal is reported by name, with the reason.** A repair nobody sees is the silence
+   P3 forbids, and this one deletes a file the user did not create.
+5. **A removal LiNix cannot perform is still reported**, because a lock it could not clear is
+   one the user now knows about.
+
+The rule is in **II.50**; the reason is in **V.180**.
 
 ---
 

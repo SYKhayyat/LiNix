@@ -28,6 +28,7 @@ pub mod sandbox;
 pub mod search;
 pub mod shim_manager;
 pub mod snapshot_restore;
+pub mod stale_lock;
 pub mod sync;
 pub mod ui;
 pub mod vocab;

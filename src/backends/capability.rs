@@ -166,6 +166,41 @@ pub fn unverified_arg(backend: &str) -> Option<&'static str> {
         .map(|(_, a)| *a)
 }
 
+/// Managers that install into an environment the operating system may own, and the argument
+/// that says *write into it anyway* (`Q49`, owner ruling 2026-08-10).
+///
+/// **PEP 668.** Debian, Ubuntu, Alpine, openSUSE and Fedora ship a marker file next to their
+/// Python — `EXTERNALLY-MANAGED` — that tells pip the interpreter belongs to the distro's own
+/// package manager. pip then refuses every install, `--user` included, and it is right to: two
+/// package managers writing the same site-packages is how a system python ends up unbootable.
+///
+/// So the default is the refusal, with `pipx:` named in it — LiNix ships pipx, pipx exists for
+/// exactly this, and it works on all of those distros. This flag is the escape hatch for
+/// someone who means it, per line, never as a global switch.
+const OS_OWNED_ENV: &[(&str, &str)] = &[("pip", "--break-system-packages")];
+
+/// The argument that lets `backend` write into an OS-owned environment, if it has one.
+pub fn os_owned_env_arg(backend: &str) -> Option<&'static str> {
+    OS_OWNED_ENV
+        .iter()
+        .find(|(b, _)| *b == backend)
+        .map(|(_, a)| *a)
+}
+
+/// Whether `@system` says anything on `backend`.
+pub fn accepts_system(backend: &str) -> bool {
+    os_owned_env_arg(backend).is_some()
+}
+
+/// The backends `@system` is legal on, for a refusal that names them.
+pub fn system_backends() -> String {
+    OS_OWNED_ENV
+        .iter()
+        .map(|(b, _)| *b)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Whether `@unverified` says anything on `backend` — LiNix's checksum, or the manager's own
 /// signature check. Wider than [`downloads`], which is `@allow_http`'s set alone.
 pub fn accepts_unverified(backend: &str) -> bool {
