@@ -828,25 +828,43 @@ impl<'a> SyncEngine<'a> {
     /// — after the final write — left all three removable, which is the whole of the
     /// intermittency.
     ///
-    /// **Only what is on the machine now.** The log records what was done, not what is; a
-    /// package removed by hand since is not this function's to claim back.
-    async fn reconcile_ownership(&self) -> Result<()> {
+    /// **Ownership follows the declaration, not the install.** A package this machine declares
+    /// and already has is LiNix's, whether LiNix put it there or the user did. That is what
+    /// makes the repair total: the orphan above is still declared — the declaration is written
+    /// before the install and survives the kill that lost the registry — so nothing has to be
+    /// remembered about *how* the package arrived, and there is no window in which the evidence
+    /// expires.
+    ///
+    /// The rejected alternative was replaying the log, which recorded the installs the registry
+    /// had lost. It repaired the crash orphan and nothing else, and only for as long as the
+    /// entry survived the seven-day purge — so a machine left alone for a week kept its orphan
+    /// for ever. It also could not see the far commoner case, a package installed by hand and
+    /// declared afterwards, which no sync ever registers because an already-present package
+    /// schedules no install.
+    ///
+    /// **Only what is on the machine now.** A declaration is a wish; this claims the ones the
+    /// manager confirms, so a package declared and not yet installed stays unclaimed and is
+    /// recorded by the install that follows.
+    ///
+    /// **And only `present` declarations.** An `absent:` line is a declaration that the package
+    /// must *not* be here — claiming it would have LiNix take ownership of something it is
+    /// under orders to remove.
+    async fn reconcile_ownership(&self, declared: &[PackageSpec]) -> Result<()> {
         let unclaimed: Vec<PackageSpec> = {
-            let journal = self.journal.lock().await;
             let state = self.state.lock().await;
-            journal
-                .completed_installs()
-                .into_iter()
-                .filter(|spec| !state.is_managed(&spec.backend, &spec.name))
+            declared
+                .iter()
+                .filter(|spec| spec.present && !state.is_managed(&spec.backend, &spec.name))
+                .cloned()
                 .collect()
         };
         if unclaimed.is_empty() {
             return Ok(());
         }
 
-        // One listing per manager, not one query per package: this runs in front of every
-        // sync, and the common case is that every candidate below has been removed by hand
-        // and none of them is still here.
+        // One listing per manager, not one query per package. This runs in front of every sync,
+        // and reaching it at all means something declared is unregistered — usually a package
+        // declared and not yet installed, which the install below records anyway.
         let mut by_backend: std::collections::BTreeMap<String, Vec<PackageSpec>> =
             std::collections::BTreeMap::new();
         for spec in unclaimed {
@@ -866,7 +884,7 @@ impl<'a> SyncEngine<'a> {
             // not on the machine, and the next sync would issue a removal for each.
             let Ok(installed) = queryable.list_installed().await else {
                 debug!(
-                    "`{}` could not be listed, so its unrecorded installs stay unclaimed.",
+                    "`{}` could not be listed, so its declared packages stay unclaimed.",
                     backend
                 );
                 continue;
@@ -882,7 +900,7 @@ impl<'a> SyncEngine<'a> {
         let names: Vec<String> = reclaimed.iter().map(|s| format!("{}:{}", s.backend, s.name)).collect();
         if self.config.dry_run {
             crate::would!(
-                "would record {} package(s) an interrupted run installed without recording: {}",
+                "would take ownership of {} declared package(s) already installed: {}",
                 names.len(),
                 names.join(", ")
             );
@@ -912,20 +930,28 @@ impl<'a> SyncEngine<'a> {
             .map_err(|e| {
                 Error::Other(format!("writing the registry after reconciling ownership: {}", e))
             })??;
+        // Announced, not silent. Taking ownership is what makes a package removable when its
+        // declaration goes, so a machine that quietly adopted software the user installed by
+        // hand would be deciding something on their behalf without saying so.
         info!(
-            "recorded {} package(s) an interrupted run installed and did not record: {}. \
-             They are LiNix's again, so removing them works.",
+            "took ownership of {} declared package(s) already installed: {}. LiNix now removes \
+             them when their declaration goes.",
             names.len(),
             names.join(", ")
         );
         Ok(())
     }
 
-    pub async fn heal(&self) -> Result<()> {
+    /// `declared` is this machine's resolved package set, which is what ownership is read from.
+    /// It has to be resolved by the caller: resolution reads the config and this runs inside a
+    /// sync that has already done it, and resolving twice per sync to save threading one
+    /// argument would be the more expensive half of the trade.
+    pub async fn heal(&self, declared: &[PackageSpec]) -> Result<()> {
         // Before the interrupted entries, and NOT gated on there being any. The packages this
-        // repairs are `Completed` in the log — nothing about them is interrupted, which is
-        // precisely why they stayed orphaned through every later sync.
-        self.reconcile_ownership().await?;
+        // repairs have nothing interrupted about them — they are installed and declared and
+        // simply unrecorded, which is precisely why they stayed orphaned through every later
+        // sync.
+        self.reconcile_ownership(declared).await?;
 
         // One package, one recovery. `record_start` mints a fresh id per attempt, so a
         // declaration that fails on every sync appends a *new* operation every time and none of

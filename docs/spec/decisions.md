@@ -7722,12 +7722,12 @@ is `already up to date`.
 `absent:` is the one thing LiNix removes without owning (II.2, V.7) — "because you named it".
 `uninstall` names it just as plainly and did not get the same treatment.
 
-**How the ownership record goes missing.** `S87`: the log is written per operation and the
-registry once at the end of a run, so a run killed in between leaves the package installed,
-`Completed` in the log, and owned by nobody. That is the bug, and II.56's first half fixes it.
-This question is about the second half — what the command should say in every case where the
-ownership record is genuinely absent, including the ones no repair can reach (a log purged at
-seven days, a package installed by hand, a package the user told LiNix to forget).
+**How the ownership record goes missing.** `S87`: the registry is written once at the end of a
+run, so a run killed before that leaves the package installed and owned by nobody. That is the
+bug, and II.56's first half fixes it. This question is about the second half — what the command
+should say in every case where the ownership record is genuinely absent, including the ones no
+repair can reach (a package undeclared by hand before the uninstall, a package the user told
+LiNix to forget).
 
 **RULED (owner, 2026-08-11), in the owner's words: "it should say it did not remove it and does
 not own it."** Rule in **II.56**, reason in **V.186**.
@@ -7768,3 +7768,41 @@ Settled with it, as implementation rather than rule:
 - **No inactive-module warning**, unlike a plain uninstall: that warning exists because a line in
   a module you forgot brings the package back, and an `absent:` line beats the module that wants
   it (II.7 rule 6).
+
+## Q55
+
+**Status: ANSWERED — raised and ruled 2026-08-11, on the back of `Q54`.**
+
+**The question in plain words.** The `S87` repair rebuilt the lost ownership record by replaying
+the write-ahead log, which records every install per operation. Should it read the **manifest**
+instead — is a package this machine declares and already has LiNix's, whether or not LiNix put
+it there?
+
+**Why it was raised rather than built.** Reading the manifest looked like a strictly simpler
+version of the same repair, and it is not. It loses one case and gains another, and the gained
+one is the one with teeth:
+
+- **Lost:** a package undeclared by hand and *then* uninstalled has no declaration left to prove
+  it was ever managed, so nothing can recognise it.
+- **Gained:** a package installed by hand and declared afterwards becomes LiNix's. Nothing
+  registers those today — an already-present package schedules no install, so `state.add` never
+  runs — which is exactly why `adopt` exists. Under a manifest-derived repair, the day that
+  declaration moves or goes, LiNix removes software it never installed.
+
+That second one is the blast-radius axis `Q54` had just put behind an explicit flag, and this
+would have granted it by default and invisibly.
+
+**RULED (owner, 2026-08-11): yes — declaring a package you already had makes it LiNix's.**
+Rule in **II.56**, reasoning in **V.186**.
+
+- Ownership is read from the resolved declaration set, not the log. There is no expiry: the
+  seven-day log purge stops being a bound on anything.
+- **The repair announces what it claimed.** Taking ownership is what makes a package removable
+  when its declaration goes, so a machine that adopted software quietly would be deciding
+  something on the user's behalf without saying so.
+- **Declared is the whole of it.** An undeclared package on the machine is never claimed,
+  however it got there. An installed set is not a manifest.
+- Only `present` declarations count — an `absent:` line says the package must not be here.
+- The lost case is covered by `Q54`'s `--absent`, which removes regardless of ownership.
+- `completed_installs` and `unmanage`'s log-clearing were **deleted**, not left beside the new
+  reader. `unmanage` drops the manifest line, which is now the whole of the forgetting.

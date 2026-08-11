@@ -3371,34 +3371,37 @@ ceiling refuses before a byte moves; a server that declares nothing, or lies, is
 running count. A body that goes over takes its partial file with it, because a half-downloaded
 artifact left on disk is one a later run can find and treat as complete.
 
-## II.56 The log owns what the registry forgot, and a removal that removed nothing says so (`S87`, `Q54`, V.186)
+## II.56 The manifest owns what the registry forgot, and a removal that removed nothing says so (`S87`, `Q54`, V.186)
 
-**Two files record what LiNix has installed, and they are not equally durable.** The write-ahead
-log is written per operation, before and after each one. The ownership registry is held in
-memory through a run and serialised once, at the end, and only when the whole transaction
-succeeded. Every crash between those two points leaves a package installed, `Completed` in the
-log, and owned by nobody — and nothing downstream notices, because the package is present so no
-sync reinstalls it and its entry is closed so no recovery replays it.
+**The ownership registry is not durable, and what it records can be lost.** It is held in memory
+through a run and serialised once, at the end, and only when the whole transaction succeeded.
+Every crash between an install landing and that final write leaves a package installed and owned
+by nobody — and nothing downstream notices, because the package is present so no sync reinstalls
+it and nothing about it is interrupted so no recovery replays it.
 
-**So the registry is a view of the log, and recovery is what makes them agree.** Before every
-sync, and on `linix heal`, every install the log completed that the registry does not carry and
-the manager still holds is recorded as LiNix's. Three limits are part of the rule: a completed
-removal cancels an earlier install (a package LiNix gave up and somebody put back by hand is
-theirs), a manager that cannot be asked leaves its packages unclaimed (assuming they are there
-would have LiNix issue removals for packages the machine does not have), and a preview records
-nothing.
+**So ownership follows the declaration, and the registry is a view of the manifest.** A package
+this machine declares and already has is LiNix's, whether LiNix installed it or the user did.
+Before every sync, and on `linix heal`, every declared package the registry does not carry and
+the manager still holds is recorded as LiNix's, and **the machine says so** — taking ownership
+is what makes a package removable when its declaration goes, so it is announced rather than
+done quietly. Three limits are part of the rule: only `present` declarations count (an `absent:`
+line says the package must *not* be here, and claiming it would adopt something LiNix is under
+orders to remove), a manager that cannot be asked leaves its packages unclaimed (assuming they
+are there would have LiNix issue removals for packages the machine does not have), and a preview
+records nothing.
+
+**The boundary: declared is the whole of it.** A package on the machine that this configuration
+does not declare is never claimed, however it got there. An installed set is not a manifest.
 
 **And this repair is not gated on anything being interrupted.** `needs_recovery` asks about
-entries that are still open; the records lost here belong to entries the log already calls
-`Completed`.
+entries that are still open; an unrecorded package has nothing open about it.
 
 **A package the user told LiNix to forget stays forgotten.** `unmanage` drops the registry entry
-and the manifest line and leaves the package installed — which, read from the registry alone, is
-indistinguishable from an ownership record a killed run never wrote. So `unmanage` clears the
-package's *finished* log entries too: the log is the third record of the same relationship, and a
-repair that read only two of the three would take the package back, find it declared nowhere, and
-remove it. Entries that are still open survive the forgetting, because a package being forgotten
-is not a reason to lose the evidence that its install never completed.
+*and the manifest line*, and leaves the package installed. Dropping the line is what makes the
+forgetting stick: ownership is read from the declaration, so a package that is no longer declared
+is no longer a candidate. The log is not consulted for ownership at all, and `unmanage` therefore
+leaves it alone — a package being forgotten is not a reason to lose the evidence that one of its
+installs never completed.
 
 **Second: a removal that removed nothing does not report success.** `uninstall` deletes the
 declaration and lets the sync take the package away as drift — and drift removal only removes

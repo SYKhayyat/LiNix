@@ -6149,7 +6149,7 @@ it. The failure it exists to stop is not a large download; it is an unbounded on
 can find and treat as complete — and the checksum that would have caught that is exactly the one
 `@unverified` is allowed to switch off.
 
-**V.186 — Why the log owns what the registry forgot, and why a removal that removed nothing says so.**
+**V.186 — Why the manifest owns what the registry forgot, and why a removal that removed nothing says so.**
 
 *(Rule in II.56. Ruling `Q54`. Bug `S87`.)*
 
@@ -6161,13 +6161,12 @@ recovered were the ones that would not uninstall. It is the other way round. The
 recovers come back **owned**, because recovery records ownership; the ones nobody owns are the
 ones `heal` never looks at, because their entries were already closed.
 
-Underneath there is no race at all, only two files with different durability. The log is
-appended to before and after each operation. The registry is one serialisation at the end of a
-run, and only if the whole transaction succeeded. Kill the process between an install's
-`Completed` line and that final write and the package is on the machine with nothing claiming
-it — permanently, because every mechanism that could fix it is looking somewhere else. The sync
-after the crash converges (the package is installed). The preview after that plans nothing
-(there is nothing to plan). `heal` has nothing to replay (the entry is terminal). The damage
+Underneath there is no race at all, only a record that is not durable. The registry is one
+serialisation at the end of a run, and only if the whole transaction succeeded. Kill the process
+between an install landing and that final write and the package is on the machine with nothing
+claiming it — permanently, because every mechanism that could fix it is looking somewhere else.
+The sync after the crash converges (the package is installed). The preview after that plans
+nothing (there is nothing to plan). `heal` has nothing to replay (nothing is open). The damage
 appears only when somebody tries to remove the package, which is the one moment ownership is
 consulted, and the answer then is a command that reports success and takes nothing away.
 
@@ -6181,25 +6180,51 @@ open — the state it aims at is one where nothing is open at all.
 **Why recovery, and not a durable write per install.** Writing the registry as each package
 lands would close the window at the cost of one serialisation of the whole file per package, on
 the hot path of every sync, for a failure that needs a kill inside a window of microseconds. The
-log already carries the fact durably; the registry is a materialised view of it. Replaying the
-log into the view is what a write-ahead log is for, it costs nothing when there is nothing to
-repair, and it also repairs the non-crash sibling — a transaction that fails after some installs
-succeeded never reaches the final write either.
+registry is a materialised view, and recomputing a view is cheaper than making it durable. It
+costs nothing when there is nothing to repair, and it also repairs the non-crash sibling — a
+transaction that fails after some installs succeeded never reaches the final write either.
 
-**Why a completed removal cancels an install.** The log keeps both for ever. A package LiNix
-installed, then removed, then that somebody installed again by hand is theirs, and a reader that
-saw only the install would take it back and remove it on the next sync. Ties cancel too: the
-entries are a map keyed by id, so two transitions recorded in the same second have no order
-between them, and the safe direction is to claim nothing.
+**Why the manifest is what the view is recomputed from, and not the log** (owner ruling,
+2026-08-11). The first version replayed the write-ahead log: it recorded every install per
+operation, so it held what the registry had lost. It worked, and it was too narrow in one
+direction and expiring in another.
 
-**Why `unmanage` had to be told.** The repair reads the log and the registry; `unmanage` writes
-the registry and the manifest. That leaves the log saying LiNix installed a package the user has
-explicitly asked it to forget — and the repair, reading exactly that, takes it back. The next sync
-then finds it declared nowhere and removes it. `unmanage` exists to prevent precisely that class
-of accident (deleting a manifest line means *uninstall this*, which is why forgetting is its own
-verb), so a repair that reintroduces it through a third file is the same bug wearing a different
-hat. Clearing the finished entries is the smallest fix that keeps all three records saying one
-thing; a "forgotten" list somewhere would have been a fourth record to keep in step.
+Too narrow, because the log answers *did LiNix install this* and the question ownership actually
+turns on is *does this machine declare it*. A package installed by hand and declared afterwards
+is never registered at all — an already-present package schedules no install, so no `state.add`
+ever runs for it — and that is the common case, not the crash. Expiring, because finished log
+entries are purged after seven days, so a machine left alone for a week kept its orphan for ever
+with no mechanism left that could see it. The ruling is that declaring a package you already
+have makes it LiNix's, and once that is the rule the manifest is simply the better record: it is
+the one the user wrote, it does not expire, and it is already resolved on every sync.
+
+The declaration is also written *before* the install, by the same `install` that P1 defines as a
+file edit. So it survives every kill the registry does not, and the crash orphan the log was
+introduced for is covered by the manifest as a special case rather than needing its own
+mechanism. Nothing is left that only the log can see: `requires` wires edges inside the declared
+set rather than pulling in undeclared packages, and the dependent phase installs shims, services
+and links — not packages. `completed_installs` was deleted rather than kept as a second source,
+because two records of one relationship is how this repo got into trouble.
+
+**What this gives up, stated plainly.** Undeclare a package by hand and then try to uninstall it
+and LiNix cannot tell it was ever managed — there is no record left saying so. Ruled acceptable:
+`uninstall --absent` removes it regardless of ownership, which is the same end state through a
+flag the user types.
+
+**And what it takes on.** Declaring a package you already had now means LiNix removes it when
+that declaration goes. That is a real transfer of blast radius, which is why the repair
+**announces** what it claimed instead of doing it quietly — a machine that silently adopts
+software the user installed by hand is deciding something on their behalf. The boundary is that
+declaration is the whole of it: an undeclared package on the machine is never claimed, however
+it got there, because an installed set is not a manifest.
+
+**Why `unmanage` no longer has to be told.** It writes the registry and the manifest, and
+ownership is now read from the manifest — so dropping the line *is* the forgetting, and there is
+no third record left to keep in step. The old repair read the log, which still said LiNix had
+installed the package, so `unmanage` had to clear those entries to stop the next sync taking it
+back and then removing it as undeclared drift. That clearing was deleted with the reader it
+defended against; leaving it would have been a defence against nothing, and it cost the evidence
+of past work for no reader's benefit.
 
 **Why `uninstall` fails rather than warns.** The failure this fixes is precisely that a script
 could not see it. `linix uninstall x && rm -rf ~/.config/x` proceeded on a package that was

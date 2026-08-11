@@ -35,13 +35,6 @@ fn spec(name: &str) -> PackageSpec {
     }
 }
 
-/// An operation the log carries through to `Completed`, as a finished run would leave it.
-async fn record_completed(kernel: &TestKernel, action: JournalAction) {
-    let mut j = kernel.app.journal.lock().await;
-    let id = j.record_start(action).expect("could not write the WAL");
-    j.record_success(&id).expect("could not close the entry");
-}
-
 /// What the manager answers when asked what it holds.
 fn brew_holds(kernel: &TestKernel, names: &[&str]) {
     let listing = names
@@ -85,13 +78,55 @@ fn confirming(kernel: &TestKernel) -> linix::app::App {
     }
 }
 
-/// The bug, and the fix: the log says this machine installed it, the machine still has it, and
-/// nothing claims it. That is not a mystery to be diagnosed later — it is a disagreement
-/// between two files, and recovery is what makes them agree.
+/// This machine's resolved package set — what ownership is read from. Resolved for real rather
+/// than hand-built, so a test that writes a line proves the line reaches the repair.
+async fn declared(kernel: &TestKernel) -> Vec<PackageSpec> {
+    linix::app::sync::resolver::StateResolver::new(
+        &kernel.app.config,
+        kernel.app.registry.clone(),
+        false,
+    )
+    .await
+    .resolve_model()
+    .await
+    .expect("the fixture's config does not resolve")
+    .packages
+    .into_values()
+    .flatten()
+    .collect()
+}
+
+/// What the active profile declares.
+fn declares(kernel: &TestKernel, lines: &str) {
+    std::fs::write(kernel.tmp.path().join("profiles/Main"), lines).unwrap();
+}
+
+/// The manager's listing, registered as a stub the repair must never reach. A plain stub that
+/// goes unmatched proves only that nothing asked; this one answers convincingly if anything
+/// does, so a repair that widened to undeclared packages would claim them and fail the
+/// assertion rather than quietly pass.
+fn brew_must_not_be_asked(kernel: &TestKernel, names: &[&str]) {
+    let listing = names
+        .iter()
+        .map(|n| format!("{} 1.0\n", n))
+        .collect::<String>();
+    kernel.mock_executor.set_response_that_must_not_be_used(
+        "brew list --versions",
+        Ok(DryRunOutput {
+            stdout: listing.into_bytes(),
+            stderr: vec![],
+        }
+        .into()),
+    );
+}
+
+/// The bug, and the fix: this machine declares the package, the machine has it, and nothing
+/// claims it. That is not a mystery to be diagnosed later — it is a disagreement between the
+/// manifest and the registry, and recovery is what makes them agree.
 #[tokio::test]
-async fn a_completed_install_that_never_reached_the_registry_is_taken_back() {
+async fn a_declared_package_the_registry_never_recorded_is_taken_back() {
     let kernel = TestKernel::new().await;
-    record_completed(&kernel, JournalAction::Install(spec("orphan-pkg"))).await;
+    declares(&kernel, "brew:orphan-pkg\n");
     brew_holds(&kernel, &["orphan-pkg"]);
 
     assert!(
@@ -99,29 +134,30 @@ async fn a_completed_install_that_never_reached_the_registry_is_taken_back() {
         "the fixture is wrong: the registry already carries the package"
     );
 
+    let declared = declared(&kernel).await;
     kernel
         .app
         .sync_engine()
         .await
-        .heal()
+        .heal(&declared)
         .await
         .expect("heal failed");
 
     assert!(
         manages(&kernel, "orphan-pkg").await,
-        "a package the log says this machine installed, and that the manager still holds, is \
-         still owned by nobody — so `uninstall` will plan no change and report success"
+        "a package this machine declares, and that the manager holds, is still owned by nobody \
+         — so `uninstall` will plan no change and report success"
     );
 }
 
 /// **Nothing is interrupted here**, and that is the point. `needs_recovery` is false for a
-/// `Completed` entry, so a sync that consulted it before calling `heal` skipped the repair
-/// above on every run — which is how one orphan survived a converge sync, an idempotence sync
-/// and three uninstalls in the measured failure.
+/// machine whose log is clean, so a sync that consulted it before calling `heal` skipped the
+/// repair above on every run — which is how one orphan survived a converge sync, an idempotence
+/// sync and three uninstalls in the measured failure.
 #[tokio::test]
 async fn the_repair_does_not_wait_for_something_to_be_interrupted() {
     let kernel = TestKernel::new().await;
-    record_completed(&kernel, JournalAction::Install(spec("orphan-pkg"))).await;
+    declares(&kernel, "brew:orphan-pkg\n");
     brew_holds(&kernel, &["orphan-pkg"]);
 
     assert!(
@@ -129,36 +165,38 @@ async fn the_repair_does_not_wait_for_something_to_be_interrupted() {
         "the fixture is wrong: this log has something interrupted in it"
     );
 
+    let declared = declared(&kernel).await;
     kernel
         .app
         .sync_engine()
         .await
-        .heal()
+        .heal(&declared)
         .await
         .expect("heal failed");
 
     assert!(manages(&kernel, "orphan-pkg").await);
 }
 
-/// The other direction, and the one that would do damage: claiming a package that is not there
-/// makes LiNix issue a removal for it on the next sync.
+/// A declaration is a wish, not a fact. Claiming a package that is not there makes LiNix issue a
+/// removal for it on the next sync; the install that follows is what records this one.
 #[tokio::test]
-async fn a_package_the_manager_no_longer_holds_is_not_taken_back() {
+async fn a_declared_package_the_manager_does_not_hold_is_not_taken_back() {
     let kernel = TestKernel::new().await;
-    record_completed(&kernel, JournalAction::Install(spec("gone-pkg"))).await;
+    declares(&kernel, "brew:gone-pkg\n");
     brew_holds(&kernel, &[]);
 
+    let declared = declared(&kernel).await;
     kernel
         .app
         .sync_engine()
         .await
-        .heal()
+        .heal(&declared)
         .await
         .expect("heal failed");
 
     assert!(
         !manages(&kernel, "gone-pkg").await,
-        "the log records an install that is no longer on the machine, and LiNix claimed it"
+        "a package that is declared and not installed was claimed as owned"
     );
 }
 
@@ -168,17 +206,18 @@ async fn a_package_the_manager_no_longer_holds_is_not_taken_back() {
 #[tokio::test]
 async fn a_manager_that_cannot_answer_leaves_the_package_unclaimed() {
     let kernel = TestKernel::new().await;
-    record_completed(&kernel, JournalAction::Install(spec("unknown-pkg"))).await;
+    declares(&kernel, "brew:unknown-pkg\n");
     kernel.mock_executor.set_response(
         "brew list --versions",
         Err(linix::core::Error::Other("brew is wedged".into())),
     );
 
+    let declared = declared(&kernel).await;
     kernel
         .app
         .sync_engine()
         .await
-        .heal()
+        .heal(&declared)
         .await
         .expect("heal failed");
 
@@ -188,74 +227,75 @@ async fn a_manager_that_cannot_answer_leaves_the_package_unclaimed() {
     );
 }
 
-/// A package LiNix installed, then removed, and that somebody put back by hand is theirs. The
-/// log carries both operations for ever, so reading only the install would take it back.
+/// **The boundary of the ruling of 2026-08-11.** Declaring a package you already had makes it
+/// LiNix's; having it and never declaring it does not. This is the software on the machine that
+/// is nobody's business but the user's, and the repair must not widen into it — a machine's
+/// installed set is not a manifest.
 #[tokio::test]
-async fn an_install_the_log_later_removed_is_not_taken_back() {
+async fn a_package_this_machine_does_not_declare_is_never_claimed() {
     let kernel = TestKernel::new().await;
-    record_completed(&kernel, JournalAction::Install(spec("returned-pkg"))).await;
-    record_completed(
-        &kernel,
-        JournalAction::Remove {
-            name: "returned-pkg".into(),
-            backend: "brew".into(),
-        },
-    )
-    .await;
+    brew_must_not_be_asked(&kernel, &["hand-installed-pkg"]);
 
+    let declared = declared(&kernel).await;
     kernel
         .app
         .sync_engine()
         .await
-        .heal()
+        .heal(&declared)
         .await
         .expect("heal failed");
 
     assert!(
-        !manages(&kernel, "returned-pkg").await,
-        "LiNix gave this package up and then claimed it again from a stale log entry"
+        !manages(&kernel, "hand-installed-pkg").await,
+        "LiNix took ownership of software the user installed and never declared"
     );
-    // And the manager was never asked. The log alone settles this one, which is what keeps
-    // the repair free on the machines that have nothing to repair — it runs in front of every
-    // sync.
+    // And no manager was asked. Nothing is declared, so there is no candidate to ask about —
+    // which is what keeps this free on the machines that have nothing to repair, since it runs
+    // in front of every sync.
     assert!(
         kernel.mock_executor.get_calls().await.is_empty(),
-        "a package the log itself rules out still cost a listing: {:?}",
+        "an undeclared machine still cost a listing: {:?}",
         kernel.mock_executor.get_calls().await
     );
 }
 
-/// A script is not a package. The log carries `exec:` and its undo as first-class entries, and
-/// a reader that treats every completed entry as an install would hand their names to a
-/// package manager.
+/// An `absent:` line is a declaration that the package must **not** be here. Claiming it would
+/// have LiNix take ownership of something it is under orders to remove — and every declaration
+/// arrives through the same map, so the presence flag is the only thing separating the two.
 #[tokio::test]
-async fn a_completed_script_is_not_a_package_to_take_back() {
+async fn an_absent_declaration_is_not_a_claim() {
     let kernel = TestKernel::new().await;
-    record_completed(
-        &kernel,
-        JournalAction::Exec {
-            script: "setup.sh".into(),
-            hash: "abc123".into(),
-        },
+    // In a module, not the profile: a profile's `absent:` is refused by the parser, because
+    // there `-<package>` means "leave it out of this profile" and the two are different claims.
+    std::fs::write(
+        kernel.tmp.path().join("modules/banned.txt"),
+        "absent:brew:banned-pkg\n",
     )
-    .await;
+    .unwrap();
+    declares(&kernel, "use banned\n");
+    // The filter drops it before any manager is asked, so the listing must go unreached — and
+    // it answers convincingly if the filter ever breaks, rather than letting the claim fail for
+    // the unrelated reason that nothing was stubbed.
+    brew_must_not_be_asked(&kernel, &["banned-pkg"]);
+
+    let declared = declared(&kernel).await;
+    assert!(
+        declared.iter().any(|s| s.name == "banned-pkg"),
+        "the fixture is wrong: the absent line never reached the resolved set, so this test \
+         would pass without the filter it exists to check"
+    );
 
     kernel
         .app
         .sync_engine()
         .await
-        .heal()
+        .heal(&declared)
         .await
         .expect("heal failed");
 
     assert!(
-        !kernel.app.state.lock().await.is_managed("exec", "setup.sh"),
-        "a completed script was recorded as a managed package"
-    );
-    assert!(
-        kernel.mock_executor.get_calls().await.is_empty(),
-        "a script's name was handed to a package manager to ask about: {:?}",
-        kernel.mock_executor.get_calls().await
+        !manages(&kernel, "banned-pkg").await,
+        "LiNix claimed ownership of a package it is declared to remove"
     );
 }
 
@@ -514,16 +554,15 @@ async fn a_bare_name_linix_owns_costs_no_listing_either() {
 /// **`unmanage` has to survive the repair, or the repair uninstalls people's software.**
 ///
 /// `unmanage` means *stop watching this, leave it installed*: it drops the registry entry and
-/// the manifest line and touches the machine not at all. From the registry alone that is
-/// indistinguishable from an ownership record a killed run never wrote — so a repair that reads
-/// only the registry takes the package back, the next sync finds it declared nowhere, and drift
-/// removal takes away software the user asked LiNix only to forget. The log is the third record
-/// of the same relationship and `unmanage` now clears it too.
+/// the manifest line and touches the machine not at all. Dropping the line is what makes that
+/// stick, now that ownership is read from what the machine declares — so this asserts the two
+/// halves together, because `unmanage` that dropped only the registry entry would be re-adopted
+/// by the next sync, found declared nowhere, and uninstalled.
 #[tokio::test]
 async fn a_package_the_user_told_linix_to_forget_stays_forgotten() {
     let kernel = TestKernel::new().await;
-    std::fs::write(kernel.tmp.path().join("profiles/Main"), "brew:kept-pkg\n").unwrap();
-    record_completed(&kernel, JournalAction::Install(spec("kept-pkg"))).await;
+    declares(&kernel, "brew:kept-pkg\n");
+    brew_must_not_be_asked(&kernel, &["kept-pkg"]);
     {
         let mut state = kernel.app.state.lock().await;
         state.add("brew", "kept-pkg", None, Default::default(), "sync", false);
@@ -541,13 +580,18 @@ async fn a_package_the_user_told_linix_to_forget_stays_forgotten() {
         "the fixture is wrong: unmanage did not drop the registry entry"
     );
 
-    // The machine still has it — that is what `unmanage` promises — and the repair does not
-    // even get as far as asking, because the log no longer claims the package either.
+    // Resolved after the forgetting, which is the whole point: the line is gone, so the package
+    // is not declared, so the repair below has no candidate to take back.
+    let declared = declared(&kernel).await;
+    assert!(
+        declared.is_empty(),
+        "unmanage left the declaration in place, and the repair is about to re-adopt it"
+    );
     kernel
         .app
         .sync_engine()
         .await
-        .heal()
+        .heal(&declared)
         .await
         .expect("heal failed");
 
@@ -563,9 +607,11 @@ async fn a_package_the_user_told_linix_to_forget_stays_forgotten() {
     );
 }
 
-/// And forgetting drops only what is finished. An `InProgress` entry is the record that
+/// And forgetting leaves the log alone entirely. An `InProgress` entry is the record that
 /// something on this machine is half-done, and a package being forgotten is not a reason to
-/// lose the evidence that its install never completed.
+/// lose the evidence that its install never completed. `unmanage` used to clear the package's
+/// finished entries, because the repair read them as ownership; the repair reads the manifest
+/// now, so that clearing was deleted rather than left as a defence against nothing.
 #[tokio::test]
 async fn forgetting_a_package_keeps_the_record_of_work_still_open() {
     let kernel = TestKernel::new().await;
@@ -594,7 +640,7 @@ async fn forgetting_a_package_keeps_the_record_of_work_still_open() {
 #[tokio::test]
 async fn a_preview_takes_nothing_back() {
     let kernel = TestKernel::new().await;
-    record_completed(&kernel, JournalAction::Install(spec("orphan-pkg"))).await;
+    declares(&kernel, "brew:orphan-pkg\n");
     brew_holds(&kernel, &["orphan-pkg"]);
 
     let mut previewing = (*kernel.app.config).clone();
@@ -613,7 +659,8 @@ async fn a_preview_takes_nothing_back() {
         kernel.app.reaping.clone(),
     )
     .await;
-    engine.heal().await.expect("heal failed");
+    let declared = declared(&kernel).await;
+    engine.heal(&declared).await.expect("heal failed");
 
     assert!(
         !manages(&kernel, "orphan-pkg").await,

@@ -617,7 +617,28 @@ pub async fn handle_heal(app: &App) -> Result<()> {
     for fixed in settle_manager_locks(app).await {
         println!("heal: {}", fixed);
     }
-    app.sync_engine().await.heal().await?;
+    // `heal` reads ownership from what this machine declares, so the model has to be resolved
+    // first. `sync` has one already and hands it over; this command is on its own.
+    //
+    // A config that will not resolve must not stop the rest of this command. `heal` is what you
+    // run when the machine is broken, and half of what it repairs — interrupted operations,
+    // wedged manager locks — has nothing to do with the manifest. So a resolution failure costs
+    // the ownership half and is reported, rather than aborting the repair that was asked for.
+    let declared: Vec<crate::core::PackageSpec> =
+        match crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+            .await
+            .resolve_model()
+            .await
+        {
+            Ok(state) => state.packages.into_values().flatten().collect(),
+            Err(e) => {
+                warn!(
+                    "{e} Skipping the ownership half of the repair; the rest of `heal` continues."
+                );
+                Vec::new()
+            }
+        };
+    app.sync_engine().await.heal(&declared).await?;
     // U9: `check` looks, `heal` acts. These three repairs used to be `doctor --fix`, which
     // made one command both the diagnosis and the treatment — and a command that changes
     // things is one you cannot run to find out whether you want things changed.

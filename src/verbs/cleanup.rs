@@ -533,27 +533,9 @@ pub async fn handle_unmanage(app: &App, packages: &[String], out: Output) -> Res
             }
         }
 
-        // And the log, which is the third record of the same relationship. `heal` takes back
-        // any package the log says this machine installed and the registry does not carry
-        // (II.56) — the repair for an ownership record a killed run never wrote. An
-        // `unmanage`d package looks identical to one of those from the registry alone, so
-        // without this the next sync would re-adopt it, find it declared nowhere, and remove
-        // it. Under `--dry-run` nothing is dropped, for the same reason the save below is
-        // skipped.
-        if !app.config.dry_run {
-            let dropped = app
-                .journal
-                .lock()
-                .await
-                .forget(backend.as_deref(), &name)?;
-            if dropped > 0 {
-                tracing::debug!("forgot {} finished log entry(ies) for {}", dropped, name);
-            }
-        }
-
-        // The line goes too. `forget` means LiNix never touches it again, and a package
-        // still declared is a package the next `sync` re-adopts — a command that silently
-        // undoes itself.
+        // The line goes too, and it is what makes the forgetting stick: ownership is read from
+        // what this machine declares (II.56), so a package still declared is a package the next
+        // `sync` re-adopts — a command that silently undoes itself.
         //
         // Under `--dry-run` this reports the lines and writes none of them: the editor is in
         // `Writes::Planned`, and the `forget` above stays in memory because the save below is

@@ -50,19 +50,6 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
     if app.journal.lock().await.needs_recovery() {
         warn!("the transaction journal records an interrupted run; healing first.");
     }
-    // Called whether or not anything is interrupted. `needs_recovery` asks about entries that
-    // are still open, and the ownership records a killed run loses belong to entries the log
-    // already calls `Completed` — so gating the call on that predicate is what left an
-    // orphaned package orphaned through every subsequent sync. `heal` returns at once when
-    // there is nothing of either kind.
-    //
-    // `heal` now fails when it could not close an entry, and `linix heal` exits non-zero for
-    // it. Here it must not: one package whose recovery cannot complete would block every
-    // other package on the machine from converging, and the entry stays recorded as
-    // interrupted either way, so the next run tries it again.
-    if let Err(e) = engine.heal().await {
-        warn!("{e} Continuing with the sync.");
-    }
 
     let mut resolver = crate::app::sync::resolver::StateResolver::new(
         &app.config,
@@ -78,6 +65,27 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
     // (II.7), so this needs more than the package map.
     let state = resolver.resolve_model().await?;
     let desired = state.packages.clone();
+
+    // After the resolution and before the plan, and both halves of that are load-bearing.
+    // After, because ownership is read from what this machine declares and the resolver is
+    // what knows it; before, because the plan reads ownership to decide what is drift, and a
+    // repair that landed afterwards would be a sync too late every time.
+    //
+    // Called whether or not anything is interrupted. `needs_recovery` asks about entries that
+    // are still open, and an unrecorded package has nothing open about it — so gating the call
+    // on that predicate is what left an orphaned package orphaned through every subsequent
+    // sync. `heal` returns at once when there is nothing of either kind.
+    //
+    // `heal` fails when it could not close an entry, and `linix heal` exits non-zero for it.
+    // Here it must not: one package whose recovery cannot complete would block every other
+    // package on the machine from converging, and the entry stays recorded as interrupted
+    // either way, so the next run tries it again.
+    let declared: Vec<crate::core::PackageSpec> =
+        desired.values().flatten().cloned().collect();
+    if let Err(e) = engine.heal(&declared).await {
+        warn!("{e} Continuing with the sync.");
+    }
+
     enforce_policy(app, &desired).await?;
 
     // SEC3, before the first repo is added and before any package is touched: a `link:` line

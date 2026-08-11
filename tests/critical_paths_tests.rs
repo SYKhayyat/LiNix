@@ -216,7 +216,9 @@ async fn healing_an_interrupted_install_never_uninstalls() {
         Ok(DryRunOutput::default().into()),
     );
 
-    engine.heal().await.expect("Healing cycle crashed.");
+    // Nothing declared: this asserts the WAL replay, and an empty declared set keeps the
+    // ownership repair out of the way of it.
+    engine.heal(&[]).await.expect("Healing cycle crashed.");
 
     let calls = kernel.mock_executor.get_calls().await;
     assert!(
@@ -258,7 +260,9 @@ async fn healing_an_interrupted_removal_still_removes() {
         Ok(DryRunOutput::default().into()),
     );
 
-    engine.heal().await.expect("Healing cycle crashed.");
+    // Nothing declared: this asserts the WAL replay, and an empty declared set keeps the
+    // ownership repair out of the way of it.
+    engine.heal(&[]).await.expect("Healing cycle crashed.");
 
     let calls = kernel.mock_executor.get_calls().await;
     assert!(
@@ -306,7 +310,9 @@ async fn a_dry_run_reports_the_recovery_and_performs_none_of_it() {
     )
     .await;
 
-    engine.heal().await.expect("Healing cycle crashed.");
+    // Nothing declared: this asserts the WAL replay, and an empty declared set keeps the
+    // ownership repair out of the way of it.
+    engine.heal(&[]).await.expect("Healing cycle crashed.");
 
     assert!(
         kernel.mock_executor.get_calls().await.is_empty(),
@@ -335,7 +341,9 @@ async fn healing_a_protected_removal_is_refused_and_the_package_kept() {
     .await;
 
     let engine = kernel.app.sync_engine().await;
-    engine.heal().await.expect("Healing cycle crashed.");
+    // Nothing declared: this asserts the WAL replay, and an empty declared set keeps the
+    // ownership repair out of the way of it.
+    engine.heal(&[]).await.expect("Healing cycle crashed.");
 
     let calls = kernel.mock_executor.get_calls().await;
     assert!(
