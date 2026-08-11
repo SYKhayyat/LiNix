@@ -31,11 +31,18 @@ on:
 # live. That would delete the broad half of the coverage to speed up the narrow half.
 #
 # **A tag is never cancelled.** A tagged run publishes binaries; half a release is worse than no
-# release. `cancel-in-progress` is therefore true only for the two triggers where a newer commit
-# genuinely makes the older answer worthless.
+# release. And `schedule` is never cancelled either: the nightly is the broad coverage, and a
+# dispatch or a push must not be able to delete it.
+#
+# **A dispatch cancels an older dispatch**, which the first version of this got wrong on the
+# reasoning that a manual rehearsal should not be killed. A rehearsal superseded by a newer
+# rehearsal on the same ref is stale by exactly the argument that applies to a push — and because
+# the trigger is part of the group, this still cannot touch the nightly. Measured the hard way:
+# a stale dispatch on a superseded commit held runners for twenty minutes while the run that
+# mattered queued behind it.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: ${{ (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')) || github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')) || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
 
 env:
   CARGO_TERM_COLOR: always
