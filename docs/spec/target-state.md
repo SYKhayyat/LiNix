@@ -3370,3 +3370,39 @@ legitimately large — and movable, and `0` removes it. A declared `Content-Leng
 ceiling refuses before a byte moves; a server that declares nothing, or lies, is caught by the
 running count. A body that goes over takes its partial file with it, because a half-downloaded
 artifact left on disk is one a later run can find and treat as complete.
+
+## II.56 The log owns what the registry forgot, and a removal that removed nothing says so (`S87`, `Q54`, V.186)
+
+**Two files record what LiNix has installed, and they are not equally durable.** The write-ahead
+log is written per operation, before and after each one. The ownership registry is held in
+memory through a run and serialised once, at the end, and only when the whole transaction
+succeeded. Every crash between those two points leaves a package installed, `Completed` in the
+log, and owned by nobody — and nothing downstream notices, because the package is present so no
+sync reinstalls it and its entry is closed so no recovery replays it.
+
+**So the registry is a view of the log, and recovery is what makes them agree.** Before every
+sync, and on `linix heal`, every install the log completed that the registry does not carry and
+the manager still holds is recorded as LiNix's. Three limits are part of the rule: a completed
+removal cancels an earlier install (a package LiNix gave up and somebody put back by hand is
+theirs), a manager that cannot be asked leaves its packages unclaimed (assuming they are there
+would have LiNix issue removals for packages the machine does not have), and a preview records
+nothing.
+
+**And this repair is not gated on anything being interrupted.** `needs_recovery` asks about
+entries that are still open; the records lost here belong to entries the log already calls
+`Completed`.
+
+**A package the user told LiNix to forget stays forgotten.** `unmanage` drops the registry entry
+and the manifest line and leaves the package installed — which, read from the registry alone, is
+indistinguishable from an ownership record a killed run never wrote. So `unmanage` clears the
+package's *finished* log entries too: the log is the third record of the same relationship, and a
+repair that read only two of the three would take the package back, find it declared nowhere, and
+remove it. Entries that are still open survive the forgetting, because a package being forgotten
+is not a reason to lose the evidence that its install never completed.
+
+**Second: a removal that removed nothing does not report success.** `uninstall` deletes the
+declaration and lets the sync take the package away as drift — and drift removal only removes
+what LiNix manages, so a name LiNix does not own plans no change. When the command ends with a
+package it named still installed, and LiNix has no record of installing it, it says exactly
+that, names `adopt`, and fails. The question is asked only of names the registry did not carry
+when the command started, so an ordinary uninstall costs nothing extra.

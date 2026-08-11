@@ -1824,6 +1824,10 @@ journal_status_tally() { # awk-condition over the final status of each id
 }
 journal_open()       { journal_status_tally "InProgress Abandoned"; }
 journal_incomplete() { journal_status_tally "InProgress Abandoned Failed"; }
+# Operations the log has closed. The `completed` iteration below kills the run once this rises,
+# which is the window neither of the other two can reach: an install the log already calls done,
+# in a process that has not yet written the ownership registry.
+journal_completed()  { journal_status_tally "Completed"; }
 # The names behind the number, for a failure message that can be acted on.
 journal_open_names() {
     [ -f "$JOURNAL" ] || return 0
@@ -1909,12 +1913,22 @@ crash_wipe() {
 }
 
 # crash_run <tag> <when> [group]
-#   when   `open`   kill the moment the log has an entry — the manager may not have started
-#          <n>      kill once n of the canaries have reached the filesystem
+#   when   `open`       kill the moment the log has an entry — the manager may not have started
+#          <n>          kill once n of the canaries have reached the filesystem
+#          `completed`  kill once the log has CLOSED an operation this run opened
 #   group  non-empty kills the process GROUP, so the package manager dies mid-write too
+#
+# The third one is `S87`'s window, and it is not a variation on the other two. Ownership is
+# held in memory through a sync and written to `registry.json` once, at the end; the log is
+# written per operation. A kill between those two leaves the package installed, `Completed` in
+# the log — so recovery has nothing to replay — and owned by nobody, and the one command for
+# removing it then plans no change and reports success. Polling the filesystem cannot aim at
+# that window: a canary reaches disk well before its entry closes, so `midway` always killed
+# too early, and twelve iterations of the other two produced it zero times.
 crash_run() {
     _tag="$1"; _when="$2"; _grp="${3:-}"
     _open_before=$(journal_open)
+    _done_before=$(journal_completed)
     crash_declare
     record_argv sync
 
@@ -1931,6 +1945,8 @@ crash_run() {
     while [ "$_spins" -lt 1800 ]; do
         if [ "$_when" = open ]; then
             [ "$(journal_open)" -gt "$_open_before" ] && break
+        elif [ "$_when" = completed ]; then
+            [ "$(journal_completed)" -gt "$_done_before" ] && break
         else
             [ "$(crash_installed)" -ge "$_when" ] && break
         fi
@@ -1939,6 +1955,7 @@ crash_run() {
     done
 
     _open_at_kill=$(journal_open)
+    _done_at_kill=$(journal_completed)
     if [ -n "$_grp" ]; then
         kill -9 "-$_pid" 2>/dev/null
     fi
@@ -1949,16 +1966,29 @@ crash_run() {
     # that were already open before this iteration started — so it would have reported a crash
     # it never caused. What this iteration is answerable for is what it added.
     _opened=$((_open_at_kill - _open_before))
-    if [ "$_opened" -lt 1 ]; then
+    _closed=$((_done_at_kill - _done_before))
+    if [ "$_when" = completed ]; then
+        # This iteration is answerable for a CLOSED operation, not an open one — a kill that
+        # leaves nothing open is exactly what it is aiming at. Measuring it by `_opened` would
+        # skip the run every time it worked.
+        if [ "$_closed" -lt 1 ]; then
+            soft "crash/$_tag: the kill closed no operation in the write-ahead log ($_done_before before, $_done_at_kill after), so this iteration measured nothing"
+            crash_wipe
+            return 0
+        fi
+        PASS=$((PASS + 1))
+        echo "  PASS  crash/$_tag: SIGKILL landed with $_closed operation(s) closed in the write-ahead log and $_opened still open, with $(crash_installed) of $CRASH_N canaries on disk"
+    elif [ "$_opened" -lt 1 ]; then
         # Honest, and deliberately NOT a pass. The kill landed outside a transaction, so
         # nothing here exercised recovery — scoring it green is the vacuous check IV.1 exists
         # to refuse.
         soft "crash/$_tag: the kill opened no new entry in the write-ahead log ($_open_before before, $_open_at_kill after), so this iteration measured no recovery"
         crash_wipe
         return 0
+    else
+        PASS=$((PASS + 1))
+        echo "  PASS  crash/$_tag: SIGKILL left $_opened newly-opened operation(s) in the write-ahead log ($_open_at_kill open in all), with $(crash_installed) of $CRASH_N canaries on disk"
     fi
-    PASS=$((PASS + 1))
-    echo "  PASS  crash/$_tag: SIGKILL left $_opened newly-opened operation(s) in the write-ahead log ($_open_at_kill open in all), with $(crash_installed) of $CRASH_N canaries on disk"
 
     _hout=$(lx heal 2>&1); _hrc=$?
 
@@ -1999,6 +2029,24 @@ crash_run() {
 
     # (4) The model still parses. A crash that wedges the config is E1's family one layer down.
     answers "crash/$_tag: the model still parses after the crash" lx check
+
+    # (4b) **Every canary the crash left on the machine is under management.** `S87`: the
+    #      ownership registry is written once, at the end of a run, and the log is written per
+    #      operation — so a kill in between leaves a package installed and owned by nobody.
+    #      Nothing downstream notices. The sync converges (the package IS installed), the
+    #      preview plans nothing (there is nothing to plan), and the damage only shows up when
+    #      somebody tries to remove it, three checks later, as a cleanup that reports success
+    #      and takes nothing away. Asked here, where the answer still names a cause.
+    _unowned=""
+    for _p in $CRASH_PKGS; do
+        on_path "$_p" || continue
+        lx why "$BACKEND:$_p" 2>&1 | grep -q "not under LiNix management" && _unowned="$_unowned $_p"
+    done
+    if [ -z "$_unowned" ]; then
+        PASS=$((PASS + 1)); echo "  PASS  crash/$_tag: every canary the crash left on the machine is under LiNix management"
+    else
+        hard "crash/$_tag: the crash left$_unowned installed and under nobody's management, so the command for removing them will report success and take nothing away"
+    fi
 
     # (5) The promise the whole loop exists to test: the next sync converges onto the
     #     declaration, whatever the crash left behind.
@@ -2207,6 +2255,9 @@ else
         crash_run open open
         # The manager is part-way through: at least one canary has reached the filesystem.
         crash_run midway 1
+        # And the one neither of those can reach: the log has CLOSED an operation, and the run
+        # has not yet written down what it owns (`S87`).
+        crash_run completed completed
         # And the hostile one — the manager dies too, mid-write. `setsid` is what puts LiNix
         # in a group of its own so the kill reaches the child; an image without it says so
         # rather than quietly running the gentler test twice.

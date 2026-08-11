@@ -691,7 +691,21 @@ impl<'a> SyncEngine<'a> {
 
         let session_active = state.active_session_id.is_some();
 
+        // **The nodes the engine reported an outright failure for.** Without `--keep-going` a
+        // failure aborts the whole transaction, so this set is empty and the loop below is
+        // unchanged; with it, the run continues and the graph carries nodes that did not
+        // happen. Recording those as managed is `S87`'s contradiction pointing the other way — the
+        // registry claiming a package the machine does not have — and the next time somebody
+        // deletes the declaration LiNix issues a removal for something that was never
+        // installed. A node the engine reported *nothing* for is deliberately NOT in here:
+        // silence is not evidence of failure, and treating it as one would drop the ownership
+        // record for a package that did install, which is the bug this whole change is about.
+        let mut failed_nodes: std::collections::HashSet<petgraph::graph::NodeIndex> =
+            std::collections::HashSet::new();
         for res in results {
+            if res.result.is_err() {
+                failed_nodes.insert(res.node_index);
+            }
             self.metrics.record_operation(
                 &res.package_name,
                 &res.backend_name,
@@ -705,6 +719,9 @@ impl<'a> SyncEngine<'a> {
         }
 
         for idx in changes.graph.node_indices() {
+            if failed_nodes.contains(&idx) {
+                continue;
+            }
             match &changes.graph[idx] {
                 GraphAction::Install(spec) => {
                     let source = spec.options.one("__source").unwrap_or("sync");
@@ -792,7 +809,124 @@ impl<'a> SyncEngine<'a> {
         }
     }
 
+    /// Take back the packages the log says this machine installed and the registry does not
+    /// carry — the disagreement a kill between an install and the end of a run leaves behind.
+    ///
+    /// Ownership is held in memory through a run and serialised once, at the end, and only
+    /// when the whole transaction succeeded; the journal is written per operation. So the two
+    /// files fall out of step in exactly one direction, and the result is a package that is
+    /// installed, `Completed` in the log, and owned by nobody. Nothing else puts it right:
+    /// the entry is terminal so `heal` has nothing to replay, the package is present so no
+    /// later sync reinstalls it, and drift removal only removes what LiNix manages — so the
+    /// one command for removing it plans no change and reports `already up to date` while the
+    /// binary stays on PATH.
+    ///
+    /// Measured on the `void` leg, 2026-08-11, killing a sync once the log recorded its first
+    /// `Completed`: 3 of 3 canaries on disk, registry empty, `heal` recovered only the one
+    /// operation still open, and `linix -y uninstall xbps:pv` then answered `already up to
+    /// date` at exit 0 over an installed `pv`. Killing the same sync a tenth of a second later
+    /// — after the final write — left all three removable, which is the whole of the
+    /// intermittency.
+    ///
+    /// **Only what is on the machine now.** The log records what was done, not what is; a
+    /// package removed by hand since is not this function's to claim back.
+    async fn reconcile_ownership(&self) -> Result<()> {
+        let unclaimed: Vec<PackageSpec> = {
+            let journal = self.journal.lock().await;
+            let state = self.state.lock().await;
+            journal
+                .completed_installs()
+                .into_iter()
+                .filter(|spec| !state.is_managed(&spec.backend, &spec.name))
+                .collect()
+        };
+        if unclaimed.is_empty() {
+            return Ok(());
+        }
+
+        // One listing per manager, not one query per package: this runs in front of every
+        // sync, and the common case is that every candidate below has been removed by hand
+        // and none of them is still here.
+        let mut by_backend: std::collections::BTreeMap<String, Vec<PackageSpec>> =
+            std::collections::BTreeMap::new();
+        for spec in unclaimed {
+            by_backend.entry(spec.backend.clone()).or_default().push(spec);
+        }
+
+        let mut reclaimed: Vec<PackageSpec> = Vec::new();
+        for (backend, specs) in by_backend {
+            let Some(b_cap) = self.registry.get(&backend) else {
+                continue;
+            };
+            let Some(queryable) = b_cap.as_queryable() else {
+                continue;
+            };
+            // A manager that cannot answer leaves its packages unclaimed. The opposite default
+            // — assume they are there — would have LiNix claim to manage packages that are
+            // not on the machine, and the next sync would issue a removal for each.
+            let Ok(installed) = queryable.list_installed().await else {
+                debug!(
+                    "`{}` could not be listed, so its unrecorded installs stay unclaimed.",
+                    backend
+                );
+                continue;
+            };
+            let present: std::collections::HashSet<String> =
+                installed.into_iter().map(|p| p.name).collect();
+            reclaimed.extend(specs.into_iter().filter(|s| present.contains(&s.name)));
+        }
+        if reclaimed.is_empty() {
+            return Ok(());
+        }
+
+        let names: Vec<String> = reclaimed.iter().map(|s| format!("{}:{}", s.backend, s.name)).collect();
+        if self.config.dry_run {
+            crate::would!(
+                "would record {} package(s) an interrupted run installed without recording: {}",
+                names.len(),
+                names.join(", ")
+            );
+            return Ok(());
+        }
+
+        {
+            let mut state = self.state.lock().await;
+            for spec in &reclaimed {
+                let source = spec.options.one("__source").unwrap_or("sync");
+                state.add(
+                    &spec.backend,
+                    &spec.name,
+                    None,
+                    spec.options.clone(),
+                    source,
+                    false,
+                );
+            }
+        }
+        // Written here and not left to the caller: `linix heal` is a whole command, and an
+        // ownership record that dies with the process leaves the package exactly as orphaned
+        // as it was.
+        let to_write = self.state.lock().await.snapshot()?;
+        tokio::task::spawn_blocking(move || to_write.write())
+            .await
+            .map_err(|e| {
+                Error::Other(format!("writing the registry after reconciling ownership: {}", e))
+            })??;
+        info!(
+            "recorded {} package(s) an interrupted run installed and did not record: {}. \
+             They are LiNix's again, so removing them works.",
+            names.len(),
+            names.join(", ")
+        );
+        Ok(())
+    }
+
     pub async fn heal(&self) -> Result<()> {
+        // Before the interrupted entries, and NOT gated on there being any. The packages this
+        // repairs are `Completed` in the log — nothing about them is interrupted, which is
+        // precisely why they stayed orphaned through every later sync.
+        self.reconcile_ownership().await?;
+
         // One package, one recovery. `record_start` mints a fresh id per attempt, so a
         // declaration that fails on every sync appends a *new* operation every time and none of
         // them is ever purged — one sweep's journal held **22 operations for a single

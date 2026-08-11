@@ -49,13 +49,19 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
     let engine = app.sync_engine().await;
     if app.journal.lock().await.needs_recovery() {
         warn!("the transaction journal records an interrupted run; healing first.");
-        // `heal` now fails when it could not close an entry, and `linix heal` exits non-zero
-        // for it. Here it must not: one package whose recovery cannot complete would block
-        // every other package on the machine from converging, and the entry stays recorded
-        // as interrupted either way, so the next run tries it again.
-        if let Err(e) = engine.heal().await {
-            warn!("{e} Continuing with the sync.");
-        }
+    }
+    // Called whether or not anything is interrupted. `needs_recovery` asks about entries that
+    // are still open, and the ownership records a killed run loses belong to entries the log
+    // already calls `Completed` — so gating the call on that predicate is what left an
+    // orphaned package orphaned through every subsequent sync. `heal` returns at once when
+    // there is nothing of either kind.
+    //
+    // `heal` now fails when it could not close an entry, and `linix heal` exits non-zero for
+    // it. Here it must not: one package whose recovery cannot complete would block every
+    // other package on the machine from converging, and the entry stays recorded as
+    // interrupted either way, so the next run tries it again.
+    if let Err(e) = engine.heal().await {
+        warn!("{e} Continuing with the sync.");
     }
 
     let mut resolver = crate::app::sync::resolver::StateResolver::new(

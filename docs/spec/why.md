@@ -6148,3 +6148,59 @@ it. The failure it exists to stop is not a large download; it is an unbounded on
 **Why the partial file is deleted.** A half-downloaded artifact left on disk is one a later run
 can find and treat as complete — and the checksum that would have caught that is exactly the one
 `@unverified` is allowed to switch off.
+
+**V.186 — Why the log owns what the registry forgot, and why a removal that removed nothing says so.**
+
+*(Rule in II.56. Ruling `Q54`. Bug `S87`.)*
+
+A cleanup uninstall reported success over a package it did not remove, on the `void` leg, after a
+deliberate SIGKILL. It did not reproduce, and the register's account of it was wrong in a way
+that made it look like a race: it read `SIGKILL left 2 newly-opened operation(s)` as "one
+finished normally", when that number is a delta, and it concluded that the packages `heal`
+recovered were the ones that would not uninstall. It is the other way round. The packages `heal`
+recovers come back **owned**, because recovery records ownership; the ones nobody owns are the
+ones `heal` never looks at, because their entries were already closed.
+
+Underneath there is no race at all, only two files with different durability. The log is
+appended to before and after each operation. The registry is one serialisation at the end of a
+run, and only if the whole transaction succeeded. Kill the process between an install's
+`Completed` line and that final write and the package is on the machine with nothing claiming
+it — permanently, because every mechanism that could fix it is looking somewhere else. The sync
+after the crash converges (the package is installed). The preview after that plans nothing
+(there is nothing to plan). `heal` has nothing to replay (the entry is terminal). The damage
+appears only when somebody tries to remove the package, which is the one moment ownership is
+consulted, and the answer then is a command that reports success and takes nothing away.
+
+**Why the harness could not produce it.** Both crash iterations poll the filesystem — one kills
+as the log opens an entry, the other once a canary reaches disk. A canary reaches disk well
+before its entry closes, so both always killed too early: twelve iterations, zero occurrences.
+Polling the *log* for a newly closed operation hit it on the first attempt. That is why there is
+now a third iteration, and why it is measured by what the kill *closed* rather than what it left
+open — the state it aims at is one where nothing is open at all.
+
+**Why recovery, and not a durable write per install.** Writing the registry as each package
+lands would close the window at the cost of one serialisation of the whole file per package, on
+the hot path of every sync, for a failure that needs a kill inside a window of microseconds. The
+log already carries the fact durably; the registry is a materialised view of it. Replaying the
+log into the view is what a write-ahead log is for, it costs nothing when there is nothing to
+repair, and it also repairs the non-crash sibling — a transaction that fails after some installs
+succeeded never reaches the final write either.
+
+**Why a completed removal cancels an install.** The log keeps both for ever. A package LiNix
+installed, then removed, then that somebody installed again by hand is theirs, and a reader that
+saw only the install would take it back and remove it on the next sync. Ties cancel too: the
+entries are a map keyed by id, so two transitions recorded in the same second have no order
+between them, and the safe direction is to claim nothing.
+
+**Why `unmanage` had to be told.** The repair reads the log and the registry; `unmanage` writes
+the registry and the manifest. That leaves the log saying LiNix installed a package the user has
+explicitly asked it to forget — and the repair, reading exactly that, takes it back. The next sync
+then finds it declared nowhere and removes it. `unmanage` exists to prevent precisely that class
+of accident (deleting a manifest line means *uninstall this*, which is why forgetting is its own
+verb), so a repair that reintroduces it through a third file is the same bug wearing a different
+hat. Clearing the finished entries is the smallest fix that keeps all three records saying one
+thing; a "forgotten" list somewhere would have been a fourth record to keep in step.
+
+**Why `uninstall` fails rather than warns.** The failure this fixes is precisely that a script
+could not see it. `linix uninstall x && rm -rf ~/.config/x` proceeded on a package that was
+still installed. A warning on stderr under exit 0 is the same bug with more text.

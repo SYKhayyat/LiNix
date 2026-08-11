@@ -1,4 +1,4 @@
-# The decision register — all 188, one of them open
+# The decision register — all 189, one of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -17,7 +17,7 @@ not in this paragraph.
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **184** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **185** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -75,8 +75,8 @@ status loses that, so it is kept here:
 
 **Nothing is open.** `Q53` — what a version pin means on a manager that cannot express one — was
 raised, measured and ruled on 2026-08-10, and the two entries that had run ahead of a ruling were
-ruled the same day: `Q24`'s idle bound and `Y19`'s unreadable-parser failure. All 188 are accounted
-for: **184 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN** — and this line
+ruled the same day: `Q24`'s idle bound and `Y19`'s unreadable-parser failure. All 189 are accounted
+for: **185 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -239,7 +239,7 @@ there). It is when the question stopped being open, not when the code landed.
 | **U42** | Do the overlapping command clusters get consolidated? | 2026-07-27 |
 | **U43** | How much does an ordinary run say about itself? | 2026-07-27 |
 
-### Q — the production-readiness round and the grading rounds after it — 52
+### Q — the production-readiness round and the grading rounds after it — 53
 
 *Not a proposal part. These are the questions the readiness assessment forced — behaviour a
 user notices, or a published contract — raised because `CLAUDE.md` requires a ruling for them
@@ -339,6 +339,7 @@ II.19 and the reasons in V.115–V.118.*
 | **Q51** | Another package manager holding its own lock made LiNix fail in 3.5 seconds, with a sentence that was false in exactly that case. RULED: **wait for it.** | 2026-08-10 |
 | **Q52** | LiNix started processes it did not own — SIGKILL for a package manager mid-transaction, and seventeen sites that detached a child or parked a runtime worker. RULED: **every child has an owner, through one of three doors.** | 2026-08-10 |
 | **Q53** | What does `@version=` mean on a manager that cannot express one? `brew` builds a formula name that does not exist and the sync dies; ten other backends drop the pin and report success. — RULED: **record everywhere, replay only where it can be replayed.** A recorded version is never fed back as an install argument to a manager that cannot take one, so drift detection keeps working everywhere; a pin somebody *typed* that cannot be honoured is refused at plan time by name, and is fatal under `--locked`. `brew` stops inventing `name@version`. (II.53, V.183) | 2026-08-10 |
+| **Q54** | A removal that removed nothing reported success. `uninstall` deletes the declaration and lets the sync take the package away as drift — and drift removal only removes what LiNix manages, so a package on the machine that LiNix has no ownership record for plans no change, prints `already up to date` and exits 0 with the binary still on PATH (`S87`). — RULED (owner, 2026-08-11): **it should say it did not remove it and does not own it.** The command now fails, names the package, says LiNix has no record of installing it, and names `adopt` as the way to take ownership. Checked only for names the registry did not carry when the command started, so an ordinary uninstall pays for nothing. (II.56, V.186) | 2026-08-11 |
 | **Q48** | Every `link:` on Windows took the cross-drive COPY fallback, same drive or not: `is_same_drive` compared a verbatim prefix against a plain one — and the limitation it guarded does not exist, since a Windows symlink spans volumes. RULED: **a `link:` links; only a missing privilege gets a copy, and it says so.** | 2026-08-06 |
 | **Y11** | Two backends built install and remove argv by hand and lost the `--` terminator; forty backends could not clear a cache because no row could say how; one manager took two locks over one database. The argv table recorded all of it and checked none of it. RULED: **one path per backend, and a capability the machinery lacks is a field.** | 2026-08-06 |
 | **Y12** | `ChangePlanner::plan` took `Option<Scope>`, where `None` meant both "do not filter the desired set" and "reap every backend on the box"; five of eight callers passed it and four wanted only the first — the transient shell, whose desired set is its own requests, planned a removal for every other package on the machine. RULED: **a plan says what it is computed over, and the case that reaps cannot be written without the list that bounds it.** | 2026-08-06 |
@@ -7699,3 +7700,50 @@ could pin and simply were not built (`helm`, and the `name-version` forms of `pk
 `pkg_add`, `xbps`) are visible as a ratchet rather than invisible as a default. The registry walk
 cannot be the instrument — registration is `cfg!(target_os)`-shaped, which is exactly how `dnf`
 went unaudited in `S83`.
+
+---
+
+## Q54
+
+**Status: ANSWERED — raised and ruled 2026-08-11. `S87` is the bug; this was the choice.**
+
+**The question in plain words.** `linix uninstall xbps:pv` deleted the declaration, ran a sync,
+printed `already up to date`, exited 0 — and left `pv` on PATH. It was not a special case: it is
+what `uninstall` does whenever LiNix has no ownership record for the package it names.
+
+**Why the command can do nothing and still report success.** `uninstall` is not a separate
+removal path. It deletes the line and lets the ordinary sync take the package away as *drift*,
+which is V.34's whole point — one converge, not a second engine with the install half amputated.
+But drift is defined as *a package LiNix manages that nothing declares any more*. A package on
+the machine that LiNix does not manage is not drift; it is the user's own software, and leaving
+it alone is correct. So when the ownership record is missing the plan is empty, and an empty plan
+is `already up to date`.
+
+`absent:` is the one thing LiNix removes without owning (II.2, V.7) — "because you named it".
+`uninstall` names it just as plainly and did not get the same treatment.
+
+**How the ownership record goes missing.** `S87`: the log is written per operation and the
+registry once at the end of a run, so a run killed in between leaves the package installed,
+`Completed` in the log, and owned by nobody. That is the bug, and II.56's first half fixes it.
+This question is about the second half — what the command should say in every case where the
+ownership record is genuinely absent, including the ones no repair can reach (a log purged at
+seven days, a package installed by hand, a package the user told LiNix to forget).
+
+**RULED (owner, 2026-08-11), in the owner's words: "it should say it did not remove it and does
+not own it."** Rule in **II.56**, reason in **V.186**.
+
+- The command **fails** rather than warning. The failure this closes is precisely that a script
+  could not see it — `linix uninstall x && rm -rf ~/.config/x` proceeded over a package that was
+  still installed. A sentence on stderr under exit 0 is the same bug with more text.
+- It names the package, says LiNix has no record of installing it, and names `adopt` as the way
+  to take ownership — or the manager, for a user who wants it gone without LiNix involved.
+- The preview says the same thing, or the two halves of one command describe different machines.
+- **Asked only of names the registry did not carry when the command started**, so an ordinary
+  uninstall — the overwhelming majority — asks no manager anything. A bare name that any manager
+  already owns is settled from the registry alone, because `uninstall jq` means *the jq I have*.
+
+**What was deliberately not ruled here.** Making `uninstall` remove a package LiNix does not own,
+the way `absent:` does. That is a real option and a bigger one: it turns `uninstall` into a verb
+that can take away software LiNix never installed, which is a decision about blast radius rather
+than about honesty. The honest failure names `adopt`, which reaches the same end state through
+a step the user can see.

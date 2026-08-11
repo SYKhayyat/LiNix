@@ -433,6 +433,11 @@ pub async fn handle_uninstall(
     let layout = app.config.layout();
     let facts = crate::config::parser::HostFacts::current();
 
+    // Asked BEFORE the sync, because the sync is what empties the registry entry for
+    // everything it removes — afterwards every name here reads as unmanaged and the check
+    // below could not tell a package that went from one that was never LiNix's.
+    let unmanaged_before = unmanaged_targets(app, packages).await;
+
     let mut never_declared: Vec<&str> = Vec::new();
 
     for pkg in packages {
@@ -508,7 +513,121 @@ pub async fn handle_uninstall(
             }
         );
     }
+
+    // **Drift removal only removes what LiNix manages, so a name it does not manage plans
+    // nothing and the sync above reports `already up to date` over a package still on PATH.**
+    // The line was there and was deleted, so the check above says nothing about it, and the
+    // exit code says success. Measured on the `void` leg, 2026-08-11: a sync killed after the
+    // log recorded an install `Completed` but before the run wrote the registry left `pv`
+    // installed and owned by nobody, and `linix -y uninstall xbps:pv` answered `already up to
+    // date` at exit 0 three commands later.
+    //
+    // `heal` takes those packages back now (`reconcile_ownership`), which is where that bug
+    // is fixed. This is the other half, and it holds for every way a package can be on the
+    // machine without being LiNix's: say plainly that it is still installed and that LiNix
+    // has no record of installing it, rather than reporting a removal that did not happen.
+    let survivors = still_installed(app, &unmanaged_before).await;
+    if !survivors.is_empty() {
+        anyhow::bail!(
+            "nothing was uninstalled: {} still installed, and LiNix has no record of \
+             installing {}. Removing drift is what `sync` does, and a package LiNix did not \
+             install is not drift — it is yours. `linix adopt` takes ownership of what is \
+             already on this machine, and `uninstall` then removes it; or take it off with \
+             the manager directly.",
+            match survivors.as_slice() {
+                [one] => format!("`{}` is", one),
+                many => format!("`{}` are", many.join("`, `")),
+            },
+            match survivors.as_slice() {
+                [_] => "it",
+                _ => "them",
+            },
+        );
+    }
     Ok(())
+}
+
+/// The `(backend, name)` pairs among these arguments that the registry does not carry.
+///
+/// Read before a removal runs, never after: the removal is what drops a registry entry, so
+/// afterwards every name it succeeded on reads exactly like a name that was never LiNix's.
+///
+/// A bare name is expanded across the managers that could hold it, through the one parser for
+/// `backend:name` — a caller that split on `:` itself would take `github:owner/repo` apart in
+/// a way no other reader of that string does.
+async fn unmanaged_targets(app: &App, packages: &[String]) -> Vec<(String, String)> {
+    let state = app.state.lock().await;
+    let mut out: Vec<(String, String)> = Vec::new();
+    for pkg in packages {
+        let (scoped, name) =
+            crate::config::parser::split_removal_target(pkg, |b| app.registry.get(b).is_some());
+        match scoped {
+            Some(backend) => {
+                if !state.is_managed(&backend, &name) {
+                    out.push((backend, name));
+                }
+            }
+            // A bare name means *the one I have*, so one manager owning it is an answer and
+            // the question is settled without a subprocess. Only a name no manager owns at all
+            // is worth asking every manager about — and asking them is what the check below
+            // does, so widening here on an ordinary `linix uninstall jq` would turn one
+            // removal into a listing from every package manager on the box.
+            None => {
+                if !app
+                    .registry
+                    .available()
+                    .iter()
+                    .any(|b| state.is_managed(b.name(), &name))
+                {
+                    out.extend(
+                        app.registry
+                            .available()
+                            .iter()
+                            .map(|b| (b.name().to_string(), name.clone())),
+                    );
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Which of those are nevertheless on the machine — the packages a removal named, did not
+/// remove, and could not have removed.
+///
+/// One listing per manager and no more. The list is empty on every ordinary uninstall (the
+/// package being removed is one LiNix manages), so the common path pays for nothing.
+async fn still_installed(app: &App, targets: &[(String, String)]) -> Vec<String> {
+    if targets.is_empty() {
+        return Vec::new();
+    }
+    let mut survivors = Vec::new();
+    let mut consulted: std::collections::HashMap<String, std::collections::HashSet<String>> =
+        std::collections::HashMap::new();
+    for (backend, name) in targets {
+        if !consulted.contains_key(backend) {
+            let b_cap = app.registry.get(backend);
+            let listed = match b_cap.as_ref().and_then(|b| b.as_queryable()) {
+                Some(q) => q.list_installed().await.ok(),
+                None => None,
+            };
+            // A manager that cannot answer proves nothing, and an accusation from a failed
+            // query is worse than the silence this check exists to end.
+            let Some(listed) = listed else {
+                continue;
+            };
+            consulted.insert(
+                backend.clone(),
+                listed.into_iter().map(|p| p.name).collect(),
+            );
+        }
+        if consulted[backend].contains(name) {
+            survivors.push(format!("{}:{}", backend, name));
+        }
+    }
+    survivors.sort();
+    survivors.dedup();
+    survivors
 }
 
 /// What `uninstall` would do, without doing any of it.
@@ -563,6 +682,27 @@ async fn preview_uninstall(
             }
         );
         return Ok(());
+    }
+
+    // The same question the real run asks after its sync, asked here before anything is
+    // written — a preview that promises a removal the run then refuses is the two halves of
+    // this command describing different machines.
+    if temp.is_none() {
+        let survivors = still_installed(app, &unmanaged_targets(app, packages).await).await;
+        if !survivors.is_empty() {
+            crate::would_print!(
+                "would remove nothing from the machine: {} installed, and LiNix has no record \
+                 of installing {}. `linix adopt` takes ownership of what is already here.",
+                match survivors.as_slice() {
+                    [one] => format!("`{}` is", one),
+                    many => format!("`{}` are", many.join("`, `")),
+                },
+                match survivors.as_slice() {
+                    [_] => "it",
+                    _ => "them",
+                },
+            );
+        }
     }
 
     crate::would_print!("would make {} change(s):", planned.len());
