@@ -403,6 +403,7 @@ pub async fn handle_uninstall(
     packages: &[String],
     out: Output,
     temp: Option<&Option<String>>,
+    absent: bool,
 ) -> Result<()> {
     // Q9: `uninstall nosuchbackend:foo` warned that it "is not declared in any active file" —
     // true, and it names the wrong thing. The manager is what does not exist, and the message
@@ -426,7 +427,11 @@ pub async fn handle_uninstall(
     // in a preview the line is still in them, so a sync-shaped report says "remove 0" about
     // the very package the command names.
     if app.config.dry_run {
-        return preview_uninstall(app, packages, out, temp).await;
+        return preview_uninstall(app, packages, out, temp, absent).await;
+    }
+
+    if absent {
+        return uninstall_as_absent(app, packages, out).await;
     }
 
     let vocab = app.vocabulary().await?;
@@ -532,8 +537,9 @@ pub async fn handle_uninstall(
             "nothing was uninstalled: {} still installed, and LiNix has no record of \
              installing {}. Removing drift is what `sync` does, and a package LiNix did not \
              install is not drift — it is yours. `linix adopt` takes ownership of what is \
-             already on this machine, and `uninstall` then removes it; or take it off with \
-             the manager directly.",
+             already on this machine, and `uninstall` then removes it; `--absent` removes it \
+             without taking ownership first, and keeps it off; or take it off with the \
+             manager directly.",
             match survivors.as_slice() {
                 [one] => format!("`{}` is", one),
                 many => format!("`{}` are", many.join("`, `")),
@@ -545,6 +551,106 @@ pub async fn handle_uninstall(
         );
     }
     Ok(())
+}
+
+/// `uninstall PKG… --absent` — remove it whether or not LiNix installed it, and keep it off.
+///
+/// Not a second removal engine. `absent:` is already the one declaration that reaches outside
+/// what LiNix manages (II.2, V.7), so this writes that line and lets the ordinary converge do
+/// the work — the same guard, the same plan, the same counts. The line staying is the point:
+/// ownership is what an unowned removal has no record of, and a declaration is a record.
+///
+/// No inactive-module warning here, unlike a plain uninstall. That warning exists because a
+/// line in a module you forgot brings the package back on the next profile switch; an
+/// `absent:` line beats the module that wants it (II.7 rule 6), so it does not.
+async fn uninstall_as_absent(app: &App, packages: &[String], out: Output) -> Result<()> {
+    let targets = absent_targets(app, packages).await?;
+
+    // The declaration goes first, and the module line goes with it. A package both declared
+    // and declared absent is a contradiction the reader resolves on every sync, and `--absent`
+    // is the case where the user has said which way it should come out.
+    for pkg in packages {
+        app.undeclare(pkg).await?;
+    }
+    for (backend, name) in &targets {
+        app.declare(
+            &format!("absent:{}:{}", backend, name),
+            None,
+            crate::model::Landing::Imperative,
+        )
+        .await?;
+    }
+
+    handle_sync(app, SyncMode::default(), out).await?;
+
+    // The plain path asks this of names the registry did not carry, because those are the ones
+    // it could not remove. Here it is asked of every target: `--absent` claims to remove them
+    // all, so any survivor is a failed removal rather than a refused one, and the advice that
+    // fits a refusal — adopt it, or use the manager — would be the wrong answer to it.
+    let survivors = still_installed(app, &targets).await;
+    if !survivors.is_empty() {
+        anyhow::bail!(
+            "declared absent, and still installed: {}. The `absent:` line is written, so the \
+             next `linix sync` tries the removal again and reports why it failed.",
+            survivors.join("`, `")
+        );
+    }
+    Ok(())
+}
+
+/// Which `(backend, name)` an `--absent` uninstall declares.
+///
+/// A scoped argument answers itself. A bare name is resolved by asking the managers which of
+/// them holds it — `--absent` is aimed at software that is on this machine, so resolving it
+/// the way `install` does would name a manager that *could* supply the package rather than
+/// the one that has it. Every holder is named, because `uninstall jq` means the jq I have.
+async fn absent_targets(app: &App, packages: &[String]) -> Result<Vec<(String, String)>> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut listings: std::collections::HashMap<String, std::collections::HashSet<String>> =
+        std::collections::HashMap::new();
+
+    for pkg in packages {
+        let (scoped, name) =
+            crate::config::parser::split_removal_target(pkg, |b| app.registry.get(b).is_some());
+        if let Some(backend) = scoped {
+            out.push((backend, name));
+            continue;
+        }
+
+        let mut holders: Vec<String> = Vec::new();
+        for b in app.registry.available() {
+            let backend = b.name().to_string();
+            if !listings.contains_key(&backend) {
+                // A manager that cannot be asked contributes no holders. Assuming it holds the
+                // package would write an `absent:` line naming a manager that never had it,
+                // and that line outlives the run that guessed.
+                let b_cap = app.registry.get(&backend);
+                let listed = match b_cap.as_ref().and_then(|b| b.as_queryable()) {
+                    Some(q) => q.list_installed().await.ok(),
+                    None => None,
+                };
+                let Some(listed) = listed else {
+                    continue;
+                };
+                listings.insert(backend.clone(), listed.into_iter().map(|p| p.name).collect());
+            }
+            if listings[&backend].contains(&name) {
+                holders.push(backend);
+            }
+        }
+
+        if holders.is_empty() {
+            anyhow::bail!(
+                "`{}` is not installed under any manager LiNix can ask, so there is nothing \
+                 to declare absent. Name the manager — `linix uninstall <backend>:{} \
+                 --absent` — to write the line anyway.",
+                name,
+                name
+            );
+        }
+        out.extend(holders.into_iter().map(|b| (b, name.clone())));
+    }
+    Ok(out)
 }
 
 /// The `(backend, name)` pairs among these arguments that the registry does not carry.
@@ -640,8 +746,18 @@ async fn preview_uninstall(
     packages: &[String],
     out: Output,
     temp: Option<&Option<String>>,
+    absent: bool,
 ) -> Result<()> {
     let mut planned = Vec::new();
+
+    // Resolved before the loop below, so a bare name that no manager holds fails the preview
+    // exactly as it fails the run — a preview that plans a line the run refuses to write is
+    // the two halves of this command describing different machines.
+    let absent_lines = if absent {
+        absent_targets(app, packages).await?
+    } else {
+        Vec::new()
+    };
 
     for pkg in packages {
         if let Some(Some(dur)) = temp {
@@ -668,6 +784,14 @@ async fn preview_uninstall(
         }
     }
 
+    for (backend, name) in &absent_lines {
+        planned.push(serde_json::json!({
+            "action": "declare-absent",
+            "package": format!("{}:{}", backend, name),
+            "line": format!("absent:{}:{}", backend, name),
+        }));
+    }
+
     if out.is_json() {
         println!("{}", serde_json::to_string_pretty(&planned)?);
         return Ok(());
@@ -687,12 +811,15 @@ async fn preview_uninstall(
     // The same question the real run asks after its sync, asked here before anything is
     // written — a preview that promises a removal the run then refuses is the two halves of
     // this command describing different machines.
-    if temp.is_none() {
+    // Not asked under `--absent`: that flag's whole business is removing what LiNix has no
+    // record of installing, so the answer is never "would remove nothing".
+    if temp.is_none() && !absent {
         let survivors = still_installed(app, &unmanaged_targets(app, packages).await).await;
         if !survivors.is_empty() {
             crate::would_print!(
                 "would remove nothing from the machine: {} installed, and LiNix has no record \
-                 of installing {}. `linix adopt` takes ownership of what is already here.",
+                 of installing {}. `linix adopt` takes ownership of what is already here; \
+                 `--absent` removes it without taking ownership, and keeps it off.",
                 match survivors.as_slice() {
                     [one] => format!("`{}` is", one),
                     many => format!("`{}` are", many.join("`, `")),

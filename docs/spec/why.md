@@ -6204,3 +6204,29 @@ thing; a "forgotten" list somewhere would have been a fourth record to keep in s
 **Why `uninstall` fails rather than warns.** The failure this fixes is precisely that a script
 could not see it. `linix uninstall x && rm -rf ~/.config/x` proceeded on a package that was
 still installed. A warning on stderr under exit 0 is the same bug with more text.
+
+**Why `--absent` is a flag, and why it writes a declaration rather than removing directly.**
+The failure above is honest but it is not always what the user wants: a package LiNix does not
+own is one `adopt` away from removable, and requiring the two steps to remove software you can
+see on your own machine is ceremony. What made this worth a flag rather than a default is that
+the two cases are not the same size. Reporting honestly costs nothing if the reading is wrong.
+Removing by default would make `uninstall` a verb that takes away software LiNix never
+installed, and a flag is where a decision about blast radius belongs — it is typed, per run, by
+someone who meant it.
+
+It writes an `absent:` line because that line already exists and already means this: *remove
+this whether or not you manage it, because I named it* (V.7). A direct removal here would be a
+second removal path — one that skipped the guard, the plan and the counts that every other
+removal goes through, and that had to grow its own preview to say what it would do. The line
+also outlasts the run, which is the point rather than a side effect: ownership is the record an
+unowned removal has no equivalent of, and a declaration is a record. A package removed by
+`--absent` stays removed when a module elsewhere asks for it back, because II.7 rule 6 says the
+absent line wins — and that is why `--absent` prints no "still declared in an inactive module"
+warning, while a plain `uninstall` must.
+
+**Why the survivor check stays on that path, with different words.** `--absent` claims to
+remove every name it was given, so a package still installed afterwards is a removal that
+failed, not one that was refused — the guard declining a protected package reaches exit 0 with
+nothing removed, which is `S87` again in a new command. The advice has to differ from the plain
+path's: telling someone to `adopt` a package that just survived an explicit `absent:` line
+answers a question they did not ask.

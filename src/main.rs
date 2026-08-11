@@ -375,8 +375,18 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
             packages,
             json,
             temp,
+            absent,
             purge: _,
-        } => handle_uninstall(app, packages, Output::from_json_flag(*json), temp.as_ref()).await,
+        } => {
+            handle_uninstall(
+                app,
+                packages,
+                Output::from_json_flag(*json),
+                temp.as_ref(),
+                *absent,
+            )
+            .await
+        }
         Commands::Shell { packages } => handle_shell(app, packages).await,
         Commands::Module(args) => handle_module(app, &args.command).await,
         Commands::Schedule(args) => handle_schedule(app, &args.command).await,

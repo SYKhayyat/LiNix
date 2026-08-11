@@ -7742,8 +7742,29 @@ not own it."** Rule in **II.56**, reason in **V.186**.
   uninstall — the overwhelming majority — asks no manager anything. A bare name that any manager
   already owns is settled from the registry alone, because `uninstall jq` means *the jq I have*.
 
-**What was deliberately not ruled here.** Making `uninstall` remove a package LiNix does not own,
-the way `absent:` does. That is a real option and a bigger one: it turns `uninstall` into a verb
-that can take away software LiNix never installed, which is a decision about blast radius rather
-than about honesty. The honest failure names `adopt`, which reaches the same end state through
-a step the user can see.
+**The half left open, and its ruling.** Whether `uninstall` should remove a package LiNix does not
+own, the way `absent:` does. Raised unruled because it is a decision about blast radius rather
+than about honesty: it turns `uninstall` into a verb that can take away software LiNix never
+installed.
+
+**RULED (owner, 2026-08-11): behind a flag, and the flag writes an `absent:` line.**
+`linix uninstall PKG --absent` undeclares the package, declares it `absent:`, and lets the
+ordinary converge remove it — no ownership consulted, because `absent:` is already the one
+declaration that reaches outside what LiNix manages (II.2, V.7). Default `uninstall` is
+unchanged: it still fails, and now names `--absent` alongside `adopt` as the two ways past it.
+
+Settled with it, as implementation rather than rule:
+
+- **`--absent` conflicts with `--temp`.** One says bring it back, the other says keep it gone.
+- **A bare name resolves to the manager that holds it**, by listing — not the way `install`
+  resolves a bare name, which answers *who could supply this* and would write a permanent line
+  naming a manager that never had the package. Every holder is named, because `uninstall jq`
+  means the jq I have. A bare name no manager holds is refused, not guessed at.
+- **The declaration is dropped as well as added.** A package both declared and declared absent
+  is a config that argues with itself on every sync.
+- **The `S87` rule holds on this path too**: a survivor after the sync is reported, not reported
+  as success. The message differs, because a package that survived an `absent:` line is a failed
+  removal rather than a refused one, and "run `adopt`" is the wrong answer to it.
+- **No inactive-module warning**, unlike a plain uninstall: that warning exists because a line in
+  a module you forgot brings the package back, and an `absent:` line beats the module that wants
+  it (II.7 rule 6).

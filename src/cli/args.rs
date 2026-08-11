@@ -548,6 +548,12 @@ pub enum Commands {
         /// be attached with `=` so it is never confused with a package name.
         #[arg(long, value_name = "DURATION", num_args = 0..=1, require_equals = true)]
         temp: Option<Option<String>>,
+
+        /// Remove it even when LiNix has no record of installing it, by declaring it
+        /// `absent:` — the one declaration that reaches outside what LiNix manages.
+        /// The line stays, so the package stays gone.
+        #[arg(long, conflicts_with = "temp")]
+        absent: bool,
     },
 
     /// Manage source repositories (PPA, Taps, Buckets, etc.)

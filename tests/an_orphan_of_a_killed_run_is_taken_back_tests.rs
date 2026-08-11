@@ -280,6 +280,7 @@ async fn uninstalling_a_package_linix_does_not_own_says_so_instead_of_succeeding
         &["brew:orphan-pkg".to_string()],
         linix::core::Output::Human,
         None,
+        false,
     )
     .await
     .expect_err("uninstall reported success over a package it did not remove");
@@ -297,6 +298,146 @@ async fn uninstalling_a_package_linix_does_not_own_says_so_instead_of_succeeding
         said.contains("adopt"),
         "the failure says what is wrong and not what to do about it: {said}"
     );
+    assert!(
+        said.contains("--absent"),
+        "the failure names one way past it and not the other — a user who does not want to \
+         own the package first has no route out of this message: {said}"
+    );
+}
+
+/// The owner's ruling of 2026-08-11 on the half of `Q54` left open: a flag that removes what
+/// LiNix does not own, by writing the `absent:` declaration.
+///
+/// Three things at once, because they are one behaviour: the module line goes, an `absent:`
+/// line arrives, and the removal runs against a package no registry claims. The mock manager
+/// keeps reporting the package after removing it — a static listing is all it has — so the
+/// command ends by saying it is still installed. That is the `S87` rule holding on this path
+/// too, and it is asserted here rather than worked around.
+#[tokio::test]
+async fn absent_removes_a_package_linix_does_not_own_and_declares_it_gone() {
+    let kernel = TestKernel::new().await;
+    std::fs::write(kernel.tmp.path().join("profiles/Main"), "brew:orphan-pkg\n").unwrap();
+    brew_holds(&kernel, &["orphan-pkg"]);
+    kernel.mock_executor.set_response(
+        "brew uninstall -- orphan-pkg",
+        Ok(DryRunOutput::default().into()),
+    );
+    assert!(!manages(&kernel, "orphan-pkg").await);
+
+    let err = linix::verbs::packages::handle_uninstall(
+        &confirming(&kernel),
+        &["brew:orphan-pkg".to_string()],
+        linix::core::Output::Human,
+        None,
+        true,
+    )
+    .await
+    .expect_err("the mock manager never drops the package, so this cannot report success");
+
+    let said = err.to_string();
+    assert!(
+        said.contains("declared absent") && said.contains("still installed"),
+        "a removal that removed nothing reported something other than that: {said}"
+    );
+
+    let calls = kernel.mock_executor.get_calls().await;
+    assert!(
+        calls.iter().any(|c| c.contains("uninstall -- orphan-pkg")),
+        "`--absent` never reached the manager, so it removed nothing at all: {calls:?}"
+    );
+
+    let written = std::fs::read_to_string(kernel.tmp.path().join("modules/imperative.txt"))
+        .expect("`--absent` wrote no declaration");
+    assert!(
+        written.contains("absent:brew:orphan-pkg"),
+        "the package was removed and nothing says it should stay removed: {written}"
+    );
+    let profile = std::fs::read_to_string(kernel.tmp.path().join("profiles/Main")).unwrap();
+    assert!(
+        !profile.contains("brew:orphan-pkg"),
+        "the module line survived alongside the absent line, which is a config that argues \
+         with itself on every sync: {profile}"
+    );
+}
+
+/// A bare name is resolved by asking who *holds* it, not who could supply it. `install`
+/// resolves the other way, and borrowing that here would write an `absent:` line naming a
+/// manager that never had the package — a line that then outlives the run that guessed.
+#[tokio::test]
+async fn absent_names_the_manager_that_actually_holds_a_bare_name() {
+    let kernel = TestKernel::new().await;
+    brew_holds(&kernel, &["orphan-pkg"]);
+    kernel.mock_executor.set_response(
+        "brew uninstall -- orphan-pkg",
+        Ok(DryRunOutput::default().into()),
+    );
+
+    let _ = linix::verbs::packages::handle_uninstall(
+        &confirming(&kernel),
+        &["orphan-pkg".to_string()],
+        linix::core::Output::Human,
+        None,
+        true,
+    )
+    .await;
+
+    let written = std::fs::read_to_string(kernel.tmp.path().join("modules/imperative.txt"))
+        .expect("`--absent` wrote no declaration for a bare name");
+    assert!(
+        written.contains("absent:brew:orphan-pkg"),
+        "a bare name did not resolve to the manager holding it: {written}"
+    );
+}
+
+/// And a bare name nobody holds is refused, not guessed at. There is no manager to name, and
+/// picking one would write a permanent line about a package that manager never had.
+#[tokio::test]
+async fn absent_refuses_a_bare_name_no_manager_holds() {
+    let kernel = TestKernel::new().await;
+    brew_holds(&kernel, &[]);
+
+    let err = linix::verbs::packages::handle_uninstall(
+        &confirming(&kernel),
+        &["ghost-pkg".to_string()],
+        linix::core::Output::Human,
+        None,
+        true,
+    )
+    .await
+    .expect_err("`--absent` invented a manager for a package nothing holds");
+
+    let said = err.to_string();
+    assert!(
+        said.contains("nothing to declare absent"),
+        "the refusal does not say why it refused: {said}"
+    );
+    assert!(
+        said.contains("ghost-pkg"),
+        "the refusal does not name the package: {said}"
+    );
+    assert!(
+        !kernel.tmp.path().join("modules/imperative.txt").exists()
+            || !std::fs::read_to_string(kernel.tmp.path().join("modules/imperative.txt"))
+                .unwrap()
+                .contains("ghost-pkg"),
+        "the refusal still wrote the line it refused to write"
+    );
+}
+
+/// `--temp` says *bring it back*; `--absent` says *keep it gone*. Together they are two
+/// declarations about the same package pointing opposite ways, so the parser refuses the pair
+/// rather than letting whichever branch runs second decide.
+#[test]
+fn absent_and_temp_cannot_be_combined() {
+    use clap::Parser;
+    linix::cli::args::Cli::try_parse_from([
+        "linix",
+        "uninstall",
+        "brew:pkg",
+        "--absent",
+        "--temp=2h",
+    ])
+    .expect_err("a package cannot be scheduled to return and declared permanently gone");
 }
 
 /// And the ordinary removal still succeeds. The check above asks the manager one question and
@@ -321,6 +462,7 @@ async fn uninstalling_a_package_linix_owns_is_unaffected() {
         &["brew:owned-pkg".to_string()],
         linix::core::Output::Human,
         None,
+        false,
     )
     .await
     .expect("removing a package LiNix owns failed");
@@ -357,6 +499,7 @@ async fn a_bare_name_linix_owns_costs_no_listing_either() {
         &["owned-pkg".to_string()],
         linix::core::Output::Human,
         None,
+        false,
     )
     .await
     .expect("removing a package LiNix owns, named without its manager, failed");

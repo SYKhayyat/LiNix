@@ -3404,5 +3404,15 @@ is not a reason to lose the evidence that its install never completed.
 declaration and lets the sync take the package away as drift — and drift removal only removes
 what LiNix manages, so a name LiNix does not own plans no change. When the command ends with a
 package it named still installed, and LiNix has no record of installing it, it says exactly
-that, names `adopt`, and fails. The question is asked only of names the registry did not carry
-when the command started, so an ordinary uninstall costs nothing extra.
+that, names `adopt` and `--absent`, and fails. The question is asked only of names the registry
+did not carry when the command started, so an ordinary uninstall costs nothing extra.
+
+**Third: `--absent` removes what LiNix does not own, by declaring it.** `uninstall PKG --absent`
+undeclares the package, writes an `absent:` line, and lets the ordinary converge do the removal
+— the same guard, the same plan, the same counts, because `absent:` is already the declaration
+that reaches outside what LiNix manages (II.2). The line stays: ownership is the record an
+unowned removal lacks, and a declaration is a record. It conflicts with `--temp`, which says the
+opposite about the same package. A bare name resolves to the manager that *holds* it and is
+refused when no manager does — resolving it the way `install` does would write a permanent line
+naming a manager that never had the package. A survivor after the sync is still reported, since
+a package that outlived an `absent:` line is a failed removal, not a refused one.
