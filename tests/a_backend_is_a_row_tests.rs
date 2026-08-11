@@ -27,9 +27,9 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use linix::backends::capability;
-use linix::backends::onboarder::{builtin_rows, CustomBackendDef};
-use linix::parsers::named;
+use shall::backends::capability;
+use shall::backends::onboarder::{builtin_rows, CustomBackendDef};
+use shall::parsers::named;
 
 /// Far below twenty-three, and it is a floor on the *scan*, not a count of the backends: a
 /// parse that returned nothing would pass every assertion in this file.
@@ -129,7 +129,7 @@ fn a_row_that_can_search_names_a_search_reader() {
         silent.is_empty(),
         "these rows have `search_args` and a named `reads`, so their parser is a `NamedParser` \
          — and `NamedParser::new` substitutes a closure returning the empty vector when \
-         `searches` is absent. `linix search` on {silent:?} would answer \"no such package\" to \
+         `searches` is absent. `shall search` on {silent:?} would answer \"no such package\" to \
          every query, from a backend advertising `Searchable`. Name a reader in `searches`."
     );
 }
@@ -329,7 +329,7 @@ fn every_fixture_reads_the_way_its_row_says_it_does() {
     for def in &rows {
         if def.fixture.is_some() {
             checked += 1;
-            wrong.extend(linix::backends::onboarder::fixture_disagreements(def));
+            wrong.extend(shall::backends::onboarder::fixture_disagreements(def));
         }
     }
     // Content before the floor, deliberately. A run that found nine fixtures and a real
@@ -377,7 +377,7 @@ fn the_number_of_fixtures_nobody_captured_only_falls() {
 /// `AdapterRow::applies_here` — the same gate every other adapter table goes through.
 #[test]
 fn a_row_pinned_to_one_os_is_registered_on_that_os_alone() {
-    use linix::core::adapter::AdapterRow;
+    use shall::core::adapter::AdapterRow;
 
     let rows = rows();
     let pinned: Vec<&CustomBackendDef> = rows.iter().filter(|d| d.os.is_some()).collect();

@@ -128,7 +128,7 @@ impl GuardScope {
     ///   the same package cannot race in one graph. Its removal phase is the first half of a
     ///   reinstall of *declared* packages; leaving one of those removals in place is not
     ///   convergence, it is a machine missing software it still declares.
-    /// - `Remove` is a person typing `linix uninstall`. The removal was ordered by hand rather
+    /// - `Remove` is a person typing `shall uninstall`. The removal was ordered by hand rather
     ///   than derived from a manifest, so a transaction that failed around it should give the
     ///   package back.
     ///
@@ -187,7 +187,7 @@ pub enum Protection {
     Rule(String),
     /// The backend reports the OS itself treats this as essential.
     OsEssential(String),
-    /// The manager reports a name that cannot be written as a package line, so LiNix can
+    /// The manager reports a name that cannot be written as a package line, so Shall can
     /// never declare it — and what it cannot be asked to keep, it must not take away.
     Undeclarable,
     /// The name declares a resource, not a package: a `service:`, `link:` or `setting:`.
@@ -204,7 +204,7 @@ impl Protection {
                 format!("{} reports it as essential to the system", backend)
             }
             Self::Undeclarable => {
-                "its manager reports a name no line can hold, so LiNix cannot manage \
+                "its manager reports a name no line can hold, so Shall cannot manage \
                  it — and removing what you cannot declare is not something you asked for"
                     .to_string()
             }
@@ -224,7 +224,7 @@ impl Protection {
 /// apart, and an inspector that contradicts the guard is worse than none, because it is
 /// believed.
 ///
-/// `backend` is `None` when the caller does not know one — `linix protected jq`, where the user
+/// `backend` is `None` when the caller does not know one — `shall protected jq`, where the user
 /// named no manager. The config rules match on the name alone and are answered; the OS's
 /// essential list is keyed by `backend:name` and cannot be, so it is not consulted. **An unknown
 /// backend is this case, never the empty string**: `is_declarable("", "jq")` builds the line
@@ -240,7 +240,7 @@ pub fn protection_of(
     os_essential: &HashSet<String>,
 ) -> Option<Protection> {
     // Before the escape hatch, because neither of these is a policy: a name no line can hold
-    // cannot be declared, so LiNix never manages it and `unprotected_packages` has nothing
+    // cannot be declared, so Shall never manages it and `unprotected_packages` has nothing
     // to release. Saying yes here would let `purge-undeclared` remove programs that could
     // never have been adopted in the first place.
     //
@@ -374,16 +374,16 @@ impl GuardReport {
             ));
         }
 
-        // The advice has to be executable. `linix unmanage` takes a package line, so offering
+        // The advice has to be executable. `shall unmanage` takes a package line, so offering
         // it for a `link:` teardown names a command that cannot accept the thing it is about;
         // for an extra the equivalent act is putting the declaration back.
         match kind {
             RemovalKind::Package => out.push_str(
                 "\nThis usually means managed state has drifted from your manifests — run \
-                 `linix plan` and read it before proceeding.\n\n\
+                 `shall plan` and read it before proceeding.\n\n\
                  What to do:\n  \
-                 linix protected <pkg>          why a package is guarded\n  \
-                 linix unmanage <pkg>           stop managing it WITHOUT uninstalling it\n  \
+                 shall protected <pkg>          why a package is guarded\n  \
+                 shall unmanage <pkg>           stop managing it WITHOUT uninstalling it\n  \
                  <command> --allow-mass-removal carry out this removal anyway\n  \
                  [guard] unprotected_packages    exempt a package permanently (preferences.toml)",
             ),
@@ -392,7 +392,7 @@ impl GuardReport {
                  `setting:`, `shim:`, `schedule:` or `repo:` line that is no longer in any \
                  module. `sync` undoes what is no longer declared.\n\n\
                  What to do:\n  \
-                 linix plan                     see exactly what would be undone\n  \
+                 shall plan                     see exactly what would be undone\n  \
                  put the line back              if the deletion was not what you meant\n  \
                  <command> --allow-mass-removal carry out this teardown anyway\n  \
                  [guard] unprotected_packages    exempt one permanently (preferences.toml)",
@@ -404,7 +404,7 @@ impl GuardReport {
                  so `sync` closes them (`N1`). A machine you reach over the network is a \
                  machine this can cut you off from — read the list before you clear it.\n\n\
                  What to do:\n  \
-                 linix plan                     see exactly what would be closed\n  \
+                 shall plan                     see exactly what would be closed\n  \
                  firewall:<port>/<proto>        declare a port you meant to keep open\n  \
                  <command> --allow-mass-removal close this many anyway\n  \
                  [guard] unprotected_packages    exempt one permanently (preferences.toml)",
@@ -664,7 +664,7 @@ fn too_many_changes(config: &Config, reaping: &Reaping, adding: usize) -> Option
 ///
 /// A package contributes its name and nothing else. An extra whose identity is a path also
 /// contributes that path's final component, so `protected_packages = ["vimrc"]` protects
-/// `link:/home/u/.vimrc` — a user names the thing, not the absolute path LiNix happens to
+/// `link:/home/u/.vimrc` — a user names the thing, not the absolute path Shall happens to
 /// key it by, and a rule that only matched the full path would silently protect nothing.
 fn protected_names(kind: RemovalKind, name: &str) -> Vec<&str> {
     let mut names = vec![name];
@@ -912,7 +912,7 @@ async fn enforce_kind(
 /// It does **not** fire `on_guard_refusal`. Announcing a refusal is a side effect, and a side
 /// effect inside a decision function runs wherever the decision is evaluated — including in
 /// tests, which call this with a default `Config` whose `config_root()` is the developer's own
-/// `~/.config/linix`. That would have `cargo test` executing the developer's real hooks. The
+/// `~/.config/shall`. That would have `cargo test` executing the developer's real hooks. The
 /// event is fired once, where `Error::Refused` becomes an exit code (`finish`), which is the
 /// layer where effects belong.
 ///
@@ -1017,10 +1017,10 @@ pub async fn enforce_installs(
     refuse(format!(
         "{}: refusing this install.\n  \
          - it installs {} packages, over the limit of {} (config: max_installs)\n\n\
-         This usually means a manifest matched more than you meant — run `linix plan` and \
+         This usually means a manifest matched more than you meant — run `shall plan` and \
          read the counts before proceeding.\n\n\
          What to do:\n  \
-         linix plan                     see exactly what would be installed\n  \
+         shall plan                     see exactly what would be installed\n  \
          {} --allow-mass-install carry out this install anyway",
         scope.as_str(),
         count,
@@ -1033,7 +1033,7 @@ pub async fn enforce_installs(
 ///
 /// They answer to no ceiling of their own: `max_total_changes` is the only number that counts
 /// them, and nothing here can be `protected` (a thing that does not exist yet cannot be a thing
-/// you asked LiNix to keep). It exists so the total is a total. Before it, a sync could install
+/// you asked Shall to keep). It exists so the total is a total. Before it, a sync could install
 /// forty packages, write forty links and open forty ports under a `max_total_changes` of ten,
 /// because the only gates on the way counted removals.
 pub async fn enforce_additions(
@@ -1085,7 +1085,7 @@ fn enforce_total(
          removed, resources torn down or written, ports opened and closed. The per-kind limits \
          each passed; the total did not.\n\n\
          What to do:\n  \
-         linix plan                     see exactly what would change\n  \
+         shall plan                     see exactly what would change\n  \
          [guard] {}       raise or clear the total (preferences.toml)\n  \
          <command> --allow-mass-removal carry out this run anyway",
         scope.as_str(),
@@ -1167,7 +1167,7 @@ mod tests {
 
     #[test]
     fn a_name_no_line_can_hold_is_never_removed() {
-        // LiNix must not remove what it could never have been asked to keep: a name that
+        // Shall must not remove what it could never have been asked to keep: a name that
         // cannot be written down cannot be declared, so it is unmanaged forever and a standing
         // `purge-undeclared` candidate through no fault of its owner.
         //
@@ -1201,7 +1201,7 @@ mod tests {
         }
     }
 
-    /// `purge-undeclared` sweeps everything LiNix does not manage, and it builds its list from
+    /// `purge-undeclared` sweeps everything Shall does not manage, and it builds its list from
     /// `list_installed` — which for `service` is every running service. The only thing that
     /// ever stopped it was the declarability test asking a question about *package* lines and
     /// getting the right answer for the wrong reason. Correcting that sentence would have
@@ -1894,7 +1894,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_teardown_refusal_does_not_advise_a_command_that_cannot_take_it() {
-        // `linix unmanage` takes a package line. Offering it for a `link:` teardown names a
+        // `shall unmanage` takes a package line. Offering it for a `link:` teardown names a
         // command that cannot accept the thing the refusal is about.
         let reg = Arc::new(BackendRegistry::new());
         let cfg = config_with(1);
@@ -1909,8 +1909,8 @@ mod tests {
         .expect_err("two removals over a limit of one must be refused");
         let msg = err.to_string();
         assert!(msg.contains("managed resources"), "{}", msg);
-        assert!(!msg.contains("linix unmanage"), "{}", msg);
-        assert!(msg.contains("linix plan"), "{}", msg);
+        assert!(!msg.contains("shall unmanage"), "{}", msg);
+        assert!(msg.contains("shall plan"), "{}", msg);
     }
 
     #[test]

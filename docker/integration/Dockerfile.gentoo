@@ -1,4 +1,4 @@
-# LiNix integration image — Gentoo (Portage / emerge). Opt-in, SMOKE-ONLY.
+# Shall integration image — Gentoo (Portage / emerge). Opt-in, SMOKE-ONLY.
 #
 # emerge builds packages FROM SOURCE, so a real install-a-package lifecycle would take many
 # minutes to hours per run. Instead this image runs the harness in SMOKE_ONLY mode: discovery
@@ -6,12 +6,12 @@
 # checks. That verifies emerge is wired end to end (argv construction, planner, JSON) on a
 # real Portage system without paying a source build.
 #
-#   docker build -f docker/integration/Dockerfile.gentoo -t linix-it-gentoo .
-#   docker run --rm linix-it-gentoo            # SMOKE_ONLY=1 baked in; runs: emerge jq
+#   docker build -f docker/integration/Dockerfile.gentoo -t shall-it-gentoo .
+#   docker run --rm shall-it-gentoo            # SMOKE_ONLY=1 baked in; runs: emerge jq
 #
 # The binary is built on Ubuntu and copied in (both Ubuntu 24.04 and current Gentoo ship
 # glibc >= 2.39 and openssl 3, so the dynamic link resolves). If your Gentoo base is older,
-# build LiNix inside the runtime stage with rustup instead.
+# build Shall inside the runtime stage with rustup instead.
 FROM ubuntu:24.04 AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -21,15 +21,15 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --pr
 ENV PATH="/root/.cargo/bin:${PATH}"
 WORKDIR /src
 COPY . /src
-RUN cargo build --release && cp target/release/linix /usr/local/bin/linix && chmod 0755 /usr/local/bin/linix
+RUN cargo build --release && cp target/release/shall /usr/local/bin/shall && chmod 0755 /usr/local/bin/shall
 
 FROM gentoo/stage3:latest
-ENV LINIX_IT_IMAGE=gentoo
+ENV SHALL_IT_IMAGE=gentoo
 # SMOKE-ONLY: no source builds; plan/parse/read-only only.
 ENV SMOKE_ONLY=1
 # On PATH, as in every other image: a second way to find the binary is a second way
 # to get it wrong, and this one was wrong — the harness never read the env var it set.
-COPY --from=builder /usr/local/bin/linix /usr/local/bin/linix
+COPY --from=builder /usr/local/bin/shall /usr/local/bin/shall
 # run-in-container.sh is .dockerignored on purpose (it's bind-mounted at run time by run.sh,
 # so editing it never busts the build cache). Just create the mount-target dir; the runtime
 # `-v …/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro` provides the file.

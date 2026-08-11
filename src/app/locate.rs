@@ -1,6 +1,6 @@
-//! `linix path` and `linix edit` — finding your files.
+//! `shall path` and `shall edit` — finding your files.
 //!
-//! Without these, every user memorises `~/.config/linix` and every script hard-codes it,
+//! Without these, every user memorises `~/.config/shall` and every script hard-codes it,
 //! which is how a configurable path stops being configurable in practice.
 
 use crate::config::settings::{resolve_root, ResolvedRoot, RootSource, Settings};
@@ -13,7 +13,7 @@ pub fn locate(flag: Option<&Path>) -> Result<ResolvedRoot> {
     resolve_root(flag, &Settings::load()?)
 }
 
-/// Plain output is exactly one line — the directory — so `cd $(linix path)` works. Anything
+/// Plain output is exactly one line — the directory — so `cd $(shall path)` works. Anything
 /// explanatory goes behind `--explain`, on stdout only when asked for.
 pub fn render_path(resolved: &ResolvedRoot, explain: bool) -> String {
     let mut out = resolved.path.display().to_string();
@@ -21,10 +21,10 @@ pub fn render_path(resolved: &ResolvedRoot, explain: bool) -> String {
         out.push_str(&format!("\n\nset by: {}", resolved.source.describe()));
         out.push_str(&format!("\nsettings file: {}", Settings::path().display()));
         if resolved.source != RootSource::SettingsFile && !Settings::path().exists() {
-            out.push_str("\n  (no settings file yet — `linix path --set DIR` writes one)");
+            out.push_str("\n  (no settings file yet — `shall path --set DIR` writes one)");
         }
         if !resolved.path.exists() {
-            out.push_str("\n\nThis directory does not exist yet. `linix init` creates it.");
+            out.push_str("\n\nThis directory does not exist yet. `shall init` creates it.");
         }
     }
     out
@@ -34,16 +34,16 @@ pub fn render_path(resolved: &ResolvedRoot, explain: bool) -> String {
 ///
 /// The settings file, and whether it was written — a preview names it and leaves it alone.
 pub fn set_root(dir: &Path) -> Result<(PathBuf, bool)> {
-    let dir = crate::config::settings::absolute_or_refuse(dir.to_path_buf(), "`linix path --set`")?;
+    let dir = crate::config::settings::absolute_or_refuse(dir.to_path_buf(), "`shall path --set`")?;
     let mut settings = Settings::load()?;
     settings.config_root = Some(dir);
     let stored = settings.save()?;
     Ok((Settings::path(), stored))
 }
 
-/// A file the user named on `linix edit`, resolved inside the repo.
+/// A file the user named on `shall edit`, resolved inside the repo.
 ///
-/// Refuses anything that climbs out. `linix edit ../../.bashrc` would otherwise make this
+/// Refuses anything that climbs out. `shall edit ../../.bashrc` would otherwise make this
 /// command an arbitrary-file editor that happens to live under a package manager.
 pub fn resolve_target(root: &Path, file: Option<&str>) -> Result<PathBuf> {
     let Some(file) = file else {
@@ -56,7 +56,7 @@ pub fn resolve_target(root: &Path, file: Option<&str>) -> Result<PathBuf> {
     // still escapes the repo, so the textual check has to come with the type's own.
     if relative.is_absolute() || normalised.starts_with('/') || has_drive_prefix(&normalised) {
         return Err(Error::Validation(format!(
-            "`{}` is an absolute path. `linix edit` opens files inside your config repo; \
+            "`{}` is an absolute path. `shall edit` opens files inside your config repo; \
              name one relative to it, like `modules/dev.txt`.",
             file
         )));
@@ -64,7 +64,7 @@ pub fn resolve_target(root: &Path, file: Option<&str>) -> Result<PathBuf> {
     for part in relative.components() {
         if matches!(part, std::path::Component::ParentDir) {
             return Err(Error::Validation(format!(
-                "`{}` climbs out of your config repo. `linix edit` opens files inside it.",
+                "`{}` climbs out of your config repo. `shall edit` opens files inside it.",
                 file
             )));
         }
@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn plain_output_is_one_line_so_it_can_be_used_in_a_shell() {
         let resolved = ResolvedRoot {
-            path: PathBuf::from("/srv/linix"),
+            path: PathBuf::from("/srv/shall"),
             source: RootSource::Default,
         };
         assert_eq!(render_path(&resolved, false).lines().count(), 1);
@@ -197,11 +197,11 @@ mod tests {
     #[test]
     fn explain_names_the_source_that_won() {
         let resolved = ResolvedRoot {
-            path: PathBuf::from("/srv/linix"),
+            path: PathBuf::from("/srv/shall"),
             source: RootSource::Environment,
         };
         let out = render_path(&resolved, true);
-        assert!(out.contains("$LINIX_CONFIG_DIR"));
+        assert!(out.contains("$SHALL_CONFIG_DIR"));
     }
 
     #[test]

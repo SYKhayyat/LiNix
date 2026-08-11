@@ -2,20 +2,20 @@
 //!
 //! Principle I is "fail loud, never silent", and `install` obeys it perfectly:
 //!
-//!     $ linix install nosuchbackend:foo -y
-//!     Error: Configuration error: <argument>: `nosuchbackend` is not a backend LiNix uses
+//!     $ shall install nosuchbackend:foo -y
+//!     Error: Configuration error: <argument>: `nosuchbackend` is not a backend Shall uses
 //!       add `nosuchbackend` to your `priority` file, or check the spelling.
 //!     rc=1
 //!
 //! `list` is asked the same question and answers nothing at all:
 //!
-//!     $ linix list -b nosuchbackend ; echo $?
+//!     $ shall list -b nosuchbackend ; echo $?
 //!     0
-//!     $ linix list -b aptt ; echo $?          # a typo
+//!     $ shall list -b aptt ; echo $?          # a typo
 //!     0
-//!     $ linix list -b APT  ; echo $?          # wrong case
+//!     $ shall list -b APT  ; echo $?          # wrong case
 //!     0
-//!     $ linix list -b ''   ; echo $?          # empty
+//!     $ shall list -b ''   ; echo $?          # empty
 //!     0
 //!
 //! Zero rows, exit 0, no message. Which is byte-identical to what a real backend with nothing
@@ -23,7 +23,7 @@
 //! that the manager is empty.
 //!
 //! It also quietly disarms a check the readiness rubric asks for. "Every `[READY]` backend can
-//! answer `list`" is §8.1's A bar, and running `linix list -b <b>` over all 24 READY backends on
+//! answer `list`" is §8.1's A bar, and running `shall list -b <b>` over all 24 READY backends on
 //! this host returns rc=0 for every one — but 13 of them return zero rows, which this test shows
 //! is exactly what a name that does not exist returns. The assertion cannot distinguish a
 //! backend that answered from one that was never consulted. That is the same shape as the
@@ -35,10 +35,10 @@ use std::path::Path;
 use std::process::Command;
 
 fn run(dir: &Path, args: &[&str]) -> (String, i32) {
-    let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+    let out = Command::new(env!("CARGO_BIN_EXE_shall"))
         .args(args)
-        .env("LINIX_CONFIG_DIR", dir.join("config"))
-        .env("LINIX_DATA_DIR", dir.join("data"))
+        .env("SHALL_CONFIG_DIR", dir.join("config"))
+        .env("SHALL_DATA_DIR", dir.join("data"))
         .stdin(std::process::Stdio::null())
         .output()
         .expect("the binary should run");
@@ -65,7 +65,7 @@ fn fixture(name: &str) -> std::path::PathBuf {
 fn listing_a_backend_that_does_not_exist_says_so() {
     let dir = fixture("unknown-backend-list");
 
-    // The control: `install` is asked the same question and refuses loudly, so "LiNix cannot
+    // The control: `install` is asked the same question and refuses loudly, so "Shall cannot
     // tell" is not the explanation.
     let (ctl, ctl_rc) = run(&dir, &["install", "nosuchbackend:foo", "-y"]);
     assert_ne!(
@@ -122,7 +122,7 @@ fn every_verb_that_takes_a_backend_name_refuses_one_that_does_not_exist() {
             || out.to_lowercase().contains("check the spelling");
         if rc == 0 || !says_so {
             silent.push(format!(
-                "`linix {}` -> rc {rc}, output {:?}",
+                "`shall {}` -> rc {rc}, output {:?}",
                 argv.join(" "),
                 out.trim()
             ));
@@ -147,7 +147,7 @@ fn every_verb_that_takes_a_backend_name_refuses_one_that_does_not_exist() {
 fn a_real_backend_that_cannot_run_here_says_that_instead() {
     let dir = fixture("unknown-backend-absent");
 
-    // A backend registered on every platform LiNix builds for, and installed on very few
+    // A backend registered on every platform Shall builds for, and installed on very few
     // machines — so it is registered here and cannot run here. `apt` would NOT do: the
     // registry is platform-scoped, so on Windows `apt` is not registered at all and is a
     // genuine typo. That distinction is the finding, so the fixture has to respect it.
@@ -161,7 +161,7 @@ fn a_real_backend_that_cannot_run_here_says_that_instead() {
     );
     assert!(
         out.to_lowercase().contains("not installed on this machine"),
-        "`linix list -b {absent}` said nothing about why it had nothing to report. Silence \
+        "`shall list -b {absent}` said nothing about why it had nothing to report. Silence \
          here is indistinguishable from an empty manager, which is the whole finding.\n{out}"
     );
     assert!(

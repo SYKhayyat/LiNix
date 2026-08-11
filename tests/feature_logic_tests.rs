@@ -1,7 +1,7 @@
-use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope, Scope};
-use linix::app::sync::resolver::StateResolver;
-use linix::core::LockFile;
-use linix::core::{Error, PackageSpec};
+use shall::app::sync::planner::{ChangePlanner, HostBackends, PlanScope, Scope};
+use shall::app::sync::resolver::StateResolver;
+use shall::core::LockFile;
+use shall::core::{Error, PackageSpec};
 use std::collections::HashMap;
 use tokio::fs;
 
@@ -113,14 +113,14 @@ async fn vars_change_is_measured_against_the_committed_baseline() {
 
     assert_eq!(
         baseline["role"],
-        linix::model::vars::Value::Str("travel".into())
+        shall::model::vars::Value::Str("travel".into())
     );
     assert_eq!(
         now["role"],
-        linix::model::vars::Value::Str("desktop".into())
+        shall::model::vars::Value::Str("desktop".into())
     );
 
-    let changed = linix::model::vars::diff(&baseline, &now);
+    let changed = shall::model::vars::diff(&baseline, &now);
     assert_eq!(changed.len(), 1, "only role changed: {:?}", changed);
     assert_eq!(changed[0].0, "role");
 }
@@ -180,7 +180,7 @@ async fn test_sync_report_generation_schema_fidelity() {
             name: "ripgrep".into(),
             backend: "brew".into(),
             options: {
-                let mut o = linix::config::grammar::Options::default();
+                let mut o = shall::config::grammar::Options::default();
                 o.insert("__source".to_string(), "module:dev-tools");
                 o
             },
@@ -247,7 +247,7 @@ async fn test_scoped_planner_filtering_accuracy() {
                 name: "pkg-work".into(),
                 backend: "brew".into(),
                 options: {
-                    let mut o = linix::config::grammar::Options::default();
+                    let mut o = shall::config::grammar::Options::default();
                     o.insert("__scopes".to_string(), "module:dev");
                     o.insert("__scopes".to_string(), "profile:Work");
                     o
@@ -259,7 +259,7 @@ async fn test_scoped_planner_filtering_accuracy() {
                 name: "pkg-home".into(),
                 backend: "brew".into(),
                 options: {
-                    let mut o = linix::config::grammar::Options::default();
+                    let mut o = shall::config::grammar::Options::default();
                     o.insert("__scopes".to_string(), "module:media");
                     o.insert("__scopes".to_string(), "profile:Home");
                     o
@@ -354,17 +354,17 @@ async fn test_locked_mode_version_conflict_enforcement() {
 
 /// An undo that fails must not be forgotten. `reconcile` records what is declared now,
 /// so a key whose teardown failed used to vanish from `locks/extras.toml` after one warning —
-/// leaving a service or a timer in place that LiNix no longer knows it owns. It stays recorded
+/// leaving a service or a timer in place that Shall no longer knows it owns. It stays recorded
 /// until the undo succeeds.
 #[tokio::test]
 async fn a_failed_undo_stays_in_the_extras_ledger() {
     let kernel = TestKernel::new().await;
     let locks = kernel.app.config.config_root().join("locks");
-    let path = linix::core::ExtrasLedger::path_in(&locks);
+    let path = shall::core::ExtrasLedger::path_in(&locks);
 
     // `no-such-backend` cannot be resolved, so its teardown fails for a reason no host can
     // fix by luck. Nothing declares it, so it is drift the moment the ledger is read.
-    let mut ledger = linix::core::ExtrasLedger::new();
+    let mut ledger = shall::core::ExtrasLedger::new();
     ledger.record(
         ["repo:no-such-backend:ppa/example".to_string()]
             .into_iter()
@@ -372,15 +372,15 @@ async fn a_failed_undo_stays_in_the_extras_ledger() {
     );
     ledger.save(&path).unwrap();
 
-    let state = linix::model::DesiredState::default();
+    let state = shall::model::DesiredState::default();
     kernel
         .app
         .extras()
-        .reconcile(&state, linix::app::sync::guard::GuardScope::Sync)
+        .reconcile(&state, shall::app::sync::guard::GuardScope::Sync)
         .await
         .expect("a failed undo is reported, not fatal");
 
-    let after = linix::core::ExtrasLedger::load(&path).unwrap();
+    let after = shall::core::ExtrasLedger::load(&path).unwrap();
     assert!(
         after.applied().contains("repo:no-such-backend:ppa/example"),
         "the failed teardown was dropped from the ledger: {:?}",
@@ -394,7 +394,7 @@ async fn a_failed_undo_stays_in_the_extras_ledger() {
 async fn a_successful_undo_leaves_the_extras_ledger() {
     let kernel = TestKernel::new().await;
     let locks = kernel.app.config.config_root().join("locks");
-    let path = linix::core::ExtrasLedger::path_in(&locks);
+    let path = shall::core::ExtrasLedger::path_in(&locks);
 
     // A `shim:` nobody deployed: `remove_shim` finds nothing to delete and returns `Ok(())`,
     // which is a genuinely successful teardown on any host and needs no service manager.
@@ -404,19 +404,19 @@ async fn a_successful_undo_leaves_the_extras_ledger() {
     // there dropped the row from the ledger while the resource stayed on the machine (`S56`) —
     // so this test was pinning the bug as the expected behaviour, which is exactly the shape
     // `S16` records. An unreadable row is now kept, and the test needed a real success.
-    let mut ledger = linix::core::ExtrasLedger::new();
+    let mut ledger = shall::core::ExtrasLedger::new();
     ledger.record(["shim:no-such-shim".to_string()].into_iter().collect());
     ledger.save(&path).unwrap();
 
-    let state = linix::model::DesiredState::default();
+    let state = shall::model::DesiredState::default();
     kernel
         .app
         .extras()
-        .reconcile(&state, linix::app::sync::guard::GuardScope::Sync)
+        .reconcile(&state, shall::app::sync::guard::GuardScope::Sync)
         .await
         .unwrap();
 
-    let after = linix::core::ExtrasLedger::load(&path).unwrap();
+    let after = shall::core::ExtrasLedger::load(&path).unwrap();
     assert!(
         after.applied().is_empty(),
         "a successful teardown was left recorded: {:?}",

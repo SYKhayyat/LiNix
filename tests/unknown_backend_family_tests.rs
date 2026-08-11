@@ -10,7 +10,7 @@
 //! | `hold nosuchbackend:foo`       | `Held 1 package(s).`                            | 0    |
 //! | `unhold nosuchbackend:foo`     | `Released 1 hold(s).`                           | 0    |
 //! | `unmanage nosuchbackend:foo`   | `not managed and not declared — nothing to forget` | 0 |
-//! | `why nosuchbackend:foo`        | `not under LiNix management`                     | 0    |
+//! | `why nosuchbackend:foo`        | `not under Shall management`                     | 0    |
 //! | `upgrade nosuchbackend:foo`    | `not a managed package — skipping`               | 0    |
 //! | `rebuild nosuchbackend:foo`    | `skipping — not declared in any active module`    | 0    |
 //! | `unlock backends nosuchbackend:foo` | `was not frozen on this host`               | 0    |
@@ -30,7 +30,7 @@
 
 use std::collections::BTreeSet;
 
-/// A prefix no build of LiNix has a backend for.
+/// A prefix no build of Shall has a backend for.
 const UNKNOWN: &str = "nosuchbackend:foo";
 
 /// Subcommands whose positional argument is **not** a package spec, each with the vocabulary it
@@ -128,7 +128,7 @@ fn every_verb_taking_a_package_spec_refuses_an_unknown_backend() {
     // refusal was removed everywhere.
     let (control, code) = f.run(&["list", "-b", "nosuchbackend"]);
     assert_eq!(code, 1, "the control failed — `list -b` no longer refuses an unknown backend, so Q9 has regressed at its own reported instance:\n{control}");
-    assert!(control.contains("is not a backend LiNix uses"), "{control}");
+    assert!(control.contains("is not a backend Shall uses"), "{control}");
 
     let verbs = spec_taking_verbs(&f);
     assert!(
@@ -140,9 +140,9 @@ fn every_verb_taking_a_package_spec_refuses_an_unknown_backend() {
     let mut silent: Vec<String> = Vec::new();
     for verb in &verbs {
         let (out, code) = f.run(&[verb, UNKNOWN, "-y"]);
-        if !out.contains("is not a backend LiNix uses") {
+        if !out.contains("is not a backend Shall uses") {
             silent.push(format!(
-                "`linix {verb} {UNKNOWN}` → rc={code}, {}",
+                "`shall {verb} {UNKNOWN}` → rc={code}, {}",
                 out.lines().next().unwrap_or("(no output)").trim()
             ));
         }
@@ -216,16 +216,16 @@ fn a_real_backend_prefix_is_never_refused() {
     ];
     for verb in verbs {
         for arg in [
-            format!("{backend}:linix-probe-zzz"),
-            "linix-probe-zzz".into(),
+            format!("{backend}:shall-probe-zzz"),
+            "shall-probe-zzz".into(),
         ] {
             let mut argv: Vec<&str> = verb.to_vec();
             argv.push(&arg);
             argv.push("-y");
             let (out, _) = f.run(&argv);
             assert!(
-                !out.contains("is not a backend LiNix uses"),
-                "`linix {} {arg}` was refused, and `{backend}` is a backend this build \
+                !out.contains("is not a backend Shall uses"),
+                "`shall {} {arg}` was refused, and `{backend}` is a backend this build \
                  registers. The Q9 check has started rejecting real names:\n{out}",
                 verb.join(" ")
             );

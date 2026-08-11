@@ -1,9 +1,9 @@
-# The snapshot providers LiNix ships (U27, Option A — owner 2026-07-26). They are rows through the
+# The snapshot providers Shall ships (U27, Option A — owner 2026-07-26). They are rows through the
 # same loader a user's `adapters/snapshot.toml` goes through, so the mechanism is proven by the
 # providers that ship and cannot fork into a privileged path nobody tested (K17/U1, V.82). This
 # file is compiled into the binary (`include_str!`), so it is NOT read through the hook ledger the
 # user's file is — a first-party asset cannot be tampered with by a pulled config, and gating it
-# would leave a fresh machine with no safety net until `linix lock` ran.
+# would leave a fresh machine with no safety net until `shall lock` ran.
 #
 # `{source}` and `detect_path` for btrfs/zfs are placeholders here; the loader fills them from
 # `btrfs_path` / `zfs_dataset` (or the auto-detected zfs root) before the row is used.
@@ -11,7 +11,7 @@
 # lvm is deliberately NOT shipped as a built-in: it has no universal origin volume, so it is the
 # exemplar user row (see `docs` / the schema test) — `source = "vg0/root"` in your own file.
 
-# btrfs — LiNix names the snapshot (the id is a subvolume path leaf). Create-only: a live btrfs
+# btrfs — Shall names the snapshot (the id is a subvolume path leaf). Create-only: a live btrfs
 # rollback replaces the root subvolume, which cannot be done over a mounted `/` (V.60).
 [[snapshot]]
 name = "btrfs"
@@ -19,10 +19,10 @@ os = "linux"
 detect = "btrfs"
 detect_path = "__BTRFS_ROOT__"
 source = "__BTRFS_ROOT__"
-id_template = "linix_pre_{label}_{ts}"
+id_template = "shall_pre_{label}_{ts}"
 create = ["btrfs", "subvolume", "snapshot", "-r", "/", "{source}/{id}"]
 list = ["btrfs", "subvolume", "list", "/"]
-list_pattern = '(linix_pre_[^\s/]+)'
+list_pattern = '(shall_pre_[^\s/]+)'
 delete = ["btrfs", "subvolume", "delete", "{source}/{id}"]
 restore_how = "a btrfs rollback replaces the root subvolume, which cannot be done over a mounted `/`; boot from other media and swap the subvolume there. The snapshot is intact under the snapshot root."
 
@@ -42,7 +42,7 @@ restore = ["timeshift", "--restore", "--snapshot", "{id}", "--target-device", "/
 restores_running_system = true
 
 # apfs (macOS) — every Mac ships APFS; `tmutil localsnapshot` names it by date. Create-only: an
-# APFS restore needs a recovery reboot LiNix cannot drive on a running system (U29, V.60).
+# APFS restore needs a recovery reboot Shall cannot drive on a running system (U29, V.60).
 [[snapshot]]
 name = "apfs"
 os = "macos"
@@ -52,36 +52,36 @@ create_id_pattern = 'date: (\S+)'
 list = ["tmutil", "listlocalsnapshots", "/"]
 list_pattern = 'com\.apple\.TimeMachine\.(.+)\.local'
 delete = ["tmutil", "deletelocalsnapshots", "{id}"]
-restore_how = "an APFS snapshot is restored by rebooting into macOS Recovery and using Time Machine / `tmutil restore`; LiNix cannot do that over a running system. The snapshot is listed by `tmutil listlocalsnapshots /`."
+restore_how = "an APFS snapshot is restored by rebooting into macOS Recovery and using Time Machine / `tmutil restore`; Shall cannot do that over a running system. The snapshot is listed by `tmutil listlocalsnapshots /`."
 
 # windows — NOT argv: elevated PowerShell cmdlets. `powershell = true` runs each line via
 # `powershell -Command`, and `{id}` is substituted only after it parses as a u32 (V.82/SEC5), so
 # nothing but a number reaches the elevated shell. `{label}` is the fixed SnapshotLabel enum. The
-# list line prints `SequenceNumber|Description` per row so the `LiNix:` ownership marker survives.
+# list line prints `SequenceNumber|Description` per row so the `Shall:` ownership marker survives.
 [[snapshot]]
 name = "windows_restore"
 os = "windows"
 detect = "powershell"
 powershell = true
-id_template = "linix_{label}_{ts}"
-create = ["Checkpoint-Computer -Description 'LiNix: {label}' -RestorePointType 'APPLICATION_INSTALL'"]
+id_template = "shall_{label}_{ts}"
+create = ["Checkpoint-Computer -Description 'Shall: {label}' -RestorePointType 'APPLICATION_INSTALL'"]
 list = ['Get-ComputerRestorePoint | ForEach-Object { "$($_.SequenceNumber)|$($_.Description)" }']
 list_pattern = '^(\d+)\|(.*)$'
 delete = ['Get-WmiObject -Namespace root\default -Class SystemRestore | ForEach-Object { $_.DeleteStatus({id}) }']
 restore = ["Restore-Computer -RestorePoint {id} -Confirm:$false"]
 restores_running_system = true
 
-# zfs — LiNix names the snapshot (`dataset@linix_...`). Registers LAST among built-ins so a
+# zfs — Shall names the snapshot (`dataset@shall_...`). Registers LAST among built-ins so a
 # machine with both btrfs and zfs keeps btrfs as the default (registration order, U28). Live
 # restore via `zfs rollback`.
 [[snapshot]]
 name = "zfs"
 detect = "zfs"
 source = "__ZFS_DATASET__"
-id_template = "{source}@linix_{ts_}"
+id_template = "{source}@shall_{ts_}"
 create = ["zfs", "snapshot", "-r", "{id}"]
 list = ["zfs", "list", "-H", "-r", "-t", "snapshot", "-o", "name"]
-list_pattern = '(\S+@linix_\S+)'
+list_pattern = '(\S+@shall_\S+)'
 delete = ["zfs", "destroy", "-r", "{id}"]
 restore = ["zfs", "rollback", "-r", "{id}"]
 restores_running_system = true

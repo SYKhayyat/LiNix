@@ -10,30 +10,30 @@
 //! ## Measured end to end, on this machine, with a real backend
 //!
 //! ```text
-//! # 1. install it plain, so LiNix owns it
-//! $ echo 'npm:json'            > $LINIX_CONFIG_DIR/modules/starter.txt
-//! $ linix sync -y              Installs: 1   ✓ [npm] json (21216ms)
+//! # 1. install it plain, so Shall owns it
+//! $ echo 'npm:json'            > $SHALL_CONFIG_DIR/modules/starter.txt
+//! $ shall sync -y              Installs: 1   ✓ [npm] json (21216ms)
 //!
 //! # 2. ask for a shim — GRADER §3.5 step 2
-//! $ echo 'npm:json@shim=true'  > $LINIX_CONFIG_DIR/modules/starter.txt
-//! $ linix sync -y              already up to date
+//! $ echo 'npm:json@shim=true'  > $SHALL_CONFIG_DIR/modules/starter.txt
+//! $ shall sync -y              already up to date
 //! $ ls ~/.local/bin | grep json    (nothing)
 //!
 //! # 3. the control: the SAME option on a fresh install works
 //! $ npm uninstall -g json ; rm -f ~/.local/bin/json*
-//! $ echo 'npm:json@shim=true'  > $LINIX_CONFIG_DIR/modules/starter.txt
-//! $ linix sync -y              Installs: 1
+//! $ echo 'npm:json@shim=true'  > $SHALL_CONFIG_DIR/modules/starter.txt
+//! $ shall sync -y              Installs: 1
 //! $ ls ~/.local/bin | grep json    json.exe        <-- so the feature works, the EDIT does not
 //!
 //! # 4. withdraw it — GRADER §3.5 step 4
-//! $ echo 'npm:json'            > $LINIX_CONFIG_DIR/modules/starter.txt
-//! $ linix sync -y              already up to date
+//! $ echo 'npm:json'            > $SHALL_CONFIG_DIR/modules/starter.txt
+//! $ shall sync -y              already up to date
 //! $ ls ~/.local/bin | grep json    json.exe        <-- the shim survives the line that asked
 //! ```
 //!
 //! Step 4 is the one that matters most. A shim is a stand-in **on the user's `PATH`**. Once
 //! declared it could not be taken back declaratively: the manifest no longer mentioned it, `sync`
-//! reported nothing to do, and the executable stayed. That is unmanaged state LiNix claims to
+//! reported nothing to do, and the executable stayed. That is unmanaged state Shall claims to
 //! manage, and it is the shape `sync` exists to prevent.
 //!
 //! ## What was built, and why these tests changed shape
@@ -151,7 +151,7 @@ const DISPOSITION: &[(&str, Where, &str)] = &[
     (
         "sandbox",
         Where::Converges,
-        "the same stand-in, plus `linix run` confinement; desugared the same way",
+        "the same stand-in, plus `shall run` confinement; desugared the same way",
     ),
     (
         "requires",
@@ -407,9 +407,9 @@ fn setup(name: &str) -> Fixture {
     f
 }
 
-const CANARY: &str = "linix-shim-canary";
+const CANARY: &str = "shall-shim-canary";
 
-/// `linix eval` renders the resolved model as JSON, so the question is asked of the structure
+/// `shall eval` renders the resolved model as JSON, so the question is asked of the structure
 /// rather than of the word: an `extras` entry of kind `shim` naming the canary.
 ///
 /// The first draft asked whether the output contained "shim" and the name anywhere, and it
@@ -449,7 +449,7 @@ fn adding_the_option_declares_the_stand_in_and_withdrawing_it_takes_it_back() {
         out.contains(&format!("shim:{CANARY}")),
         "the line stopped asking for a stand-in and nothing plans to remove it. A shim is an \
          executable on the user's PATH: unremovable by editing the file that asked for it, it is \
-         unmanaged state LiNix claims to manage:\n{out}"
+         unmanaged state Shall claims to manage:\n{out}"
     );
 
     // And the control: with the option back, that teardown must NOT be planned — otherwise the
@@ -472,7 +472,7 @@ fn sandbox_carries_the_stand_in_too() {
     assert_eq!(code, 0, "`eval` failed:\n{out}");
     assert!(
         declares_a_shim(&out),
-        "`@sandbox=true` declared no stand-in; `linix run` confines the tool THROUGH the shim, \
+        "`@sandbox=true` declared no stand-in; `shall run` confines the tool THROUGH the shim, \
          so there is nothing to confine without one:\n{out}"
     );
 }
@@ -504,7 +504,7 @@ fn the_historical_options_are_deliberately_not_drift_checked() {
 ///
 /// **`@hold=true` was inert**, and the first fix was the same mistake one size smaller. It is in
 /// `PACKAGE_OPTION_KEYS`, `validate_package` refuses it beside `@version` as a contradiction, and
-/// II.2 documents it — and the only writer of the held set was the imperative `linix hold`, so a
+/// II.2 documents it — and the only writer of the held set was the imperative `shall hold`, so a
 /// manifest line carrying it parsed, validated, and did nothing whatsoever. Two readers were
 /// taught about the declaration and a *file-level* version of this test went green over four:
 ///
@@ -512,7 +512,7 @@ fn the_historical_options_are_deliberately_not_drift_checked() {
 ///   no grep for the ledger's readers and silently remediated a package the manifest had frozen;
 /// - the "holds are not enforced by a native whole-system upgrade" note counted the ledger, so
 ///   somebody whose holds were all declared was told nothing;
-/// - `linix hold` with no arguments — the command whose entire job is *tell me what is held* —
+/// - `shall hold` with no arguments — the command whose entire job is *tell me what is held* —
 ///   answered `No packages are held.` over a manifest holding three.
 ///
 /// The last two live in files that already mentioned `declares_hold`, which is exactly why a
@@ -572,7 +572,7 @@ fn nothing_outside_the_union_reads_the_hold_ledger() {
         "{} place(s) read the hold ledger directly:
   {}
 
-`linix hold` writes the ledger          and `@hold=true` on a manifest line writes nothing there, so a reader that sees only          the ledger upgrades a package the user froze. Ask `App::holds()`, which is the union          of the two.",
+`shall hold` writes the ledger          and `@hold=true` on a manifest line writes nothing there, so a reader that sees only          the ledger upgrades a package the user froze. Ask `App::holds()`, which is the union          of the two.",
         deaf.len(),
         deaf.join("
   ")

@@ -81,7 +81,7 @@ impl JournalAction {
 
     /// Whether re-running this action is a recovery.
     ///
-    /// A package: yes. Every manager LiNix drives reaches a state when told to, and reaching
+    /// A package: yes. Every manager Shall drives reaches a state when told to, and reaching
     /// it twice is reaching it once, so an interrupted install is finished by installing.
     ///
     /// A script: no. Replaying it would be recovery inventing a mutation rather than
@@ -118,7 +118,7 @@ impl JournalAction {
     }
 }
 
-/// The source of truth for the 'linix heal' command.
+/// The source of truth for the 'shall heal' command.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JournalEntry {
     pub id: String,
@@ -149,7 +149,7 @@ pub struct Journal {
 }
 
 impl Journal {
-    /// The WAL of an ordinary run: LiNix's data directory, wherever `LINIX_DATA_DIR` and the
+    /// The WAL of an ordinary run: Shall's data directory, wherever `SHALL_DATA_DIR` and the
     /// platform say that is.
     ///
     /// **The journal lives beside the registry**, and a run that places the registry itself —
@@ -229,7 +229,7 @@ impl Journal {
             warn!(
                 "the WAL at {:?} is corrupt — none of its {} line(s) could be read. {} \
                  Starting a fresh journal so commands still run; an operation interrupted \
-                 before this cannot be auto-recovered — re-run `linix sync` to reconcile.",
+                 before this cannot be auto-recovered — re-run `shall sync` to reconcile.",
                 self.path,
                 unreadable,
                 match (previewing, moved) {
@@ -251,7 +251,7 @@ impl Journal {
             warn!(
                 "{} line(s) of the WAL at {:?} could not be read and were skipped; {} entr(ies) \
                  were recovered. If an operation was interrupted it may not be auto-healable — \
-                 run `linix sync` to reconcile.",
+                 run `shall sync` to reconcile.",
                 unreadable,
                 self.path,
                 self.entries.len()

@@ -9,14 +9,14 @@ use std::path::{Path, PathBuf};
 /// Configuration for platform-specific sandboxing behaviors.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SandboxSettings {
-    /// On Linux, if true, LiNix will fail if 'bwrap' is missing.
+    /// On Linux, if true, Shall will fail if 'bwrap' is missing.
     #[serde(default = "default_false")]
     pub require_bwrap: bool,
 
     /// Optional path to a custom macOS sandbox (.sb) profile.
     pub macos_profile_template: Option<PathBuf>,
 
-    /// On Windows, if true, LiNix will fail if Windows Sandbox is unavailable.
+    /// On Windows, if true, Shall will fail if Windows Sandbox is unavailable.
     #[serde(default = "default_false")]
     pub windows_require_sandbox: bool,
 
@@ -189,7 +189,7 @@ pub struct ScheduleConfig {
     pub name: String,
     /// Cron expression (e.g., "0 2 * * *").
     pub cron: String,
-    /// The LiNix command to run.
+    /// The Shall command to run.
     pub command: String,
     /// Notification channel: "desktop", "email", or "none".
     pub notification: Option<String>,
@@ -230,7 +230,7 @@ pub struct Config {
     pub yes: bool,
 
     /// This run is an unattended `watch` tick, so nobody is present to answer a prompt (T4).
-    /// CLI/runtime only (`serde(skip)`): it is a property of *how LiNix was invoked*, not a
+    /// CLI/runtime only (`serde(skip)`): it is a property of *how Shall was invoked*, not a
     /// preference. `watch` sets it; every other command leaves it false. A touch-required
     /// `@decrypt` is skipped under it rather than hanging the whole reconcile.
     #[serde(skip)]
@@ -252,19 +252,19 @@ pub struct Config {
     #[serde(skip)]
     pub replace_existing: bool,
 
-    /// The root of your LiNix repo (II.1): the folder that holds `modules/`, `profiles/`,
-    /// `active`, `priority`, `locks/` and `preferences.toml`. LiNix's own data (the registry,
+    /// The root of your Shall repo (II.1): the folder that holds `modules/`, `profiles/`,
+    /// `active`, `priority`, `locks/` and `preferences.toml`. Shall's own data (the registry,
     /// snapshots) lives BESIDE it, never inside it — see [`safe_data_dir`].
     ///
     /// `#[serde(skip)]`: `preferences.toml` lives *inside* this directory, so a key here that
     /// moved it could only be read from the place it was moving away from. It is resolved
-    /// before this file is opened — `--config-dir`, `$LINIX_CONFIG_DIR`, the settings file,
+    /// before this file is opened — `--config-dir`, `$SHALL_CONFIG_DIR`, the settings file,
     /// the default — by [`crate::app::locate`].
     #[serde(skip, default = "default_config_root")]
     pub config_root: PathBuf,
 
-    /// Where LiNix's own data lives (II.1): the registry, snapshots, journal — BESIDE the repo,
-    /// never inside it. Derived from [`safe_data_dir`] by default (which honours `$LINIX_DATA_
+    /// Where Shall's own data lives (II.1): the registry, snapshots, journal — BESIDE the repo,
+    /// never inside it. Derived from [`safe_data_dir`] by default (which honours `$SHALL_DATA_
     /// DIR`), but a stored field so a test harness can inject an isolated root ONCE, structurally,
     /// instead of every test remembering to set an env var (S11). `#[serde(skip)]`: it is not a
     /// config-file knob, only a runtime/derived path.
@@ -278,11 +278,11 @@ pub struct Config {
     #[serde(default)]
     pub hooks: HashMap<String, HashMap<String, String>>,
 
-    /// This machine's hooks on LiNix's own events (XIII.13, U15): `[events] on_drift = "..."`.
+    /// This machine's hooks on Shall's own events (XIII.13, U15): `[events] on_drift = "..."`.
     ///
     /// **A separate table from `[hooks]` on purpose.** `[hooks]` is the package-lifecycle table
     /// (`before_install`, `after_install`, …), run by the embedded Lua/Rhai interpreter. These
-    /// are LiNix's own events (`after_sync`, `on_drift`, `on_guard_refusal`), run as scripts
+    /// are Shall's own events (`after_sync`, `on_drift`, `on_guard_refusal`), run as scripts
     /// with the event on stdin as JSON. They overlapped on `after_sync` when both read
     /// `[hooks]` — a hook there fired twice, once each way — so the event table has its own
     /// name and the two can never collide. The repo half lives in the `hooks/` directory.
@@ -298,13 +298,13 @@ pub struct Config {
     #[serde(default)]
     pub health: Vec<String>,
 
-    /// How long to retain each of LiNix's histories —
+    /// How long to retain each of Shall's histories —
     /// generations, and filesystem snapshots — each configured independently. See
     /// [`crate::core::RetentionConfig`]. Empty/zero policies keep everything (default).
     #[serde(default)]
     pub retention: crate::core::RetentionConfig,
 
-    /// Default SSH destinations for `linix fleet` when none are given on the command line.
+    /// Default SSH destinations for `shall fleet` when none are given on the command line.
     #[serde(default)]
     pub fleet_hosts: Vec<String>,
 
@@ -318,16 +318,16 @@ pub struct Config {
     #[serde(default)]
     pub quiet: bool,
 
-    /// How many **processes** LiNix runs at once. Defaults to the core count, which is the
+    /// How many **processes** Shall runs at once. Defaults to the core count, which is the
     /// right shape for work that ends up in a CPU or a package manager's own subprocess.
     #[serde(default = "default_max_parallel")]
     pub max_parallel: usize,
 
-    /// How many **network** requests LiNix has in flight at once — registry searches, the
+    /// How many **network** requests Shall has in flight at once — registry searches, the
     /// priority chain's remote lookups, advisory fetches, SSH to a fleet.
     ///
     /// A separate number from `max_parallel` because nothing about waiting on a socket wants
-    /// to be bounded by how many cores the machine has. On a 4-core laptop `linix search`
+    /// to be bounded by how many cores the machine has. On a 4-core laptop `shall search`
     /// used to run its ~22 registry queries in six sequential waves, for no reason but that
     /// the laptop has four cores; the queries are not competing for anything the laptop owns.
     #[serde(default = "default_network_parallel")]
@@ -336,17 +336,17 @@ pub struct Config {
     /// How long a manager's installed listing may be reused **across** runs, in seconds.
     /// `0` — the default — means never: every run asks every manager afresh.
     ///
-    /// LiNix's whole runtime is waiting on other people's processes, and the same question is
+    /// Shall's whole runtime is waiting on other people's processes, and the same question is
     /// asked on every invocation: 19.5 s of manager work, overlapped into ~3.2 s, to answer
     /// "what is installed" for a machine that usually has not changed since the last command.
     /// A cache is the only remaining way to make that faster, because the alternative — asking
     /// them concurrently — is already done.
     ///
-    /// **It is off by default, and that is not timidity.** A stale listing makes LiNix wrong
+    /// **It is off by default, and that is not timidity.** A stale listing makes Shall wrong
     /// about the machine, and being wrong about the machine is how a declarative tool removes
     /// something it should not have. A package installed by hand with `winget install` is
-    /// invisible until the entry expires. LiNix drops the cache itself whenever it mutates
-    /// anything, so it can only go stale behind LiNix's back — which is exactly the case the
+    /// invisible until the entry expires. Shall drops the cache itself whenever it mutates
+    /// anything, so it can only go stale behind Shall's back — which is exactly the case the
     /// user is opting into when they set this.
     #[serde(default = "default_installed_cache_secs")]
     pub installed_cache_secs: u64,
@@ -355,7 +355,7 @@ pub struct Config {
     #[serde(default = "default_network_timeout_secs")]
     pub network_timeout_secs: u64,
 
-    /// How long a spawned command may produce **no output at all** before LiNix kills it and
+    /// How long a spawned command may produce **no output at all** before Shall kills it and
     /// says so. `0` removes the bound. This is not a cap on how long a command may run — a
     /// build that prints for an hour is never touched — it is a cap on silence.
     #[serde(default = "default_command_idle_timeout_secs")]
@@ -373,7 +373,7 @@ pub struct Config {
     #[serde(default = "default_query_idle_timeout_secs")]
     pub query_idle_timeout_secs: u64,
 
-    /// How long LiNix waits for a person to type a **sudo password** before giving up. `0`
+    /// How long Shall waits for a person to type a **sudo password** before giving up. `0`
     /// waits as long as sudo itself would.
     ///
     /// Its own number, not the command bound, because the two measure different things. A
@@ -410,16 +410,16 @@ pub struct Config {
     pub rate_limit_max_wait_secs: u64,
 
     /// How long to wait for **another package manager** that is holding its own lock. `0` does
-    /// not wait at all and fails the way LiNix used to.
+    /// not wait at all and fails the way Shall used to.
     ///
     /// Two package managers on one machine is not an error, it is a Tuesday: an `apt upgrade`
     /// in another terminal, an unattended-upgrade timer, a GUI updater. The manager says so
-    /// plainly (*"could not get lock"*, *"unable to lock database"*) and LiNix used to answer
+    /// plainly (*"could not get lock"*, *"unable to lock database"*) and Shall used to answer
     /// with four retries over three and a half seconds and the sentence *"this is not the
     /// transient failure its output looks like"* — which was false in precisely the case that
     /// printed it.
     ///
-    /// Five minutes because that is sized for the holder, not for LiNix: a `dnf upgrade` of a
+    /// Five minutes because that is sized for the holder, not for Shall: a `dnf upgrade` of a
     /// hundred packages legitimately runs that long, and a wait that expires before the ordinary
     /// case finishes is the same failure with more delay in front of it. The wait announces its
     /// holder as soon as it starts, so it is never silence — and it is only ever entered when a
@@ -434,8 +434,8 @@ pub struct Config {
     pub nix_gc_age: String,
 
     /// K4: when a package installed by a *download* backend (`github:`/`web:`/`appimage:`) is
-    /// removed, also delete any cached copy of the fetched file from the cache locations LiNix
-    /// knows. Off by default. **Download-backends only, and the key says so:** LiNix knows the
+    /// removed, also delete any cached copy of the fetched file from the cache locations Shall
+    /// knows. Off by default. **Download-backends only, and the key says so:** Shall knows the
     /// file only where it fetched it itself — on apt/dnf/pacman the manager owns its own cache
     /// and this setting does nothing, which is why it is scoped rather than pretending to be
     /// universal.
@@ -443,7 +443,7 @@ pub struct Config {
     pub clean_cache_on_remove: bool,
 
     /// K4: extra directories to search when `clean_cache_on_remove` cleans up — anywhere else a
-    /// machine keeps downloads. LiNix already searches the standard locations
+    /// machine keeps downloads. Shall already searches the standard locations
     /// (`$XDG_CACHE_HOME`, `~/.cache`, `/var/cache`); this points it at the rest.
     #[serde(default)]
     pub cache_dirs: Vec<std::path::PathBuf>,
@@ -492,7 +492,7 @@ pub struct Config {
     /// best-effort says so on the command line, where it is visible in the shell history that
     /// produced the machine.
     ///
-    /// This is not how a manager LiNix does not have is handled — that is not a failure at
+    /// This is not how a manager Shall does not have is handled — that is not a failure at
     /// all (II.7c) and needs no flag.
     #[serde(skip)]
     pub keep_going_this_run: bool,
@@ -522,7 +522,7 @@ pub struct Config {
     pub appimage_dir: PathBuf,
 
     /// Where shims are deployed. `~/.local/bin` on every platform, and **not a preference**:
-    /// it is skipped by serde so a repo cannot move LiNix's shims onto a machine's PATH by
+    /// it is skipped by serde so a repo cannot move Shall's shims onto a machine's PATH by
     /// declaration. It is a field rather than a constant so a sandbox can move it, which is
     /// what stops a test writing an executable into the developer's real `~/.local/bin`.
     #[serde(skip, default = "default_bin_dir")]
@@ -532,7 +532,7 @@ pub struct Config {
     pub sandbox: SandboxSettings,
 
     /// The `[vars]` table (Part IX): which variable provider is active. A repo may hold more
-    /// than one provider file (`vars`, `vars.py`, `vars.linix`); this picks the active one.
+    /// than one provider file (`vars`, `vars.py`, `vars.shall`); this picks the active one.
     #[serde(default)]
     pub vars: VarsSettings,
 }
@@ -546,7 +546,7 @@ pub struct Config {
 #[serde(deny_unknown_fields)]
 pub struct VarsSettings {
     /// The filename of the active provider, relative to the repo root — `vars`, `vars.py`,
-    /// `vars.linix`. Unset selects the sole provider file if there is exactly one, or none.
+    /// `vars.shall`. Unset selects the sole provider file if there is exactly one, or none.
     #[serde(default)]
     pub source: Option<String>,
 }
@@ -643,7 +643,7 @@ fn default_read_retry_attempts() -> u32 {
 fn default_nix_gc_age() -> String {
     "30d".to_string()
 }
-/// Five minutes, sized for the *other* manager's transaction rather than for LiNix's patience.
+/// Five minutes, sized for the *other* manager's transaction rather than for Shall's patience.
 /// The wait is only entered against a proved-live holder, so it ends when that holder does.
 ///
 /// Public because `TransactionConfig::patient()` needs the same number and a second literal is
@@ -673,10 +673,10 @@ fn default_max_port_closures() -> usize {
 }
 
 fn default_protected_packages() -> Vec<String> {
-    let mut packages = vec!["sudo".into(), "bash".into(), "linix".into()];
+    let mut packages = vec!["sudo".into(), "bash".into(), "shall".into()];
     #[cfg(target_os = "linux")]
     {
-        // These are packages whose removal breaks the machine (or LiNix's own ability to
+        // These are packages whose removal breaks the machine (or Shall's own ability to
         // run and repair it), and which a manifest is unlikely to ever declare. Prefix
         // entries (`libpam*`) are deliberate: the library families ship under versioned
         // names (libpam0g, libperl5.38t64) no fixed list could keep up with.
@@ -833,14 +833,14 @@ impl Config {
             }
             Err(e) => return Err(Error::Config(format!("Failed to read config file: {}", e))),
         };
-        // Named, because this refusal stops every command LiNix has and the bare TOML error
+        // Named, because this refusal stops every command Shall has and the bare TOML error
         // says only "line 17" — of which of several files, it does not say. A key deleted in
         // the rewrite (NO LEGACY) is still on disk in configs written by an older build, so
         // this is the first thing a returning user meets.
         let mut config: Self = toml::from_str(super::without_bom(&content)).map_err(|e| {
             Error::Config(format!(
                 "{} is not readable:\n{}\nDelete the line it names — the key no longer \
-                 exists, and LiNix refuses a setting it would otherwise silently ignore.",
+                 exists, and Shall refuses a setting it would otherwise silently ignore.",
                 path.display(),
                 e
             ))
@@ -902,10 +902,10 @@ impl Config {
         }
     }
 
-    /// LiNix's data root (II.1) — where the registry, snapshots and journal live, beside the
+    /// Shall's data root (II.1) — where the registry, snapshots and journal live, beside the
     /// repo. Same empty/relative guard as [`config_root`], falling back to [`safe_data_dir`].
-    /// One answer to "where is LiNix's data", whether it came from the platform dir,
-    /// `$LINIX_DATA_DIR`, or a test's injected temp dir (P4/S11).
+    /// One answer to "where is Shall's data", whether it came from the platform dir,
+    /// `$SHALL_DATA_DIR`, or a test's injected temp dir (P4/S11).
     pub fn data_root(&self) -> PathBuf {
         if self.data_root.as_os_str().is_empty() || !self.data_root.is_absolute() {
             return safe_data_dir();
@@ -913,10 +913,10 @@ impl Config {
         self.data_root.clone()
     }
 
-    /// This run's II.1 layout: your repo, and LiNix's data beside it but never inside it.
+    /// This run's II.1 layout: your repo, and Shall's data beside it but never inside it.
     ///
     /// Derived rather than stored so there is one answer to "where are the files", and it
-    /// is the same answer whether it came from `$LINIX_CONFIG_DIR`, the platform dir, or a
+    /// is the same answer whether it came from `$SHALL_CONFIG_DIR`, the platform dir, or a
     /// test's temporary directory (P4).
     pub fn layout(&self) -> Layout {
         Layout::new(self.config_root(), self.data_root())
@@ -1108,14 +1108,14 @@ mod tests {
         // `--config-dir DIR config init` wrote to the built-in location instead of DIR,
         // because the not-found path returned a bare default.
         let target = std::env::temp_dir()
-            .join("linix-absent-root")
+            .join("shall-absent-root")
             .join(PREFERENCES_FILE_NAME);
         let cfg = Config::from_file(&target).unwrap();
         assert_eq!(cfg.preferences_file, target);
     }
 
     #[test]
-    fn the_shipped_example_is_a_file_linix_would_accept() {
+    fn the_shipped_example_is_a_file_shall_would_accept() {
         // It documented eight keys that had been deleted from this struct. Every one was
         // silently ignored, so the example read as a working config and was not one.
         let example = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/preferences.toml");
@@ -1128,9 +1128,9 @@ mod tests {
     #[test]
     fn the_preferences_file_sits_inside_the_repo() {
         let sandbox = std::path::Path::new(if cfg!(windows) {
-            r"C:\linix-test-sandbox"
+            r"C:\shall-test-sandbox"
         } else {
-            "/tmp/linix-test-sandbox"
+            "/tmp/shall-test-sandbox"
         });
         let cfg = Config::sandboxed(sandbox);
         assert_eq!(cfg.preferences_file, cfg.layout().preferences_file());
@@ -1142,9 +1142,9 @@ mod tests {
         // forgets `data_root` -- the registry, journal and snapshots then land in the
         // developer's real state. Assert every path, not just the two obvious ones.
         let sandbox = std::path::Path::new(if cfg!(windows) {
-            r"C:\linix-test-sandbox"
+            r"C:\shall-test-sandbox"
         } else {
-            "/tmp/linix-test-sandbox"
+            "/tmp/shall-test-sandbox"
         });
         let cfg = Config::sandboxed(sandbox);
         for (label, path) in [

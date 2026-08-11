@@ -6,7 +6,7 @@
 //! swept across every config layer, self-critical about its own first cut. Its diagnosis names
 //! the whole chain:
 //!
-//! > *"Through LiNix that became `Ok("")` → **a parser finding nothing** → `list_installed`
+//! > *"Through Shall that became `Ok("")` → **a parser finding nothing** → `list_installed`
 //! > answering `Ok(vec![])`. Nothing in the chain believed anything had failed."*
 //!
 //! It fixed `run_output`, `info`, `list` and `hook-reconcile`. **The parser — the link it named
@@ -30,7 +30,7 @@
 //! at all**, in every layer that carries them, and that the type has not quietly grown a way back
 //! to conflating them.
 
-use linix::parsers::{self, common, dnf, ecosystem, language, windows, ParseResult, Unrecognised};
+use shall::parsers::{self, common, dnf, ecosystem, language, windows, ParseResult, Unrecognised};
 
 // -------------------------------------------------------------------------------------------
 // The distinction itself.
@@ -195,7 +195,7 @@ fn a_backend_with_no_reader_wired_is_not_an_empty_machine() {
 /// question cannot be asked"*.
 #[test]
 fn a_manager_with_no_listing_verb_says_that_rather_than_nothing() {
-    use linix::parsers::{CannotList, OutputParser};
+    use shall::parsers::{CannotList, OutputParser};
     let p = CannotList("stack");
     let e = p
         .parse_installed("anything at all")
@@ -212,7 +212,7 @@ fn a_manager_with_no_listing_verb_says_that_rather_than_nothing() {
 /// sixty parsers that call it.
 #[test]
 fn the_shared_judgement_is_the_rule_and_nothing_more() {
-    use linix::core::Package;
+    use shall::core::Package;
     let one = || vec![Package::new("jq", "test")];
 
     // Found something: always fine, whatever else was in the output.
@@ -286,7 +286,7 @@ fn a_failure_names_the_manager_and_the_bytes() {
 /// variant whose retry policy is right.
 #[test]
 fn the_failure_survives_the_crossing_into_the_programs_error_type() {
-    use linix::core::{Error, Retryability};
+    use shall::core::{Error, Retryability};
     let e: Error = Unrecognised {
         backend: "opam".into(),
         data_lines: 9,
@@ -310,7 +310,7 @@ fn the_failure_survives_the_crossing_into_the_programs_error_type() {
 /// direction of installing everything and removing nothing.
 #[test]
 fn only_the_installed_side_is_fallible_and_that_is_deliberate() {
-    use linix::core::Package;
+    use shall::core::Package;
     fn assert_is_vec(_: Vec<Package>) {}
     fn assert_is_result(_: ParseResult) {}
 

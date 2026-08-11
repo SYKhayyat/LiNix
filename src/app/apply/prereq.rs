@@ -2,7 +2,7 @@ use crate::core::Result;
 use crate::model::prereq::PrereqDef;
 use tracing::{info, warn};
 
-/// The setup steps LiNix ships with (Q10, Q11, Q13). Compiled in rather than read from the
+/// The setup steps Shall ships with (Q10, Q11, Q13). Compiled in rather than read from the
 /// repo, because a fresh machine has no `adapters/` file and `mix:` has to work on it.
 pub const BUILTIN: &str = include_str!("prereq_builtins.toml");
 
@@ -21,7 +21,7 @@ impl Prereqs<'_> {
     /// command that arrives with a pulled repo must be approved before it can be offered. The
     /// built-in file is not gated, for the reason `snapshot_builtins.toml` is not: it is a
     /// first-party compiled-in asset, and gating it would leave a fresh machine unable to
-    /// install through mix until `linix lock` had run.
+    /// install through mix until `shall lock` had run.
     pub fn rows(&self) -> Vec<PrereqDef> {
         let mut rows = Vec::new();
         let layout = self.config.layout();
@@ -55,7 +55,7 @@ impl Prereqs<'_> {
     ///
     /// **Ask, then do** (owner ruling, 2026-07-29). The three this ships with — Hex for `mix`,
     /// a plugin for `asdf`, a switch for `opam` — each made *every* install through that
-    /// manager fail with a message only the user could act on. LiNix knows the command, so it
+    /// manager fail with a message only the user could act on. Shall knows the command, so it
     /// offers to run it; it does not run it unasked, because `asdf plugin add` fetches a
     /// third-party repository whose scripts asdf then executes, and `opam switch create`
     /// builds a compiler and pins it for the account.
@@ -136,7 +136,7 @@ impl Prereqs<'_> {
         use std::io::IsTerminal;
 
         println!(
-            "\n`{}` cannot install anything here yet: it needs {}.\nLiNix can set that up with:\n\n    {}\n",
+            "\n`{}` cannot install anything here yet: it needs {}.\nShall can set that up with:\n\n    {}\n",
             manager,
             row.missing_line(name),
             row.command_line(name)
@@ -151,7 +151,7 @@ impl Prereqs<'_> {
             "Run that now?",
             crate::core::prompt::Unattended::Decline(
                 "Not asking in a non-interactive shell — run it yourself, or re-run with \
-                 `--yes` to have LiNix run it.",
+                 `--yes` to have Shall run it.",
             ),
         )
         .unwrap_or(false);
@@ -295,7 +295,7 @@ mod tests {
     }
 
     /// And without it. A test's stdin is not a terminal, so this is also the unattended path:
-    /// LiNix says what it would have asked and changes nothing.
+    /// Shall says what it would have asked and changes nothing.
     #[tokio::test]
     async fn nothing_is_set_up_without_being_asked() {
         let h = harness(&[("mix hex.info", false, "could not be found")]);

@@ -1,17 +1,17 @@
-//! GRADER round 4, 2026-07-30 — RED. `linix protected <bare name>` calls every unqualified name
+//! GRADER round 4, 2026-07-30 — RED. `shall protected <bare name>` calls every unqualified name
 //! protected, and gives the wrong reason for the names that really are.
 //!
 //! The command's own help documents the form: *"Check specific packages instead of listing the
 //! rules (`apt:python3` or `jq`)"*. Measured on Windows, default config, 7 rules in force:
 //!
-//!     $ linix protected jq
+//!     $ shall protected jq
 //!     PACKAGE      PROTECTED  REASON
 //!     jq           yes        its manager reports a name no package line can hold, …
 //!
-//!     $ linix protected sudo            # `sudo` IS in protected_packages
+//!     $ shall protected sudo            # `sudo` IS in protected_packages
 //!     sudo         yes        its manager reports a name no package line can hold, …
 //!
-//!     $ linix protected cargo:ripgrep
+//!     $ shall protected cargo:ripgrep
 //!     cargo:ripgrep  no       no rule matches
 //!
 //! Every bare name — `jq`, `ripgrep`, `python3`, `sudo`, the help's own example — comes back
@@ -69,7 +69,7 @@ impl Fixture {
 #[test]
 fn a_qualified_name_with_no_rule_is_not_protected() {
     let f = Fixture::new("grade3-protected-control");
-    let (yes, reason) = f.row("cargo:linix-probe-zzz");
+    let (yes, reason) = f.row("cargo:shall-probe-zzz");
     assert!(
         !yes,
         "the control failed: a qualified name matching no rule was called protected — {reason}"
@@ -79,11 +79,11 @@ fn a_qualified_name_with_no_rule_is_not_protected() {
 #[test]
 fn a_bare_name_matching_no_rule_is_not_protected() {
     let f = Fixture::new("grade3-protected-bare");
-    for name in ["jq", "ripgrep", "linix-probe-zzz"] {
+    for name in ["jq", "ripgrep", "shall-probe-zzz"] {
         let (yes, reason) = f.row(name);
         assert!(
             !yes,
-            "`linix protected {name}` says the guard protects it, because \
+            "`shall protected {name}` says the guard protects it, because \
              `protection_of` was handed an empty backend and `is_declarable(\"\", \"{name}\")` is \
              false. Reason given: {reason}\n\nThe enforcer, asked about the same package with the \
              backend it really has, says no rule matches. An inspector that contradicts the guard \
@@ -111,8 +111,8 @@ fn a_bare_name_that_is_protected_names_the_rule_that_protects_it() {
     );
     assert!(
         reason.contains("config rule"),
-        "`linix protected sudo` explains a `protected_packages` match as: {reason}\n\nThe rule is \
-         in force — `linix protected` lists it — and the command whose job is *which rule decides \
+        "`shall protected sudo` explains a `protected_packages` match as: {reason}\n\nThe rule is \
+         in force — `shall protected` lists it — and the command whose job is *which rule decides \
          this* names none."
     );
 }

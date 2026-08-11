@@ -1,7 +1,7 @@
 //! `firewall:22/tcp` — a perimeter you declare (Part XI, N1–N7).
 //!
 //! **The lockout check is this feature's precondition, not one of its features.** Everything
-//! else here manages rules; this decides whether LiNix is allowed to close the port carrying
+//! else here manages rules; this decides whether Shall is allowed to close the port carrying
 //! the connection it is being typed over. Building the backend before the check is building
 //! the lockout — so the check lives at the bottom of the module and everything above it is
 //! written knowing it exists.
@@ -114,7 +114,7 @@ impl Rule {
             "udp" => Proto::Udp,
             _ => {
                 return Err(format!(
-                    "`{}` is not a protocol. LiNix speaks `tcp` and `udp`; anything else is a \
+                    "`{}` is not a protocol. Shall speaks `tcp` and `udp`; anything else is a \
                      rule your firewall's own tool should write.",
                     tail
                 ))
@@ -133,10 +133,10 @@ impl Rule {
     }
 }
 
-/// Whether applying `plan` would cut the connection LiNix is being run over (Part XI's
+/// Whether applying `plan` would cut the connection Shall is being run over (Part XI's
 /// precondition).
 ///
-/// `session_port` is the local port carrying the controlling connection — `None` when LiNix is
+/// `session_port` is the local port carrying the controlling connection — `None` when Shall is
 /// on a console and there is nothing to lose.
 ///
 /// **A tightened default policy counts.** Closing `default/incoming` is not a rule about port
@@ -167,7 +167,7 @@ pub fn lockout_refusal(port: u16, scope: crate::app::sync::guard::GuardScope) ->
     format!(
         "refusing to apply the firewall change: it would close port {}, which is carrying this \
          session.\n  \
-         LiNix is being run over that port, so applying this would end the connection and \
+         Shall is being run over that port, so applying this would end the connection and \
          leave no way back in.\n  \
          Declare `firewall:{}/tcp` to keep it open, or make this change from the machine's own \
          console.\n  \
@@ -218,7 +218,7 @@ mod tests {
         );
     }
 
-    /// A rule LiNix cannot express must be refused, not approximated: a firewall line that
+    /// A rule Shall cannot express must be refused, not approximated: a firewall line that
     /// half-applies is a perimeter nobody can reason about.
     #[test]
     fn anything_else_is_refused_with_a_reason() {

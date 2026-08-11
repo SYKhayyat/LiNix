@@ -1,11 +1,11 @@
-//! The embedded `vars.linix` provider (Part IX): a script LiNix runs in-process to produce
+//! The embedded `vars.shall` provider (Part IX): a script Shall runs in-process to produce
 //! `name → value` pairs, in a language it ships so a fleet resolves identically with nothing to
-//! install. Rhai is the engine, behind the neutral `vars.linix` extension so it can be replaced
+//! install. Rhai is the engine, behind the neutral `vars.shall` extension so it can be replaced
 //! without renaming anyone's files.
 //!
 //! **The engine is not sandboxed, and that is the ruling.** A stock Rhai `Engine` has no file,
 //! shell, clock or network access; `core::rhai_stdlib` puts all four back, always on, because
-//! II.6b decided `vars.linix` is *"trusted the same as a hook — a script in your own repo"* and
+//! II.6b decided `vars.shall` is *"trusted the same as a hook — a script in your own repo"* and
 //! gave it every power an external `vars.py` already had. A `#rhai` hook builds its engine from
 //! that same function, so the two are one language and cannot drift apart.
 //!
@@ -22,7 +22,7 @@ use crate::model::vars::{Value, VarOrigins, Vars};
 use rhai::{Dynamic, Scope};
 use std::path::Path;
 
-/// Run `vars.linix` and turn the map it evaluates to into resolved variables.
+/// Run `vars.shall` and turn the map it evaluates to into resolved variables.
 ///
 /// The script is handed the machine's detected facts as the constants `OS`, `ARCH`, `HOST` and
 /// `FAMILY`, and must end in a map: `#{ role: "travel", cores: 8 }`. The map's values are the
@@ -38,7 +38,7 @@ pub fn resolve_with_origins(path: &Path, facts: &HostFacts) -> Result<(Vars, Var
     let name = path
         .file_name()
         .and_then(|s| s.to_str())
-        .unwrap_or("vars.linix")
+        .unwrap_or("vars.shall")
         .to_string();
     let origin = Origin::new(name.clone(), 0);
 
@@ -140,9 +140,9 @@ mod tests {
         static N: AtomicUsize = AtomicUsize::new(0);
         // `env::temp_dir()`, not TMP-or-TMPDIR-or-".": neither variable is set in a plain
         // Linux shell, so the fallback was the current directory — which is the repo, and
-        // every `cargo test` left a pile of `linix-embedded-*.linix` in it.
+        // every `cargo test` left a pile of `shall-embedded-*.shall` in it.
         let path = std::env::temp_dir().join(format!(
-            "linix-embedded-{}-{}.linix",
+            "shall-embedded-{}-{}.shall",
             std::process::id(),
             N.fetch_add(1, Ordering::Relaxed)
         ));
@@ -203,12 +203,12 @@ mod tests {
 
     #[test]
     fn the_environment_is_readable_and_is_w7s_escape_hatch() {
-        std::env::set_var("LINIX_TEST_ROLE", "work");
+        std::env::set_var("SHALL_TEST_ROLE", "work");
         let vars = run(
-            r#"#{ role: env("LINIX_TEST_ROLE"), missing: env("LINIX_NOPE", "default"), present: has_env("LINIX_TEST_ROLE") }"#,
+            r#"#{ role: env("SHALL_TEST_ROLE"), missing: env("SHALL_NOPE", "default"), present: has_env("SHALL_TEST_ROLE") }"#,
         )
         .unwrap();
-        std::env::remove_var("LINIX_TEST_ROLE");
+        std::env::remove_var("SHALL_TEST_ROLE");
         assert_eq!(vars["role"], Value::Str("work".into()));
         assert_eq!(vars["missing"], Value::Str("default".into()));
         assert_eq!(vars["present"], Value::Bool(true));
@@ -216,7 +216,7 @@ mod tests {
 
     #[test]
     fn a_file_can_be_read_and_probed() {
-        let marker = std::env::temp_dir().join(format!("linix-marker-{}", std::process::id()));
+        let marker = std::env::temp_dir().join(format!("shall-marker-{}", std::process::id()));
         std::fs::write(&marker, "gpu").unwrap();
         let script = format!(
             r#"#{{ here: path_exists("{p}"), body: read_file("{p}") }}"#,

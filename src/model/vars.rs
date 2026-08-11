@@ -181,7 +181,7 @@ pub type Vars = BTreeMap<String, Value>;
 /// Where each resolved variable's value came from — the winning definition's line for a line
 /// file, the provider file for a script or program. Kept beside [`Vars`] rather than inside it
 /// so the value path (gating, the plan, the diff) never carries provenance it does not read;
-/// only the tooling that explains a variable (`linix vars`, `why`) asks for this (W11/W12).
+/// only the tooling that explains a variable (`shall vars`, `why`) asks for this (W11/W12).
 pub type VarOrigins = BTreeMap<String, Origin>;
 
 /// One `NAME = VALUE` line. `conditional` is whether it came from inside a `when` block, which
@@ -622,7 +622,7 @@ mod tests {
 
     #[test]
     fn the_origin_is_the_winning_definition_not_the_default() {
-        // W11/W12: `why` and `linix vars` must point at the line that actually set the value —
+        // W11/W12: `why` and `shall vars` must point at the line that actually set the value —
         // the override when one applies, the default otherwise.
         let (v, o) = resolve_with_origins(&[
             top("role", "desktop", 1),

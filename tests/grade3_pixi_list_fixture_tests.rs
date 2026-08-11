@@ -9,11 +9,11 @@
 //!     └── ripgrep: 15.2.0
 //!         └─ exposes: rg
 //!
-//!     $ linix list -b pixi
+//!     $ shall list -b pixi
 //!     pixi         ripgrep                          15.2.0
 //!     pixi         exposes                          rg           <- not a package
 //!
-//! `exposes` is pixi's word for "this environment puts these binaries on PATH". LiNix reports it
+//! `exposes` is pixi's word for "this environment puts these binaries on PATH". Shall reports it
 //! as an installed package whose version is `rg`. The unit test in `src/parsers/ecosystem.rs`
 //! passes because its fixture was written by hand — two rows, no `exposes:` child — which is
 //! GRADER §3.3's rule in one instance: *a parser is tested against output captured from the tool
@@ -21,7 +21,7 @@
 //!
 //! The fixture beside this test is `pixi global list` on the grading host, byte for byte.
 
-use linix::parsers::ecosystem::pixi_list;
+use shall::parsers::ecosystem::pixi_list;
 
 const FIXTURE: &str = include_str!("fixtures/pixi/list-one-tool.txt");
 
@@ -34,7 +34,7 @@ fn pixi_list_reads_one_tool_as_one_package() {
     assert_eq!(
         names,
         vec!["ripgrep"],
-        "`pixi global list` reports one installed tool; the parser reported {:?}. A row LiNix \
+        "`pixi global list` reports one installed tool; the parser reported {:?}. A row Shall \
          invents here is a package `check` counts, `list` prints, `adopt` can write into a \
          manifest and `sync` will then try to install.",
         names

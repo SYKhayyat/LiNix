@@ -1,4 +1,4 @@
-//! Does every subcommand LiNix invokes still exist in the tool it invokes it on?
+//! Does every subcommand Shall invokes still exist in the tool it invokes it on?
 //!
 //! `pixi global upgrade-all` was removed upstream and stayed in this tree, invisible, because
 //! the only thing testing it was a plan-smoke — and **a plan-smoke proves an argv was
@@ -6,11 +6,11 @@
 //! ever asked pixi.
 //!
 //! So this asks. It drives every registered backend through a mock executor, reads the argv
-//! LiNix would really have run, and walks each subcommand chain against that manager's own
+//! Shall would really have run, and walks each subcommand chain against that manager's own
 //! `--help` on this machine. It converts silent upstream drift into a named failure, which is
 //! the difference between fixing `pixi` today and fixing its successor automatically.
 //!
-//! **It reads the argv from the code, not from a list.** A written-down table of "what LiNix
+//! **It reads the argv from the code, not from a list.** A written-down table of "what Shall
 //! invokes" is a second copy of the truth, and the second copy is what goes stale — which is
 //! this defect's own shape, one level up.
 //!
@@ -21,10 +21,10 @@
 //! A manager that IS installed and cannot be asked is a **failure**, not a skip. That
 //! distinction is the whole difference between a gate and a report: `scoop`, `npm`, `gem`,
 //! `pipx` and `yarn` are all on this machine and were all skipped as "its help could not be
-//! read", because this file launched them with a raw `Command` while LiNix launches them
+//! read", because this file launched them with a raw `Command` while Shall launches them
 //! through an interpreter — they are `.cmd`/`.ps1` shims and `Command::new` cannot execute one.
 //! Five installed managers, silently uncovered, in the gate written to stop exactly that.
-//! Everything here now goes through [`linix::core::executor::effective_command`], the same
+//! Everything here now goes through [`shall::core::executor::effective_command`], the same
 //! function the product uses.
 
 use std::collections::BTreeSet;
@@ -36,9 +36,9 @@ use std::process::Command;
 /// list is where coverage goes to disappear (E29).
 fn help_cannot_answer(program: &str) -> Option<&'static str> {
     match program {
-        // Not package managers — LiNix runs these as plain programs with no subcommand.
+        // Not package managers — Shall runs these as plain programs with no subcommand.
         "sh" | "bash" | "sudo" | "env" | "tee" | "cp" | "mv" | "rm" | "ln" | "chmod" => {
-            Some("not a package manager; LiNix runs it as a plain program")
+            Some("not a package manager; Shall runs it as a plain program")
         }
         // PowerShell takes a script, not a subcommand; its "argv" is a -Command string.
         "powershell" | "pwsh" => Some("takes a -Command script, not a subcommand"),
@@ -139,7 +139,7 @@ fn is_subcommand_token(tok: &str) -> bool {
         && tok != "jq"
 }
 
-/// A long flag LiNix passes, as opposed to a short one, an operand or a value.
+/// A long flag Shall passes, as opposed to a short one, an operand or a value.
 ///
 /// Long flags only. A short flag (`-y`, `-q`) is rarely documented in a form this can match,
 /// and **a gate with false positives is worse than no gate** — the rule that already shapes
@@ -175,15 +175,15 @@ fn on_path(program: &str) -> bool {
     which::which(program).is_ok()
 }
 
-/// Run a manager the way LiNix runs it.
+/// Run a manager the way Shall runs it.
 ///
 /// `Command::new("scoop")` cannot launch anything on Windows: `scoop` is a `.ps1`/`.cmd` shim,
 /// and only an interpreter can execute it. `which::which` still finds it, so this gate said
-/// "installed" and then failed to read a word of its help — and skipped it. LiNix's own
+/// "installed" and then failed to read a word of its help — and skipped it. Shall's own
 /// executor has always wrapped shims; the gate did not, so it launched a different program
 /// from the one that ships and covered four installed managers less than it claimed.
 fn run(program: &str, args: &[String]) -> Option<String> {
-    let (prog, argv) = linix::core::executor::effective_command(program, args);
+    let (prog, argv) = shall::core::executor::effective_command(program, args);
     let out = Command::new(prog).args(&argv).output().ok()?;
     Some(format!(
         "{}{}",
@@ -219,21 +219,21 @@ fn help_text(program: &str, chain: &[String]) -> Option<String> {
 }
 
 #[tokio::test]
-async fn every_subcommand_linix_invokes_still_exists_upstream() {
+async fn every_subcommand_shall_invokes_still_exists_upstream() {
     use dashmap::DashMap;
-    use linix::core::executor::MockExecutor;
-    use linix::core::{CommandExecutor, PackageSpec};
+    use shall::core::executor::MockExecutor;
+    use shall::core::{CommandExecutor, PackageSpec};
     use std::sync::Arc;
 
     let vfs = Arc::new(DashMap::new());
     let mock = Arc::new(MockExecutor::new(vfs.clone()));
     let exec =
         CommandExecutor::with_layer(true, false, mock.clone(), vfs, Arc::new(DashMap::new()));
-    let config = linix::config::Config::default();
-    let registry = linix::backends::create_default_registry(
+    let config = shall::config::Config::default();
+    let registry = shall::backends::create_default_registry(
         exec,
         &config,
-        Arc::new(linix::app::hooks::LuaHooks::new(&config).expect("hooks")),
+        Arc::new(shall::app::hooks::LuaHooks::new(&config).expect("hooks")),
     )
     .await;
 
@@ -254,8 +254,8 @@ async fn every_subcommand_linix_invokes_still_exists_upstream() {
                 .remove(
                     &["jq".to_string()],
                     false,
-                    linix::app::sync::guard::Reaped::for_reason(
-                        linix::app::sync::guard::GuardScope::Remove,
+                    shall::app::sync::guard::Reaped::for_reason(
+                        shall::app::sync::guard::GuardScope::Remove,
                         "a unit test of the effector itself",
                     ),
                 )
@@ -273,10 +273,10 @@ async fn every_subcommand_linix_invokes_still_exists_upstream() {
             // it builds an argv — and the only helm argvs this gate saw were `plugin list` and
             // `plugin uninstall`. Measured: with a plainly bogus flag planted in the capability
             // table, the gate still passed, because the flag's own code path was never driven.
-            if let Some(key) = linix::backends::capability::install_source_key(backend.name()) {
+            if let Some(key) = shall::backends::capability::install_source_key(backend.name()) {
                 unverified.options.set(
                     key.to_string(),
-                    "https://example.invalid/linix-drift-probe".to_string(),
+                    "https://example.invalid/shall-drift-probe".to_string(),
                 );
             }
             let _ = i.install(std::slice::from_ref(&unverified), false).await;
@@ -290,7 +290,7 @@ async fn every_subcommand_linix_invokes_still_exists_upstream() {
             // The two verbs this gate could not see. `clean_cache` and `list_orphans` build
             // argv from the same rows `install` does — `dnf clean all`, `pacman -Qdtq`,
             // `xbps-remove -Oy`, `apt-get autoremove --dry-run` — and until 2026-08-06 none of
-            // them was ever walked against a `--help`. A subcommand that only `linix
+            // them was ever walked against a `--help`. A subcommand that only `shall
             // clean-cache` reaches is a subcommand upstream can delete unnoticed, which is
             // what happened to `pixi global upgrade-all` and is the reason this file exists.
             let _ = u.clean_cache(false).await;
@@ -423,19 +423,19 @@ async fn every_subcommand_linix_invokes_still_exists_upstream() {
 
     assert!(
         unreadable.is_empty(),
-        "these managers are installed here and this gate could not ask them anything, so every          subcommand LiNix runs on them is unverified:
+        "these managers are installed here and this gate could not ask them anything, so every          subcommand Shall runs on them is unverified:
   {}",
         unreadable.join("
   ")
     );
     assert!(
         drifted.is_empty(),
-        "these subcommands no longer exist in the tool LiNix runs them on:\n  {}",
+        "these subcommands no longer exist in the tool Shall runs them on:\n  {}",
         drifted.join("\n  ")
     );
     assert!(
         flag_drift.is_empty(),
-        "these flags are passed by LiNix and not documented by the tool it passes them to:\n  \
+        "these flags are passed by Shall and not documented by the tool it passes them to:\n  \
          {}\n\n\
          This is the dimension the gate did not cover until 2026-07-28, and the first flag \
          added after it shipped — helm's `--verify=false` — is one that helm 3 rejects.",

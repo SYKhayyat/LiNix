@@ -11,7 +11,7 @@
 //! hand-written `@sha256=` cannot describe either without pinning the format first.
 //!
 //! **A recorded hash is a record, not a policy.** It says what was downloaded, so a change is
-//! visible in `linix diff` and a re-download that differs is an error. It does not demand that
+//! visible in `shall diff` and a re-download that differs is an error. It does not demand that
 //! the user pre-declare anything.
 
 use crate::core::ledger::LockFile;
@@ -40,7 +40,7 @@ pub struct ArtifactLock {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
     /// The system installer that owns this artifact once it is placed (D5) — `dpkg` for a
-    /// `.deb`, `rpm` for an `.rpm`. `None` is the ordinary case: LiNix unpacked it and put it on
+    /// `.deb`, `rpm` for an `.rpm`. `None` is the ordinary case: Shall unpacked it and put it on
     /// PATH itself. When set, removal, upgrade and dedup route through this manager rather than
     /// through a file delete, and `system_package` is the name it was recorded under.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -122,7 +122,7 @@ pub fn verify_set(
     for (asset, sha) in resolved {
         let Some(entry) = locked.iter().find(|l| &l.asset == asset) else {
             return Some(format!(
-                "the lock records {} and this resolved to `{}` as well. Run `linix lock` if \
+                "the lock records {} and this resolved to `{}` as well. Run `shall lock` if \
                  the change is intended.",
                 named(locked),
                 asset
@@ -137,7 +137,7 @@ pub fn verify_set(
         .find(|l| !resolved.iter().any(|(a, _)| a == &l.asset))
     {
         return Some(format!(
-            "the lock records `{}` and this release no longer offers it. Run `linix lock` if \
+            "the lock records `{}` and this release no longer offers it. Run `shall lock` if \
              the change is intended.",
             dropped.asset
         ));
@@ -161,7 +161,7 @@ fn named(locks: &[ArtifactLock]) -> String {
 pub fn verify_against(lock: &ArtifactLock, asset: &str, sha256: Option<&str>) -> Option<String> {
     if lock.asset != asset {
         return Some(format!(
-            "the lock records `{}` and this resolved to `{}`. Run `linix lock` if the change \
+            "the lock records `{}` and this resolved to `{}`. Run `shall lock` if the change \
              is intended.",
             lock.asset, asset
         ));
@@ -365,7 +365,7 @@ mod tests {
         let why = verify_against(&l, "fd-musl.tar.gz", None).unwrap();
         assert!(why.contains("fd-gnu.tar.gz"), "{}", why);
         assert!(why.contains("fd-musl.tar.gz"), "{}", why);
-        assert!(why.contains("linix lock"), "{}", why);
+        assert!(why.contains("shall lock"), "{}", why);
     }
 
     #[test]

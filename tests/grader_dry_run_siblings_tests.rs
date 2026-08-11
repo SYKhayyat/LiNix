@@ -41,10 +41,10 @@ impl Fresh {
     }
 
     fn run(&self, args: &[&str]) -> (String, i32) {
-        let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+        let out = Command::new(env!("CARGO_BIN_EXE_shall"))
             .args(args)
-            .env("LINIX_CONFIG_DIR", self.dir.join("config"))
-            .env("LINIX_DATA_DIR", self.dir.join("data"))
+            .env("SHALL_CONFIG_DIR", self.dir.join("config"))
+            .env("SHALL_DATA_DIR", self.dir.join("data"))
             .stdin(std::process::Stdio::null())
             .output()
             .expect("the binary should run");

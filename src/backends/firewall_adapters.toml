@@ -1,4 +1,4 @@
-# The firewalls LiNix ships with (Part XI, riding K17's adapter table).
+# The firewalls Shall ships with (Part XI, riding K17's adapter table).
 #
 # Rows, not Rust — the same decision K17 made for settings stores, and for the same reason: a
 # machine running a firewall nobody wrote an arm for should not have to wait for a release. A
@@ -40,14 +40,14 @@ os = "windows"
 detect = "netsh"
 allow = [
   "netsh", "advfirewall", "firewall", "add", "rule",
-  "name=LiNix {port}/{proto}", "dir=in", "action=allow",
+  "name=Shall {port}/{proto}", "dir=in", "action=allow",
   "protocol={proto}", "localport={port}",
 ]
 deny = [
   "netsh", "advfirewall", "firewall", "delete", "rule",
-  "name=LiNix {port}/{proto}",
+  "name=Shall {port}/{proto}",
 ]
 default_in = ["netsh", "advfirewall", "set", "allprofiles", "firewallpolicy", "{policy}"]
 default_out = []
 list = ["netsh", "advfirewall", "firewall", "show", "rule", "name=all"]
-list_pattern = 'LiNix (\d+)/(tcp|udp)'
+list_pattern = 'Shall (\d+)/(tcp|udp)'

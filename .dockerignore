@@ -10,7 +10,7 @@ target/
 
 # Docs, host-only scripts, and the bind-mounted test driver don't belong in the image.
 # Excluding them means editing them never busts the cargo build cache (the image just
-# needs the Rust sources to compile `linix`; run-in-container.sh is bind-mounted at run).
+# needs the Rust sources to compile `shall`; run-in-container.sh is bind-mounted at run).
 docs/
 scripts/
 *.md

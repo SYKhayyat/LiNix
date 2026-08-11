@@ -12,7 +12,7 @@ pub struct Execs<'a> {
 }
 
 impl Execs<'_> {
-    /// Resolve one `exec:` line to the script LiNix would run, its content hash, and what the
+    /// Resolve one `exec:` line to the script Shall would run, its content hash, and what the
     /// two ledgers say about it. Shared by the preview and the run so a plan cannot describe a
     /// decision the sync then makes differently.
     ///
@@ -36,7 +36,7 @@ impl Execs<'_> {
         let body = std::fs::read_to_string(&path).map_err(|e| {
             Error::Validation(format!(
                 "`exec:{}` — cannot read the script at {} ({}). An `exec:` names a file the \
-                 config carries; its contents are what LiNix hashes and runs.",
+                 config carries; its contents are what Shall hashes and runs.",
                 script,
                 path.display(),
                 e
@@ -174,7 +174,7 @@ impl Execs<'_> {
     /// current config would find nothing and do nothing, which is the `link:` source-deletion
     /// mistake wearing a different hat.
     ///
-    /// A script that declared no `@undo=` is simply forgotten: LiNix cannot invent an inverse,
+    /// A script that declared no `@undo=` is simply forgotten: Shall cannot invent an inverse,
     /// and pretending to would be worse than saying nothing. `plan` says so in those words.
     async fn undo_departed_execs(
         &self,

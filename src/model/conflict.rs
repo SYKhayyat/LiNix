@@ -31,7 +31,7 @@ pub fn reconcile(
 ) -> Result<Declared, GrammarError> {
     let (da, db) = (dating_of(&a.options, now), dating_of(&b.options, now));
 
-    // A lapsed line has no opinion. It lingers in your file — LiNix must not rewrite what
+    // A lapsed line has no opinion. It lingers in your file — Shall must not rewrite what
     // you wrote (II.16) — but it does not participate.
     match (da, db) {
         (Dating::Lapsed, Dating::Lapsed) => return Ok(a),
@@ -119,7 +119,7 @@ fn conflict_error(key: &str, a: &Declared, b: &Declared) -> GrammarError {
         ),
     )
     .with_hint(
-        "LiNix will not pick one for you: whichever it chose would be right half the time \
+        "Shall will not pick one for you: whichever it chose would be right half the time \
          and silent about it. Change one of them, or put them in profiles that are not \
          active together.",
     )

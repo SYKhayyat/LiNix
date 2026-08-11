@@ -199,7 +199,7 @@ impl std::fmt::Display for ResourceKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Statement {
     Package(PackageDecl),
-    /// `absent:BACKEND:NAME` — declare it must not exist. The one thing LiNix may remove
+    /// `absent:BACKEND:NAME` — declare it must not exist. The one thing Shall may remove
     /// that it does not manage, because you named it (V.7).
     Absent(PackageDecl),
     /// `repo:BACKEND:SPEC` — a repository, for a named backend (V.47). A PPA is apt's, a
@@ -777,7 +777,7 @@ fn parse_inner(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Resu
                 ),
             )
             .with_hint(
-                "an `absent:` line reaches outside what LiNix manages, so it must say which \
+                "an `absent:` line reaches outside what Shall manages, so it must say which \
                  backend: `absent:apt:libreoffice`.",
             ));
         }
@@ -853,7 +853,7 @@ impl Statement {
     /// a backend by that name.
     ///
     /// `service`, `link` and `setting` are each both a grammar prefix and a registered backend,
-    /// and `linix list` prints them in those two columns. So the string a user copies out of a
+    /// and `shall list` prints them in those two columns. So the string a user copies out of a
     /// listing — `service:com.apple.SafariHistoryServiceAgent` — parses as a typed *resource
     /// statement*, not as a `backend:name` package, and every consumer that only understands
     /// packages answered "not installed" about a row `list` had just printed (R-4).
@@ -886,8 +886,8 @@ impl Statement {
             Statement::Link(name, o) => Some((("link", name), o)),
             Statement::Setting(name, o) => Some((("setting", name), o)),
             // Every other statement's prefix is not a backend name: `shim:`, `schedule:` and
-            // `repo:` name things LiNix does rather than things a manager lists, and no
-            // registry entry answers to them. Checked, not assumed — `linix list -b shim`
+            // `repo:` name things Shall does rather than things a manager lists, and no
+            // registry entry answers to them. Checked, not assumed — `shall list -b shim`
             // refuses as an unknown backend.
             _ => None,
         }
@@ -1170,11 +1170,11 @@ fn parse_prefix(
     let unknown = |name: &str| {
         GrammarError::new(
             origin.clone(),
-            format!("`{}` is not a backend LiNix uses", name),
+            format!("`{}` is not a backend Shall uses", name),
         )
         .with_hint(format!(
             "add `{}` to your `priority` file, or check the spelling. Not listed means \
-             LiNix does not use it at all.",
+             Shall does not use it at all.",
             name
         ))
     };
@@ -1257,7 +1257,7 @@ fn reject_leading_dash(origin: &Origin, name: &str) -> Result<()> {
 ///
 /// An `@` that **opens the name** is part of the name (Q23). npm's scoped packages are named
 /// `@scope/name` — `@angular/cli`, `@bazel/bazelisk` — and `npm ls -g` prints them, so a name
-/// LiNix lists has to be a name LiNix can be given back. Before this, `npm:@bazel/bazelisk` was
+/// Shall lists has to be a name Shall can be given back. Before this, `npm:@bazel/bazelisk` was
 /// read as an empty name followed by an option list and refused with *"is not a list of
 /// `key=value` options"*, which is baffling advice about a line nobody wrote wrongly.
 ///
@@ -1358,7 +1358,7 @@ fn parse_package(origin: &Origin, text: &str, backends: &dyn BackendNames) -> Re
             }
             // A quoted name is taken verbatim, spaces and all. `winget list` answers with
             // `ARP\Machine\X64\Mozilla Firefox` — the identifier `winget install` takes back —
-            // and a name LiNix lists has to be a name LiNix can be given (V.113). Quoting is
+            // and a name Shall lists has to be a name Shall can be given (V.113). Quoting is
             // what keeps that from re-opening VI.1: prose is not quoted, so a typo is still an
             // error rather than a package named after itself.
             let name = match rest.strip_prefix('"') {
@@ -1566,7 +1566,7 @@ pub const SETTING_OPTION_KEYS: &[&str] = &["value", "scope"];
 /// run-once-per-content; `always` opts out (see `model::exec`). `undo` is deliberately absent:
 /// what a removal means is U3, still open, so no key promises it.
 /// `undo` is what removing the line runs (U3). Optional, because a script has no inverse and
-/// inventing one would be LiNix claiming to undo something it cannot: without it, removing an
+/// inventing one would be Shall claiming to undo something it cannot: without it, removing an
 /// `exec:` drops the record and nothing else, and `plan` says so in those words.
 pub const EXEC_OPTION_KEYS: &[&str] = &["runs", "undo"];
 /// Empty, and stated as a table rather than as a special case in the validator: "what may
@@ -1821,7 +1821,7 @@ pub(crate) const PACKAGE_OPTION_KEYS: &[&str] = &[
     "url",
     // A shim is a PATH stand-in that forwards to a managed tool. `@shim=true` asks for one on
     // the tool's own line — the form R3 named when it deleted the imperative command — and
-    // `@sandbox=true` asks for the same shim and confines `linix run` as well. Both are read by
+    // `@sandbox=true` asks for the same shim and confines `shall run` as well. Both are read by
     // `sync`, and this table refused them until Q18, so the form the ruling pointed at was the
     // one form that did not parse.
     "shim",
@@ -2004,7 +2004,7 @@ pub fn validate_backend_options(origin: &Origin, backend: Option<&str>, o: &Opti
     }
 
     // SEC2's two opt-outs each relax a rule, and the rules have different reach — which is why
-    // they are checked apart and never as a pair. Plain HTTP is only a question where LiNix
+    // they are checked apart and never as a pair. Plain HTTP is only a question where Shall
     // itself fetches a URL; a checksum is a question wherever *something* vouches for the
     // bytes, and a manager can be that something (Q5). On a backend that verifies nothing
     // either flag is a line that does nothing, which II.2 refuses.
@@ -2091,7 +2091,7 @@ pub fn validate_backend_options(origin: &Origin, backend: Option<&str>, o: &Opti
         )
         .with_hint(
             "one release ships several files and one hash cannot verify them all. Add \
-             `@formats=` naming one, or drop the checksum — LiNix records the hash of what it \
+             `@formats=` naming one, or drop the checksum — Shall records the hash of what it \
              downloaded in `locks/` either way.",
         ));
     }
@@ -2578,7 +2578,7 @@ mod tests {
 
     #[test]
     fn a_backend_not_in_priority_says_so() {
-        // V.15: not listed means LiNix does not use it at all, and saying so catches typos.
+        // V.15: not listed means Shall does not use it at all, and saying so catches typos.
         let err = parse(&o(), "flatpak:gimp", &known).unwrap_err();
         assert!(err.what.contains("flatpak"), "{}", err.what);
     }
@@ -2622,7 +2622,7 @@ mod tests {
 
     #[test]
     fn absent_must_name_a_backend() {
-        // `absent:` reaches outside what LiNix manages, so it cannot be left to `priority`.
+        // `absent:` reaches outside what Shall manages, so it cannot be left to `priority`.
         let err = p("absent:libreoffice").unwrap_err();
         assert!(err.what.contains("does not name a backend"), "{}", err.what);
     }
@@ -2748,7 +2748,7 @@ mod tests {
         // you `use` it by name like everything else.
         for bad in [
             "use ./base.txt",
-            "use /etc/linix/base.txt",
+            "use /etc/shall/base.txt",
             "use https://x/y.txt",
         ] {
             let err = p(bad).unwrap_err();
@@ -2824,7 +2824,7 @@ mod tests {
             "service:nginx",
             "link:/a/b@target=/c",
             "setting:org.gnome.x/k@value=dark",
-            // Not resources: their prefixes name things LiNix does, not things a backend lists.
+            // Not resources: their prefixes name things Shall does, not things a backend lists.
             "shim:jq@source=cargo:jq",
             "schedule:nightly@cron=0 2 * * *,run=sync",
             "apt:jq",
@@ -2891,7 +2891,7 @@ mod option_key_tests {
 
     #[test]
     fn lease_is_refused_and_points_at_the_dated_line() {
-        // S19. II.16 retired `@lease=2h`, and nothing LiNix writes used it — but
+        // S19. II.16 retired `@lease=2h`, and nothing Shall writes used it — but
         // `StateRegistry::add` still READ it and turned it into a real expiry, so a
         // hand-written lease was silently a package that uninstalls itself, on a path the
         // guard does not see (C3).
@@ -2958,8 +2958,8 @@ mod option_key_tests {
         }
     }
 
-    /// Q23: npm's scoped packages. `npm ls -g` prints `@bazel/bazelisk`, so a name LiNix lists
-    /// has to be a name LiNix accepts — and the two CI `Build` jobs were red on exactly that,
+    /// Q23: npm's scoped packages. `npm ls -g` prints `@bazel/bazelisk`, so a name Shall lists
+    /// has to be a name Shall accepts — and the two CI `Build` jobs were red on exactly that,
     /// because the runners have one installed globally and this developer's box does not.
     #[test]
     fn a_name_may_open_with_an_at_sign_and_still_take_options() {
@@ -3253,7 +3253,7 @@ mod artifact_option_tests {
     }
 
     /// Q5. `@unverified` is legal wherever *something* verifies bytes and the line can say
-    /// "not here" — LiNix's own checksum on a download, and helm's plugin signature.
+    /// "not here" — Shall's own checksum on a download, and helm's plugin signature.
     #[test]
     fn unverified_is_legal_on_every_backend_that_verifies_something() {
         for line in [
@@ -3288,7 +3288,7 @@ mod artifact_option_tests {
     }
 
     /// The two flags do not travel together (SEC2). helm downloads a plugin over HTTPS from a
-    /// git host; `--plain-http` is for OCI registries LiNix does not address, so accepting
+    /// git host; `--plain-http` is for OCI registries Shall does not address, so accepting
     /// `@unverified` there did not also make `@allow_http` mean anything.
     #[test]
     fn allow_http_did_not_follow_unverified_onto_helm() {

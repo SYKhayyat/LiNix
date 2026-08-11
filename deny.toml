@@ -32,9 +32,9 @@ ignore = [
     # 1.25.1, the newest release, still carries it. The advisory says so itself: "No safe upgrade
     # is available!"
     #
-    # The only two ways out are upstream migrating to `compact_str`/`smol_str`, or LiNix dropping
+    # The only two ways out are upstream migrating to `compact_str`/`smol_str`, or Shall dropping
     # `rhai` — which is one of the three hook dialects the owner ruled all stay (2026-07-20), and
-    # is also what `vars.linix` is evaluated by. Neither is a thing to do on the way to a release
+    # is also what `vars.shall` is evaluated by. Neither is a thing to do on the way to a release
     # because a GitHub repository was archived.
     #
     # **What would end this entry:** a rhai release whose dependency tree no longer contains
@@ -66,7 +66,7 @@ allow = [
 # a dependency that starts carrying one should stop the build until a person looks.
 confidence-threshold = 0.8
 
-# `Z1` is ruled: LiNix is `MIT OR Apache-2.0`, both of which are in the allow list above, so this
+# `Z1` is ruled: Shall is `MIT OR Apache-2.0`, both of which are in the allow list above, so this
 # crate answers the same gate every dependency does. The exemption that stood here while the
 # licence was unruled is gone — it existed so this file would not answer the owner's question by
 # implication, and there is nothing left to imply.

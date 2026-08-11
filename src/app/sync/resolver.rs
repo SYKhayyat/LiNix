@@ -43,7 +43,7 @@ pub fn new_resolution() {
 
 /// Whether the statements handed to the prober are the whole model.
 ///
-/// Only then does a name's absence mean it is no longer declared. A single `linix run jq` is
+/// Only then does a name's absence mean it is no longer declared. A single `shall run jq` is
 /// one line, and pruning the bare-name lock against it would forget every other name on the
 /// machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,7 +105,7 @@ pub struct StateResolver<'a> {
     /// default** (owner ruling, 2026-07-24): a sync converges to what was decided, not to what
     /// was published since. `--upgrade` turns it off for the run that means to move forward.
     /// Unlike `locked`, a package with no recorded version is not an error here — it simply
-    /// resolves, which is what a machine that has never run `linix lock` does for everything.
+    /// resolves, which is what a machine that has never run `shall lock` does for everything.
     prefer_locks: bool,
     /// "backend:package" -> version.
     locks: HashMap<String, String>,
@@ -136,7 +136,7 @@ impl<'a> StateResolver<'a> {
     pub async fn new(config: &'a Config, registry: Arc<BackendRegistry>, locked: bool) -> Self {
         // Read unconditionally: recorded versions are preferred on every ordinary run now, so
         // this file is no longer only a strict-mode input. A missing file is the ordinary state
-        // of a machine that has not run `linix lock`, never an error.
+        // of a machine that has not run `shall lock`, never an error.
         let mut locks = HashMap::new();
         let lock_path = config.config_root().join("locks").join("versions.json");
         if tokio::fs::try_exists(&lock_path).await.unwrap_or(false) {
@@ -204,7 +204,7 @@ impl<'a> StateResolver<'a> {
 
     /// The `priority` file: which package managers this setup uses, and in what order.
     ///
-    /// A missing file is an error and not a detected default. LiNix cannot pick your
+    /// A missing file is an error and not a detected default. Shall cannot pick your
     /// package managers for you — inheriting them from whatever happens to be installed is
     /// the thing `priority` exists to stop (V.15), and a default nobody chose is a default
     /// nobody can safely change (P5).
@@ -221,17 +221,17 @@ impl<'a> StateResolver<'a> {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // The command that writes this file goes first. This is the first thing a new
                 // user sees, and it used to explain the format by hand and never mention
-                // `linix init` — which exists to do exactly this, detects the managers on the
+                // `shall init` — which exists to do exactly this, detects the managers on the
                 // machine, and is one word long. Explaining how to hand-write a file the
                 // program will write for you is a dead end however well the format is
                 // described.
                 return Err(Error::Config(format!(
                     "no `priority` file at {}.\n  \
-                     Run `linix init` — it writes this file with the package managers it \
+                     Run `shall init` — it writes this file with the package managers it \
                      finds on this machine, along with the rest of the repo.\n\n  \
-                     To write it by hand instead: `priority` lists the managers LiNix may \
+                     To write it by hand instead: `priority` lists the managers Shall may \
                      use, one per line, best first — for example:\n\n    apt\n    cargo\n\n  \
-                     Listed means LiNix uses it. Not listed means LiNix does not touch it at \
+                     Listed means Shall uses it. Not listed means Shall does not touch it at \
                      all.",
                     file.display()
                 )));
@@ -255,12 +255,12 @@ impl<'a> StateResolver<'a> {
         Priority::every_backend(&file, &body).map_err(Error::from)
     }
 
-    /// Resolve the variables against the given facts — the one implementation, so `linix vars`
+    /// Resolve the variables against the given facts — the one implementation, so `shall vars`
     /// prints what a `when` will see rather than a second opinion about it.
     ///
     /// **Resolved once per invocation (IX.6), and now actually once.** Every resolver entry
     /// point comes through here, and `StateResolver` is constructed at 39 sites — so a single
-    /// `linix check` ran the user's `vars.sh` three times, measured, and any `http()` variable
+    /// `shall check` ran the user's `vars.sh` three times, measured, and any `http()` variable
     /// was fetched three times over three fresh connections. That is not only slow: a vars
     /// provider is a program the user wrote, and running it three times runs its side effects
     /// three times. `HostFacts::with_vars` has claimed "resolved once per invocation and
@@ -315,13 +315,13 @@ impl<'a> StateResolver<'a> {
         .map_err(Error::from)
     }
 
-    /// Resolve just the variables (Part IX), without planning the whole model — for `linix vars`.
+    /// Resolve just the variables (Part IX), without planning the whole model — for `shall vars`.
     /// The same resolution `resolve_model` performs, so what this prints is what a `when` sees.
     pub async fn resolve_vars(&self) -> Result<crate::model::vars::Vars> {
         self.resolve_vars_with_origins().await.map(|(v, _)| v)
     }
 
-    /// [`resolve_vars`], plus where each variable was set — for `linix vars` and `why`, which
+    /// [`resolve_vars`], plus where each variable was set — for `shall vars` and `why`, which
     /// have to say not just a variable's value but the line or provider that produced it (W11/W12).
     pub async fn resolve_vars_with_origins(
         &self,
@@ -514,7 +514,7 @@ impl<'a> StateResolver<'a> {
 
         self.apply_locks(&mut state)?;
 
-        // II.16: an expired line lingers, because LiNix must not rewrite your files. It
+        // II.16: an expired line lingers, because Shall must not rewrite your files. It
         // gets mentioned by the exact file and line, never vaguely.
         for (key, origin) in &state.lapsed {
             warn!("`{}` at {} has expired and no longer counts.", key, origin);
@@ -533,10 +533,10 @@ impl<'a> StateResolver<'a> {
     /// The dangerous half of Lisp, kept on the safe side of XIII.32's line by four rules, none
     /// waived:
     /// - **Off by default.** With `allow_generators` unset, a `generate:` line is a refusal,
-    ///   naming the config key and `linix lock`. The computing-config surface is dormant unless
+    ///   naming the config key and `shall lock`. The computing-config surface is dormant unless
     ///   turned on deliberately.
     /// - **The ledger gates it.** A generator runs code the repo carries; it is approved by
-    ///   `linix lock` (content-addressed, like `exec:`), and an unapproved or changed command
+    ///   `shall lock` (content-addressed, like `exec:`), and an unapproved or changed command
     ///   stops resolution. `-y` cannot approve it.
     /// - **A failure is a failed resolution.** A non-zero exit is an error, never an empty set —
     ///   an empty declaration set is a mass-removal input (VI.0), and "the generator broke" must
@@ -582,7 +582,7 @@ impl<'a> StateResolver<'a> {
                     "{}: `generate:{}` is off by default.\n  \
                      A generator runs a command and treats its stdout as declarations — the one \
                      place the config computes its state instead of stating it.\n  \
-                     Set `allow_generators = true` to enable it, then `linix lock` to approve the \
+                     Set `allow_generators = true` to enable it, then `shall lock` to approve the \
                      command.",
                     origin, cmd
                 )));
@@ -941,7 +941,7 @@ impl<'a> StateResolver<'a> {
         // The lock answers what it can without troubling anyone.
         for question in questions {
             // A candidate `priority` does not list is not a candidate at all: `priority` says
-            // which managers LiNix may use on this host, whatever a line asks for (V.15).
+            // which managers Shall may use on this host, whatever a line asks for (V.15).
             let chain: Vec<String> = question
                 .candidates
                 .order(&listed)
@@ -1071,7 +1071,7 @@ impl<'a> StateResolver<'a> {
                     )
                     .with_hint(if chain.is_empty() {
                         format!(
-                            "{} — and none of them is in your `priority` file, so LiNix may \
+                            "{} — and none of them is in your `priority` file, so Shall may \
                              not use any of them here.",
                             describe_candidates(&candidates)
                         )
@@ -1122,7 +1122,7 @@ impl<'a> StateResolver<'a> {
                         )));
                     }
                     // Nothing recorded for this one: it resolves freely, which is what every
-                    // package on a machine that has never run `linix lock` does.
+                    // package on a machine that has never run `shall lock` does.
                     continue;
                 };
                 if let Some(pinned) = spec.options.one("version") {
@@ -1203,11 +1203,11 @@ impl<'a> StateResolver<'a> {
         Ok(())
     }
 
-    /// Parse one package from a command line (`linix run jq`, a shell request).
+    /// Parse one package from a command line (`shall run jq`, a shell request).
     ///
     /// The same grammar and the same probe as a line in a module. P1: an imperative command
     /// is a shortcut for editing a file, so it must not be a second dialect.
-    /// The static half of `parse_and_probe_spec`: does this line name a backend LiNix uses?
+    /// The static half of `parse_and_probe_spec`: does this line name a backend Shall uses?
     ///
     /// Answers without asking any manager anything, so it is cheap enough to run before a
     /// write. A bare name has no backend to check and passes; a `repo:` names one the same
@@ -1234,7 +1234,7 @@ impl<'a> StateResolver<'a> {
     /// The `(backend, name)` a query string denotes when it is a typed resource statement whose
     /// prefix is also a backend — `service:com.apple.X`, `link:/etc/foo`, `setting:S/K`.
     ///
-    /// Three prefixes are both grammar keywords and registered backends, and `linix list`
+    /// Three prefixes are both grammar keywords and registered backends, and `shall list`
     /// prints them as those two columns. A user who copies a row out of a listing therefore
     /// hands a string the *declaration* parser reads as a resource, and a caller that only
     /// understands packages sees nothing at all. That is R-4: `list` reported
@@ -1260,7 +1260,7 @@ impl<'a> StateResolver<'a> {
     /// a second place that decides what a prefix means is the bug `CLAUDE.md` names and C13
     /// records six times over.
     ///
-    /// Callers need this to tell *the user named a manager* from *LiNix picked one*, which are
+    /// Callers need this to tell *the user named a manager* from *Shall picked one*, which are
     /// different questions with different right answers. `info ripgrep` reported a package the
     /// machine has as absent because `priority` picked `choco`, `choco` had nothing, and the
     /// answer from the manager that did have it was never asked for (N-3).
@@ -1387,8 +1387,8 @@ impl<'a> StateResolver<'a> {
     /// no manager carries:
     ///
     /// ```text
-    /// linix eval, bare name nothing claims     18.1 s  (103 s cold)
-    /// linix eval, the same fixture qualified    0.31 s
+    /// shall eval, bare name nothing claims     18.1 s  (103 s cold)
+    /// shall eval, the same fixture qualified    0.31 s
     /// ```
     ///
     /// Every manager has to be asked when nobody has the name, so the cost is not the number of
@@ -1810,7 +1810,7 @@ mod tests {
         ]);
         let err = resolve(&r).await.unwrap_err().to_string();
         // Two refusals guard this, and which one fires depends on whether the backend is
-        // one LiNix has ever heard of: the grammar refuses a prefix that names nothing,
+        // one Shall has ever heard of: the grammar refuses a prefix that names nothing,
         // `priority` refuses a real backend you did not list (V.15). Both must name the
         // backend, point at `priority`, and say where the line is — an error that cannot
         // be located cannot be fixed.
@@ -1899,7 +1899,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unreached_broken_module_is_never_parsed() {
-        // II.3: LiNix only parses what the active profiles reach. `linix check` is the
+        // II.3: Shall only parses what the active profiles reach. `shall check` is the
         // command that parses everything.
         let r = repo(&[
             ("priority", "apt\n"),

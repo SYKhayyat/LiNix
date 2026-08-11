@@ -11,14 +11,14 @@
 //! `AU1` starts: a package that *fails* still fails the command. Absence is a property of the
 //! machine; a failed install is a property of the run.
 
-use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
-use linix::app::sync::resolver::StateResolver;
-use linix::core::ManagedPackage;
+use shall::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
+use shall::app::sync::resolver::StateResolver;
+use shall::core::ManagedPackage;
 use tokio::fs;
 
 use crate::mock_providers::TestKernel;
 
-/// A manager that is in `priority`, is a name LiNix knows, and is not on this host.
+/// A manager that is in `priority`, is a name Shall knows, and is not on this host.
 ///
 /// `zypper` is registered only on Linux, so on Windows this exercises the "no such backend in
 /// the registry" branch and on Linux the "registered, binary absent" branch — which is the
@@ -44,7 +44,7 @@ async fn kernel_with(module_body: &str) -> TestKernel {
     kernel
 }
 
-async fn plan_of(kernel: &TestKernel) -> linix::app::sync::planner::SyncChanges {
+async fn plan_of(kernel: &TestKernel) -> shall::app::sync::planner::SyncChanges {
     let resolver = StateResolver::new(&kernel.app.config, kernel.app.registry.clone(), false).await;
     let desired = resolver
         .resolve_desired_state()
@@ -118,7 +118,7 @@ async fn the_report_counts_a_skip_apart_from_a_change() {
 
 #[tokio::test]
 async fn a_managed_package_whose_manager_is_gone_is_not_reaped() {
-    // The removal side of the same rule. LiNix installed it through zypper on the Linux box;
+    // The removal side of the same rule. Shall installed it through zypper on the Linux box;
     // the config now travels to a machine with no zypper. Scheduling the removal would run a
     // command that cannot exist, and failing is not what the user asked for either.
     let kernel = kernel_with("brew:neovim\n").await;
@@ -183,12 +183,12 @@ async fn a_package_that_fails_still_fails_the_command() {
 
     kernel.mock_executor.set_response(
         "brew install -- neovim",
-        Err(linix::core::Error::Other("no such formula".into())),
+        Err(shall::core::Error::Other("no such formula".into())),
     );
 
     let engine = kernel.app.sync_engine().await;
     let result = engine
-        .sync(changes, linix::app::sync::guard::GuardScope::Sync)
+        .sync(changes, shall::app::sync::guard::GuardScope::Sync)
         .await;
 
     assert!(
@@ -202,18 +202,18 @@ async fn a_package_that_fails_still_fails_the_command() {
 async fn keep_going_turns_a_failure_into_a_warning_and_nothing_else_does() {
     let kernel = TestKernel::new().await;
     assert!(
-        !linix::core::TransactionConfig::default().continue_on_error,
+        !shall::core::TransactionConfig::default().continue_on_error,
         "all-or-nothing stays the default; --keep-going is the opt-in"
     );
 
     let mut config = (*kernel.app.config).clone();
     assert!(
-        !linix::core::TransactionConfig::from_config(&config).continue_on_error,
+        !shall::core::TransactionConfig::from_config(&config).continue_on_error,
         "the flag is the only thing that turns it on"
     );
     config.keep_going_this_run = true;
     assert!(
-        linix::core::TransactionConfig::from_config(&config).continue_on_error,
+        shall::core::TransactionConfig::from_config(&config).continue_on_error,
         "`--keep-going` has to reach the transaction, or the flag is decoration"
     );
 }

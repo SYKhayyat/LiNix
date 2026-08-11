@@ -2,7 +2,7 @@
 //!
 //! **Git already knows.** The config repo is a git repo (II.1), every sync commits, and the
 //! commit that first added a line is a fact already recorded — so the answer is a question put
-//! to git, not a second history LiNix writes at sync time and has to keep true. A store
+//! to git, not a second history Shall writes at sync time and has to keep true. A store
 //! recording "when did this line appear" would be a copy of git's answer that can disagree with
 //! it, and the copy is always the one that is wrong.
 //!

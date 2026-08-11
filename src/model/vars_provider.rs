@@ -2,7 +2,7 @@
 //!
 //! A provider produces `name → value` pairs; the file provider does it by resolving a line file,
 //! this module does it by running a program the user wrote. Several provider files may sit in a
-//! repo at once — `vars`, `vars.py`, `vars.linix` — and exactly one is active per machine, named
+//! repo at once — `vars`, `vars.py`, `vars.shall` — and exactly one is active per machine, named
 //! by `[vars] source` in `preferences.toml`. Two present and none chosen is a loud error, never a
 //! guess about which one wins.
 
@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 pub enum Kind {
     /// `vars` — the built-in line file, resolved by [`crate::model::vars::resolve`].
     LineFile,
-    /// `vars.linix` — the embedded script, run in-process.
+    /// `vars.shall` — the embedded script, run in-process.
     Embedded,
     /// `vars.<ext>` — an external executable, run by this module.
     External,
@@ -34,7 +34,7 @@ pub struct Selected {
 fn kind_of(filename: &str) -> Option<Kind> {
     match filename {
         "vars" => Some(Kind::LineFile),
-        "vars.linix" => Some(Kind::Embedded),
+        "vars.shall" => Some(Kind::Embedded),
         _ if filename.starts_with("vars.") => Some(Kind::External),
         _ => None,
     }
@@ -76,7 +76,7 @@ pub fn select(config_root: &Path, source: &Option<String>) -> Result<Option<Sele
                 ),
             )
             .with_hint(
-                "name the built-in `vars`, an embedded `vars.linix`, or an external `vars.<ext>`.",
+                "name the built-in `vars`, an embedded `vars.shall`, or an external `vars.<ext>`.",
             ));
         };
         let path = config_root.join(name);
@@ -113,8 +113,8 @@ pub fn select(config_root: &Path, source: &Option<String>) -> Result<Option<Sele
 
 /// Run an external provider and parse its output into resolved variables.
 ///
-/// The program is handed the machine's detected facts as `LINIX_OS`/`LINIX_ARCH`/`LINIX_HOST`/
-/// `LINIX_FAMILY`, so it decides per machine without re-detecting them. Its stdout is a JSON
+/// The program is handed the machine's detected facts as `SHALL_OS`/`SHALL_ARCH`/`SHALL_HOST`/
+/// `SHALL_FAMILY`, so it decides per machine without re-detecting them. Its stdout is a JSON
 /// object of `name → value`, or `name = value` lines. A non-zero exit is an error carrying the
 /// program's own stderr — a provider that fails must not silently resolve to nothing.
 pub fn run_external(path: &Path, facts: &HostFacts) -> Result<Vars> {
@@ -132,13 +132,13 @@ pub fn run_external_with_origins(path: &Path, facts: &HostFacts) -> Result<(Vars
     let mut cmd = std::process::Command::new(&argv[0]);
     cmd.args(&argv[1..])
         .stdin(std::process::Stdio::null())
-        .env("LINIX_OS", &facts.os)
-        .env("LINIX_ARCH", &facts.arch)
-        .env("LINIX_HOST", &facts.host)
-        .env("LINIX_FAMILY", &facts.family);
+        .env("SHALL_OS", &facts.os)
+        .env("SHALL_ARCH", &facts.arch)
+        .env("SHALL_HOST", &facts.host)
+        .env("SHALL_FAMILY", &facts.family);
 
     // An external provider runs on every resolution, before any manager is asked — so a slow
-    // one looks like LiNix being slow to start until the breakdown names it.
+    // one looks like Shall being slow to start until the breakdown names it.
     let timing = crate::core::timing::begin();
     // Blocking, and it runs on every resolution before any manager is asked.
     let output = crate::core::blocking::command_output(&mut cmd);
@@ -183,7 +183,7 @@ fn file_name(path: &Path) -> String {
 
 /// The conventional interpreter for a provider's extension — `.py` is Python, `.js` is Node — so
 /// a user writes `vars.py` and it runs without a shebang or a chmod, which is what IX.6 means by
-/// "an executable run by LiNix". An unknown extension is run directly, trusting the OS.
+/// "an executable run by Shall". An unknown extension is run directly, trusting the OS.
 ///
 /// The *name* here is a Unix spelling, and finding this machine's copy of it is
 /// `model::script`'s question, not a second one: `.py` used to mean literally `python` on Windows
@@ -347,7 +347,7 @@ mod tests {
 
     /// A per-test directory that deletes itself.
     ///
-    /// It used to be `temp_dir()/linix-vars-test-<pid>-<n>`, created and never removed. PIDs
+    /// It used to be `temp_dir()/shall-vars-test-<pid>-<n>`, created and never removed. PIDs
     /// are recycled, so a later run could land on a previous run's directory and find its
     /// files — and these tests are about *which provider files are present*, so inheriting two
     /// of them made "more than one variable provider is present" a failure that appeared and
@@ -470,8 +470,8 @@ mod tests {
     }
 
     #[test]
-    fn vars_linix_is_the_embedded_kind() {
-        assert_eq!(kind_of("vars.linix"), Some(Kind::Embedded));
+    fn vars_shall_is_the_embedded_kind() {
+        assert_eq!(kind_of("vars.shall"), Some(Kind::Embedded));
         assert_eq!(kind_of("vars"), Some(Kind::LineFile));
         assert_eq!(kind_of("vars.py"), Some(Kind::External));
         assert_eq!(kind_of("modules"), None);
@@ -534,10 +534,10 @@ mod tests {
         let (name, body) = if cfg!(windows) {
             (
                 "vars.cmd",
-                "@echo off\r\necho role=%LINIX_OS%\r\necho cores=8\r\n",
+                "@echo off\r\necho role=%SHALL_OS%\r\necho cores=8\r\n",
             )
         } else {
-            ("vars.sh", "echo role=$LINIX_OS\necho cores=8\n")
+            ("vars.sh", "echo role=$SHALL_OS\necho cores=8\n")
         };
         let path = dir.join(name);
         std::fs::write(&path, body).unwrap();

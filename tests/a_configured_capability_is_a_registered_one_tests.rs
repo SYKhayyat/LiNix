@@ -5,7 +5,7 @@
 //! was registered `.with_upgradable(…)`. `choco`, the third Windows manager, is registered with
 //! it, in the same file, forty lines away.
 //!
-//! So `linix upgrade` on Windows upgraded chocolatey packages and silently skipped the other
+//! So `shall upgrade` on Windows upgraded chocolatey packages and silently skipped the other
 //! two. There is no error: `as_upgradable()` answers `None`, and every caller reads that as
 //! *this manager has no such concept* — the same answer `link:` gives.
 //!
@@ -37,7 +37,7 @@ const EXEMPT: &[(&str, &str)] = &[
     (
         "register_bun",
         "`bun upgrade` upgrades the bun runtime, not the packages bun installed. Registering it \
-         would make `linix upgrade` replace the user's toolchain while reporting that it had \
+         would make `shall upgrade` replace the user's toolchain while reporting that it had \
          updated their packages.",
     ),
 ];
@@ -119,7 +119,7 @@ fn a_manager_that_says_how_to_upgrade_everything_is_upgradable() {
     .scanning_at_least(15)
     .reason_of_at_least(60)
     .remedy(
-        "`linix upgrade` skips them without saying so. Add \
+        "`shall upgrade` skips them without saying so. Add \
          `.with_upgradable(Arc::new(GenericUpgradable { core: core.clone() }))`.",
     )
     .audit(scanned, &losses(&src));

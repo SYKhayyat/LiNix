@@ -11,9 +11,9 @@
 //! `@channel`-hides-`@classic` cases are the same fault twice: a drift check that `return`ed on
 //! the first option it recognised, so writing two options together killed one of them.
 
-use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
-use linix::core::executor::DryRunOutput;
-use linix::core::{GraphAction, PackageSpec};
+use shall::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
+use shall::core::executor::DryRunOutput;
+use shall::core::{GraphAction, PackageSpec};
 use std::collections::HashMap;
 
 use crate::mock_providers::TestKernel;
@@ -220,7 +220,7 @@ async fn a_satisfied_channel_does_not_hide_a_drifted_confinement() {
 
 /// Y23 — the same defect on the *other* backend that publishes channels. flatpak calls a channel
 /// a branch, `@channel` really does reach the installed ref (`org.gimp.GIMP//beta`), and the
-/// listing LiNix read asked for `application,version` — so the branch was never known, the drift
+/// listing Shall read asked for `application,version` — so the branch was never known, the drift
 /// check had nothing to compare, and editing a flatpak's channel did nothing for ever.
 #[tokio::test]
 async fn an_edited_flatpak_branch_is_drift() {
@@ -250,7 +250,7 @@ async fn an_edited_flatpak_branch_is_drift() {
 
 /// D13's rule where flatpak is the backend that forces it. flatpak installs branches side by
 /// side and its listing has no column saying which one is current, so an app on two branches is
-/// a channel LiNix cannot read — and an unreadable value is left alone. Reporting either row
+/// a channel Shall cannot read — and an unreadable value is left alone. Reporting either row
 /// would schedule a switch on every sync for ever, which is worse than the drift it would catch.
 #[tokio::test]
 async fn an_app_on_two_branches_is_left_alone_rather_than_switched_for_ever() {

@@ -18,7 +18,7 @@
 //!
 //!     === the manifest, in bytes:
 //!     0000000   c   a   r   g   o   : 033   [   3   1   m   r   e   d 033   [ …
-//!     === what linix prints, in bytes:
+//!     === what shall prints, in bytes:
 //!     0000060   …   n   a   m   e   :     033   [   3   1   m   r   e   d 033 …
 //!     0000060   …   n   a   m   e   :     342 200 256   r   e   v   e   r   s …
 //!
@@ -66,11 +66,11 @@ fn fixture(name: &str, bad: &str) -> PathBuf {
 }
 
 fn run(dir: &Path, args: &[&str]) -> (String, i32) {
-    let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+    let out = Command::new(env!("CARGO_BIN_EXE_shall"))
         .args(args)
         .current_dir(dir)
-        .env("LINIX_CONFIG_DIR", dir.join("config"))
-        .env("LINIX_DATA_DIR", dir.join("data"))
+        .env("SHALL_CONFIG_DIR", dir.join("config"))
+        .env("SHALL_DATA_DIR", dir.join("data"))
         .stdin(std::process::Stdio::null())
         .output()
         .expect("the binary should run");
@@ -146,11 +146,11 @@ fn a_refusal_does_not_reprint_the_control_bytes_it_rejects() {
 
     for (tag, bad, bytes) in cases {
         let dir = fixture(&format!("grade4-echo-{tag}"), bad);
-        let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+        let out = Command::new(env!("CARGO_BIN_EXE_shall"))
             .arg("eval")
             .current_dir(&dir)
-            .env("LINIX_CONFIG_DIR", dir.join("config"))
-            .env("LINIX_DATA_DIR", dir.join("data"))
+            .env("SHALL_CONFIG_DIR", dir.join("config"))
+            .env("SHALL_DATA_DIR", dir.join("data"))
             .env("NO_COLOR", "1")
             .stdin(std::process::Stdio::null())
             .output()
@@ -166,7 +166,7 @@ fn a_refusal_does_not_reprint_the_control_bytes_it_rejects() {
     assert!(
         echoed.is_empty(),
         "the refusal reprinted the control bytes it was rejecting, verbatim, for: {}\n\nNO_COLOR=1 \
-         was set, so this is the manifest's bytes and not LiNix's own styling. U+202E is the \
+         was set, so this is the manifest's bytes and not Shall's own styling. U+202E is the \
          trojan-source character; the message that says the characters are invalid renders under \
          their control.",
         echoed.join(", ")
@@ -202,11 +202,11 @@ const READERS: [&[&str]; 5] = [
 ];
 
 fn raw(dir: &Path, args: &[&str]) -> Vec<u8> {
-    let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+    let out = Command::new(env!("CARGO_BIN_EXE_shall"))
         .args(args)
         .current_dir(dir)
-        .env("LINIX_CONFIG_DIR", dir.join("config"))
-        .env("LINIX_DATA_DIR", dir.join("data"))
+        .env("SHALL_CONFIG_DIR", dir.join("config"))
+        .env("SHALL_DATA_DIR", dir.join("data"))
         .env("NO_COLOR", "1")
         .stdin(std::process::Stdio::null())
         .output()
@@ -224,7 +224,7 @@ fn no_command_reprints_a_control_character_it_read_from_a_manifest() {
         let dir = fixture(&format!("grade4-fam-echo-{tag}"), &format!("cargo:{ch}bad"));
         for args in READERS {
             if raw(&dir, args).windows(bytes.len()).any(|w| w == bytes) {
-                leaks.push(format!("`linix {}` leaked {tag}", args.join(" ")));
+                leaks.push(format!("`shall {}` leaked {tag}", args.join(" ")));
             }
         }
     }
@@ -232,7 +232,7 @@ fn no_command_reprints_a_control_character_it_read_from_a_manifest() {
     assert!(
         leaks.is_empty(),
         "these commands handed the terminal the control bytes they read out of a module:\n  {}\n\n\
-         NO_COLOR=1 was set, so nothing here is LiNix's own styling. Escaping one message is not \
+         NO_COLOR=1 was set, so nothing here is Shall's own styling. Escaping one message is not \
          the fix — the name reaches a user through whichever command reads the model first.",
         leaks.join("\n  ")
     );
@@ -254,7 +254,7 @@ fn every_command_that_refuses_a_hostile_name_says_where_it_is() {
             }
             if !out.contains(&format!("big.txt:{BAD_LINE}")) {
                 unlocated.push(format!(
-                    "`linix {}` for {tag}: {}",
+                    "`shall {}` for {tag}: {}",
                     args.join(" "),
                     out.lines()
                         .find(|l| l.contains("rror"))

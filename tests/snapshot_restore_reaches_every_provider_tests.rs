@@ -16,9 +16,9 @@
 //! next year is covered without anyone remembering this file exists.
 
 use async_trait::async_trait;
-use linix::app::snapshot_restore::SnapshotRestore;
-use linix::core::snapshot::{RestoreCapability, SnapshotProvider};
-use linix::core::{Result, Snapshot, SnapshotManager, StateRegistry};
+use shall::app::snapshot_restore::SnapshotRestore;
+use shall::core::snapshot::{RestoreCapability, SnapshotProvider};
+use shall::core::{Result, Snapshot, SnapshotManager, StateRegistry};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -36,7 +36,7 @@ impl SnapshotProvider for DeclaresLiveRestore {
     async fn is_available(&self) -> bool {
         true
     }
-    async fn create(&self, _label: linix::core::snapshot::SnapshotLabel) -> Result<Snapshot> {
+    async fn create(&self, _label: shall::core::snapshot::SnapshotLabel) -> Result<Snapshot> {
         unreachable!("these tests never create")
     }
     async fn list(&self) -> Result<Vec<Snapshot>> {
@@ -55,10 +55,10 @@ impl SnapshotProvider for DeclaresLiveRestore {
 
 fn snapshot_of(backend: &str) -> Snapshot {
     Snapshot {
-        id: "linix_pre_sync_20260804120000".to_string(),
+        id: "shall_pre_sync_20260804120000".to_string(),
         backend: backend.to_string(),
         timestamp: "2026-08-04 12:00:00".to_string(),
-        description: "LiNix: pre-sync".to_string(),
+        description: "Shall: pre-sync".to_string(),
     }
 }
 
@@ -115,7 +115,7 @@ async fn a_provider_with_no_readable_snapshot_tree_yields_no_summary_rather_than
 /// added with a capability the command cannot honour.
 #[test]
 fn every_shipped_row_that_declares_a_live_restore_names_a_restore_command() {
-    let file: linix::core::snapshot::SnapshotProviderFile =
+    let file: shall::core::snapshot::SnapshotProviderFile =
         toml::from_str(include_str!("../src/core/snapshot_builtins.toml"))
             .expect("the shipped provider rows parse");
     let mut live = 0;

@@ -1,14 +1,14 @@
-//! **Nothing LiNix installs may come from asking a manager what a package depends on.**
+//! **Nothing Shall installs may come from asking a manager what a package depends on.**
 //!
 //! The rule this gates is II.19's, and the bug it gates is the one the repo kept fixing one
 //! backend at a time. The planner asked each backend for a declared package's dependencies and
 //! added every returned name as an install node of its own. That node then:
 //!
-//! - was written into `registry.json` as a package LiNix manages — so `apt:nginx` on one line
+//! - was written into `registry.json` as a package Shall manages — so `apt:nginx` on one line
 //!   took ownership of nginx's dependencies, and a managed package nothing declares is drift,
 //!   which the next `sync` removes;
 //! - wired a graph edge, and an edge splits a manager's wave into two command lines, so the
-//!   one case where LiNix knew two declared packages were related was the one case it refused
+//!   one case where Shall knew two declared packages were related was the one case it refused
 //!   to put on a single `apt install`;
 //! - cost a subprocess per declared package, and another per discovered dependency, before any
 //!   install started.
@@ -26,8 +26,8 @@
 //! `MetadataProvider`.** That holds for the seven, for every data row, and for the backend
 //! nobody has written yet.
 //!
-//! `MetadataProvider` itself is alive and wanted — `linix info <name>` prints dependencies
-//! and `linix why` searches them for reverse dependencies. Reporting them is the feature.
+//! `MetadataProvider` itself is alive and wanted — `shall info <name>` prints dependencies
+//! and `shall why` searches them for reverse dependencies. Reporting them is the feature.
 //! Planning from them is the bug.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -42,12 +42,12 @@ use crate::ledger::Ledger;
 const REPORTING: &[(&str, &str)] = &[
     (
         "src/app/insight.rs",
-        "`linix why` — reverse dependencies among packages already managed. Reads them; \
+        "`shall why` — reverse dependencies among packages already managed. Reads them; \
          installs nothing.",
     ),
     (
         "src/verbs/packages.rs",
-        "`linix info <name>` — prints a `Dependencies:` line. Reads them; installs nothing.",
+        "`shall info <name>` — prints a `Dependencies:` line. Reads them; installs nothing.",
     ),
 ];
 
@@ -140,7 +140,7 @@ fn nothing_that_plans_asks_a_manager_what_a_package_depends_on() {
         .detailing(|site| sites.get(site).map(|l| l.join("\n        ")))
         .remedy(
             "Whatever a manager installs alongside what you asked for is that manager's \
-             business, and it does it at install time whether or not LiNix asks first. A name \
+             business, and it does it at install time whether or not Shall asks first. A name \
              that comes back from here becomes an install node, which becomes a row in \
              `registry.json` that nothing declares — and a managed package nothing declares is \
              what `sync` removes (II.7). Report dependencies; never plan from them.",

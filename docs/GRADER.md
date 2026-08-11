@@ -1,9 +1,9 @@
 # YOU ARE THE GRADER
 
-**Your job: independently verify LiNix and award a letter grade.** You need a machine, Docker,
+**Your job: independently verify Shall and award a letter grade.** You need a machine, Docker,
 and time. You are the adversary, not the author.
 
-You are working in the LiNix repo at the path given to you. Read, in this order:
+You are working in the Shall repo at the path given to you. Read, in this order:
 
 1. `CLAUDE.md` and `docs/SPEC.md` — the repo's binding rules.
 2. `docs/spec/bugs.md` — the live defect list, and `docs/spec/target-state.md`, which is what
@@ -57,7 +57,7 @@ stops being able to grade.
 4. **Do not fix what you find, unless it is trivial and you also write the failing test first.**
    Findings are more valuable than patches here; a patch without a diagnosis hides the family.
 5. **Prefer disposable environments for anything destructive.** Containers, VMs, throwaway
-   `LINIX_CONFIG_DIR`/`LINIX_DATA_DIR`. Never validate a removal path on a machine someone uses.
+   `SHALL_CONFIG_DIR`/`SHALL_DATA_DIR`. Never validate a removal path on a machine someone uses.
 6. **Record every command and its real output.** Paste it. Summaries of test results are how
    this codebase acquired false ✅s.
 7. **Check state at the right moment, or you will manufacture a finding.** Learned the hard way
@@ -101,15 +101,15 @@ findings are, because a defective check hides an unbounded number of defects.
 The known instance, in **both** harnesses:
 
 ```sh
-grep -v -F "linix-no-such-pkg-zzz" "$IMPERATIVE" > "$IMPERATIVE.tmp"
+grep -v -F "shall-no-such-pkg-zzz" "$IMPERATIVE" > "$IMPERATIVE.tmp"
 mv "$IMPERATIVE.tmp" "$IMPERATIVE"                       # deletes the line
 nok "the unresolvable name is out of the manifest" \
-    grep -q "linix-no-such-pkg-zzz" "$IMPERATIVE"        # then asserts it is gone
+    grep -q "shall-no-such-pkg-zzz" "$IMPERATIVE"        # then asserts it is gone
 ```
 
 Find the rest. Techniques:
 
-- **Mutation-test the harness.** Replace the `linix` binary with a stub that does nothing and
+- **Mutation-test the harness.** Replace the `shall` binary with a stub that does nothing and
   exits 0. Run each harness. **Every check that still passes is a check that tests nothing.**
   This single experiment is worth more than reading the harness line by line.
 - Then a stub that exits 1 on everything. Every check that still passes is inverted or unguarded.
@@ -129,20 +129,20 @@ soft "<backend>: install of <pkg> failed (ecosystem/network variance) — the ch
 ```
 
 In one observed run it fired four times and **not once was it network variance**: `github` was
-LiNix *correctly refusing* to overwrite a file it did not create, `helm` hit a real argv defect
+Shall *correctly refusing* to overwrite a file it did not create, `helm` hit a real argv defect
 (`plugin source does not support verification`), `luarocks` hit a real defect (no Lua version
 pinned). Each time, the rest of that backend's lifecycle — list, PATH, remove, gone — was
 skipped, and the run reported success.
 
 **So coverage disappears precisely where the product is broken.** Find every catch-all of this
-shape, in both harnesses. Then fix the category error: LiNix already computes
+shape, in both harnesses. Then fix the category error: Shall already computes
 `Retryability::{Transient, Permanent, Unknown}` and has a distinct `Refused` exit. A harness
 should soften only on `Transient`, fail hard on `Permanent`, and score `Refused` as its own
 outcome — never collapse "the network flaked", "we have a bug", and "we refused on purpose and
 were right" into one word.
 
 **Test for it directly:** point a backend at a package that cannot exist, and assert the harness
-reports a *failure*, not a soft pass. Then point it at something LiNix should refuse, and assert
+reports a *failure*, not a soft pass. Then point it at something Shall should refuse, and assert
 it reports a *refusal*.
 
 ### 2.2b Hunt the checker that verifies the arithmetic and not the claim
@@ -213,11 +213,11 @@ image that takes tens of minutes and therefore runs nightly at best.
 ### 3.2 Verify every argv against current upstream
 
 For each backend, run the real tool's `--help` (or subcommand help) and diff it against the
-argv LiNix builds in `src/backends/registry.rs` and the dedicated backend modules. Upstream CLIs
+argv Shall builds in `src/backends/registry.rs` and the dedicated backend modules. Upstream CLIs
 drift; `pixi global upgrade-all` was removed and nothing noticed.
 
 **Make this a permanent, self-updating check**, not a one-off sweep: a nightly job that, for each
-installed manager, asserts every subcommand LiNix will invoke still appears in that manager's
+installed manager, asserts every subcommand Shall will invoke still appears in that manager's
 help output. This is the single highest-leverage test in this document — it converts silent
 upstream drift into a named failure.
 
@@ -244,7 +244,7 @@ command. `krew` does it correctly, checking both `kubectl` and `kubectl-krew`.
 
 Audit every `is_available` and `check_health` against one question: *does this probe the thing
 that actually has to work?* For each, construct the environment where the probe passes and the
-backend fails, and assert LiNix says so.
+backend fails, and assert Shall says so.
 
 ### 3.5 Change every option after the install — the sweep no lifecycle performs
 
@@ -263,7 +263,7 @@ For **every** key in `config/grammar/statement.rs::PACKAGE_OPTION_KEYS` and ever
 
 1. Declare it with value A. Sync. Confirm the machine has A.
 2. **Edit the line to value B and sync again.** Confirm the machine has B — by asking the tool,
-   never by asking LiNix.
+   never by asking Shall.
 3. Sync a third time unchanged. Confirm **nothing happens.** This is the other half and it is
    the half a single edit cannot see: a comparison that gets units or formatting wrong reports a
    change on *every* sync, for ever, and a test that syncs once passes it.
@@ -285,23 +285,23 @@ and why — that list is the finding.
 ## 4. Test as a human, not as a pipe
 
 Everything in CI runs with pipes on every handle. A defect that emptied the output of every
-command LiNix runs lived in exactly that gap for weeks. `tests/pty_tests.rs` now covers the
+command Shall runs lived in exactly that gap for weeks. `tests/pty_tests.rs` now covers the
 basic case and is Linux-only. Go further.
 
 - **Drive a real pty** (`script -qec`, `expect`, `ptyprocess`, or a pty crate) and assert that
-  *what LiNix parsed equals what LiNix printed*. Do it for every read command, not just `list`.
+  *what Shall parsed equals what Shall printed*. Do it for every read command, not just `list`.
 - **Test the four handle combinations** for a mutation: stdin tty/pipe × stderr tty/pipe. The
   mirroring path in `RawExecutor::execute` only engages when stderr is a terminal.
 - **Test `sudo` for real** in a container with a password-protected user. Does the prompt reach
   the screen? Does the password reach sudo? Does a wrong password fail loudly? Does the keepalive
   work? This is untested and it is on every privileged path.
-- **Test the pipe-closed path**: `linix search x | head -1`. There is a panic hook for EPIPE
+- **Test the pipe-closed path**: `shall search x | head -1`. There is a panic hook for EPIPE
   under `panic = "abort"`; confirm it, and confirm it did not swallow real panics.
 - **Test a narrow terminal (`COLUMNS=40`), a dumb terminal (`TERM=dumb`), and no-color
   (`NO_COLOR=1`).** Tables are printed with fixed `{:<32}` widths; check they degrade sanely.
 - **Read the output aloud as a new user.** One failed install currently prints the same sentence
-  three times — once as a `WARN` naming `linix::core::journal` and a 32-hex WAL id, once as an
-  `ERROR` naming `linix::core::transaction` and a "Node", and once as `Error:`. Flag every place
+  three times — once as a `WARN` naming `shall::core::journal` and a 32-hex WAL id, once as an
+  `ERROR` naming `shall::core::transaction` and a "Node", and once as `Error:`. Flag every place
   internal vocabulary leaks: WAL, Node, DAG, backend-capability, module paths, UUIDs.
 
 **A rule worth adopting:** every user-visible failure should name (a) what failed in the user's
@@ -317,12 +317,12 @@ several require a real filesystem and some may require a reboot.
 
 - **Build a loopback btrfs/zfs filesystem in a VM**, take a snapshot, mutate, restore, and assert
   the mutation is gone. Same for lvm. This is the only way these get tested.
-- **Kill LiNix mid-transaction** — `SIGKILL` (not `SIGTERM`) between the install of package 3 and
+- **Kill Shall mid-transaction** — `SIGKILL` (not `SIGTERM`) between the install of package 3 and
   package 4 — then run `heal` and assert the machine and the journal agree. Do it at every step
   boundary, in a loop. This is the WAL's entire reason to exist and nothing tests it under a real
   crash.
 - **Fail a compensating action.** Make the reinstall during rollback fail (remove the package
-  from the repo mid-run) and assert LiNix reports the package as *left at the new version* by
+  from the repo mid-run) and assert Shall reports the package as *left at the new version* by
   name, and returns an error, rather than reporting a clean rollback.
 - **Prove the guard from the code, not the list.** Enumerate every call site that can reach a
   backend's `remove`/`purge`, from the code. For each, write a test that it refuses a protected
@@ -350,12 +350,12 @@ of.
   `:` and `@`. **Nothing should panic; everything should be a named refusal.** Compare against the
   §7 invariant: the parser is the one place a hostile string enters.
 - **Model-based testing.** Write a tiny reference model of the desired state in a few hundred
-  lines, generate random command sequences, and assert LiNix's `eval` output matches the model
+  lines, generate random command sequences, and assert Shall's `eval` output matches the model
   after each step. Divergence is a bug in one of them, and finding out which is the point.
 - **Differential testing across backends.** The same declarative operation through apt, brew,
   scoop and pacman should produce the same *shape* of result. Where it does not, either a parser
   or a capability declaration is wrong.
-- **Concurrency.** Two `linix sync` runs at once; one holding the data lock while the other
+- **Concurrency.** Two `shall sync` runs at once; one holding the data lock while the other
   starts; `SIGKILL` the lock holder and assert the next run recovers rather than waits forever.
 
 ---
@@ -403,12 +403,12 @@ a hook ledger — so look where that discipline could have gaps.
 
 Script a **new user's first hour** and assert on it, because none of it is covered today:
 
-1. Fresh machine, no config. `linix sync` — does it name `linix init`? *(Today: no.)*
-2. `linix init` — does it create everything its `--help` promises? *(Today: no starter module.)*
-3. `linix check health` on a normal machine — does it call 23 absent managers *critical*?
+1. Fresh machine, no config. `shall sync` — does it name `shall init`? *(Today: no.)*
+2. `shall init` — does it create everything its `--help` promises? *(Today: no starter module.)*
+3. `shall check health` on a normal machine — does it call 23 absent managers *critical*?
    *(Today: yes.)* Does the rollup agree with the detail view? *(Today: no.)*
-4. `linix install <typo>` — is the config still usable afterwards? *(Today: no.)*
-5. `linix info <a real package>` — how long, and is it right? *(Today: 98 seconds, and wrong.)*
+4. `shall install <typo>` — is the config still usable afterwards? *(Today: no.)*
+5. `shall info <a real package>` — how long, and is it right? *(Today: 98 seconds, and wrong.)*
 6. Every error message: does it name a file or a command the user can act on?
 
 **Then time everything.** Set a budget per command class — read-only commands under 2s, a
@@ -419,14 +419,14 @@ which is how a 98-second `info` shipped.
 
 ## 9b. The four rulings of 2026-07-31, and how to catch them lying
 
-Each shipped with a claim that a name a manager prints is a name LiNix accepts. Each is one
+Each shipped with a claim that a name a manager prints is a name Shall accepts. Each is one
 command, and the *interesting* half of every one of them is the control beside it — a rule that
 admits everything is not a rule.
 
 | ruling | the check | the control that must still refuse |
 |---|---|---|
-| `Q22` BOM | `printf '\\xef\\xbb\\xbfcargo:ripgrep\\n' > $LINIX_CONFIG_DIR/modules/starter.txt; linix eval` | a U+FEFF *mid-name* is still refused, and the refusal names `<U+FEFF>` rather than drawing it |
-| `Q23` scoped `@` | `linix eval` over `npm:@angular/cli@version=17.3.0` — name `@angular/cli`, version `17.3.0` | `cargo:ripgrep@version=15.2.0` still splits at its first `@` |
+| `Q22` BOM | `printf '\\xef\\xbb\\xbfcargo:ripgrep\\n' > $SHALL_CONFIG_DIR/modules/starter.txt; shall eval` | a U+FEFF *mid-name* is still refused, and the refusal names `<U+FEFF>` rather than drawing it |
+| `Q23` scoped `@` | `shall eval` over `npm:@angular/cli@version=17.3.0` — name `@angular/cli`, version `17.3.0` | `cargo:ripgrep@version=15.2.0` still splits at its first `@` |
 | winget identifiers | `winget:ARP\Machine\X64\{GUID}` resolves | the same name under `cargo` is refused; `..`, `;`, backtick, `$`, `|` still refused for winget |
 | `G-2` backslash | `winget:a\b` is a package | `apt:jq \ apt:vim` is still set math |
 
@@ -442,7 +442,7 @@ question to ask of any name rule is not "does it parse" but **"does it survive `
 - **`nix` is installed in the `tools` image.** It was not, for months: the nixos.org script
   refuses to run as root and `|| echo "SKIP nix install"` swallowed it, while the ledger called
   `nix` a backend with *no path to a real lifecycle anywhere*. Check the image's own assertion
-  (`RUN nix --version && nix profile list`) and the `/etc/linix-image-managers` manifest the
+  (`RUN nix --version && nix profile list`) and the `/etc/shall-image-managers` manifest the
   sweep now reads — a manager that failed to install is reported MISSING, not impossible.
 - **Five exemptions are now conditional on `disposable_host`** (`CI` set): `pip`, `vscode`,
   `emacs`, `mise`, `asdf`. On a developer's box they still skip, and the reason still says so.

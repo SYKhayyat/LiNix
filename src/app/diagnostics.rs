@@ -147,7 +147,7 @@ impl FailureDiagnosticEngine {
         let suggestions = self.diagnose(stderr, current_backend);
         if !suggestions.is_empty() {
             println!(
-                "\nmissing dependency: {} — try: linix install {}",
+                "\nmissing dependency: {} — try: shall install {}",
                 suggestions.join(", "),
                 suggestions.join(" ")
             );

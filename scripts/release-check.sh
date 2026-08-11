@@ -101,12 +101,12 @@ fi
 # `tests/the_review_apparatus_is_rust_tests.rs`, so a gate added to CI fails until it is added
 # here too.
 echo "-> scripts/harness-logic-test.sh"
-if LINIX_BIN="$REPO_ROOT/target/release/linix" bash scripts/harness-logic-test.sh; then
+if SHALL_BIN="$REPO_ROOT/target/release/shall" bash scripts/harness-logic-test.sh; then
     pass "harness predicates"
 else fail "harness predicates FAILED"; fi
 
 # A harness is trustworthy because its checks can go red, not because they are green. This
-# runs them against a `linix` that does nothing and fails if too many still pass.
+# runs them against a `shall` that does nothing and fails if too many still pass.
 echo "-> scripts/harness-mutation-test.sh --check"
 if bash scripts/harness-mutation-test.sh --check; then
     pass "harness mutation budget"
@@ -126,7 +126,7 @@ if [ "$SKIP_DOCKER" = "1" ]; then
     info "SKIP_DOCKER=1 — skipped the real integration matrix (hermetic gates only)"
 elif [ "$OS" = "Darwin" ]; then
     step "2. NATIVE INTEGRATION (macOS — no Linux containers; sweeping brew)"
-    if LINIX="$REPO_ROOT/target/release/linix" bash scripts/integration-windows.sh brew wget; then
+    if SHALL="$REPO_ROOT/target/release/shall" bash scripts/integration-windows.sh brew wget; then
         pass "native brew integration sweep PASS"
     else fail "native brew integration sweep FAILED"; fi
 elif command -v docker >/dev/null 2>&1; then

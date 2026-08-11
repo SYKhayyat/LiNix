@@ -140,7 +140,7 @@ jobs:
       # reasoned: three consecutive runs produced a single `Build for x86_64-pc-windows-msvc`
       # and no others. Linux and both Macs were never built here at all, while the release job
       # below asserts four binaries in `dist/` — the same shape as the assets that were all
-      # named `linix`, and found the same way, by reading what the run actually did.
+      # named `shall`, and found the same way, by reading what the run actually did.
       matrix:
         include:
           - os: ubuntu-latest
@@ -251,9 +251,9 @@ jobs:
       if: ${{ !matrix.native }}
 
     # The blind spot every other gate in this file shares: builds, tests, clippy and all four
-    # container lifecycles run with pipes on every handle, so none of them can see what LiNix
+    # container lifecycles run with pipes on every handle, so none of them can see what Shall
     # does when a human is at a terminal — which is where a defect sat that emptied the output
-    # of every command LiNix runs. `cargo test` already includes this file; it is named as its
+    # of every command Shall runs. `cargo test` already includes this file; it is named as its
     # own step so a regression is legible in the job list instead of buried in 1,300 results.
     # Quoted, and it has to be: a module filter ends in `::`, which YAML reads as a mapping key
     # and refuses. An unparseable workflow does not fail a job — it fails the *run*, in zero
@@ -273,20 +273,20 @@ jobs:
     # The integration harnesses decide pass/fail for every backend, and they only run
     # nightly — so a wrong verdict inside one of them is a day late and easy to read
     # past. Their predicates are cheap to test directly, so they are tested on every push.
-    # LINIX_BIN also lets it check that every subcommand the harnesses invoke still
+    # SHALL_BIN also lets it check that every subcommand the harnesses invoke still
     # exists: six of them had been folded into `check <section>` and the host harness
     # was never updated, which silently emptied two whole sections of that sweep.
     - name: Harness predicates
-      run: LINIX_BIN="$PWD/target/${{ matrix.target }}/release/linix" bash scripts/harness-logic-test.sh
+      run: SHALL_BIN="$PWD/target/${{ matrix.target }}/release/shall" bash scripts/harness-logic-test.sh
       if: matrix.target == 'x86_64-unknown-linux-gnu'
 
     - name: Upload binary artifact
       uses: actions/upload-artifact@v4
       with:
-        name: linix-${{ matrix.target }}
+        name: shall-${{ matrix.target }}
         path: |
-          target/${{ matrix.target }}/release/linix
-          target/${{ matrix.target }}/release/linix.exe
+          target/${{ matrix.target }}/release/shall
+          target/${{ matrix.target }}/release/shall.exe
         if-no-files-found: ignore
 
   # **This job had never run, and could not have.** Its publish step is gated on a `v*` tag, and
@@ -310,22 +310,22 @@ jobs:
     - name: Download all artifacts
       uses: actions/download-artifact@v4
 
-    # **A release asset is named by its basename, and every build target produces `linix`.**
+    # **A release asset is named by its basename, and every build target produces `shall`.**
     # Four artifact directories carrying one filename between them upload as one asset that
-    # three of the four overwrite — a release page offering a single `linix` binary with no way
+    # three of the four overwrite — a release page offering a single `shall` binary with no way
     # to tell which platform won. The name has to carry the target before anything is published,
     # and it has to be the name the installers ask for.
     - name: Name each binary after the target it was built for
       run: |
         set -eu
         mkdir -p dist
-        for d in linix-*/; do
-          target=${d%/}; target=${target#linix-}
-          if [ -f "${d}linix.exe" ]; then
-            cp "${d}linix.exe" "dist/linix-${target}.exe"
+        for d in shall-*/; do
+          target=${d%/}; target=${target#shall-}
+          if [ -f "${d}shall.exe" ]; then
+            cp "${d}shall.exe" "dist/shall-${target}.exe"
           else
-            cp "${d}linix" "dist/linix-${target}"
-            chmod +x "dist/linix-${target}"
+            cp "${d}shall" "dist/shall-${target}"
+            chmod +x "dist/shall-${target}"
           fi
         done
         ls -l dist
@@ -341,9 +341,9 @@ jobs:
         set -eu
         missing=
         for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin; do
-          test -f "dist/linix-${target}" || missing="${missing} linix-${target}"
+          test -f "dist/shall-${target}" || missing="${missing} shall-${target}"
         done
-        test -f dist/linix-x86_64-pc-windows-msvc.exe || missing="${missing} linix-x86_64-pc-windows-msvc.exe"
+        test -f dist/shall-x86_64-pc-windows-msvc.exe || missing="${missing} shall-x86_64-pc-windows-msvc.exe"
         test -z "$missing" || { echo "the release is missing:${missing}" >&2; exit 1; }
         echo "all five targets present"
 
@@ -384,13 +384,13 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Build the ${{ matrix.distro }} image
-      run: docker build -f docker/integration/Dockerfile.${{ matrix.distro }} -t linix-it-${{ matrix.distro }} .
+      run: docker build -f docker/integration/Dockerfile.${{ matrix.distro }} -t shall-it-${{ matrix.distro }} .
     - name: Run the ${{ matrix.distro }} lifecycle
       run: |
         docker run --rm \
           -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
           -v "$PWD/scripts/lifecycle-floor.txt:/src/scripts/lifecycle-floor.txt:ro" \
-          linix-it-${{ matrix.distro }} ${{ matrix.backend }} ${{ matrix.pkg }}
+          shall-it-${{ matrix.distro }} ${{ matrix.backend }} ${{ matrix.pkg }}
 
     # The container harness runs four distros on every push and nothing ever asked whether its
     # checks CAN fail — the mutation gate was pointed only at the Windows harness. It runs here,
@@ -407,7 +407,7 @@ jobs:
           -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
           -v "$PWD/scripts/lifecycle-floor.txt:/src/scripts/lifecycle-floor.txt:ro" \
           -v "$PWD/scripts/harness-mutation-test.sh:/src/scripts/harness-mutation-test.sh:ro" \
-          linix-it-ubuntu -c \
+          shall-it-ubuntu -c \
           "cd /src && bash scripts/harness-mutation-test.sh docker/integration/run-in-container.sh --check ${{ matrix.backend }} ${{ matrix.pkg }}"
 
   # The source-building images. `tools` is where 18 of the ecosystem managers get a real
@@ -428,13 +428,13 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Build the ${{ matrix.distro }} image
-      run: docker build -f docker/integration/Dockerfile.${{ matrix.distro }} -t linix-it-${{ matrix.distro }} .
+      run: docker build -f docker/integration/Dockerfile.${{ matrix.distro }} -t shall-it-${{ matrix.distro }} .
     - name: Run the ${{ matrix.distro }} lifecycle
       run: |
         docker run --rm ${{ matrix.smoke }} \
           -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
           -v "$PWD/scripts/lifecycle-floor.txt:/src/scripts/lifecycle-floor.txt:ro" \
-          linix-it-${{ matrix.distro }} ${{ matrix.backend }} ${{ matrix.pkg }}
+          shall-it-${{ matrix.distro }} ${{ matrix.backend }} ${{ matrix.pkg }}
 
     # The argv gates, run where the managers are. Both of them can only ask a manager that is
     # present, and a GitHub runner has about eight — this image has thirty. That gap is the
@@ -447,7 +447,7 @@ jobs:
         docker run --rm --entrypoint bash \
           -e TERMINATOR_PROBE=1 -e CARGO_TARGET_DIR=/tmp/target \
           -v "$PWD:/src" \
-          linix-it-tools -c \
+          shall-it-tools -c \
           "cd /src && cargo test --test suite -- argv_drift_tests:: terminator_probe_tests:: --nocapture"
 
   # The storage effectors, on real block devices. `btrfs`, `lvm` and `zfs` operate on volumes
@@ -472,14 +472,14 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Build the storage image
-      run: docker build -f docker/integration/Dockerfile.storage -t linix-it-storage .
+      run: docker build -f docker/integration/Dockerfile.storage -t shall-it-storage .
     - name: Run the storage lifecycle
       run: |
         docker run --rm --privileged \
           -v /lib/modules:/lib/modules:ro \
           -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
           -v "$PWD/scripts/lifecycle-floor.txt:/src/scripts/lifecycle-floor.txt:ro" \
-          linix-it-storage apt jq
+          shall-it-storage apt jq
 
   # macOS, run rather than compiled. A Darwin build passing `cargo test` says the code
   # compiles there; it says nothing about whether `brew install` reaches brew, whether the
@@ -504,7 +504,7 @@ jobs:
     - name: Install coreutils (gtimeout)
       run: brew install coreutils
     - name: Native sweep (brew)
-      run: LINIX="$PWD/target/release/linix" bash scripts/integration-windows.sh brew wget
+      run: SHALL="$PWD/target/release/shall" bash scripts/integration-windows.sh brew wget
 
   # The native Windows sweep — the gate that found every hard failure in the 2026-07-27
   # readiness assessment, and which no automated job ran on any platform. `release-check.ps1`
@@ -531,9 +531,9 @@ jobs:
         echo "$env:USERPROFILE\scoop\shims" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
     - name: Native sweep (scoop)
       shell: bash
-      run: LINIX="$PWD/target/release/linix.exe" bash scripts/integration-windows.sh scoop jq
+      run: SHALL="$PWD/target/release/shall.exe" bash scripts/integration-windows.sh scoop jq
 
-  # Does every subcommand LiNix invokes still exist in the tool it invokes it on?
+  # Does every subcommand Shall invokes still exist in the tool it invokes it on?
   #
   # `pixi global upgrade-all` was removed upstream and sat in the tree for as long as it did
   # because a plan-smoke proves an argv was *constructed*, never that it is *correct*. This
@@ -564,7 +564,7 @@ jobs:
       run: "cargo test --release --test suite -- terminator_probe_tests:: --nocapture"
 
   # A harness is trustworthy because its checks CAN go red, not because they are green. This
-  # replaces `linix` with a binary that does nothing and exits 0: every check that still
+  # replaces `shall` with a binary that does nothing and exits 0: every check that still
   # passes examined nothing. The survivor count is a ratchet — it may fall, never rise.
   harness-mutation:
     name: Harness mutation (can the checks fail?)

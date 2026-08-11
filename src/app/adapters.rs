@@ -1,23 +1,23 @@
-//! The eight ways to extend LiNix, in one table, with a way to ask what this machine has.
+//! The eight ways to extend Shall, in one table, with a way to ask what this machine has.
 //!
 //! Every one of them already worked: a `[[backend]]` row teaches a package manager, a
 //! `[[snapshot]]` row teaches a rollback provider, and both go through II.12's ledger like any
-//! other file LiNix executes on your behalf. What was missing is a **front door**. The eight
+//! other file Shall executes on your behalf. What was missing is a **front door**. The eight
 //! surfaces were eight paths on `Layout`, eight readers, and eight `warn!("ignoring
 //! adapters/x.toml: …")` lines, and nothing in the program could answer *what have I extended?*
 //!
 //! **The failure that costs the most is not a bad row, it is a row nobody knows was dropped.**
 //! `[[backends]]` instead of `[[backend]]` parses as perfectly good TOML describing a table
-//! LiNix does not read — no parse error, no warning, and a `mymgr:` line that fails later with a
+//! Shall does not read — no parse error, no warning, and a `mymgr:` line that fails later with a
 //! message about an unknown backend. So the survey below counts *rows the reader will actually
 //! see*, per surface, and a file that parses into none of them says so.
 
 use crate::model::layout::Layout;
 use std::path::PathBuf;
 
-/// One extension surface: a file a user writes, and what a row in it teaches LiNix.
+/// One extension surface: a file a user writes, and what a row in it teaches Shall.
 pub struct Surface {
-    /// The file's stem, which is also how a user names the surface: `linix adapters backends`.
+    /// The file's stem, which is also how a user names the surface: `shall adapters backends`.
     pub name: &'static str,
     /// The TOML array a reader looks for. `[[backend]]`, singular, in `backends.toml`, plural —
     /// the mismatch is deliberate in the format and is exactly the typo worth catching.
@@ -39,13 +39,13 @@ impl Surface {
 }
 
 /// **Every surface, and there are no others.** A ninth reader that opens a file under
-/// `adapters/` without a row here is invisible to `linix adapters`, which is the whole defect
+/// `adapters/` without a row here is invisible to `shall adapters`, which is the whole defect
 /// this table exists to close — `every_adapter_surface_is_in_the_table` fails on it.
 pub const SURFACES: [Surface; 8] = [
     Surface {
         name: "backends",
         key: "backend",
-        teaches: "how to drive a package manager LiNix does not ship",
+        teaches: "how to drive a package manager Shall does not ship",
     },
     Surface {
         name: "settings",
@@ -200,7 +200,7 @@ fn standing_of(surface: &Surface, path: &std::path::Path, locks_dir: &std::path:
 pub fn cannot_use(surface: &Surface, why: impl std::fmt::Display) -> String {
     format!(
         "adapters/{}.toml is not in use: {why}. Nothing in it takes effect — a row there \
-         teaches LiNix {}, and one opens with `{}`. `linix adapters` lists every extension \
+         teaches Shall {}, and one opens with `{}`. `shall adapters` lists every extension \
          surface and what this machine has on each.",
         surface.name,
         surface.teaches,
@@ -259,7 +259,7 @@ mod tests {
             .standing;
         assert!(matches!(s, Standing::Unapproved(_)), "{s:?}");
         assert!(
-            s.detail().is_some_and(|d| d.contains("linix lock")),
+            s.detail().is_some_and(|d| d.contains("shall lock")),
             "{s:?}"
         );
     }
@@ -332,7 +332,7 @@ mod tests {
         assert!(msg.contains("adapters/firewall.toml"));
         assert!(msg.contains("[[firewall]]"));
         assert!(msg.contains("missing field `name`"));
-        assert!(msg.contains("linix adapters"));
+        assert!(msg.contains("shall adapters"));
     }
 
     #[test]

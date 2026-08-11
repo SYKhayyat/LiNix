@@ -1,4 +1,4 @@
-//! LiNix - a declarative package manager.
+//! Shall - a declarative package manager.
 //!
 //! You list the packages you want in a file; `sync` installs what is missing and
 //! removes what is no longer listed, across every supported package manager.

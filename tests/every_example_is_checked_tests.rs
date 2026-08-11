@@ -2,7 +2,7 @@
 //! did not rot. `examples/groups/` had nothing behind it and rotted completely: five files
 //! describing a directory layout that no longer exists — `group:` is on `target-state.md`'s
 //! deleted-syntax list — of which `bloatware.txt` told the reader to run
-//! `linix sync --remove-bloatware`, a flag on the deleted-config list, and was itself named on
+//! `shall sync --remove-bloatware`, a flag on the deleted-config list, and was itself named on
 //! the deleted-*files* list. A straight NO-LEGACY violation, read by nothing.
 //!
 //! **That contrast is the whole argument, so it is a gate rather than a cleanup.** Deleting the
@@ -35,10 +35,10 @@ fn every_example() -> Vec<PathBuf> {
     out
 }
 
-/// The directory names LiNix's own layout uses, asked of `Layout` rather than listed here.
+/// The directory names Shall's own layout uses, asked of `Layout` rather than listed here.
 fn layout_directories() -> Vec<String> {
     let root = PathBuf::from("/root");
-    let layout = linix::model::Layout::new(root.clone(), root.join("data"));
+    let layout = shall::model::Layout::new(root.clone(), root.join("data"));
     [
         layout.modules_dir(),
         layout.profiles_dir(),
@@ -55,7 +55,7 @@ fn layout_directories() -> Vec<String> {
 /// would not: `bloatware.txt` was a hundred percent comments and parses as an empty manifest,
 /// and `base.txt` was bare package names that are still perfectly legal lines. What was wrong
 /// with `examples/groups/` was not any line in it — it was the **directory**, describing a
-/// layout LiNix stopped having. `groups` is a *file* in the layout (`Layout::groups_file`, the
+/// layout Shall stopped having. `groups` is a *file* in the layout (`Layout::groups_file`, the
 /// U18 backend groups), never a folder of manifests, and that mismatch is the whole defect
 /// stated in one comparison.
 #[test]
@@ -82,7 +82,7 @@ fn every_example_directory_is_one_the_layout_has() {
         let name = entry.file_name().to_string_lossy().to_string();
         assert!(
             allowed.contains(&name),
-            "examples/{}/ is a directory LiNix's layout does not have. That is what
+            "examples/{}/ is a directory Shall's layout does not have. That is what
              `examples/groups/` was: five files teaching a folder shape the program stopped \
              using, one of them advertising a `--remove-bloatware` flag on the deleted list.",
             name
@@ -91,7 +91,7 @@ fn every_example_directory_is_one_the_layout_has() {
 }
 
 #[test]
-fn every_shipped_example_is_something_linix_can_actually_read() {
+fn every_shipped_example_is_something_shall_can_actually_read() {
     let examples = every_example();
 
     // The instrument before the assertion: a walk that finds nothing passes silently, and the
@@ -112,13 +112,13 @@ fn every_shipped_example_is_something_linix_can_actually_read() {
             // A settings file has to deserialize into the real `Config`, which is what caught
             // `[retention.generations]` surviving a whole phase after the format was deleted.
             Some("toml") => {
-                toml::from_str::<linix::config::Config>(&text).unwrap_or_else(|e| {
+                toml::from_str::<shall::config::Config>(&text).unwrap_or_else(|e| {
                     panic!("examples/{} does not parse as a Config: {}", name, e)
                 });
             }
             // A manifest has to parse with the real grammar, against a vocabulary that knows
-            // every backend LiNix ships — which is what would have refused `group:` lines and
-            // the `# linix sync --remove-bloatware` advice's file for being a manifest that is
+            // every backend Shall ships — which is what would have refused `group:` lines and
+            // the `# shall sync --remove-bloatware` advice's file for being a manifest that is
             // not one.
             Some("txt") => {
                 let known = |_: &str| true;
@@ -127,11 +127,11 @@ fn every_shipped_example_is_something_linix_can_actually_read() {
                     if line.is_empty() || line.starts_with('#') {
                         continue;
                     }
-                    let origin = linix::config::grammar::Origin::new(PathBuf::from(&name), n + 1);
-                    linix::config::grammar::statement::parse(&origin, line, &known).unwrap_or_else(
+                    let origin = shall::config::grammar::Origin::new(PathBuf::from(&name), n + 1);
+                    shall::config::grammar::statement::parse(&origin, line, &known).unwrap_or_else(
                         |e| {
                             panic!(
-                                "examples/{}:{} is not a line LiNix can read: {}\n  {}",
+                                "examples/{}:{} is not a line Shall can read: {}\n  {}",
                                 name,
                                 n + 1,
                                 e.what,

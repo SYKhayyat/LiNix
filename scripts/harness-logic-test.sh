@@ -41,7 +41,7 @@ lift() {
 }
 # The cap is a runaway guard — a malformed function must not slurp the rest of the file — and
 # not a size limit on harness functions. It was 40, and `classify_install` grew to 43 when it
-# stopped re-deriving transience by retrying and started reading `linix-failure-class:`. A
+# stopped re-deriving transience by retrying and started reading `shall-failure-class:`. A
 # truncated lift is a `syntax error: unexpected end of file` and then `CLASS: unbound variable`,
 # which reads as the harness being broken rather than this file's awk being short: worth
 # knowing, because the first instinct was to shrink the function to fit the test measuring it.
@@ -127,7 +127,7 @@ run_against() {
     # absent. This case only bites where /bin/sh is dash: ubuntu's runner, which is where
     # this file runs.
     TOTAL=$((TOTAL + 1))
-    on_path linix-no-such-binary-zzz; _rc=$?
+    on_path shall-no-such-binary-zzz; _rc=$?
     if [ "$_rc" = 1 ]; then
         echo "  ok    on_path says no with 1, not with the shell's not-found code"
     else
@@ -145,11 +145,11 @@ run_against() {
     # had done nothing wrong — and it would have passed all three had the machine happened
     # to be wired, which is the half that matters: an install that says NOTHING about an
     # unreachable binary is the defect (github and yarn, measured 2026-07-29).
-    _rd="${TMPDIR:-/tmp}/linix-reach-$$"
+    _rd="${TMPDIR:-/tmp}/shall-reach-$$"
     rm -rf "$_rd"; mkdir -p "$_rd"
-    _rbin=linix-reach-zzz
+    _rbin=shall-reach-zzz
     _rlog="$_rd/install.log"
-    printf '%s\n' "  WARN linix::verbs::sync: \`go\` installs its executables into $_rd, which is not on your PATH — so what it just installed will answer \"command not found\"." > "$_rlog"
+    printf '%s\n' "  WARN shall::verbs::sync: \`go\` installs its executables into $_rd, which is not on your PATH — so what it just installed will answer \"command not found\"." > "$_rlog"
 
     outcome() { # label want cmd...
         _olabel="$1"; _owant="$2"; shift 2
@@ -170,7 +170,7 @@ run_against() {
     # The defect this check exists for: installed, unreachable, and nothing said so.
     outcome "unreachable and unexplained" fail assert_binary_reachable go "$_rbin" "$_rd/no-such.log"
 
-    # LiNix warned and the file is where it said: the product kept its promise, and the
+    # Shall warned and the file is where it said: the product kept its promise, and the
     # host's PATH is not the product's to fix.
     : > "$_rd/$_rbin"
     outcome "unreachable, explained, and there" pass assert_binary_reachable go "$_rbin" "$_rlog"
@@ -208,7 +208,7 @@ run_against() {
         assert_binary_reachable go hello "$_rd/no-such.log" "/root/.cabal/bin/hello"
     # The lifted bodies assign to globals — there are no locals in a POSIX shell — so the three
     # cases above left `$_rbin` reading `hello`. Restored, because the checks below share it.
-    FAKE=""; _rbin=linix-reach-zzz
+    FAKE=""; _rbin=shall-reach-zzz
 
     # The warning belongs to the backend that printed it. One sync can warn about two
     # managers, and handing yarn's directory to go would answer for the wrong install.
@@ -256,7 +256,7 @@ for src in $SOURCES; do run_against "$src"; done
 # itself as missing coverage; it announces itself as no coverage at all.
 #
 # Runs only when a binary is given, so the predicate tests above stay runnable anywhere.
-BIN="${LINIX_BIN:-}"
+BIN="${SHALL_BIN:-}"
 if [ -n "$BIN" ] && "$BIN" --version >/dev/null 2>&1; then
     echo "== subcommands invoked vs subcommands that exist ($BIN)"
     _real="$("$BIN" --help 2>&1 | sed -n '/^Commands:/,/^Options:/p' \
@@ -300,7 +300,7 @@ if [ -n "$BIN" ] && "$BIN" --version >/dev/null 2>&1; then
         fi
     done
 else
-    echo "== subcommands invoked vs subcommands that exist: SKIPPED (set LINIX_BIN to a built binary)"
+    echo "== subcommands invoked vs subcommands that exist: SKIPPED (set SHALL_BIN to a built binary)"
 fi
 
 # E5's classifier, in both harnesses. The catch-all it replaced softened ANY install failure
@@ -346,7 +346,7 @@ for _src in $SOURCES; do
         # half of E5, and it is as wrong as the variance catch-all was.
         [ "$FAILC" -eq 0 ] || { echo "  BAD   a refusal or a timeout was recorded as a hard failure"; _bad=1; }
 
-        # R-3, both directions. The classifier reads `linix-failure-class:` instead of retrying
+        # R-3, both directions. The classifier reads `shall-failure-class:` instead of retrying
         # the install to guess at it, and the two branches fail in opposite ways: a permanent
         # failure retried is a minute wasted per backend, and a transient one scored a defect is
         # a red CI leg over a rate-limit window that has since moved.
@@ -355,7 +355,7 @@ for _src in $SOURCES; do
         lx_slow() { lx "$@"; }
 
         FAILC=0; SOFTC=0; PASS=0
-        printf 'linix-failure-class: permanent\n' > "$_log"
+        printf 'shall-failure-class: permanent\n' > "$_log"
         # To a file, not a `$( )`: command substitution runs in a subshell, so `CLASS` set
         # inside it never reaches this scope and the assertion below reads the PREVIOUS call's
         # answer. It did, and reported `timeout`.
@@ -366,7 +366,7 @@ for _src in $SOURCES; do
         rm -f "$_out"
 
         FAILC=0; SOFTC=0
-        printf 'linix-failure-class: transient\n' > "$_log"
+        printf 'shall-failure-class: transient\n' > "$_log"
         classify_install be spec 1 "$_log" >/dev/null 2>&1
         [ "$CLASS" = exhausted ] || { echo "  BAD   a transient failure that did not clear is not exhausted (got '$CLASS')"; _bad=1; }
         [ "$FAILC" -eq 0 ] || { echo "  BAD   a transient failure that did not clear was scored a hard failure — this is the red macOS leg"; _bad=1; }
@@ -448,10 +448,10 @@ _tinydir="$(mktemp -d)"
 _tiny="$_tinydir/tiny-harness.sh"
 cat > "$_tiny" <<'TINYEOF'
 #!/usr/bin/env bash
-LX="${LINIX:-linix}"
+LX="${SHALL:-shall}"
 ok()  { echo "  PASS  $1"; }
 nok() { echo "  FAIL  $1"; }
-if "$LX" --version >/dev/null 2>&1; then ok "LiNix runs"; else nok "LiNix runs"; fi
+if "$LX" --version >/dev/null 2>&1; then ok "Shall runs"; else nok "Shall runs"; fi
 if "$LX" init      >/dev/null 2>&1; then ok "init runs";  else nok "init runs";  fi
 if "$LX" eval | grep -q schema;       then ok "eval emits a model"; else nok "eval emits a model"; fi
 TINYEOF

@@ -1,9 +1,9 @@
 //! The setup a manager needs before it can install anything (Q10, Q11, Q13).
 //!
-//! Three managers in the `tools` image failed every install, and none of them was a LiNix
+//! Three managers in the `tools` image failed every install, and none of them was a Shall
 //! defect: `mix` had no Hex, `asdf` had no plugin for the tool it was asked for, `opam` had no
 //! switch. Each fails with the manager's own message, which is accurate and which the user is
-//! left to act on by hand — while LiNix, which knows the command, watches.
+//! left to act on by hand — while Shall, which knows the command, watches.
 //!
 //! **Ask, then do** (owner ruling, 2026-07-29), the same shape [`bootstrap`](super::bootstrap)
 //! uses for a manager that is missing entirely: print what is absent and the exact command,
@@ -140,7 +140,7 @@ impl AdapterRow for PrereqDef {
 ///
 /// A row naming this OS is considered before a catch-all, and the caller's own rows come
 /// before the built-ins, so a user who disagrees with a shipped row replaces it by writing one
-/// rather than by editing LiNix.
+/// rather than by editing Shall.
 pub fn for_manager<'a>(rows: &'a [PrereqDef], manager: &str, os: &str) -> Vec<&'a PrereqDef> {
     rows.iter()
         .filter(|r| r.unusable().is_none() && r.manager == manager && r.applies_to(os))
@@ -226,7 +226,7 @@ mod tests {
     }
 
     /// A user's row comes first, so disagreeing with a shipped one is writing a row rather
-    /// than editing LiNix — and a row for another OS is not offered at all.
+    /// than editing Shall — and a row for another OS is not offered at all.
     #[test]
     fn rows_are_selected_by_manager_and_os() {
         let mut theirs = row("mix", &["mine"]);

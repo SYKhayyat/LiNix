@@ -1,6 +1,6 @@
 //! Which managers forgive a non-zero exit code without being able to contradict it.
 //!
-//! `benign_exits` says "this code is not a failure". On its own that is a promise LiNix cannot
+//! `benign_exits` says "this code is not a failure". On its own that is a promise Shall cannot
 //! check: if the manager also writes the real outcome in prose, and the policy has no prose to
 //! read, then every run that exits with a forgiven code is reported as a success — including
 //! the ones that did nothing.
@@ -8,7 +8,7 @@
 //! CI 30684191791 was that, on chocolatey. `choco install bat` pulls eleven packages and
 //! installs `bat` last; choco raises its exit code to 1 for a failed package only when nothing
 //! has set one already, so a dependency asking for a reboot left 3010 standing over an install
-//! of nothing. 3010 is forgiven here, choco's policy had no `failure_markers`, and LiNix
+//! of nothing. 3010 is forgiven here, choco's policy had no `failure_markers`, and Shall
 //! called it success. `list` could not show the package, PATH could not resolve it, and
 //! `uninstall` said it was not installed — three red rows off one wrong "yes".
 //!
@@ -18,7 +18,7 @@
 //! shape is a bound now, and a policy that gains a `benign_exits` entry without gaining a way
 //! to contradict it turns this red instead of waiting for a runner to notice.
 
-use linix::core::exit_policy;
+use shall::core::exit_policy;
 
 /// Backends that forgive a code and cannot contradict it, with the reason each is allowed to.
 ///

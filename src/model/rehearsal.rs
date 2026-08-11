@@ -1,4 +1,4 @@
-//! `linix try` — rehearse this config on a clean machine (XIII.11, U12).
+//! `shall try` — rehearse this config on a clean machine (XIII.11, U12).
 //!
 //! The question `plan` cannot answer: *would this config work on a machine that is not mine?*
 //! A plan is computed against the host's installed set, its backends and its quirks, so a
@@ -9,7 +9,7 @@
 //! and cover most hosts; a config-named base is the second step, not the blocker. The value is
 //! the rehearsal existing at all.
 //!
-//! **The host is not touched.** The config goes in read-only and LiNix's data directory inside
+//! **The host is not touched.** The config goes in read-only and Shall's data directory inside
 //! the container is a throwaway, so the rehearsal cannot install anything here, cannot write to
 //! the repo, and cannot leave a registry behind.
 //!
@@ -24,13 +24,13 @@ pub const RUNTIMES: [&str; 2] = ["docker", "podman"];
 
 /// The images Phase 6 already builds, and what each is for.
 pub const IMAGES: [(&str, &str); 3] = [
-    ("linix-it-ubuntu", "debian/ubuntu, apt"),
-    ("linix-it-alpine", "alpine, apk"),
-    ("linix-it-arch", "arch, pacman"),
+    ("shall-it-ubuntu", "debian/ubuntu, apt"),
+    ("shall-it-alpine", "alpine, apk"),
+    ("shall-it-arch", "arch, pacman"),
 ];
 
 /// The image `try` uses when none is named.
-pub const DEFAULT_IMAGE: &str = "linix-it-ubuntu";
+pub const DEFAULT_IMAGE: &str = "shall-it-ubuntu";
 
 /// The first runtime that is actually here.
 pub fn pick_runtime(present: &dyn Fn(&str) -> bool) -> Option<&'static str> {
@@ -48,7 +48,7 @@ pub fn no_runtime_refusal() -> String {
          The whole point of `try` is to answer \"would this config work on a machine that is \
          not mine\", so running it here would answer a different question and call it the same \
          one.\n  \
-         Install one, or use `linix check` to validate the config against this machine.",
+         Install one, or use `shall check` to validate the config against this machine.",
         RUNTIMES.join(" nor ")
     )
 }
@@ -82,7 +82,7 @@ pub fn missing_image_refusal(runtime: &str, image: &str) -> String {
 ///
 /// `--rm` so the container is gone afterwards, `:ro` on the config so the rehearsal cannot
 /// write to the repo, and a data directory inside the container so nothing it records survives.
-/// The check runs as the container's own `linix`, which is the point: a different machine's
+/// The check runs as the container's own `shall`, which is the point: a different machine's
 /// binary, backends and installed set.
 pub fn argv(runtime: &str, image: &str, config_host_path: &str) -> Vec<String> {
     [
@@ -90,13 +90,13 @@ pub fn argv(runtime: &str, image: &str, config_host_path: &str) -> Vec<String> {
         "run",
         "--rm",
         "-v",
-        &format!("{}:/linix-config:ro", config_host_path),
+        &format!("{}:/shall-config:ro", config_host_path),
         "-e",
-        "LINIX_CONFIG_DIR=/linix-config",
+        "SHALL_CONFIG_DIR=/shall-config",
         "-e",
-        "LINIX_DATA_DIR=/tmp/linix-try-data",
+        "SHALL_DATA_DIR=/tmp/shall-try-data",
         "--entrypoint",
-        "linix",
+        "shall",
         image,
         // `eval`, not `check`. `check` compares the config against the machine, and on a bare
         // container it always finds differences — which U21 makes exit 2, indistinguishable
@@ -159,10 +159,10 @@ mod tests {
     /// was asked to inspect — and `try`'s whole claim is that it touches nothing on the host.
     #[test]
     fn the_config_is_mounted_read_only() {
-        let cmd = argv("docker", "linix-it-ubuntu", "/home/a/.config/linix");
+        let cmd = argv("docker", "shall-it-ubuntu", "/home/a/.config/shall");
         let mount = cmd
             .iter()
-            .find(|a| a.contains(":/linix-config"))
+            .find(|a| a.contains(":/shall-config"))
             .expect("the config must be mounted");
         assert!(mount.ends_with(":ro"), "{}", mount);
     }
@@ -171,10 +171,10 @@ mod tests {
     /// registry to the host would make "it touched nothing" false.
     #[test]
     fn the_rehearsals_data_stays_in_the_container() {
-        let cmd = argv("docker", "linix-it-ubuntu", "/cfg");
+        let cmd = argv("docker", "shall-it-ubuntu", "/cfg");
         let data = cmd
             .iter()
-            .find(|a| a.starts_with("LINIX_DATA_DIR="))
+            .find(|a| a.starts_with("SHALL_DATA_DIR="))
             .expect("a data dir must be set");
         assert!(!data.contains("/cfg"), "{}", data);
         assert!(data.contains("/tmp/"), "{}", data);
@@ -188,9 +188,9 @@ mod tests {
 
     #[test]
     fn the_runtime_and_image_land_in_the_command() {
-        let cmd = argv("podman", "linix-it-alpine", "/cfg");
+        let cmd = argv("podman", "shall-it-alpine", "/cfg");
         assert_eq!(cmd[0], "podman");
-        assert!(cmd.contains(&"linix-it-alpine".to_string()));
+        assert!(cmd.contains(&"shall-it-alpine".to_string()));
     }
 
     /// The rehearsal asks whether the config RESOLVES, so it runs `eval` — not `check`, which
@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn the_missing_image_refusal_says_how_to_build_one() {
-        let msg = missing_image_refusal("docker", "linix-it-ubuntu");
+        let msg = missing_image_refusal("docker", "shall-it-ubuntu");
         assert!(msg.contains("docker build"), "{}", msg);
         assert!(
             msg.contains("docker/integration/Dockerfile.ubuntu"),

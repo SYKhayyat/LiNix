@@ -11,9 +11,9 @@
 //! This file is the proof the boundary moved, and it pays for itself by testing two pure
 //! functions that had no coverage at all.
 
-use linix::core::{ManagedPackage, StateRegistry};
-use linix::verbs::plan::unverified_packages;
-use linix::verbs::upgrade::upgrade_excluded;
+use shall::core::{ManagedPackage, StateRegistry};
+use shall::verbs::plan::unverified_packages;
+use shall::verbs::upgrade::upgrade_excluded;
 use std::collections::HashMap;
 use std::path::PathBuf;
 

@@ -1,4 +1,4 @@
-//! `linix check` — the one command that looks at the machine (U9, 7i).
+//! `shall check` — the one command that looks at the machine (U9, 7i).
 //!
 //! There used to be ten commands answering "what is going on": `status`, `doctor`,
 //! `unmanaged`, `absent`, `conflicts`, `audit` and the old `check`, each with its own
@@ -42,7 +42,7 @@ pub enum Section {
     /// **The other half of `Approvals`' reason.** A reader that cannot use its adapter file
     /// warns and carries on, which is the right call mid-`sync` on a working machine and the
     /// wrong place to learn about it: the warning scrolls past, the file stays inert, and the
-    /// tool it was teaching LiNix about goes unmanaged. Loud where loud is free.
+    /// tool it was teaching Shall about goes unmanaged. Loud where loud is free.
     Adapters,
 }
 
@@ -112,7 +112,7 @@ pub struct Finding {
     /// The numbers `summary` states, in a form nothing has to read English to get.
     ///
     /// Every number a section reports goes here as well as into the sentence. Without it the
-    /// only machine-readable thing in `check --json` was the `ok` flag, so `linix fleet` — whose
+    /// only machine-readable thing in `check --json` was the `ok` flag, so `shall fleet` — whose
     /// entire job is "how far is each machine from its manifests" — could learn *that* a host
     /// had drifted and never *how much*. A consumer reaching for a count had to regex
     /// `"3 to install, 1 to remove"`, which makes the wording of a sentence an API.
@@ -195,12 +195,12 @@ mod tests {
     /// step is the reader guessing has done the easy half (P8).
     #[test]
     fn a_finding_that_needs_attention_names_the_next_command() {
-        let f = Finding::attention(Section::Drift, "3 to install", "linix sync");
+        let f = Finding::attention(Section::Drift, "3 to install", "shall sync");
         assert!(!f.ok);
         let line = f.line();
         assert!(line.contains("drift"), "{}", line);
         assert!(line.contains("3 to install"), "{}", line);
-        assert!(line.contains("linix sync"), "{}", line);
+        assert!(line.contains("shall sync"), "{}", line);
     }
 
     /// The summary is a column, and `Display` must honour the width it is given — `write_str`

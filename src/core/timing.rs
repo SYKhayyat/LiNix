@@ -3,9 +3,9 @@
 //! [`latency`](crate::core::latency) measures the *total* and says when it crosses a budget.
 //! That is enough to notice a 98-second `info` and not enough to act on one: the next question
 //! is always which manager took the time, and until this existed the only way to answer it was
-//! to time the managers by hand outside LiNix and subtract.
+//! to time the managers by hand outside Shall and subtract.
 //!
-//! **Sum and wall clock are both reported, because their ratio is the parallelism.** LiNix
+//! **Sum and wall clock are both reported, because their ratio is the parallelism.** Shall
 //! spends its life waiting on other people's processes, so a run whose child time sums to 6 s
 //! inside a 3.4 s wall clock is overlapping them 1.8×, and one whose ratio is 1.0 is asking
 //! them one at a time. A breakdown that printed only the sum would hide the difference the
@@ -192,7 +192,7 @@ pub fn waves() -> usize {
 
 /// Print the breakdown to stderr.
 ///
-/// stderr, not stdout: `linix eval --timings | jq` must still get JSON, and a measurement
+/// stderr, not stdout: `shall eval --timings | jq` must still get JSON, and a measurement
 /// written into the answer is a measurement that breaks every caller parsing it.
 pub fn report(wall: Duration) {
     if !is_enabled() {
@@ -231,7 +231,7 @@ pub fn report(wall: Duration) {
             waves - 1,
         );
     }
-    eprintln!("  (only commands LiNix spawns are counted; its own parsing is the remainder)");
+    eprintln!("  (only commands Shall spawns are counted; its own parsing is the remainder)");
     eprintln!("  {:>7}  {:>7}   command", "at", "took");
     for row in &rows {
         let calls = if row.calls == 1 {
@@ -342,12 +342,12 @@ mod tests {
         let started = begin();
         assert!(started.is_some(), "recording is on");
         std::thread::sleep(Duration::from_millis(30));
-        end(started, "linix-timing-probe", &["sleep".to_string()]);
+        end(started, "shall-timing-probe", &["sleep".to_string()]);
 
         let (rows, _, _) = summary();
         let row = rows
             .iter()
-            .find(|r| r.label == "linix-timing-probe sleep")
+            .find(|r| r.label == "shall-timing-probe sleep")
             .expect("the span was recorded");
         assert!(
             row.total >= Duration::from_millis(10),

@@ -16,7 +16,7 @@
 //! **Why a source scan.** The finding is about a phase that exists and is *not dispatched*. No
 //! behavioural test can enumerate the phases nobody wired up — that is the shape of the bug.
 
-use linix::config::grammar::{Options, Phase, Statement};
+use shall::config::grammar::{Options, Phase, Statement};
 use std::path::{Path, PathBuf};
 
 fn root() -> PathBuf {
@@ -392,12 +392,12 @@ fn has_non_package_work_covers_every_phase_after_the_packages() {
 }
 
 /// A `DesiredState` holding nothing but these statements.
-fn state_with(statements: Vec<Statement>) -> linix::model::DesiredState {
-    let origin = linix::config::grammar::Origin {
+fn state_with(statements: Vec<Statement>) -> shall::model::DesiredState {
+    let origin = shall::config::grammar::Origin {
         file: PathBuf::from("modules/test.txt"),
         line: 1,
     };
-    linix::model::DesiredState {
+    shall::model::DesiredState {
         extras: statements
             .into_iter()
             .map(|s| (s, origin.clone()))

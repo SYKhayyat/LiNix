@@ -42,7 +42,7 @@ enum Evidence {
     /// the other host's reading a disagreement.
     ///
     /// **Only ever `false`**, asserted by `a_divergent_row_takes_the_refusing_answer`. A
-    /// divergent row that claimed to terminate would be LiNix emitting a `--` that some host
+    /// divergent row that claimed to terminate would be Shall emitting a `--` that some host
     /// reads as a package name, which is the failure this whole table exists to prevent; the
     /// exemption is for the safe direction and for nothing else.
     Divergent(&'static str),
@@ -50,7 +50,7 @@ enum Evidence {
 
 /// Whether a binary's CLI ends option parsing at `--`, and how that is known.
 ///
-/// Keyed on the binary actually invoked, not the LiNix backend name, because that is what
+/// Keyed on the binary actually invoked, not the Shall backend name, because that is what
 /// parses the arguments (apt's installs run `apt-get`, its queries run `dpkg-query`).
 struct Terminator {
     binary: &'static str,
@@ -258,7 +258,7 @@ const TERMINATORS: &[Terminator] = &[
              31517118980), and on windows-latest the same argv reported `swallows` — the \
              terminator changed what stack did with its operand (run 31458415385). Both readings \
              are real, so the row takes the refusing one: the cost of being wrong that way is a \
-             `--` LiNix does not send, and the cost of being wrong the other way is an install \
+             `--` Shall does not send, and the cost of being wrong the other way is an install \
              that names no package at all",
         ),
     ),
@@ -477,7 +477,7 @@ const TERMINATORS: &[Terminator] = &[
         "launchctl",
         true,
         Evidence::Measured(
-            "all four verbs LiNix drives are identical with and without the terminator on \
+            "all four verbs Shall drives are identical with and without the terminator on \
              macos-latest: `load -w -- <bogus>` and `unload -w -- <bogus>` both answer `Load \
              failed: 5: Input/output error` at exit 0, `start -- <bogus>` and `stop -- <bogus>` \
              both exit 3 in silence, and none of the four mentions a stray `--`. Listed false on \
@@ -623,7 +623,7 @@ mod tests {
     ///
     /// The exemption `Divergent` buys is *the probe stops calling one host's reading a
     /// disagreement* — and it is only sound in the safe direction. A divergent row claiming to
-    /// terminate would be LiNix emitting a `--` that some platform reads as a package name,
+    /// terminate would be Shall emitting a `--` that some platform reads as a package name,
     /// which is precisely the failure this table exists to prevent, with an exemption on top
     /// of it. Unrepresentable is better than documented, and this is as close as a const table
     /// gets.

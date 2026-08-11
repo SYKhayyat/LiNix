@@ -1,7 +1,7 @@
 // src/app/module_registry.rs
 //
 // Remote module sharing: resolve a source reference (`github:user/repo`, a raw URL) into a
-// concrete fetch URL + a suggested local name, so `linix module add <source>` can pull a
+// concrete fetch URL + a suggested local name, so `shall module add <source>` can pull a
 // community-maintained module into the local modules directory. The URL resolution is pure
 // and unit-tested; the network fetch lives in the command handler.
 

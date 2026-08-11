@@ -5,7 +5,7 @@
 //! named a provider got whichever provider the resolver happened to pick for the bare name —
 //! silently, which is the defect class this repo hunts, sitting inside the repo.
 //!
-//! The shim itself cannot carry the answer: it is a copy of the linix binary under another name,
+//! The shim itself cannot carry the answer: it is a copy of the shall binary under another name,
 //! with nowhere to keep data. It does not need to. The config that declared the shim is the same
 //! config the shim process loads on its way in, and it still says what the source is.
 

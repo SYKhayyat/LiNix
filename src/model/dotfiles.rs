@@ -11,7 +11,7 @@
 //! ledger row per file, and that is the cost worth paying.
 //!
 //! The rows are written by `Dotfiles::links`, which expands a tree into the `link:` lines it
-//! stands for — that expansion is what makes the teardown, the `<dest>.linix-backup` and the
+//! stands for — that expansion is what makes the teardown, the `<dest>.shall-backup` and the
 //! removal guard the tree's as much as a hand-written line's.
 //!
 //! **The tree never decrypts (U24).** A `.age` file in it is copied as the ciphertext it is.
@@ -40,7 +40,7 @@ pub struct Placement {
 pub struct TreePlan {
     /// Every file, in a stable order so a plan reads the same twice.
     pub placements: Vec<Placement>,
-    /// Destinations that already hold something LiNix did not put there (U23). The run is
+    /// Destinations that already hold something Shall did not put there (U23). The run is
     /// refused until these have been seen.
     pub collisions: Vec<PathBuf>,
 }
@@ -61,7 +61,7 @@ fn is_skipped(name: &str) -> bool {
 
 /// Walk `tree`, mapping every file to its place under `target_root`.
 ///
-/// `owned` answers "did LiNix put this here?" for a destination that already exists — injected
+/// `owned` answers "did Shall put this here?" for a destination that already exists — injected
 /// rather than read here so this stays pure and the ownership rule lives in one place.
 pub fn plan(
     tree: &Path,
@@ -213,7 +213,7 @@ mod tests {
     }
 
     /// U23: a destination holding the user's own file is a collision, reported before anything
-    /// is written. One LiNix already owns is not.
+    /// is written. One Shall already owns is not.
     #[test]
     fn a_destination_the_user_owns_is_a_collision_and_ours_is_not() {
         let tree = tree_with(&["a.conf", "b.conf"]);

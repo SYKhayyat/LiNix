@@ -148,7 +148,7 @@ impl Queryable for MiseQueryable {
                     for v_obj in v_list {
                         // mise keeps reporting a tool after `mise uninstall` — the entry stays,
                         // with `installed: false`, because the *declaration* in its config is
-                        // still there. Reporting those as installed told LiNix a package was
+                        // still there. Reporting those as installed told Shall a package was
                         // present when it was not, which is drift detection reading backwards.
                         if v_obj.get("installed").and_then(|i| i.as_bool()) == Some(false) {
                             continue;
@@ -191,7 +191,7 @@ impl Queryable for MiseQueryable {
     ///
     /// It used to ask `mise plugins ls --all`, which lists every plugin mise has ever heard
     /// of — so `info` answered `Some` for anything in the catalogue, the planner read that as
-    /// "already installed", and `linix install mise:jq` reported *already up to date* while
+    /// "already installed", and `shall install mise:jq` reported *already up to date* while
     /// installing nothing. Found by the `tools` container image, which is the only place a
     /// real mise runs (2026-07-24).
     ///
@@ -402,7 +402,7 @@ mod tests {
     }
 
     /// mise keeps a tool in `list --json` after `mise uninstall`, flagged `installed: false`,
-    /// because the declaration in its config survives. Reporting those as installed told LiNix
+    /// because the declaration in its config survives. Reporting those as installed told Shall
     /// a package was present when it was not.
     #[tokio::test]
     async fn a_tool_mise_says_is_not_installed_is_not_listed() {
@@ -418,7 +418,7 @@ mod tests {
 
     /// The fail-silent bug the `tools` image caught: `info` asked mise's plugin CATALOGUE, so
     /// it answered "yes" for anything mise had heard of. The planner read that as "already
-    /// installed" and `linix install mise:jq` reported *already up to date* while installing
+    /// installed" and `shall install mise:jq` reported *already up to date* while installing
     /// nothing at all.
     #[tokio::test]
     async fn info_answers_installed_here_not_known_to_mise() {

@@ -20,7 +20,7 @@ use tracing::trace;
 /// **Ordered, because everything downstream walks it and calls the result an order.**
 ///
 /// This was a `HashMap`, whose iteration order Rust randomises per process — so `available()`
-/// and `all()` handed back the backends in a different sequence on every run. Two `linix list`
+/// and `all()` handed back the backends in a different sequence on every run. Two `shall list`
 /// runs a second apart differed by 530 lines and sorted to the same file; `check health` moved
 /// its rows; the fan-outs handed their first slots to whichever managers the seed picked, so no
 /// timing measurement was reproducible; and any code that takes the *first* backend that can
@@ -250,12 +250,12 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_remove_binary: None,
             repo_list_shape: RepoListing::Columns,
             // No transitive dependency expansion for apt. apt resolves and installs a
-            // package's full dependency closure itself at `apt-get install` time, so LiNix
+            // package's full dependency closure itself at `apt-get install` time, so Shall
             // re-deriving it is redundant. Worse, the planner's expansion is a recursive
             // BFS (walks jq -> libc6 -> libgcc-s1 -> …), and because apt's local cache lets
             // `apt depends` answer offline, that recursion fans out into hundreds of
             // subprocess calls and effectively hangs `status`/`sync`. It also wrongly tags
-            // every transitive dependency as a LiNix-managed install. Leave dependency
+            // every transitive dependency as a Shall-managed install. Leave dependency
             // resolution to apt. See the sync harness.
             depends: None,
             // `apt clean` exists on modern apt; `apt-get clean` exists on every apt there has ever
@@ -339,7 +339,7 @@ fn register_pacman(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         binary: None,
         args: vec!["-Sc".into(), "--noconfirm".into()],
     });
-    // Drop-in policy: write `/etc/pacman.d/linix-<name>.conf` and add one `Include =` line to
+    // Drop-in policy: write `/etc/pacman.d/shall-<name>.conf` and add one `Include =` line to
     // `/etc/pacman.conf`, never rewriting its body. The name lands in a path, so the row asks
     // for `{name_component}` and the generic path refuses anything that could leave the
     // directory.
@@ -347,17 +347,17 @@ fn register_pacman(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     cfg.repo_add_args = Some(vec![
         "-c".into(),
         "set -e; printf '[%s]\\nServer = %s\\n' '{name_component}' '{url}' \
-         > '/etc/pacman.d/linix-{name_component}.conf'; \
-         grep -qxF 'Include = /etc/pacman.d/linix-{name_component}.conf' /etc/pacman.conf || \
-         printf '\\n%s\\n' 'Include = /etc/pacman.d/linix-{name_component}.conf' \
+         > '/etc/pacman.d/shall-{name_component}.conf'; \
+         grep -qxF 'Include = /etc/pacman.d/shall-{name_component}.conf' /etc/pacman.conf || \
+         printf '\\n%s\\n' 'Include = /etc/pacman.d/shall-{name_component}.conf' \
          >> /etc/pacman.conf"
             .into(),
     ]);
     cfg.repo_remove_args = Some(vec![
         "-c".into(),
         // A `#` delimiter for sed avoids escaping the slashes in the path.
-        "rm -f '/etc/pacman.d/linix-{name_component}.conf'; \
-         sed -i '\\#Include = /etc/pacman.d/linix-{name_component}.conf#d' /etc/pacman.conf"
+        "rm -f '/etc/pacman.d/shall-{name_component}.conf'; \
+         sed -i '\\#Include = /etc/pacman.d/shall-{name_component}.conf#d' /etc/pacman.conf"
             .into(),
     ]);
     // `pacman-conf --repo-list` prints names and nothing else; the mirror for one repository
@@ -758,7 +758,7 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             // names. The generic label-parser would turn the header into a bogus target
             // (`jq-1.8.1-r0`) and the `so:` provides into non-existent packages, so `apk add`
             // would fail with "no such package". apk resolves its own dependency closure at
-            // install time, so LiNix does not need to expand it. See the sync harness.
+            // install time, so Shall does not need to expand it. See the sync harness.
             depends: None,
             // apk-cache(8). A host with no cache directory configured has nothing to delete and
             // says so; it is not an error.
@@ -846,7 +846,7 @@ fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_remove_binary: None,
             repo_list_shape: RepoListing::Columns,
             // None, like apt, dnf and pacman: zypper resolves its own dependency closure at
-            // install time, so LiNix re-deriving one adds nodes the planner then tries to
+            // install time, so Shall re-deriving one adds nodes the planner then tries to
             // install by name. What `info --requires` reports are RPM capabilities
             // (`libjq.so.1()(64bit)`), not packages anyone declares — and until 2026-07-30 this
             // was the only system manager that set it, which is why it was the only one whose
@@ -1096,7 +1096,7 @@ fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             remove_args: vec!["uninstall".into(), "-y".into()],
             purge_args: None,
             // Chocolatey 2.x removed `-lo`: `list` is local-only now and the flag is an
-            // error, so the command failed, the output was empty, and LiNix read that as
+            // error, so the command failed, the output was empty, and Shall read that as
             // "nothing is installed" — the input to a mass removal, not a bad listing.
             list_args: vec!["list".into(), "-r".into()],
             // `choco list` reports locally-installed packages, all user-requested.
@@ -2106,13 +2106,13 @@ mod tests {
         );
     }
 
-    /// Which backends a bare `linix adopt` declines to take, and why it is a short list.
+    /// Which backends a bare `shall adopt` declines to take, and why it is a short list.
     ///
     /// Opting out is a real cost to the user — a backend that keeps itself out of `adopt` is a
     /// backend they have to write by hand — so it is spelled out here rather than left to
     /// whoever adds the next one. The bar is not "this list is noisy": it is *being on the
     /// machine is not evidence anybody chose it*, which is true of an init's running services
-    /// and of nothing else LiNix drives.
+    /// and of nothing else Shall drives.
     ///
     /// Measured before the ruling: `adopt` wrote 161 declarations on a Windows host and 150
     /// were services (owner ruling, 2026-08-05 — `Q39`).
@@ -2372,7 +2372,7 @@ mod tests {
     /// compiled everywhere now and still *registered* only on their own OS, which is the part
     /// that has to stay true: `create_default_registry` keeps its `cfg!` gate, and
     /// `registry_capability_matrix` asserts what this host actually offers.
-    /// A system package manager resolves its own dependency closure, so LiNix must not
+    /// A system package manager resolves its own dependency closure, so Shall must not
     /// re-derive one: `expand_transitive_dependencies` turns every returned name into an
     /// install node, and a name that is not a package is then installed by name.
     ///
@@ -2835,10 +2835,10 @@ mod tests {
             ArgvCase::shaped(
                 "helm",
                 &register_helm,
-                "linix-probe",
+                "shall-probe",
                 &[("url", "https://example.invalid/p.tgz")],
                 Runs("helm plugin install -- https://example.invalid/p.tgz"),
-                Runs("helm plugin uninstall -- linix-probe"),
+                Runs("helm plugin uninstall -- shall-probe"),
             ),
             // The two Haskell managers, which have no uninstall verb at all.
             ArgvCase::pkg("cabal", &register_cabal, Runs("cabal install"), Unsupported),
@@ -2885,9 +2885,9 @@ mod tests {
             ArgvCase::shaped(
                 "btrfs",
                 &|r, e| crate::backends::btrfs::register(r, e, &Config::default()),
-                "/mnt/linix-probe",
+                "/mnt/shall-probe",
                 &[],
-                Runs("btrfs subvolume create /mnt/linix-probe"),
+                Runs("btrfs subvolume create /mnt/shall-probe"),
                 NoCommand(
                     "deletion is guarded on the subvolume existing on the real filesystem \
                      (`Path::exists`), which no mock can satisfy. Deleting a path that is not \
@@ -2929,9 +2929,9 @@ mod tests {
                 "setting",
                 &|r, e| crate::backends::setting::register(r, e, &Config::default()),
                 if cfg!(windows) {
-                    "Software\\LinixProbe/Value"
+                    "Software\\ShallProbe/Value"
                 } else {
-                    "org.linix.probe/key"
+                    "org.shall.probe/key"
                 },
                 &[("value", "1")],
                 // **macOS has no settings store at all**, and this row is where that becomes a
@@ -2948,9 +2948,9 @@ mod tests {
                     )
                 } else {
                     Runs(if cfg!(windows) {
-                        "reg add HKCU\\Software\\LinixProbe /v Value /d 1 /f"
+                        "reg add HKCU\\Software\\ShallProbe /v Value /d 1 /f"
                     } else {
-                        "gsettings set org.linix.probe key 1"
+                        "gsettings set org.shall.probe key 1"
                     })
                 },
                 if cfg!(target_os = "macos") {
@@ -2960,9 +2960,9 @@ mod tests {
                     )
                 } else {
                     Runs(if cfg!(windows) {
-                        "reg delete HKCU\\Software\\LinixProbe /v Value /f"
+                        "reg delete HKCU\\Software\\ShallProbe /v Value /f"
                     } else {
-                        "gsettings reset org.linix.probe key"
+                        "gsettings reset org.shall.probe key"
                     })
                 },
             ),
@@ -2973,8 +2973,8 @@ mod tests {
             ArgvCase::shaped(
                 "link",
                 &|r, e| crate::backends::link::register(r, e, &Config::default()),
-                "/tmp/linix-probe-src",
-                &[("target", "/tmp/linix-probe-dst")],
+                "/tmp/shall-probe-src",
+                &[("target", "/tmp/shall-probe-dst")],
                 NoCommand(
                     "writes a symlink (or copies) through the filesystem layer. It shells out \
                      for nothing, which is why a link works on a machine with no shell at all.",
@@ -3092,7 +3092,7 @@ mod tests {
         assert!(
             split_locks.is_empty(),
             "these backends take a DIFFERENT exclusive lock to install than to remove, so two \
-             LiNix processes can write one package database at the same time:\n    {}\n\n\
+             Shall processes can write one package database at the same time:\n    {}\n\n\
              The lock names the manager, not the program: a manager that installs with one \
              binary and removes with another has one database and two names for it.",
             split_locks.join("\n    ")
@@ -3277,7 +3277,7 @@ mod tests {
         }
     }
 
-    /// `linix clean-cache` reaches the managers that have one, and says nothing about the rest.
+    /// `shall clean-cache` reaches the managers that have one, and says nothing about the rest.
     ///
     /// **Three outcomes and no fourth**, the same discipline the argv table applies to install
     /// and remove — because the fourth, *"it reported success having run nothing"*, is exactly
@@ -3386,7 +3386,7 @@ mod tests {
     /// one that contains it, and that is also what lets it go behind the terminator.
     ///
     /// Pinned for all three because they are the only rows in the tree that ask, and because
-    /// `argv_drift_tests` does not drive `get_dependencies` — an argv only `linix info` reaches.
+    /// `argv_drift_tests` does not drive `get_dependencies` — an argv only `shall info` reaches.
     #[tokio::test]
     async fn a_dependency_probe_sends_the_operand_and_keeps_the_format_string() {
         use crate::core::executor::MockExecutor;
@@ -3465,11 +3465,11 @@ mod tests {
                 .and_then(|b| b.as_repo_manager().cloned())
                 .unwrap_or_else(|| panic!("{name} manages no repositories"));
 
-            rm.add_repo("linixprobe", "https://example.invalid/r", false)
+            rm.add_repo("shallprobe", "https://example.invalid/r", false)
                 .await
                 .unwrap_or_else(|e| panic!("{name} add_repo: {e}"));
             rm.remove_repo(
-                "linixprobe",
+                "shallprobe",
                 false,
                 crate::app::sync::guard::Reaped::for_reason(
                     crate::app::sync::guard::GuardScope::Remove,
@@ -3484,12 +3484,12 @@ mod tests {
             let want: &[&str] = match name {
                 "dnf" => &[
                     "dnf config-manager --add-repo https://example.invalid/r",
-                    "rm -f /etc/yum.repos.d/linixprobe.repo",
+                    "rm -f /etc/yum.repos.d/shallprobe.repo",
                     "dnf repolist --all",
                 ],
                 _ => &[
                     "sh -c set -e; printf",
-                    "sh -c rm -f '/etc/pacman.d/linix-linixprobe.conf'",
+                    "sh -c rm -f '/etc/pacman.d/shall-shallprobe.conf'",
                     "pacman-conf --repo-list",
                 ],
             };
@@ -3888,7 +3888,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("{} manages no repositories", name));
 
             let _ = mgr
-                .add_repo("linixtest", "https://example.invalid/repo", false)
+                .add_repo("shalltest", "https://example.invalid/repo", false)
                 .await;
             if want_read.is_some() {
                 let _ = mgr.list_repos().await;
@@ -3928,7 +3928,7 @@ mod tests {
     /// $ mix archive.uninstall --force -- phx_new         -> gone
     /// ```
     ///
-    /// The option terminator is LiNix's, and it was measured rather than assumed: both of the
+    /// The option terminator is Shall's, and it was measured rather than assumed: both of the
     /// commands above were run in that exact shape, because two managers in this tree turned
     /// out to read `--` as a package name (W25) and mix does not.
     /// ```
@@ -3990,7 +3990,7 @@ mod tests {
     }
 
     /// Q6, the case the key exists for: a manager changes its CLI, and the person on that
-    /// machine corrects it that day instead of waiting for a LiNix release.
+    /// machine corrects it that day instead of waiting for a Shall release.
     #[tokio::test]
     async fn a_definition_that_says_so_replaces_a_built_in() {
         use crate::backends::onboarder::{register_custom_backends, CustomBackendDef};
@@ -4091,7 +4091,7 @@ mod tests {
 
     /// Two walks of the registry give the same order, and it is one a reader can predict.
     ///
-    /// It was a `HashMap`, so the order was Rust's per-process hash seed: `linix list` printed
+    /// It was a `HashMap`, so the order was Rust's per-process hash seed: `shall list` printed
     /// its backend blocks in a different sequence every run — two runs a second apart differed
     /// by 530 lines and sorted identical — and the fan-outs handed their first slots to
     /// whichever managers the seed happened to name first, so no timing measurement repeated.

@@ -1,7 +1,7 @@
 //! A package that installed and cannot be run.
 //!
-//! `linix install pub:sass` succeeds, `linix list` agrees, and typing `sass` answers "command
-//! not found" — because `~/.pub-cache/bin` is not on `PATH` and nothing ever said so. LiNix
+//! `shall install pub:sass` succeeds, `shall list` agrees, and typing `sass` answers "command
+//! not found" — because `~/.pub-cache/bin` is not on `PATH` and nothing ever said so. Shall
 //! reported success for a package the user cannot invoke, which is the same event as a failed
 //! install everywhere it matters and is reported as the opposite.
 //!
@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 ///
 /// Three kinds of answer, and the difference matters:
 ///
-/// - **LiNix's own deploy directory** for the artifact backends. It is `[bin_dir]` and nothing
+/// - **Shall's own deploy directory** for the artifact backends. It is `[bin_dir]` and nothing
 ///   else, so the sentence this file prints cannot name a directory the deploy did not use.
 /// - **The tool's own answer**, for the managers whose global directory is decided by how they
 ///   were installed, or by which switch is selected. `yarn global bin` reads `…\scoop\apps\yarn\current\global\bin` on the
@@ -44,7 +44,7 @@ use std::path::{Path, PathBuf};
 /// them being on `PATH` is enough to stay quiet — a warning that fires on a machine that is
 /// fine is how the real one gets ignored.
 pub async fn user_bin_dirs(backend: &str, cfg: &Config, exec: &CommandExecutor) -> Vec<PathBuf> {
-    if deploys_through_linix(backend) {
+    if deploys_through_shall(backend) {
         return vec![cfg.bin_dir.clone()];
     }
     if let Some(dirs) = asks_the_tool(backend, exec).await {
@@ -61,8 +61,8 @@ pub async fn user_bin_dirs(backend: &str, cfg: &Config, exec: &CommandExecutor) 
     conventional_bin_dir(backend).into_iter().collect()
 }
 
-/// The backends whose executables LiNix itself deploys, into `[bin_dir]`.
-fn deploys_through_linix(backend: &str) -> bool {
+/// The backends whose executables Shall itself deploys, into `[bin_dir]`.
+fn deploys_through_shall(backend: &str) -> bool {
     matches!(backend, "github" | "web" | "appimage" | "shim")
 }
 
@@ -220,9 +220,9 @@ mod tests {
     use std::sync::Arc;
 
     #[cfg(windows)]
-    const SANDBOX: &str = r"C:\linix-test-sandbox";
+    const SANDBOX: &str = r"C:\shall-test-sandbox";
     #[cfg(not(windows))]
-    const SANDBOX: &str = "/linix-test-sandbox";
+    const SANDBOX: &str = "/shall-test-sandbox";
 
     /// An executor that answers only what a test told it to. Anything else reads back empty,
     /// which is the same shape as a manager that is not installed.
@@ -271,8 +271,8 @@ mod tests {
         }
     }
 
-    /// The directory LiNix deploys into is a user directory like any other, and it is the one
-    /// LiNix is answerable for. CI, 2026-07-29: `github installed sharkdp/fd for real`,
+    /// The directory Shall deploys into is a user directory like any other, and it is the one
+    /// Shall is answerable for. CI, 2026-07-29: `github installed sharkdp/fd for real`,
     /// `github: list shows fd`, `github: fd is on PATH` FAILED — `~/.local/bin` is not on a
     /// clean Windows runner's PATH and nothing said so.
     ///
@@ -281,13 +281,13 @@ mod tests {
     /// warning could name a directory the deploy never used, and a sandboxed run deployed into
     /// the developer's real home.
     #[tokio::test]
-    async fn the_directory_linix_itself_deploys_into_answers() {
+    async fn the_directory_shall_itself_deploys_into_answers() {
         let (exec, cfg) = mocked(&[]);
         for be in ["github", "web", "appimage", "shim"] {
             assert_eq!(
                 user_bin_dirs(be, &cfg, &exec).await,
                 vec![cfg.bin_dir.clone()],
-                "{be} deploys through LiNix's own bin dir and this does not say so"
+                "{be} deploys through Shall's own bin dir and this does not say so"
             );
         }
     }

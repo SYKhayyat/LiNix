@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build + run the LiNix integration harness across Linux distros in disposable containers,
-# testing each distro's native package manager through the real `linix` binary.
+# Build + run the Shall integration harness across Linux distros in disposable containers,
+# testing each distro's native package manager through the real `shall` binary.
 #
 #   ./docker/integration/run.sh                # all distros, package "jq"
 #   ./docker/integration/run.sh htop           # override the test package
@@ -31,7 +31,7 @@ crlf=""
 # the container, which is the outcome the check was written to prevent. `od` turns the byte into
 # the two characters \r first.
 has_cr() { head -c 65536 "$1" | od -c | grep -q '\\r'; }
-probe="${TMPDIR:-/tmp}/linix-crlf-selftest.$$"
+probe="${TMPDIR:-/tmp}/shall-crlf-selftest.$$"
 printf 'x\r\n' > "$probe"
 if ! has_cr "$probe"; then
     rm -f "$probe"
@@ -98,7 +98,7 @@ for d in $DISTROS; do
     be="$(backend_for "$d")"
     [ -n "$be" ] || { echo "unknown distro: $d"; continue; }
     echo "############### BUILD $d ($be) ###############"
-    if ! docker build -f "docker/integration/Dockerfile.$d" -t "linix-it-$d" . ; then
+    if ! docker build -f "docker/integration/Dockerfile.$d" -t "shall-it-$d" . ; then
         summary="${summary}\n  ${d} (${be}): BUILD-FAIL"; overall=1; continue
     fi
     echo "############### RUN $d ($be) ###############"
@@ -134,7 +134,7 @@ for d in $DISTROS; do
     [ "$d" = gentoo ] && smoke=1
     [ -n "$smoke" ] && ENVFLAGS="$ENVFLAGS -e SMOKE_ONLY=$smoke"
     # shellcheck disable=SC2086
-    if docker run --rm $PRIV $ENVFLAGS -v "$SCRIPT_MOUNT" -v "$FLOOR_MOUNT" "linix-it-$d" "$be" "$PKG"; then
+    if docker run --rm $PRIV $ENVFLAGS -v "$SCRIPT_MOUNT" -v "$FLOOR_MOUNT" "shall-it-$d" "$be" "$PKG"; then
         summary="${summary}\n  ${d} (${be}): PASS"
     else
         summary="${summary}\n  ${d} (${be}): FAIL"; overall=1

@@ -1,7 +1,7 @@
 //! How this platform runs a script file.
 //!
 //! One answer, because there are three callers — an `exec:` declaration (XIII.3), a hook on one
-//! of LiNix's own events (XIII.13), and a `#!` package hook (V.150) — and a second copy would be
+//! of Shall's own events (XIII.13), and a `#!` package hook (V.150) — and a second copy would be
 //! a second chance for one of them to be wrong on Windows, where the answer is not "make it
 //! executable and run it". A fourth asks only half the question: a `vars.<ext>` provider names
 //! its interpreter by file extension (IX.6) and takes [`interpreter_named`] to find it.
@@ -45,7 +45,7 @@ pub struct Shebang {
 /// The command that runs the script at `path`, whose text is `contents`.
 ///
 /// A script with no `#!` gets this platform's default shell, which is what every script in a
-/// LiNix config was before shebangs were honoured anywhere.
+/// Shall config was before shebangs were honoured anywhere.
 pub fn launch_for(path: &Path, contents: &str) -> Result<Launch> {
     let script = path.to_string_lossy().to_string();
 
@@ -68,7 +68,7 @@ pub fn launch_for(path: &Path, contents: &str) -> Result<Launch> {
     };
 
     // An interpreter on Windows can itself be a `.cmd`/`.bat`/`.ps1` shim, which `CreateProcess`
-    // cannot launch at all. Everything else LiNix runs goes through this; an interpreter chosen
+    // cannot launch at all. Everything else Shall runs goes through this; an interpreter chosen
     // here is not the one thing exempt from it.
     let (program, args) = crate::core::executor::effective_command(&program, &args);
     Ok(Launch { program, args })
@@ -101,12 +101,12 @@ pub fn shebang_of(contents: &str) -> Result<Option<Shebang>> {
         if tokens.first() == Some(&"-S") {
             tokens.remove(0);
         }
-        // `env` can set variables before the interpreter runs. LiNix cannot: one of the three
+        // `env` can set variables before the interpreter runs. Shall cannot: one of the three
         // callers runs its script through an executor with no per-command environment, and a
         // form honoured by two callers out of three is worse than one refused by all three.
         if let Some(assignment) = tokens.first().copied().filter(|t| is_assignment(t)) {
             return Err(Error::Other(format!(
-                "this script's first line sets `{}` before its interpreter, which LiNix does not \
+                "this script's first line sets `{}` before its interpreter, which Shall does not \
                  do. Set it inside the script instead.",
                 assignment
             )));
@@ -388,7 +388,7 @@ mod tests {
         assert!(shebang("").is_none());
         assert!(shebang("#!").is_none());
         assert!(shebang("#!   \n").is_none());
-        // `#rhai` is LiNix's own marker and belongs to the dialect chooser, not to this.
+        // `#rhai` is Shall's own marker and belongs to the dialect chooser, not to this.
         assert!(shebang("#rhai\nlet x = 1;").is_none());
     }
 

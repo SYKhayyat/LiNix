@@ -1,7 +1,7 @@
 // src/app/sync/saved_plan.rs
 //
 // A saved, reviewable plan artifact — Terraform's `plan -out` / `apply plan` for packages.
-// `linix plan --out p.json` freezes exactly what a sync would do; `linix apply p.json`
+// `shall plan --out p.json` freezes exactly what a sync would do; `shall apply p.json`
 // executes that captured set. A content hash lets `apply` detect that the world changed
 // since the plan was captured.
 

@@ -184,7 +184,7 @@ impl Error {
     /// "while doing X: {e}"))` — turns a withdrawable line into a permanent wedge. This edits
     /// the sentence and nothing else.
     ///
-    /// `install X` converges the whole configuration, which is the model working: LiNix is
+    /// `install X` converges the whole configuration, which is the model working: Shall is
     /// declarative and your file is the truth. But it means a line you have never looked at can
     /// stop the install you just typed, and before this the error named the *command* — `sc`
     /// failed (exit 1056) — with nothing to say which declaration ran it or where that line
@@ -256,7 +256,7 @@ impl Error {
             Error::CommandFailed { retry, .. } => *retry,
 
             // Nothing about the machine changes between attempts for any of these: the name
-            // is wrong, the file is wrong, the platform cannot do it, or LiNix itself said no.
+            // is wrong, the file is wrong, the platform cannot do it, or Shall itself said no.
             Error::BackendNotFound(_)
             | Error::NoSuchPackage { .. }
             | Error::Unresolvable { .. }

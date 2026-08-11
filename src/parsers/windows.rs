@@ -1051,7 +1051,7 @@ kubectl 1.36.2            1.36.3
         assert_eq!(p[1].version.as_deref(), Some("1.36.3"));
     }
 
-    /// A pin is a decision. Offering to undo it reads as LiNix not knowing you made it.
+    /// A pin is a decision. Offering to undo it reads as Shall not knowing you made it.
     #[test]
     fn a_pinned_choco_package_is_not_reported_as_outdated() {
         let out = "git|2.54.0|2.55.0|false\nnodejs|20.0.0|22.0.0|true\n";

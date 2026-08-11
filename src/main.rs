@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use linix::app::App;
-use linix::cli::{Cli, Commands};
-use linix::core::Output;
+use shall::app::App;
+use shall::cli::{Cli, Commands};
+use shall::core::Output;
 use std::collections::HashMap;
 use std::env;
 use tracing::warn;
@@ -18,14 +18,14 @@ use tracing_subscriber::EnvFilter;
 //
 // This glob stays honest only while it is the dispatcher's. If a *tenth* consumer appears, it
 // is a sibling and it should import by name.
-use linix::verbs::{
+use shall::verbs::{
     check::*, cleanup::*, declare::*, history::*, packages::*, plan::*, setup::*, sync::*,
     upgrade::*,
 };
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // A closed output pipe (e.g. `linix search x | head`) makes `println!` fail with
+    // A closed output pipe (e.g. `shall search x | head`) makes `println!` fail with
     // EPIPE, which under `panic = "abort"` becomes a core dump ("Aborted"). Intercept
     // that one panic and exit quietly — the wanted output was already delivered. This
     // leaves SIGPIPE ignored for sockets, so network writes are unaffected.
@@ -49,25 +49,25 @@ async fn main() -> Result<()> {
     // 1. Logging Initialization
     // Logs go to STDERR so that stdout carries only machine-readable payloads. Otherwise
     // `INFO` lines are interleaved with `--json` output on stdout, corrupting it for any
-    // consumer (`linix search --json | jq`).
+    // consumer (`shall search --json | jq`).
     //
     // The level is read straight off argv rather than off the parsed `Cli`, because this has
     // to be running before the shim hijack a few lines down — and reading it after clap is
     // exactly why `--verbose` used to do nothing at all.
     // A default run prints neither a timestamp nor a module path. `WARN
-    // linix::verbs::packages` and an RFC3339 stamp are addressed to whoever is debugging
-    // LiNix, and the person reading them typed a package name — the sentence is for them, the
+    // shall::verbs::packages` and an RFC3339 stamp are addressed to whoever is debugging
+    // Shall, and the person reading them typed a package name — the sentence is for them, the
     // provenance is not. Both come back at `-v`, where somebody has asked for the internals.
     let argv: Vec<String> = std::env::args().collect();
     let level = log_level_from_argv(&argv);
     let filter = || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
     let verbose = level.contains("debug") || level.contains("trace");
     // Asked, rather than left to `tracing-subscriber`'s default, which is colour-always. Without
-    // this line `linix install nosuchpkg 2>&1 | grep` came back carrying escape codes and a run
+    // this line `shall install nosuchpkg 2>&1 | grep` came back carrying escape codes and a run
     // redirected into a log file wrote them to disk. The question is about *stderr*, which is
     // where this writes — `utils::style::color_enabled` answers it for stdout, and a pipe on
     // stdout with a terminal on stderr is the ordinary arrangement, not an odd one.
-    let ansi = linix::utils::style::color_enabled_on_stderr();
+    let ansi = shall::utils::style::color_enabled_on_stderr();
     if verbose {
         tracing_subscriber::fmt()
             .with_writer(std::io::stderr)
@@ -84,7 +84,7 @@ async fn main() -> Result<()> {
             .init();
     }
 
-    // 1.5 Where LiNix's own data lives — before the shim hijack, which builds an `App` and so
+    // 1.5 Where Shall's own data lives — before the shim hijack, which builds an `App` and so
     // reads it.
     settle_data_dir(&argv)?;
 
@@ -98,7 +98,7 @@ async fn main() -> Result<()> {
     // an alias `up` can stand in for `upgrade --all`. Built-in subcommands always win.
     let raw_argv: Vec<String> = std::env::args().collect();
     let prefs = preferences_path_from_argv(&raw_argv)
-        .and_then(|p| linix::config::Config::from_file(&p).ok());
+        .and_then(|p| shall::config::Config::from_file(&p).ok());
     let aliases = prefs
         .as_ref()
         .map(|c| c.command_aliases.clone())
@@ -115,7 +115,7 @@ async fn main() -> Result<()> {
             Some(Ok(steps)) => return run_user_verb(steps).await,
             Some(Err(msg)) => {
                 eprintln!("{}", msg);
-                std::process::exit(linix::core::Exit::Failed.code());
+                std::process::exit(shall::core::Exit::Failed.code());
             }
             None => {}
         }
@@ -132,7 +132,7 @@ async fn main() -> Result<()> {
     // Before the config is read, because loading it can already run an external vars provider
     // — and a breakdown that starts after the first child has nothing to say about it.
     if cli.timings {
-        linix::core::timing::enable();
+        shall::core::timing::enable();
     }
 
     let mut config = load_and_merge_config(&cli).await?;
@@ -145,10 +145,10 @@ async fn main() -> Result<()> {
     }
     apply_process_wide_config(&config);
 
-    // 4. A hook fired by a manager that LiNix itself is driving has nothing to add — the run
+    // 4. A hook fired by a manager that Shall itself is driving has nothing to add — the run
     //    that spawned it is already recording what it installed, and it holds the lock this
     //    process would wait two minutes for.
-    if stands_down_inside_linix(&[&cli.command]) {
+    if stands_down_inside_shall(&[&cli.command]) {
         return Ok(());
     }
 
@@ -170,13 +170,13 @@ async fn main() -> Result<()> {
     // question in seconds (E14).
     let started = std::time::Instant::now();
     let outcome = dispatch(&app, &cli).await;
-    linix::core::latency::report_if_over(
-        &linix::core::latency::subcommand_name(&cli.command),
+    shall::core::latency::report_if_over(
+        &shall::core::latency::subcommand_name(&cli.command),
         started.elapsed(),
     );
     // Before `finish`, which maps a refusal or a failure onto an exit code and leaves: a run
     // that ended badly is the one whose timing a user most wants to see.
-    linix::core::timing::report(linix::core::timing::elapsed());
+    shall::core::timing::report(shall::core::timing::elapsed());
     finish(&app, outcome).await
 }
 
@@ -191,15 +191,15 @@ fn clap_exit_code(kind: clap::error::ErrorKind) -> i32 {
     match kind {
         // Asked for and answered.
         ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => 0,
-        // `linix` with no subcommand. clap prints help as a courtesy and files it next to the
+        // `shall` with no subcommand. clap prints help as a courtesy and files it next to the
         // real thing, but nobody asked for help and no command ran — a script that reaches
         // here has a bug, and 0 would tell it everything is fine.
-        ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => linix::core::Exit::Failed.code(),
-        _ => linix::core::Exit::Failed.code(),
+        ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => shall::core::Exit::Failed.code(),
+        _ => shall::core::Exit::Failed.code(),
     }
 }
 
-/// Hand clap's own message to the user, then leave with LiNix's code rather than clap's.
+/// Hand clap's own message to the user, then leave with Shall's code rather than clap's.
 fn parse_or_exit(parsed: Result<Cli, clap::Error>) -> Cli {
     match parsed {
         Ok(cli) => cli,
@@ -215,12 +215,12 @@ fn parse_or_exit(parsed: Result<Cli, clap::Error>) -> Cli {
 /// A refusal and a difference are printed as themselves — plainly, with no `Error:` prefix —
 /// because neither is a malfunction. Only a real failure is reported as one.
 pub(crate) async fn finish(app: &App, outcome: Result<()>) -> Result<()> {
-    use linix::core::Exit;
+    use shall::core::Exit;
     match outcome {
         Ok(()) => Ok(()),
         Err(e) => {
-            let code = match e.downcast_ref::<linix::core::Error>() {
-                Some(linix::core::Error::Refused(msg)) => {
+            let code = match e.downcast_ref::<shall::core::Error>() {
+                Some(shall::core::Error::Refused(msg)) => {
                     eprintln!("{}", msg);
                     // `on_guard_refusal` (XIII.13) fires here and nowhere else. Fired at this
                     // layer rather than inside the guard because announcing a refusal is a
@@ -236,22 +236,22 @@ pub(crate) async fn finish(app: &App, outcome: Result<()>) -> Result<()> {
                     // message says it is refusing and fails on one not built as
                     // `Error::Refused`, and fires a real hook through a real refusal. A
                     // sentence that quantifies over paths belongs in a test, not in a comment.
-                    linix::app::events::EventHooks::load(&app.config)
+                    shall::app::events::EventHooks::load(&app.config)
                         .fire(
-                            linix::model::event::Event::OnGuardRefusal,
+                            shall::model::event::Event::OnGuardRefusal,
                             serde_json::json!({ "message": msg }),
                         )
                         .await;
                     Exit::Refused
                 }
-                Some(linix::core::Error::Differences(msg)) => {
+                Some(shall::core::Error::Differences(msg)) => {
                     if !msg.is_empty() {
                         eprintln!("{}", msg);
                     }
                     Exit::Differences
                 }
                 _ => {
-                    // R-3's other half. LiNix classifies every failure it can — a rate limit
+                    // R-3's other half. Shall classifies every failure it can — a rate limit
                     // is `Transient` and says why — and nothing downstream could see the
                     // answer. The sweep harness therefore tested transience by RETRYING THE
                     // INSTALL IMMEDIATELY, which cannot succeed inside a 1236-second rate-limit
@@ -272,7 +272,7 @@ pub(crate) async fn finish(app: &App, outcome: Result<()>) -> Result<()> {
     }
 }
 
-/// The one machine-readable line: what LiNix thinks the failure it is about to report *is*.
+/// The one machine-readable line: what Shall thinks the failure it is about to report *is*.
 ///
 /// `retryability()` already answers this and only two places consulted it. A caller that has to
 /// re-derive the answer by running the command again is not reading the classification, it is
@@ -282,14 +282,14 @@ pub(crate) async fn finish(app: &App, outcome: Result<()>) -> Result<()> {
 /// The vocabulary is `Retryability`'s own, so a variant added there and not handled here is a
 /// compile error rather than a silently missing token.
 fn print_failure_class(e: &anyhow::Error) {
-    use linix::core::Retryability;
+    use shall::core::Retryability;
     use std::io::IsTerminal;
 
     // Addressed to a program, so it is written only where a program is listening. On a terminal
     // it was internal vocabulary on the first line of the first command a new user runs:
     //
-    //     $ linix sync
-    //     linix-failure-class: permanent
+    //     $ shall sync
+    //     shall-failure-class: permanent
     //     Error: Configuration error: no `priority` file at …
     //
     // A pipe is exactly the condition under which both harnesses read it (G-6).
@@ -297,17 +297,17 @@ fn print_failure_class(e: &anyhow::Error) {
         return;
     }
     let class = match e
-        .downcast_ref::<linix::core::Error>()
+        .downcast_ref::<shall::core::Error>()
         .map(|x| x.retryability())
     {
         Some(Retryability::Transient) => "transient",
         Some(Retryability::Permanent) => "permanent",
         Some(Retryability::Exhausted) => "exhausted",
-        // No LiNix error at all, or one nothing classified: the same answer either way, and it
+        // No Shall error at all, or one nothing classified: the same answer either way, and it
         // is the honest one — nobody looked.
         Some(Retryability::Unknown) | None => "unknown",
     };
-    eprintln!("linix-failure-class: {class}");
+    eprintln!("shall-failure-class: {class}");
 }
 
 pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
@@ -400,7 +400,7 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
         Commands::Rollback { reference } => handle_rollback(app, reference).await,
         Commands::Diff { from, to } => handle_diff(app, from, to.as_deref()).await,
         Commands::Eval => handle_eval(app).await,
-        Commands::Repl => linix::app::repl::run(app).await.map_err(Into::into),
+        Commands::Repl => shall::app::repl::run(app).await.map_err(Into::into),
         Commands::Try { image } => handle_try(app, image.as_deref()).await,
         Commands::Add {
             source,
@@ -493,10 +493,10 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
             handle_why(app, package, Output::from_json_flag(*json)).await
         }
         Commands::Service(args) => handle_service(app, &args.command).await,
-        Commands::Bisect { test, yes } => linix::app::bisect::bisect(app, test, *yes)
+        Commands::Bisect { test, yes } => shall::app::bisect::bisect(app, test, *yes)
             .await
             .map_err(|e| e.into()),
-        Commands::Fleet(args) => linix::app::fleet::fleet(app, &args.hosts, args.sync, args.apply)
+        Commands::Fleet(args) => shall::app::fleet::fleet(app, &args.hosts, args.sync, args.apply)
             .await
             .map_err(|e| e.into()),
         Commands::Hooks(args) => handle_hooks(app, &args.command).await,
@@ -516,19 +516,19 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
         Commands::Policy => handle_policy(app).await,
         Commands::Completions { shell } => {
             let mut cmd = <Cli as clap::CommandFactory>::command();
-            linix::cli::generate_completions(*shell, &mut cmd);
+            shall::cli::generate_completions(*shell, &mut cmd);
             Ok(())
         }
         Commands::SelfUpgrade { git, check } => handle_self_upgrade(git.as_deref(), *check).await,
     }
 }
 
-/// Repository a `self-upgrade` installs from: explicit `--git`, else `$LINIX_REPO`, else the
+/// Repository a `self-upgrade` installs from: explicit `--git`, else `$SHALL_REPO`, else the
 /// upstream default (kept in sync with `scripts/install.sh`).
 pub(crate) fn self_upgrade_repo(git: Option<&str>) -> String {
     git.map(|s| s.to_string())
-        .or_else(|| std::env::var("LINIX_REPO").ok())
-        .unwrap_or_else(|| "https://github.com/SYKhayyat/LiNix".to_string())
+        .or_else(|| std::env::var("SHALL_REPO").ok())
+        .unwrap_or_else(|| "https://github.com/SYKhayyat/Shall".to_string())
 }
 
 pub(crate) async fn cargo_install_from(
@@ -542,27 +542,27 @@ pub(crate) async fn cargo_install_from(
     }
     // The terminal-handoff door: a `cargo install --git` compiles for minutes and the person is
     // reading its progress, so it is inherited and unbounded — but owned, because a compile left
-    // running after LiNix has gone still writes to `~/.cargo/bin` when it finishes.
-    linix::core::executor::supervised_status(cmd, "cargo install")
+    // running after Shall has gone still writes to `~/.cargo/bin` when it finishes.
+    shall::core::executor::supervised_status(cmd, "cargo install")
         .await
         .map_err(std::io::Error::other)
 }
 
 pub(crate) async fn handle_self_upgrade(git: Option<&str>, check: bool) -> Result<()> {
     let repo = self_upgrade_repo(git);
-    println!("Current version : linix {}", linix::VERSION);
+    println!("Current version : shall {}", shall::VERSION);
     if check {
         println!("Upgrade source  : {}", repo);
-        println!("Run `linix self-upgrade` to rebuild and install the latest from source.");
+        println!("Run `shall self-upgrade` to rebuild and install the latest from source.");
         return Ok(());
     }
     if which::which("cargo").is_err() {
         anyhow::bail!(
             "`cargo` (the Rust toolchain) is required to self-upgrade. Install it from \
-             https://rustup.rs, or re-run the LiNix install script."
+             https://rustup.rs, or re-run the Shall install script."
         );
     }
-    println!("Rebuilding linix from {repo} via cargo — this can take a few minutes...");
+    println!("Rebuilding shall from {repo} via cargo — this can take a few minutes...");
     // Reproducible build first (--locked); fall back to a loose build, exactly like install.sh.
     let first = cargo_install_from(&repo, true).await;
     let ok = matches!(&first, Ok(s) if s.success());
@@ -572,10 +572,10 @@ pub(crate) async fn handle_self_upgrade(git: Option<&str>, check: bool) -> Resul
             .await
             .context("running `cargo install`")?;
         if !second.success() {
-            anyhow::bail!("cargo install failed; LiNix was not upgraded.");
+            anyhow::bail!("cargo install failed; Shall was not upgraded.");
         }
     }
-    println!("Done. Run `linix --version` to confirm the new build.");
+    println!("Done. Run `shall --version` to confirm the new build.");
     Ok(())
 }
 
@@ -602,9 +602,9 @@ pub(crate) fn flag_from_argv(argv: &[String], names: &[&str]) -> Option<String> 
 /// `--data-dir`, and the two environment variables, settled once before anything reads them.
 ///
 /// **The flag sets the variable rather than becoming a second answer.** Six places ask "where is
-/// LiNix's data" — `safe_data_dir`, `Layout::from_env`, `StateRegistry::load_default`, the
+/// Shall's data" — `safe_data_dir`, `Layout::from_env`, `StateRegistry::load_default`, the
 /// config default, the rehearsal sandbox, the test fixtures — and every one of them reads
-/// `$LINIX_DATA_DIR`. A flag threaded through as a separate value would have to reach all six,
+/// `$SHALL_DATA_DIR`. A flag threaded through as a separate value would have to reach all six,
 /// and the one it missed would be the one that wrote to the developer's real registry. Config
 /// got a first-class flag and state got an undocumented variable, and that asymmetry is what
 /// turned `--config-dir` from a testing affordance into a trap (AU4): a fresh sandbox planned
@@ -616,16 +616,16 @@ pub(crate) fn flag_from_argv(argv: &[String], names: &[&str]) -> Option<String> 
 /// Both variables are checked for absoluteness at this one point, because the readers above
 /// return a `PathBuf` and cannot refuse anything (AU2).
 fn settle_data_dir(argv: &[String]) -> Result<()> {
-    use linix::config::settings::absolute_or_refuse;
+    use shall::config::settings::absolute_or_refuse;
 
     if let Some(flag) = flag_from_argv(argv, &["--data-dir"]) {
         let dir = absolute_or_refuse(std::path::PathBuf::from(flag), "`--data-dir`")?;
-        std::env::set_var("LINIX_DATA_DIR", dir);
-    } else if let Some(dir) = std::env::var_os("LINIX_DATA_DIR").filter(|v| !v.is_empty()) {
-        absolute_or_refuse(std::path::PathBuf::from(dir), "`$LINIX_DATA_DIR`")?;
+        std::env::set_var("SHALL_DATA_DIR", dir);
+    } else if let Some(dir) = std::env::var_os("SHALL_DATA_DIR").filter(|v| !v.is_empty()) {
+        absolute_or_refuse(std::path::PathBuf::from(dir), "`$SHALL_DATA_DIR`")?;
     }
-    if let Some(dir) = std::env::var_os("LINIX_CONFIG_DIR").filter(|v| !v.is_empty()) {
-        absolute_or_refuse(std::path::PathBuf::from(dir), "`$LINIX_CONFIG_DIR`")?;
+    if let Some(dir) = std::env::var_os("SHALL_CONFIG_DIR").filter(|v| !v.is_empty()) {
+        absolute_or_refuse(std::path::PathBuf::from(dir), "`$SHALL_CONFIG_DIR`")?;
     }
     Ok(())
 }
@@ -633,12 +633,12 @@ fn settle_data_dir(argv: &[String]) -> Result<()> {
 /// Where `preferences.toml` is, for the pre-clap alias load.
 ///
 /// `--config` names the file; otherwise `locate` answers with `--config-dir`,
-/// `$LINIX_CONFIG_DIR`, the settings file, then the default — the one resolution, so the
+/// `$SHALL_CONFIG_DIR`, the settings file, then the default — the one resolution, so the
 /// aliases come out of the file the rest of the run will read (X.6).
-/// How much LiNix says about itself, from argv alone.
+/// How much Shall says about itself, from argv alone.
 ///
 /// The default is `warn`, not `info`: an ordinary run's answer goes to stdout, and what was
-/// left on the `info` channel was LiNix narrating its own startup over the top of it. The
+/// left on the `info` channel was Shall narrating its own startup over the top of it. The
 /// narration is still there for anyone who asks — that is what `-v` is for, and asking is the
 /// difference. `RUST_LOG` outranks all of this; it is checked before this is called.
 ///
@@ -674,12 +674,12 @@ pub(crate) fn preferences_path_from_argv(argv: &[String]) -> Option<std::path::P
         return Some(std::path::PathBuf::from(p));
     }
     let dir = flag_from_argv(argv, &["--config-dir"]).map(std::path::PathBuf::from);
-    linix::app::locate::locate(dir.as_deref())
+    shall::app::locate::locate(dir.as_deref())
         .ok()
-        .map(|r| r.path.join(linix::config::PREFERENCES_FILE_NAME))
+        .map(|r| r.path.join(shall::config::PREFERENCES_FILE_NAME))
 }
 
-/// Does this invocation consist of hooks fired by a manager LiNix is already driving?
+/// Does this invocation consist of hooks fired by a manager Shall is already driving?
 ///
 /// **Both doors, one rule.** The stand-down lived inline in `main` and covered a single
 /// subcommand; `run_user_verb` is the other way a `Commands` reaches a lock, and a `[verbs]`
@@ -690,8 +690,8 @@ pub(crate) fn preferences_path_from_argv(argv: &[String]) -> Option<std::path::P
 /// `any`, not `all`: one hook step is enough to make the whole verb wait on a lock this
 /// process's parent is holding, and a sequence that deadlocks halfway is not better than one
 /// that stands down.
-pub(crate) fn stands_down_inside_linix(commands: &[&Commands]) -> bool {
-    env::var_os(linix::core::executor::INSIDE_LINIX).is_some()
+pub(crate) fn stands_down_inside_shall(commands: &[&Commands]) -> bool {
+    env::var_os(shall::core::executor::INSIDE_SHALL).is_some()
         && commands.iter().any(|c| c.is_manager_hook())
 }
 
@@ -706,12 +706,12 @@ pub(crate) fn stands_down_inside_linix(commands: &[&Commands]) -> bool {
 /// property the argv read was reaching for and could not have.
 pub(crate) async fn acquire_data_lock(
     command: &Commands,
-) -> Result<Option<linix::core::datalock::DataLock>> {
+) -> Result<Option<shall::core::datalock::DataLock>> {
     if !command.writes() {
         return Ok(None);
     }
-    let name = linix::core::latency::subcommand_name(command);
-    let lock = linix::core::datalock::DataLock::for_one_step(&name).await?;
+    let name = shall::core::latency::subcommand_name(command);
+    let lock = shall::core::datalock::DataLock::for_one_step(&name).await?;
     Ok(Some(lock))
 }
 
@@ -807,7 +807,7 @@ pub(crate) fn expand_command_aliases(
 ///
 /// Pure and unit-tested. Each step inherits the leading global flags (`-c path`) so config
 /// selection is the same for every step, and gains no trailing arguments — a verb is a fixed
-/// composition, and threading `linix update --dry-run` into some steps and not others is the
+/// composition, and threading `shall update --dry-run` into some steps and not others is the
 /// kind of surprise the closed vocabulary exists to avoid. **Composition only:** a step whose
 /// first token is not a built-in subcommand is an error, because a verb that runs arbitrary argv
 /// is `exec:` wearing a command's clothes (U33, off by default).
@@ -867,15 +867,15 @@ pub(crate) fn plan_user_verb(
 ///
 /// One function because there are two entry points that load a config, and a setting wired
 /// into one of them is a setting that does nothing under `run_user_verb`.
-fn apply_process_wide_config(config: &linix::config::Config) {
-    linix::backends::node_registry::set_http_timeout(config.network_timeout_secs);
-    linix::core::executor::set_command_idle_timeout(config.command_idle_timeout_secs);
-    linix::core::executor::set_query_bounds(
+fn apply_process_wide_config(config: &shall::config::Config) {
+    shall::backends::node_registry::set_http_timeout(config.network_timeout_secs);
+    shall::core::executor::set_command_idle_timeout(config.command_idle_timeout_secs);
+    shall::core::executor::set_query_bounds(
         config.query_idle_timeout_secs,
         config.read_retry_attempts,
     );
-    linix::core::executor::set_sudo_password_timeout(config.sudo_password_timeout_secs);
-    linix::core::download::set_max_download_bytes(config.max_download_bytes);
+    shall::core::executor::set_sudo_password_timeout(config.sudo_password_timeout_secs);
+    shall::core::download::set_max_download_bytes(config.max_download_bytes);
 }
 
 /// Run a user verb: build the config and app once from the shared leading flags, then dispatch
@@ -888,7 +888,7 @@ fn apply_process_wide_config(config: &linix::config::Config) {
 /// step syncs takes it before the first step runs rather than partway through.
 pub(crate) async fn run_user_verb(steps: Vec<Vec<String>>) -> Result<()> {
     let parsed: Vec<Cli> = steps.iter().map(Cli::parse_from).collect();
-    if stands_down_inside_linix(&parsed.iter().map(|c| &c.command).collect::<Vec<_>>()) {
+    if stands_down_inside_shall(&parsed.iter().map(|c| &c.command).collect::<Vec<_>>()) {
         return Ok(());
     }
     let config = load_and_merge_config(&parsed[0]).await?;
@@ -919,11 +919,11 @@ pub(crate) async fn attempt_shim_hijack() -> Result<Option<Result<()>>> {
     let current_name = env::current_exe()
         .ok()
         .and_then(|p| p.file_name().map(|s| s.to_string_lossy().into_owned()))
-        .unwrap_or_else(|| "linix".to_string());
-    if current_name != "linix" && !current_name.starts_with("linix") {
-        let root = linix::app::locate::locate(None)?.path;
+        .unwrap_or_else(|| "shall".to_string());
+    if current_name != "shall" && !current_name.starts_with("shall") {
+        let root = shall::app::locate::locate(None)?.path;
         let config =
-            linix::config::Config::from_file(&root.join(linix::config::PREFERENCES_FILE_NAME))
+            shall::config::Config::from_file(&root.join(shall::config::PREFERENCES_FILE_NAME))
                 .unwrap_or_default();
         let app = App::new(config).await?;
         return Ok(Some(
@@ -936,19 +936,19 @@ pub(crate) async fn attempt_shim_hijack() -> Result<Option<Result<()>>> {
     Ok(None)
 }
 
-pub(crate) async fn load_and_merge_config(cli: &Cli) -> Result<linix::config::Config> {
-    // Where the repo is: --config-dir, then $LINIX_CONFIG_DIR, then LiNix's settings file,
+pub(crate) async fn load_and_merge_config(cli: &Cli) -> Result<shall::config::Config> {
+    // Where the repo is: --config-dir, then $SHALL_CONFIG_DIR, then Shall's settings file,
     // then the default. This has to resolve BEFORE `preferences.toml` is opened, because
     // that file lives inside the root it would otherwise have to announce.
-    let located = linix::app::locate::locate(cli.config_dir.as_deref())?;
+    let located = shall::app::locate::locate(cli.config_dir.as_deref())?;
     let path = cli
         .config
         .clone()
-        .unwrap_or_else(|| located.path.join(linix::config::PREFERENCES_FILE_NAME));
+        .unwrap_or_else(|| located.path.join(shall::config::PREFERENCES_FILE_NAME));
     let mut config =
-        tokio::task::spawn_blocking(move || linix::config::Config::from_file(&path)).await??;
+        tokio::task::spawn_blocking(move || shall::config::Config::from_file(&path)).await??;
     config.config_root = located.path;
-    config.merge_cli_overrides(linix::config::CliOverrides {
+    config.merge_cli_overrides(shall::config::CliOverrides {
         dry_run: cli.dry_run,
         yes: cli.yes,
         verbose: cli.verbose > 0,
@@ -961,7 +961,7 @@ pub(crate) async fn load_and_merge_config(cli: &Cli) -> Result<linix::config::Co
     // can run ahead of it. Every config write consults this instead of each verb remembering
     // to — which five verbs did not (`activate`, `deactivate`, `lock`, `git init`,
     // `config init`), and `--dry-run activate Work` left you on Work without printing a line.
-    linix::core::dry_run::set(config.dry_run);
+    shall::core::dry_run::set(config.dry_run);
 
     // A per-run acknowledgement, never a config key (U23): a machine that always bypasses the
     // dotfiles collision check is a machine where the check does not exist.
@@ -978,8 +978,8 @@ pub(crate) async fn load_and_merge_config(cli: &Cli) -> Result<linix::config::Co
     // (`cache_may_answer`) — the setting says how long a reading may be reused, never that a
     // plan or an adoption may be built on one.
     if cli.no_cache
-        || !linix::core::installed::InstalledListings::cache_may_answer(
-            &linix::core::latency::subcommand_name(&cli.command),
+        || !shall::core::installed::InstalledListings::cache_may_answer(
+            &shall::core::latency::subcommand_name(&cli.command),
         )
     {
         config.installed_cache_secs = 0;
@@ -1016,8 +1016,8 @@ mod alias_tests {
         aliases.insert("up".to_string(), "upgrade --all".to_string());
         let known: HashSet<String> = ["upgrade".to_string()].into_iter().collect();
 
-        let out = expand_command_aliases(argv(&["linix", "up", "--dry-run"]), &aliases, &known);
-        assert_eq!(out, argv(&["linix", "upgrade", "--all", "--dry-run"]));
+        let out = expand_command_aliases(argv(&["shall", "up", "--dry-run"]), &aliases, &known);
+        assert_eq!(out, argv(&["shall", "upgrade", "--all", "--dry-run"]));
     }
 
     #[test]
@@ -1026,8 +1026,8 @@ mod alias_tests {
         aliases.insert("up".to_string(), "upgrade --all".to_string());
         let known: HashSet<String> = ["upgrade".to_string()].into_iter().collect();
 
-        let out = expand_command_aliases(argv(&["linix", "-c", "/c.toml", "up"]), &aliases, &known);
-        assert_eq!(out, argv(&["linix", "-c", "/c.toml", "upgrade", "--all"]));
+        let out = expand_command_aliases(argv(&["shall", "-c", "/c.toml", "up"]), &aliases, &known);
+        assert_eq!(out, argv(&["shall", "-c", "/c.toml", "upgrade", "--all"]));
     }
 
     #[test]
@@ -1039,8 +1039,8 @@ mod alias_tests {
         aliases.insert("up".to_string(), "upgrade --all".to_string());
         let known: HashSet<String> = ["upgrade".to_string()].into_iter().collect();
 
-        let out = expand_command_aliases(argv(&["linix", "--progress", "up"]), &aliases, &known);
-        assert_eq!(out, argv(&["linix", "--progress", "upgrade", "--all"]));
+        let out = expand_command_aliases(argv(&["shall", "--progress", "up"]), &aliases, &known);
+        assert_eq!(out, argv(&["shall", "--progress", "upgrade", "--all"]));
     }
 
     #[test]
@@ -1063,16 +1063,16 @@ mod alias_tests {
 
     #[test]
     fn subcommand_index_skips_flags_and_their_values() {
-        assert_eq!(find_subcommand_index(&argv(&["linix", "up"])), Some(1));
+        assert_eq!(find_subcommand_index(&argv(&["shall", "up"])), Some(1));
         assert_eq!(
-            find_subcommand_index(&argv(&["linix", "-c", "x", "up"])),
+            find_subcommand_index(&argv(&["shall", "-c", "x", "up"])),
             Some(3)
         );
         assert_eq!(
-            find_subcommand_index(&argv(&["linix", "--dry-run", "up"])),
+            find_subcommand_index(&argv(&["shall", "--dry-run", "up"])),
             Some(2)
         );
-        assert_eq!(find_subcommand_index(&argv(&["linix", "--version"])), None);
+        assert_eq!(find_subcommand_index(&argv(&["shall", "--version"])), None);
     }
 
     #[test]
@@ -1081,8 +1081,8 @@ mod alias_tests {
         aliases.insert("upgrade".to_string(), "install evil".to_string());
         let known: HashSet<String> = ["upgrade".to_string()].into_iter().collect();
         // `upgrade` is a real command → alias ignored.
-        let out = expand_command_aliases(argv(&["linix", "upgrade"]), &aliases, &known);
-        assert_eq!(out, argv(&["linix", "upgrade"]));
+        let out = expand_command_aliases(argv(&["shall", "upgrade"]), &aliases, &known);
+        assert_eq!(out, argv(&["shall", "upgrade"]));
     }
 
     #[test]
@@ -1090,12 +1090,12 @@ mod alias_tests {
         let aliases = HashMap::new();
         let known = HashSet::new();
         assert_eq!(
-            expand_command_aliases(argv(&["linix", "--version"]), &aliases, &known),
-            argv(&["linix", "--version"])
+            expand_command_aliases(argv(&["shall", "--version"]), &aliases, &known),
+            argv(&["shall", "--version"])
         );
         assert_eq!(
-            expand_command_aliases(argv(&["linix", "notanalias"]), &aliases, &known),
-            argv(&["linix", "notanalias"])
+            expand_command_aliases(argv(&["shall", "notanalias"]), &aliases, &known),
+            argv(&["shall", "notanalias"])
         );
     }
 
@@ -1116,14 +1116,14 @@ mod alias_tests {
     #[test]
     fn a_verb_expands_to_one_argv_per_step() {
         let v = verbs(&[("refresh", &["sync", "upgrade --all"])]);
-        let steps = plan_user_verb(&argv(&["linix", "refresh"]), &v, &builtins())
+        let steps = plan_user_verb(&argv(&["shall", "refresh"]), &v, &builtins())
             .unwrap()
             .unwrap();
         assert_eq!(
             steps,
             vec![
-                argv(&["linix", "sync"]),
-                argv(&["linix", "upgrade", "--all"]),
+                argv(&["shall", "sync"]),
+                argv(&["shall", "upgrade", "--all"]),
             ]
         );
     }
@@ -1132,7 +1132,7 @@ mod alias_tests {
     fn a_verb_inherits_leading_global_flags_on_every_step() {
         let v = verbs(&[("refresh", &["sync", "check"])]);
         let steps = plan_user_verb(
-            &argv(&["linix", "-c", "/c.toml", "refresh"]),
+            &argv(&["shall", "-c", "/c.toml", "refresh"]),
             &v,
             &builtins(),
         )
@@ -1141,8 +1141,8 @@ mod alias_tests {
         assert_eq!(
             steps,
             vec![
-                argv(&["linix", "-c", "/c.toml", "sync"]),
-                argv(&["linix", "-c", "/c.toml", "check"]),
+                argv(&["shall", "-c", "/c.toml", "sync"]),
+                argv(&["shall", "-c", "/c.toml", "check"]),
             ]
         );
     }
@@ -1151,13 +1151,13 @@ mod alias_tests {
     fn a_verb_never_shadows_a_builtin() {
         let v = verbs(&[("sync", &["upgrade"])]);
         // `sync` is a real command, so the verb is invisible and normal parsing proceeds.
-        assert!(plan_user_verb(&argv(&["linix", "sync"]), &v, &builtins()).is_none());
+        assert!(plan_user_verb(&argv(&["shall", "sync"]), &v, &builtins()).is_none());
     }
 
     #[test]
     fn a_verb_step_must_be_a_builtin() {
         let v = verbs(&[("evil", &["rm -rf /"])]);
-        let err = plan_user_verb(&argv(&["linix", "evil"]), &v, &builtins())
+        let err = plan_user_verb(&argv(&["shall", "evil"]), &v, &builtins())
             .unwrap()
             .unwrap_err();
         assert!(err.contains("not a built-in"), "{}", err);
@@ -1167,7 +1167,7 @@ mod alias_tests {
     #[test]
     fn a_verb_takes_no_arguments() {
         let v = verbs(&[("refresh", &["sync"])]);
-        let err = plan_user_verb(&argv(&["linix", "refresh", "--dry-run"]), &v, &builtins())
+        let err = plan_user_verb(&argv(&["shall", "refresh", "--dry-run"]), &v, &builtins())
             .unwrap()
             .unwrap_err();
         assert!(err.contains("takes no arguments"), "{}", err);
@@ -1176,7 +1176,7 @@ mod alias_tests {
     #[test]
     fn a_name_that_is_neither_builtin_nor_verb_is_left_alone() {
         let v = verbs(&[("refresh", &["sync"])]);
-        assert!(plan_user_verb(&argv(&["linix", "whatever"]), &v, &builtins()).is_none());
+        assert!(plan_user_verb(&argv(&["shall", "whatever"]), &v, &builtins()).is_none());
     }
 }
 
@@ -1184,7 +1184,7 @@ mod alias_tests {
 mod log_level_tests {
     use super::log_level_from_argv;
     use clap::Parser;
-    use linix::cli::args::Cli;
+    use shall::cli::args::Cli;
 
     fn argv(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|s| s.to_string()).collect()
@@ -1193,32 +1193,32 @@ mod log_level_tests {
     /// The ruling: an ordinary run prints its answer and nothing else.
     #[test]
     fn an_ordinary_run_says_nothing_about_itself() {
-        assert_eq!(log_level_from_argv(&argv(&["linix", "list"])), "warn");
-        assert_eq!(log_level_from_argv(&argv(&["linix", "sync"])), "warn");
+        assert_eq!(log_level_from_argv(&argv(&["shall", "list"])), "warn");
+        assert_eq!(log_level_from_argv(&argv(&["shall", "sync"])), "warn");
     }
 
     /// The defect this replaced: `--verbose` promised debug logging and delivered none,
     /// because the level was read after clap had parsed and the subscriber was already built.
     #[test]
     fn asking_for_more_gets_more_in_both_spellings() {
-        for one in [&["linix", "-v", "list"], &["linix", "--verbose", "list"]] {
+        for one in [&["shall", "-v", "list"], &["shall", "--verbose", "list"]] {
             assert_eq!(log_level_from_argv(&argv(one)), "info");
         }
         assert_eq!(
-            log_level_from_argv(&argv(&["linix", "-vv", "list"])),
+            log_level_from_argv(&argv(&["shall", "-vv", "list"])),
             "debug"
         );
         assert_eq!(
-            log_level_from_argv(&argv(&["linix", "-v", "-v", "list"])),
+            log_level_from_argv(&argv(&["shall", "-v", "-v", "list"])),
             "debug"
         );
         assert_eq!(
-            log_level_from_argv(&argv(&["linix", "--verbose", "--verbose", "list"])),
+            log_level_from_argv(&argv(&["shall", "--verbose", "--verbose", "list"])),
             "debug"
         );
         // Past two there is nothing more to say, and it must not fall back to the default.
         assert_eq!(
-            log_level_from_argv(&argv(&["linix", "-vvvv", "list"])),
+            log_level_from_argv(&argv(&["shall", "-vvvv", "list"])),
             "debug"
         );
     }
@@ -1228,15 +1228,15 @@ mod log_level_tests {
     #[test]
     fn bundled_short_flags_are_read_letter_by_letter() {
         assert_eq!(
-            log_level_from_argv(&argv(&["linix", "-nv", "sync"])),
+            log_level_from_argv(&argv(&["shall", "-nv", "sync"])),
             "info"
         );
         assert_eq!(
-            log_level_from_argv(&argv(&["linix", "-nvv", "sync"])),
+            log_level_from_argv(&argv(&["shall", "-nvv", "sync"])),
             "debug"
         );
         assert_eq!(
-            log_level_from_argv(&argv(&["linix", "-nq", "sync"])),
+            log_level_from_argv(&argv(&["shall", "-nq", "sync"])),
             "error"
         );
     }
@@ -1244,29 +1244,29 @@ mod log_level_tests {
     #[test]
     fn quiet_wins_over_loud_whichever_order_they_come_in() {
         assert_eq!(
-            log_level_from_argv(&argv(&["linix", "-q", "list"])),
+            log_level_from_argv(&argv(&["shall", "-q", "list"])),
             "error"
         );
         assert_eq!(
-            log_level_from_argv(&argv(&["linix", "-q", "-vv", "list"])),
+            log_level_from_argv(&argv(&["shall", "-q", "-vv", "list"])),
             "error"
         );
         assert_eq!(
-            log_level_from_argv(&argv(&["linix", "-vv", "-q", "list"])),
+            log_level_from_argv(&argv(&["shall", "-vv", "-q", "list"])),
             "error"
         );
     }
 
-    /// Everything after `--` is the command's, not LiNix's. A script named `-v` does not
-    /// turn logging on, and `linix run -- mytool -q` does not silence LiNix.
+    /// Everything after `--` is the command's, not Shall's. A script named `-v` does not
+    /// turn logging on, and `shall run -- mytool -q` does not silence Shall.
     #[test]
     fn flags_stop_at_the_double_dash() {
         assert_eq!(
-            log_level_from_argv(&argv(&["linix", "run", "--", "mytool", "-v"])),
+            log_level_from_argv(&argv(&["shall", "run", "--", "mytool", "-v"])),
             "warn"
         );
         assert_eq!(
-            log_level_from_argv(&argv(&["linix", "run", "--", "mytool", "-q"])),
+            log_level_from_argv(&argv(&["shall", "run", "--", "mytool", "-q"])),
             "warn"
         );
     }
@@ -1276,11 +1276,11 @@ mod log_level_tests {
     #[test]
     fn a_long_flag_is_never_read_letter_by_letter() {
         assert_eq!(
-            log_level_from_argv(&argv(&["linix", "--dry-run", "--yes", "sync"])),
+            log_level_from_argv(&argv(&["shall", "--dry-run", "--yes", "sync"])),
             "warn"
         );
         assert_eq!(
-            log_level_from_argv(&argv(&["linix", "--allow-mass-removal", "sync"])),
+            log_level_from_argv(&argv(&["shall", "--allow-mass-removal", "sync"])),
             "warn"
         );
     }
@@ -1290,7 +1290,7 @@ mod log_level_tests {
     #[test]
     fn the_program_path_is_not_a_flag() {
         assert_eq!(
-            log_level_from_argv(&argv(&["/home/q/Videos/linix", "list"])),
+            log_level_from_argv(&argv(&["/home/q/Videos/shall", "list"])),
             "warn"
         );
     }
@@ -1315,7 +1315,7 @@ mod log_level_tests {
     #[test]
     fn the_readers_are_exactly_the_commands_that_read() {
         use clap::CommandFactory;
-        use linix::cli::LockScope;
+        use shall::cli::LockScope;
 
         // **Asked of the program, not of its source text.** The first version of this scanned
         // `args.rs` for the arms' variant names, because a subcommand with required arguments
@@ -1325,7 +1325,7 @@ mod log_level_tests {
         //
         // So the argv is built out of clap's own metadata instead: every required argument gets
         // a value it will accept — the first of its `possible_values` where it has them, because
-        // `linix completions filler` is not a shell — and a subcommand that carries subcommands
+        // `shall completions filler` is not a shell — and a subcommand that carries subcommands
         // of its own recurses into its first child. That reaches all sixty-four, including
         // `repo`, `hook-record` and `completions`, which no amount of positional filler does.
         fn argv_for(sub: &clap::Command) -> Vec<String> {
@@ -1363,7 +1363,7 @@ mod log_level_tests {
         let mut unparsed = Vec::new();
         for sub in <Cli as CommandFactory>::command().get_subcommands() {
             let name = sub.get_name().to_string();
-            let mut argv = vec!["linix".to_string()];
+            let mut argv = vec!["shall".to_string()];
             argv.extend(argv_for(sub));
             match Cli::try_parse_from(&argv).map(|cli| cli.command.lock_scope()) {
                 Ok(LockScope::Reader) => {
@@ -1398,7 +1398,7 @@ mod log_level_tests {
                 .collect();
         assert_eq!(
             deferred, expected_deferred,
-            "the set of commands that take the lock at the write rather than for the run              changed. A command belongs here when its duration is decided by a person, a loop              or a program LiNix does not own — never by the package work it performs."
+            "the set of commands that take the lock at the write rather than for the run              changed. A command belongs here when its duration is decided by a person, a loop              or a program Shall does not own — never by the package work it performs."
         );
 
         let expected: std::collections::BTreeSet<String> = [
@@ -1435,22 +1435,22 @@ mod log_level_tests {
     }
 
     /// The direction that matters for correctness, driven through clap rather than asserted
-    /// about a list of strings: a command LiNix cannot run without writing takes the lock.
+    /// about a list of strings: a command Shall cannot run without writing takes the lock.
     #[test]
     fn the_commands_that_write_take_the_lock() {
         for argv in [
-            vec!["linix", "sync"],
-            vec!["linix", "install", "apt:jq"],
-            vec!["linix", "uninstall", "apt:jq"],
-            vec!["linix", "adopt"],
-            vec!["linix", "heal"],
-            vec!["linix", "rollback", "HEAD"],
-            vec!["linix", "init"],
-            vec!["linix", "purge-undeclared"],
-            vec!["linix", "remove-orphans"],
-            vec!["linix", "rebuild"],
-            vec!["linix", "apply", "linix-plan.json"],
-            vec!["linix", "self-upgrade"],
+            vec!["shall", "sync"],
+            vec!["shall", "install", "apt:jq"],
+            vec!["shall", "uninstall", "apt:jq"],
+            vec!["shall", "adopt"],
+            vec!["shall", "heal"],
+            vec!["shall", "rollback", "HEAD"],
+            vec!["shall", "init"],
+            vec!["shall", "purge-undeclared"],
+            vec!["shall", "remove-orphans"],
+            vec!["shall", "rebuild"],
+            vec!["shall", "apply", "shall-plan.json"],
+            vec!["shall", "self-upgrade"],
         ] {
             let cli = Cli::parse_from(&argv);
             assert!(
@@ -1461,18 +1461,18 @@ mod log_level_tests {
         }
 
         for argv in [
-            vec!["linix", "plan"],
-            vec!["linix", "list"],
-            vec!["linix", "why", "apt:jq"],
+            vec!["shall", "plan"],
+            vec!["shall", "list"],
+            vec!["shall", "why", "apt:jq"],
             // The two the old list got wrong, in opposite directions.
-            vec!["linix", "history"],
-            vec!["linix", "fleet"],
+            vec!["shall", "history"],
+            vec!["shall", "fleet"],
             // The three that were still wrong after those two were fixed. Each writes state
             // and each is unbounded in time, so each takes the lock at the write instead
             // (`LockScope::Deferred`). `watch` is the sharp one: it never returns.
-            vec!["linix", "watch"],
-            vec!["linix", "shell"],
-            vec!["linix", "run", "true"],
+            vec!["shall", "watch"],
+            vec!["shall", "shell"],
+            vec!["shall", "run", "true"],
         ] {
             let cli = Cli::parse_from(&argv);
             assert!(

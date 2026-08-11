@@ -1,8 +1,8 @@
-# LiNix integration image — Arch Linux (pacman). Build context = repo root.
-#   docker build -f docker/integration/Dockerfile.arch -t linix-it-arch .
-#   docker run --rm linix-it-arch              # defaults to: pacman jq
+# Shall integration image — Arch Linux (pacman). Build context = repo root.
+#   docker build -f docker/integration/Dockerfile.arch -t shall-it-arch .
+#   docker run --rm shall-it-arch              # defaults to: pacman jq
 FROM archlinux:latest
-ENV LINIX_IT_IMAGE=arch
+ENV SHALL_IT_IMAGE=arch
 # Essential toolchain + a broad set of language package managers so the harness can sweep
 # many backends in one container (pacman + npm + yarn + pnpm + pipx + uv + bun + cargo + gem).
 RUN pacman -Syu --noconfirm \
@@ -23,6 +23,6 @@ RUN curl -fsSL https://bun.sh/install | bash || true
 ENV PATH="/root/.local/bin:/root/.bun/bin:/root/.cargo/bin:${PATH}"
 WORKDIR /src
 COPY . /src
-RUN cargo build --release && cp target/release/linix /usr/local/bin/linix && chmod 0755 /usr/local/bin/linix
+RUN cargo build --release && cp target/release/shall /usr/local/bin/shall && chmod 0755 /usr/local/bin/shall
 ENTRYPOINT ["sh", "/src/docker/integration/run-in-container.sh"]
 CMD ["pacman", "jq"]

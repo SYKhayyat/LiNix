@@ -1,4 +1,4 @@
-# Lamdan — LiNix, whole repo
+# Lamdan — Shall, whole repo
 
 **2026-08-09.** Third full pass. Eleven regions, every tracked file in exactly one, each read by a
 separate reviewer with no knowledge of the others' conventions, then cross-examined by me against
@@ -58,7 +58,7 @@ survivors is not reporting its method.
 >
 > And three things I predict will break that sketch: **(1)** you cannot compute removals from
 > `installed − declared`, because that set contains the kernel — so there must be a third file
-> recording what LiNix installed, and that file is a *liability*, not a convenience; **(2)**
+> recording what Shall installed, and that file is a *liability*, not a convenience; **(2)**
 > `ripgrep` is `BurntSushi.ripgrep` on winget, so bare names need a resolution order that must be
 > *recorded* or the same file means two machines; **(3)** the removal set is the product and
 > everything else is plumbing around one dangerous number.
@@ -82,7 +82,7 @@ Everything my sketch predicted is there and it is tiny.
 Five things break the two-file model, and each one is a real cost, not an indulgence:
 
 **1. The third file, and it is a liability.** `installed − declared` is your operating system.
-So there must be a record of what LiNix installed. The alternative is not hypothetical — it ships,
+So there must be a record of what Shall installed. The alternative is not hypothetical — it ships,
 as `purge-undeclared`, and `context.rs:797-801` records the measurement: **476 packages on stock
 Ubuntu against 103 for `adopt`.** The registry is what makes that number 103. And because the
 registry can be *wrong* — stale, mis-scoped, from another machine — everything called "the guard"
@@ -91,7 +91,7 @@ file.
 
 **2. `installed` is not a set. It is 62 managers that can each fail to answer** — and the correct
 default for "I could not ask" is *opposite in the two directions*. For a removal, unknown must mean
-*yes, it's installed* (`planner.rs:604`) or one flaky manager silently stops LiNix removing anything
+*yes, it's installed* (`planner.rs:604`) or one flaky manager silently stops Shall removing anything
 through it. For an install, unknown must be a hard error (`planner.rs:880-886`) or you schedule an
 Install node for every managed package, each a trivial success, and one later failure rolls back the
 set. A set difference has nowhere to put that.
@@ -120,7 +120,7 @@ is **the same fact written down in more than one place**, which is the subject o
 
 ## The strongest claim
 
-**LiNix's characteristic move is to turn a property into a type. Its characteristic failure is that
+**Shall's characteristic move is to turn a property into a type. Its characteristic failure is that
 the type stops at a module boundary and continues on the other side as a string or an integer — and
 every single region found an instance without knowing the others had.**
 
@@ -308,7 +308,7 @@ winget declares `upgrade_args: ["upgrade","--all","--silent"]` and `update_args`
 scoop declares both (`registry.rs:1030`). Both are registered through a hand-written builder chain
 with `installable`, `queryable`, `searchable`, `repo_manager`, `metadata_provider` — and **no
 `.with_upgradable(…)`** (`registry.rs:997`, `:1077`). `context.rs:536` filters on `is_upgradable()`,
-so `linix update` and `linix upgrade` skip both on every Windows machine.
+so `shall update` and `shall upgrade` skip both on every Windows machine.
 
 `registry.rs:3038-3062` asserts exactly that capability set as correct.
 
@@ -414,7 +414,7 @@ disappears. Cost: three call sites, one new type.
 matches `"watch"`. Both named arms unreachable; the unattended tick is guarded as `sync`. Change:
 pass the `Copy` enum. Cost: two signatures. **Do this one first — it is ten minutes.**
 
-**3 · `linix history` can run a full rollback + sync with no data lock held** — `rewrite`
+**3 · `shall history` can run a full rollback + sync with no data lock held** — `rewrite`
 *(verified)*. `main.rs:638` exempts it; `verbs/history.rs:317` reaches `handle_rollback` →
 `handle_sync`. Change: `fn Commands::writes(&self) -> bool`, an exhaustive match, as the *assertion*
 the two tests currently approximate — keep the argv read for the default so a new subcommand is still
@@ -464,7 +464,7 @@ on every run, for ever."* Family diagnosed, named, tested, fixed in one member. 
 **9 · `vscode:` asks the marketplace whether a package is installed** — `rewrite` *(verified)*.
 `vscode.rs:192-218` — `info` POSTs to `marketplace.visualstudio.com` and returns `Some` for anything
 that *exists*, with the marketplace's *latest* version; `fetch_installed` (`:170`) reads
-`code --list-extensions` and is never consulted. So `linix install vscode:x` reports success and
+`code --list-extensions` and is never consulted. So `shall install vscode:x` reports success and
 installs nothing, a `@version=` pin reinstalls forever once upstream moves, and every plan makes one
 rate-limited HTTPS POST per extension. **`mise.rs:183-192` carries this bug's obituary in a doc
 comment**, found by the `tools` container on 2026-07-24, with an assertion at `:409` that the catalogue
@@ -496,7 +496,7 @@ naming what `LX-3` changed, and rule which arm is now canonical. The code change
 that is not what this finding is about.
 
 **14 · The smaller families** — each verified, each a one-liner:
-- `install.sh:9` documents `LINIX_BIN_DIR`; **the variable is read nowhere in the repo.** This is the
+- `install.sh:9` documents `SHALL_BIN_DIR`; **the variable is read nowhere in the repo.** This is the
   file users pipe from the internet.
 - `release-check.sh:71` — `grep -q "^$MSRV"` with `$MSRV` empty is `grep -q "^"`, which matches every
   line; the `.ps1` twin got an explicit guard, the `.sh` did not.
@@ -504,7 +504,7 @@ that is not what this finding is about.
   script because two files tracked one number by hand.
 - Two files carry `# shellcheck disable=` directives for a linter that **nothing runs**.
 - `md5` is still a direct dependency for one cache key (`web.rs:237`) beside `sha2`.
-- `model/edit.rs:321,470` rejoins with `\n` after `str::lines()`, so every `linix install` rewrites a
+- `model/edit.rs:321,470` rejoins with `\n` after `str::lines()`, so every `shall install` rewrites a
   CRLF module file to LF in full — in a grammar that goes out of its way to accept a BOM *because
   that is what Notepad writes*, and Notepad writes CRLF. Two halves of one courtesy, one delivered.
 - `Fixture` is written **34 times** across the test suite and has already drifted three ways;
@@ -512,7 +512,7 @@ that is not what this finding is about.
   ubuntu-latest and macos-latest from the day it was committed**.
 - Three test binaries justify a source scan with *"`verbs/` is private to the binary"*. `src/lib.rs:20`
   is `pub mod verbs;`, and `verbs_are_reachable_tests.rs:16` imports through it.
-- `insight.rs:552-584` — `linix why` constructs a fresh `StateResolver` **inside** its match loop and
+- `insight.rs:552-584` — `shall why` constructs a fresh `StateResolver` **inside** its match loop and
   calls `resolve_model()` and `resolve_vars_with_origins()`, so a name managed by two backends resolves
   the entire configuration twice.
 - Two `Writes` enums, same name, same constructor, same semantics (`model/edit.rs:134`,
@@ -584,7 +584,7 @@ re-download-forever bug dies with the duplicate, because there is then one ident
 
 `tests/` is 24,076 lines across **99 binaries**, each fat-LTO-linked against a 100k-line crate under
 `codegen-units = 1`. **36 of them never call the library API at all** — they only spawn
-`CARGO_BIN_EXE_linix` — and link it for nothing.
+`CARGO_BIN_EXE_shall` — and link it for nothing.
 
 - **`tests/main.rs` with `mod a_machine_converges;`** keeps every file, every filename-as-a-sentence,
   every doc comment, and collapses 99 link units to one. Zero source lines deleted. The suite already
@@ -624,7 +624,7 @@ Compacting these shrinks `dry_run_every_verb_tests.rs` and retires
 
 ### F · Small, verified, no argument required — **~700 lines**
 
-`retention.rs` (244 lines) opens *"shared by the three histories LiNix keeps"*; two of the three were
+`retention.rs` (244 lines) opens *"shared by the three histories Shall keeps"*; two of the three were
 deleted, `select_deletions` has one caller, and `RetentionConfig` now wraps a single field. The
 `gated.rs` block walker (~120 of 208 lines) is the second of five implementations of brace-and-`when`
 handling. `utils/file.rs`'s three dead functions, `Journal::new` (zero callers — the *cause* of the
@@ -833,4 +833,4 @@ Nothing here removes a capability. Items 1–4 are under a day, together.
     plan/differ split in `planner.rs`, which is where the co-change signal actually points.
 11. **And the free ones whenever:** `[profile.ci]` without fat LTO, `matrix.target` in the cache key,
     ShellCheck in CI for the 7,133 lines of shell that already carry its suppression comments, and
-    `LINIX_BIN_DIR` either implemented or deleted from the file users pipe from the internet.
+    `SHALL_BIN_DIR` either implemented or deleted from the file users pipe from the internet.

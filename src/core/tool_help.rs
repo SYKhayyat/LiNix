@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 /// Help text already obtained this run, by `program <chain…>`. A manager's help does not change
-/// while LiNix is running, and an install of forty plugins must not launch forty help processes.
+/// while Shall is running, and an install of forty plugins must not launch forty help processes.
 ///
 /// The text and not the answer: two questions are asked of the same help — does it document
 /// this flag, and does it document verification at all — and caching per question would run the
@@ -72,7 +72,7 @@ fn help_text(program: &str, chain: &[String]) -> Option<String> {
 ///   * the tool verifies under a flag we have the old name for — drift, and a defect.
 ///
 /// A gate built on `accepts_flag` alone reports success for both, which is how a planted
-/// `--linix-bogus-flag-zzz` passed the flag half of the argv-drift gate on a helm 4 host. It
+/// `--shall-bogus-flag-zzz` passed the flag half of the argv-drift gate on a helm 4 host. It
 /// lives here rather than in the test because it is a question about a tool, asked the same way
 /// and through the same cache as the other one.
 pub fn documents_verification(program: &str, chain: &[String]) -> Option<bool> {
@@ -178,7 +178,7 @@ mod tests {
         // while passing on the one machine that happened to have helm.
         assert_eq!(
             accepts_flag(
-                "linix-no-such-program-zzz",
+                "shall-no-such-program-zzz",
                 &["plugin".into(), "install".into()],
                 "--verify=false"
             ),

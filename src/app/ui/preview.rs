@@ -109,7 +109,7 @@ impl<'a> TuiPreview<'a> {
             )
             .split(f.area());
 
-        let header = Paragraph::new("LiNix Transaction Preview - Confirm System Changes")
+        let header = Paragraph::new("Shall Transaction Preview - Confirm System Changes")
             .block(Block::default().borders(Borders::ALL).title("Status"));
         f.render_widget(header, chunks[0]);
 

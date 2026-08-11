@@ -38,17 +38,17 @@ The map (every command above, by what you are doing):
   Cleaning up
     clean-cache · purge-undeclared · reset
 
-  Fleet and LiNix itself
+  Fleet and Shall itself
     fleet · completions · self-upgrade
 
-Start with `linix init`, then `linix edit modules/starter.txt`, then `linix sync`.
-`linix <command> --help` explains any one of them.";
+Start with `shall init`, then `shall edit modules/starter.txt`, then `shall sync`.
+`shall <command> --help` explains any one of them.";
 
-/// LiNix - a declarative package manager: you edit a file listing the packages you
+/// Shall - a declarative package manager: you edit a file listing the packages you
 /// want, and `sync` makes the machine match it.
 #[derive(Parser, Debug)]
 #[command(
-    name = "linix",
+    name = "shall",
     version = env!("CARGO_PKG_VERSION"),
     about = "A declarative package manager: edit a file, sync the machine to match",
     after_help = COMMAND_MAP,
@@ -95,15 +95,15 @@ pub struct Cli {
 
     /// Use this directory as the config repo, for this run only.
     ///
-    /// Outranks $LINIX_CONFIG_DIR and the stored path in LiNix's settings file.
-    /// `linix path` says which of the four sources won.
+    /// Outranks $SHALL_CONFIG_DIR and the stored path in Shall's settings file.
+    /// `shall path` says which of the four sources won.
     #[arg(long, global = true, value_name = "DIR")]
     pub config_dir: Option<PathBuf>,
 
-    /// Use this directory for LiNix's own state — the registry, journal and snapshots.
+    /// Use this directory for Shall's own state — the registry, journal and snapshots.
     ///
-    /// The flag form of $LINIX_DATA_DIR, and the other half of isolating a run: --config-dir
-    /// moves your files, this moves what LiNix records about them. Without both, a fresh
+    /// The flag form of $SHALL_DATA_DIR, and the other half of isolating a run: --config-dir
+    /// moves your files, this moves what Shall records about them. Without both, a fresh
     /// sandbox plans against the real machine's managed state. Must be absolute.
     #[arg(long, global = true, value_name = "DIR")]
     pub data_dir: Option<PathBuf>,
@@ -112,7 +112,7 @@ pub struct Cli {
     /// protected/essential package. Global because every command that can delete needs
     /// it. Deliberately NOT implied by --yes: scripts and CI pass -y everywhere, and an
     /// unattended run is the one that cannot notice a system being dismantled.
-    /// See `linix protected` for what is guarded and why.
+    /// See `shall protected` for what is guarded and why.
     #[arg(long, global = true)]
     pub allow_mass_removal: bool,
 
@@ -132,7 +132,7 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub no_progress: bool,
 
-    /// Say more about what LiNix is doing: `-v` for progress, `-vv` for debug detail.
+    /// Say more about what Shall is doing: `-v` for progress, `-vv` for debug detail.
     ///
     /// An ordinary run prints its answer and nothing else. This turns the running commentary
     /// back on. `RUST_LOG` outranks it, for anyone who wants per-module control.
@@ -148,14 +148,14 @@ pub struct Cli {
     ///
     /// The escape hatch for `installed_cache_secs`. A cache that cannot be bypassed for one
     /// run is a cache the user has to turn off in a file and remember to turn back on, and
-    /// the moment they need it is the moment they already suspect LiNix is wrong about the
+    /// the moment they need it is the moment they already suspect Shall is wrong about the
     /// machine. Does nothing when the cache is off, which is the default.
     #[arg(long, global = true)]
     pub no_cache: bool,
 
-    /// Print where the run's time went: every command LiNix ran, slowest first.
+    /// Print where the run's time went: every command Shall ran, slowest first.
     ///
-    /// LiNix spends its life waiting on other people's processes, so "why was that slow" is
+    /// Shall spends its life waiting on other people's processes, so "why was that slow" is
     /// almost always "which manager was slow". The report says the wall clock, the summed
     /// child time and the ratio between them — that ratio is how much of the waiting was
     /// overlapped. It goes to stderr, so `--timings` never disturbs output being parsed.
@@ -234,10 +234,10 @@ pub enum Commands {
         /// Arguments forwarded to that command, verbatim
         //
         // Without this the shim could not run. `src/bin/shim.rs` builds
-        // `linix run --packages X -- X <args...>` — the whole mechanism behind a `@shim=true`
+        // `shall run --packages X -- X <args...>` — the whole mechanism behind a `@shim=true`
         // line — and `command` was a single positional, so clap refused the invocation with
         // *unexpected argument* for anything the shimmed program was given. A user typing
-        // `linix run -p jq -- jq -r .name` met the same refusal.
+        // `shall run -p jq -- jq -r .name` met the same refusal.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -253,21 +253,21 @@ pub enum Commands {
     /// Delete downloaded package archives and caches. Frees disk; removes no package.
     #[command(name = "clean-cache")]
     CleanCache {
-        /// Also clear LiNix's own download cache and extracted artifacts (X.3 level 2), not
+        /// Also clear Shall's own download cache and extracted artifacts (X.3 level 2), not
         /// just each backend's cache. Still removes no installed package.
         #[arg(long)]
         all: bool,
     },
 
-    /// Make LiNix forget it manages anything — the registry and snapshots are deleted, the
+    /// Make Shall forget it manages anything — the registry and snapshots are deleted, the
     /// packages stay installed (X.3, level 3).
     ///
-    /// This is not a cleanup. Losing the registry means LiNix can no longer tell software you
+    /// This is not a cleanup. Losing the registry means Shall can no longer tell software you
     /// declared from software that was already there, which is the one distinction the whole
     /// removal model rests on. After a reset, every managed package looks unmanaged and
-    /// `linix adopt` is how you get them back — by guessing. Refuses while a config repo
+    /// `shall adopt` is how you get them back — by guessing. Refuses while a config repo
     /// exists unless `--force`, because forgetting the registry while the declarations remain
-    /// leaves LiNix believing it manages nothing and the files saying otherwise.
+    /// leaves Shall believing it manages nothing and the files saying otherwise.
     Reset {
         /// Reset even though a config repo (modules/profiles) still exists.
         #[arg(long)]
@@ -277,7 +277,7 @@ pub enum Commands {
     /// Look at the machine: drift, unmanaged software, conflicts, backend health and more
     ///
     /// One section per question. With no section it prints a line for each and names the
-    /// command that acts on it. `check` only ever looks — `linix heal` is what repairs.
+    /// command that acts on it. `check` only ever looks — `shall heal` is what repairs.
     Check {
         /// One of: config, drift, unmanaged, absent, conflicts, health, security
         section: Option<String>,
@@ -292,20 +292,20 @@ pub enum Commands {
     /// does not fire.
     Vars,
 
-    /// Delete everything LiNix does not manage. Shows the whole list first.
+    /// Delete everything Shall does not manage. Shows the whole list first.
     ///
     /// This is the strict "make this machine exactly match my files" command. It is a
     /// command and not a setting on purpose: no config anyone can flip, inherit, or copy
     /// from a dotfiles repo makes a routine `sync` delete software it did not install.
     #[command(name = "purge-undeclared")]
     PurgeUndeclared {
-        /// Proceed even though LiNix manages very little of this machine — which usually
+        /// Proceed even though Shall manages very little of this machine — which usually
         /// means it has not been adopted yet, not that you want the rest deleted.
         #[arg(long = "allow-mass-purge")]
         allow_mass_purge: bool,
     },
 
-    /// Stop managing a package WITHOUT uninstalling it. LiNix forgets it exists; the
+    /// Stop managing a package WITHOUT uninstalling it. Shall forgets it exists; the
     /// package stays on your system. This is the counterpart to deleting a manifest line,
     /// which means "uninstall this" — not "stop managing it"
     Unmanage {
@@ -318,7 +318,7 @@ pub enum Commands {
         json: bool,
     },
 
-    /// List the eight ways this repo can extend LiNix, and what this machine has on each:
+    /// List the eight ways this repo can extend Shall, and what this machine has on each:
     /// which surface, which file, whether the approval ledger cleared it, and how many rows
     /// are actually in force
     Adapters {
@@ -346,15 +346,15 @@ pub enum Commands {
     /// Compute what `sync` would do and freeze it to a reviewable file, so the exact plan you
     /// inspect is the one you later `apply` (Terraform-style plan/apply for packages).
     Plan {
-        /// Where to write the plan (default: linix-plan.json)
-        #[arg(long, default_value = "linix-plan.json")]
+        /// Where to write the plan (default: shall-plan.json)
+        #[arg(long, default_value = "shall-plan.json")]
         out: String,
     },
 
     /// Execute a previously saved plan file, applying exactly the captured changes. Warns if
     /// the system/manifests have drifted since the plan was frozen.
     Apply {
-        /// Path to a plan file produced by `linix plan`
+        /// Path to a plan file produced by `shall plan`
         plan: String,
 
         /// Apply even if the system has drifted from the captured plan
@@ -431,7 +431,7 @@ pub enum Commands {
         #[arg(long)]
         json: bool,
 
-        /// Only show results that are already installed / managed by LiNix
+        /// Only show results that are already installed / managed by Shall
         #[arg(long)]
         installed: bool,
     },
@@ -457,7 +457,7 @@ pub enum Commands {
         #[arg(long)]
         all: bool,
 
-        /// Upgrade only packages that `linix check security` reports as vulnerable, to their fixed version
+        /// Upgrade only packages that `shall check security` reports as vulnerable, to their fixed version
         #[arg(long)]
         security: bool,
 
@@ -544,13 +544,13 @@ pub enum Commands {
 
         /// Temporary uninstall: reinstall the package(s) later. With a DURATION
         /// (e.g. `--temp=2h`) they return when it elapses; bare `--temp` inside a
-        /// `linix shell` restores them when that ephemeral session ends. The duration must
+        /// `shall shell` restores them when that ephemeral session ends. The duration must
         /// be attached with `=` so it is never confused with a package name.
         #[arg(long, value_name = "DURATION", num_args = 0..=1, require_equals = true)]
         temp: Option<Option<String>>,
 
-        /// Remove it even when LiNix has no record of installing it, by declaring it
-        /// `absent:` — the one declaration that reaches outside what LiNix manages.
+        /// Remove it even when Shall has no record of installing it, by declaring it
+        /// `absent:` — the one declaration that reaches outside what Shall manages.
         /// The line stays, so the package stays gone.
         #[arg(long, conflicts_with = "temp")]
         absent: bool,
@@ -562,7 +562,7 @@ pub enum Commands {
     /// Take over the machine: write the packages you installed by hand into a module
     Adopt {
         /// Only these backends — and these are taken even when a bare `adopt` leaves them
-        /// alone. `linix adopt service` writes the machine's services; a bare `linix adopt`
+        /// alone. `shall adopt service` writes the machine's services; a bare `shall adopt`
         /// does not, because an init records what is running and never who chose it.
         #[arg(value_name = "BACKEND")]
         backends: Vec<String>,
@@ -582,7 +582,7 @@ pub enum Commands {
     /// those are the other machine's choices. `use` the vendored module by name afterward.
     ///
     /// Anything the source can execute (an `exec:` verb, a backend definition) arrives
-    /// UNAPPROVED and does not run until `linix lock` — pass `--trust` to lock in the same
+    /// UNAPPROVED and does not run until `shall lock` — pass `--trust` to lock in the same
     /// step, for a source you already trust.
     Add {
         /// `github:owner/repo`, a git/https URL, a raw file URL, or a local path.
@@ -647,7 +647,7 @@ pub enum Commands {
     /// Roll back to a past commit: restore the manifests it recorded, then converge the
     /// machine to match them.
     Rollback {
-        /// The git commit (or ref like HEAD~1) to roll back to. See `linix git log`.
+        /// The git commit (or ref like HEAD~1) to roll back to. See `shall git log`.
         /// Rollback checks out the manifests at that commit, then syncs the machine to match —
         /// one mechanism, no separate generation history (II.1: git IS the history).
         reference: String,
@@ -655,7 +655,7 @@ pub enum Commands {
 
     /// Show what changed between two commits, in packages (not text): the manifest lines added
     /// and removed going from `from` to `to`. Omit `to` to diff `from` against your current
-    /// manifests. See `linix git log` for commit refs.
+    /// manifests. See `shall git log` for commit refs.
     Diff {
         /// The older commit (baseline).
         from: String,
@@ -699,17 +699,17 @@ pub enum Commands {
     /// Native system-level task scheduling (systemd, launchd, task-scheduler)
     Schedule(ScheduleArgs),
 
-    /// Inspect and scaffold the LiNix application configuration file
+    /// Inspect and scaffold the Shall application configuration file
     Config(ConfigArgs),
 
-    /// Print the config repo directory, so `cd $(linix path)` works
+    /// Print the config repo directory, so `cd $(shall path)` works
     Path {
-        /// Also say which of --config-dir, $LINIX_CONFIG_DIR, the settings file or the
+        /// Also say which of --config-dir, $SHALL_CONFIG_DIR, the settings file or the
         /// built-in default decided it, and where the settings file lives
         #[arg(long)]
         explain: bool,
 
-        /// Store this directory in LiNix's settings file as the repo location, so every
+        /// Store this directory in Shall's settings file as the repo location, so every
         /// later run finds it without a flag or an environment variable
         #[arg(long, value_name = "DIR")]
         set: Option<PathBuf>,
@@ -722,8 +722,8 @@ pub enum Commands {
         file: Option<String>,
     },
 
-    /// Scaffold the LiNix repo (modules, profiles, active, priority) and a starter
-    /// module, so a fresh machine is ready for `linix sync`
+    /// Scaffold the Shall repo (modules, profiles, active, priority) and a starter
+    /// module, so a fresh machine is ready for `shall sync`
     Init {
         /// Reset the starter manifest even if one already exists
         #[arg(long)]
@@ -765,7 +765,7 @@ pub enum Commands {
     /// backends that support offline fetch.
     Bundle {
         /// Directory to write the bundle into
-        #[arg(long, default_value = "linix-bundle")]
+        #[arg(long, default_value = "shall-bundle")]
         out: String,
 
         /// Also pre-download package artifacts (apt/dnf/pip/npm/brew/pacman/apk)
@@ -781,7 +781,7 @@ pub enum Commands {
     ///
     /// Copies the bundle's declarations, `locks/` and registry back. Refuses a config
     /// directory that is not empty unless `--force`, because a restore writes over what is
-    /// there. It restores files; run `linix sync --locked` afterward to reproduce the exact
+    /// there. It restores files; run `shall sync --locked` afterward to reproduce the exact
     /// versions.
     Restore {
         /// The bundle directory to restore from.
@@ -823,7 +823,7 @@ pub enum Commands {
     /// Compare a set of machines over SSH against your manifests and report drift
     Fleet(FleetArgs),
 
-    /// Auto-record manual package-manager use into LiNix (native hooks + shell wrappers),
+    /// Auto-record manual package-manager use into Shall (native hooks + shell wrappers),
     /// so `apt install foo` (etc.) updates your declarative state without changing workflow.
     Hooks(HooksArgs),
 
@@ -889,10 +889,10 @@ pub enum Commands {
         shell: Shell,
     },
 
-    /// Update LiNix itself: rebuild and install the latest from source with cargo
+    /// Update Shall itself: rebuild and install the latest from source with cargo
     /// (the same mechanism as the install script). Requires a Rust toolchain.
     SelfUpgrade {
-        /// Git repository to install from (default: $LINIX_REPO, else the upstream repo)
+        /// Git repository to install from (default: $SHALL_REPO, else the upstream repo)
         #[arg(long)]
         git: Option<String>,
 
@@ -912,7 +912,7 @@ pub enum Commands {
 /// each one was found separately, patched separately, and its sibling left live. `edit`,
 /// `history` and `fleet` were fixed in three commits; `watch`, `shell` and `run` were not
 /// touched, and `watch` is the documented GitOps deployment: while it runs, every other writing
-/// LiNix command on the machine waits 120 seconds and then fails.
+/// Shall command on the machine waits 120 seconds and then fails.
 ///
 /// Making it one enum is what stops the seventh instance. A new subcommand does not compile
 /// until it answers, and `no_unbounded_command_holds_the_lock_for_its_lifetime` fails if an
@@ -946,7 +946,7 @@ impl Commands {
     /// The lock is over the DATA directory. Commands that write into the CONFIG repo —
     /// `path --set`, `config init`, `edit` — are readers here and go through
     /// `utils::file::persist`, which is atomic; `edit` is the sharpest, because it blocks on
-    /// `$EDITOR` and once stopped every other LiNix on the machine for as long as somebody
+    /// `$EDITOR` and once stopped every other Shall on the machine for as long as somebody
     /// read a manifest in vim (AU6).
     ///
     /// **`--dry-run` never exempts anything** (S25): a preview of a writer reads the same
@@ -965,7 +965,7 @@ impl Commands {
             //   was up. The user who followed the documented deployment bricked their own CLI.
             // - `shell` launches `$SHELL` and awaits it: the lock covers provisioning the
             //   session packages and tearing them down, not the session.
-            // - `run` provisions what a command needs and then runs a command LiNix does not
+            // - `run` provisions what a command needs and then runs a command Shall does not
             //   own. Same shape as `shell`, one layer smaller.
             // - `history` opens a TUI a person reads for as long as they like. Its one
             //   mutating action — `HistoryAction::Rollback`, which reaches `handle_rollback` →
@@ -1062,16 +1062,16 @@ impl Commands {
     ///
     /// **Asked as a property, not enumerated in a `matches!`.** The re-entrancy stand-down in
     /// `main` matched `HookReconcile` alone — the one apt, dnf, zypper, apk, xbps, portage and
-    /// eopkg invoke — and left the other two live. `HookRecord` is what LiNix installs as
+    /// eopkg invoke — and left the other two live. `HookRecord` is what Shall installs as
     /// pacman's `PostTransaction` hook and `HookObserve` is what the shell wrappers call; both
     /// are writers by [`writes`](Self::writes), so both took the 120-second exclusive lock
     /// *inside* the sync that was holding it. pacman waits on its own hook, so that is two
-    /// minutes of silence per transaction on every Arch machine with `linix hooks` installed,
+    /// minutes of silence per transaction on every Arch machine with `shall hooks` installed,
     /// and the record is lost at the end of it anyway.
     ///
     /// Naming a third arm would have left the same hole for a fourth subcommand. clap's name
-    /// for the variant is the answer instead: everything LiNix writes into a manager's hook
-    /// file is spelled `hook-*` on the command line, and `every_hook_linix_installs_stands_down`
+    /// for the variant is the answer instead: everything Shall writes into a manager's hook
+    /// file is spelled `hook-*` on the command line, and `every_hook_shall_installs_stands_down`
     /// asserts that against `app/pm_hooks.rs` itself rather than against this sentence.
     /// `hooks` — the verb a person types to install them — is deliberately not one.
     pub fn is_manager_hook(&self) -> bool {
@@ -1106,12 +1106,12 @@ pub struct HooksArgs {
 #[derive(Subcommand, Debug)]
 pub enum HooksCommand {
     /// Install native package-manager hooks (writes to system hook dirs; usually needs root).
-    /// With no managers named, installs every hook LiNix knows and whose manager is present.
+    /// With no managers named, installs every hook Shall knows and whose manager is present.
     Install {
         /// Limit to specific managers (e.g. pacman apt dnf)
         managers: Vec<String>,
     },
-    /// Remove LiNix's native hooks.
+    /// Remove Shall's native hooks.
     Uninstall {
         /// Limit to specific managers
         managers: Vec<String>,
@@ -1147,11 +1147,11 @@ pub enum GitCommand {
     /// Commit the current manifest/config state now.
     Commit {
         /// Commit message
-        #[arg(short, long, default_value = "linix: manual manifest commit")]
+        #[arg(short, long, default_value = "shall: manual manifest commit")]
         message: String,
     },
     /// Roll the *config* (manifests) back to a past commit WITHOUT touching installed
-    /// packages — the config half of a rollback. Pair with `linix rollback` for the system.
+    /// packages — the config half of a rollback. Pair with `shall rollback` for the system.
     Checkout {
         /// Commit hash or ref to restore the manifests to
         reference: String,
@@ -1267,7 +1267,7 @@ pub enum ModuleCommand {
         #[arg(long)]
         force: bool,
     },
-    /// Fetch a shared module into `modules/`, e.g. `linix module add github:acme/rust-dev`.
+    /// Fetch a shared module into `modules/`, e.g. `shall module add github:acme/rust-dev`.
     ///
     /// This is the fetch step: `use` takes a name, never a URL, so a module from the
     /// internet lands on disk first and then you `use <name>` it like any other (II.2).
@@ -1297,7 +1297,7 @@ pub enum SnapshotCommand {
     ///
     /// This is the filesystem half of going back, and it is here rather than at the top level
     /// under the name `undo` because that name did not say which of the two mechanisms it
-    /// meant. The other half is the manifest history: `linix history` to browse it, `linix
+    /// meant. The other half is the manifest history: `shall history` to browse it, `shall
     /// rollback <ref>` to go to one.
     Restore,
     /// Prune snapshots based on age and count limits defined in config
@@ -1323,7 +1323,7 @@ pub enum ScheduleCommand {
         /// Cron-style execution string (e.g. "0 2 * * *")
         #[arg(long)]
         cron: String,
-        /// LiNix command to run (e.g. "upgrade --profile dev")
+        /// Shall command to run (e.g. "upgrade --profile dev")
         #[arg(long)]
         run: String,
         /// Notification channel (desktop, email, or none)
@@ -1341,11 +1341,11 @@ pub struct FleetArgs {
     /// SSH destinations (user@host ...). If omitted, falls back to config `fleet_hosts`.
     pub hosts: Vec<String>,
 
-    /// After reporting, run `linix sync` on the machines that DRIFTED to reconcile them
+    /// After reporting, run `shall sync` on the machines that DRIFTED to reconcile them
     #[arg(long)]
     pub sync: bool,
 
-    /// Push `linix sync` to EVERY reachable machine, whether or not it drifted (fleet-wide apply)
+    /// Push `shall sync` to EVERY reachable machine, whether or not it drifted (fleet-wide apply)
     #[arg(long)]
     pub apply: bool,
 }

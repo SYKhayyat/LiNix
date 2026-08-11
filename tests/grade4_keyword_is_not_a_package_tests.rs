@@ -4,12 +4,12 @@
 //! Measured end to end, release binary, a module containing the single word `link` — which is
 //! what a half-typed `link:SRC @target=DEST` line looks like:
 //!
-//!     $ linix eval
+//!     $ shall eval
 //!       "present": [ { "backend": "cargo", "name": "link", "source": "modules/kw.txt:1" } ]
-//!     $ linix --dry-run sync -y
+//!     $ shall --dry-run sync -y
 //!       install 1   remove 0   (total 1 change(s))     backends: cargo
-//!     $ linix check
-//!       ->  drift   1 to install …  run `linix sync`
+//!     $ shall check
+//!       ->  drift   1 to install …  run `shall sync`
 //!
 //! Thirteen of fourteen keywords behave this way and each resolves to a real backend holding a
 //! real package of that name — the resolver searched live indexes to produce these:
@@ -33,8 +33,8 @@
 //! The keyword list is read from `known_prefixes()` rather than copied, so a prefix added later
 //! is covered without anyone remembering to add it here.
 
-use linix::config::grammar::statement::{known_prefixes, parse, Statement};
-use linix::config::grammar::Origin;
+use shall::config::grammar::statement::{known_prefixes, parse, Statement};
+use shall::config::grammar::Origin;
 
 /// Stands in for the live registry: the backends a fixture would have.
 fn known(name: &str) -> bool {
@@ -64,8 +64,8 @@ fn no_resource_keyword_is_read_as_a_package_name() {
     assert!(
         wrong.is_empty(),
         "{} of {} grammar prefixes are read as package names when written without their colon:\n  \
-         {}\n\nA user who types `link` and stops has declared a package. `linix check` then \
-         reports `1 to install` and tells them to run `linix sync`.",
+         {}\n\nA user who types `link` and stops has declared a package. `shall check` then \
+         reports `1 to install` and tells them to run `shall sync`.",
         wrong.len(),
         known_prefixes().len(),
         wrong.join("\n  ")
@@ -109,7 +109,7 @@ fn no_control_keyword_is_read_as_a_package_name() {
     assert!(
         wrong.is_empty(),
         "control keywords read as package names: {}\n\nA module containing only the word `when` \
-         resolves to `cargo:when` and `linix check` recommends the sync that installs it.",
+         resolves to `cargo:when` and `shall check` recommends the sync that installs it.",
         wrong.join(", ")
     );
 }

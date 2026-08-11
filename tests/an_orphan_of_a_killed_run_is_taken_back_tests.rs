@@ -6,22 +6,22 @@
 //! install has completed leaves the package installed, `Completed` in the log, and in no
 //! registry. Nothing put it right — the entry is terminal so recovery had nothing to replay,
 //! the package is present so no later sync reinstalled it, and drift removal only removes what
-//! LiNix manages, so the one command for removing it planned no change and answered `already
+//! Shall manages, so the one command for removing it planned no change and answered `already
 //! up to date` while the binary stayed on PATH.
 //!
 //! Reproduced on the `void` leg on 2026-08-11 by killing a sync the moment the log recorded
 //! its first `Completed`: 3 of 3 canaries on disk, an empty registry, `heal` recovering only
 //! the one operation still open, then
 //!
-//!     why xbps:pv          -> 'xbps:pv' is not under LiNix management.
+//!     why xbps:pv          -> 'xbps:pv' is not under Shall management.
 //!     uninstall xbps:pv    -> already up to date        rc=0, pv STILL ON PATH
 //!
 //! Killing the same sync a tenth of a second later — after the final write — left all three
 //! removable, which is the whole of the intermittency that made this look like a race.
 
-use linix::core::executor::DryRunOutput;
-use linix::core::journal::JournalAction;
-use linix::core::PackageSpec;
+use shall::core::executor::DryRunOutput;
+use shall::core::journal::JournalAction;
+use shall::core::PackageSpec;
 
 use crate::mock_providers::TestKernel;
 
@@ -59,10 +59,10 @@ async fn manages(kernel: &TestKernel, name: &str) -> bool {
 /// is genuinely planned stops at the confirmation gate under a test harness, which has no
 /// terminal to answer it — and the case this file exists for never reaches that gate, because
 /// its plan is the empty one.
-fn confirming(kernel: &TestKernel) -> linix::app::App {
+fn confirming(kernel: &TestKernel) -> shall::app::App {
     let mut config = (*kernel.app.config).clone();
     config.yes = true;
-    linix::app::App {
+    shall::app::App {
         config: std::sync::Arc::new(config),
         registry: kernel.app.registry.clone(),
         executor: kernel.app.executor.duplicate(),
@@ -81,7 +81,7 @@ fn confirming(kernel: &TestKernel) -> linix::app::App {
 /// This machine's resolved package set — what ownership is read from. Resolved for real rather
 /// than hand-built, so a test that writes a line proves the line reaches the repair.
 async fn declared(kernel: &TestKernel) -> Vec<PackageSpec> {
-    linix::app::sync::resolver::StateResolver::new(
+    shall::app::sync::resolver::StateResolver::new(
         &kernel.app.config,
         kernel.app.registry.clone(),
         false,
@@ -177,7 +177,7 @@ async fn the_repair_does_not_wait_for_something_to_be_interrupted() {
     assert!(manages(&kernel, "orphan-pkg").await);
 }
 
-/// A declaration is a wish, not a fact. Claiming a package that is not there makes LiNix issue a
+/// A declaration is a wish, not a fact. Claiming a package that is not there makes Shall issue a
 /// removal for it on the next sync; the install that follows is what records this one.
 #[tokio::test]
 async fn a_declared_package_the_manager_does_not_hold_is_not_taken_back() {
@@ -209,7 +209,7 @@ async fn a_manager_that_cannot_answer_leaves_the_package_unclaimed() {
     declares(&kernel, "brew:unknown-pkg\n");
     kernel.mock_executor.set_response(
         "brew list --versions",
-        Err(linix::core::Error::Other("brew is wedged".into())),
+        Err(shall::core::Error::Other("brew is wedged".into())),
     );
 
     let declared = declared(&kernel).await;
@@ -228,7 +228,7 @@ async fn a_manager_that_cannot_answer_leaves_the_package_unclaimed() {
 }
 
 /// **The boundary of the ruling of 2026-08-11.** Declaring a package you already had makes it
-/// LiNix's; having it and never declaring it does not. This is the software on the machine that
+/// Shall's; having it and never declaring it does not. This is the software on the machine that
 /// is nobody's business but the user's, and the repair must not widen into it — a machine's
 /// installed set is not a manifest.
 #[tokio::test]
@@ -247,7 +247,7 @@ async fn a_package_this_machine_does_not_declare_is_never_claimed() {
 
     assert!(
         !manages(&kernel, "hand-installed-pkg").await,
-        "LiNix took ownership of software the user installed and never declared"
+        "Shall took ownership of software the user installed and never declared"
     );
     // And no manager was asked. Nothing is declared, so there is no candidate to ask about —
     // which is what keeps this free on the machines that have nothing to repair, since it runs
@@ -260,7 +260,7 @@ async fn a_package_this_machine_does_not_declare_is_never_claimed() {
 }
 
 /// An `absent:` line is a declaration that the package must **not** be here. Claiming it would
-/// have LiNix take ownership of something it is under orders to remove — and every declaration
+/// have Shall take ownership of something it is under orders to remove — and every declaration
 /// arrives through the same map, so the presence flag is the only thing separating the two.
 #[tokio::test]
 async fn an_absent_declaration_is_not_a_claim() {
@@ -295,19 +295,19 @@ async fn an_absent_declaration_is_not_a_claim() {
 
     assert!(
         !manages(&kernel, "banned-pkg").await,
-        "LiNix claimed ownership of a package it is declared to remove"
+        "Shall claimed ownership of a package it is declared to remove"
     );
 }
 
 /// The other half of `S87`, and the owner's ruling of 2026-08-11: a removal that removed
-/// nothing must say so, and say that LiNix does not own the package.
+/// nothing must say so, and say that Shall does not own the package.
 ///
 /// The line was declared and the line was deleted, so the check for a name no file declares
 /// says nothing about this case — and the sync that follows plans no change, because drift
-/// removal only removes what LiNix manages. The measured failure was three commands answering
+/// removal only removes what Shall manages. The measured failure was three commands answering
 /// `already up to date` at exit 0 with all three binaries still on PATH.
 #[tokio::test]
-async fn uninstalling_a_package_linix_does_not_own_says_so_instead_of_succeeding() {
+async fn uninstalling_a_package_shall_does_not_own_says_so_instead_of_succeeding() {
     let kernel = TestKernel::new().await;
     // Declared, so `undeclare` finds a line and the "not declared anywhere" arm does not fire.
     std::fs::write(kernel.tmp.path().join("profiles/Main"), "brew:orphan-pkg\n").unwrap();
@@ -315,10 +315,10 @@ async fn uninstalling_a_package_linix_does_not_own_says_so_instead_of_succeeding
     brew_holds(&kernel, &["orphan-pkg"]);
     assert!(!manages(&kernel, "orphan-pkg").await);
 
-    let err = linix::verbs::packages::handle_uninstall(
+    let err = shall::verbs::packages::handle_uninstall(
         &kernel.app,
         &["brew:orphan-pkg".to_string()],
-        linix::core::Output::Human,
+        shall::core::Output::Human,
         None,
         false,
     )
@@ -346,7 +346,7 @@ async fn uninstalling_a_package_linix_does_not_own_says_so_instead_of_succeeding
 }
 
 /// The owner's ruling of 2026-08-11 on the half of `Q54` left open: a flag that removes what
-/// LiNix does not own, by writing the `absent:` declaration.
+/// Shall does not own, by writing the `absent:` declaration.
 ///
 /// Three things at once, because they are one behaviour: the module line goes, an `absent:`
 /// line arrives, and the removal runs against a package no registry claims. The mock manager
@@ -354,7 +354,7 @@ async fn uninstalling_a_package_linix_does_not_own_says_so_instead_of_succeeding
 /// command ends by saying it is still installed. That is the `S87` rule holding on this path
 /// too, and it is asserted here rather than worked around.
 #[tokio::test]
-async fn absent_removes_a_package_linix_does_not_own_and_declares_it_gone() {
+async fn absent_removes_a_package_shall_does_not_own_and_declares_it_gone() {
     let kernel = TestKernel::new().await;
     std::fs::write(kernel.tmp.path().join("profiles/Main"), "brew:orphan-pkg\n").unwrap();
     brew_holds(&kernel, &["orphan-pkg"]);
@@ -364,10 +364,10 @@ async fn absent_removes_a_package_linix_does_not_own_and_declares_it_gone() {
     );
     assert!(!manages(&kernel, "orphan-pkg").await);
 
-    let err = linix::verbs::packages::handle_uninstall(
+    let err = shall::verbs::packages::handle_uninstall(
         &confirming(&kernel),
         &["brew:orphan-pkg".to_string()],
-        linix::core::Output::Human,
+        shall::core::Output::Human,
         None,
         true,
     )
@@ -412,10 +412,10 @@ async fn absent_names_the_manager_that_actually_holds_a_bare_name() {
         Ok(DryRunOutput::default().into()),
     );
 
-    let _ = linix::verbs::packages::handle_uninstall(
+    let _ = shall::verbs::packages::handle_uninstall(
         &confirming(&kernel),
         &["orphan-pkg".to_string()],
-        linix::core::Output::Human,
+        shall::core::Output::Human,
         None,
         true,
     )
@@ -436,10 +436,10 @@ async fn absent_refuses_a_bare_name_no_manager_holds() {
     let kernel = TestKernel::new().await;
     brew_holds(&kernel, &[]);
 
-    let err = linix::verbs::packages::handle_uninstall(
+    let err = shall::verbs::packages::handle_uninstall(
         &confirming(&kernel),
         &["ghost-pkg".to_string()],
-        linix::core::Output::Human,
+        shall::core::Output::Human,
         None,
         true,
     )
@@ -470,8 +470,8 @@ async fn absent_refuses_a_bare_name_no_manager_holds() {
 #[test]
 fn absent_and_temp_cannot_be_combined() {
     use clap::Parser;
-    linix::cli::args::Cli::try_parse_from([
-        "linix",
+    shall::cli::args::Cli::try_parse_from([
+        "shall",
         "uninstall",
         "brew:pkg",
         "--absent",
@@ -481,11 +481,11 @@ fn absent_and_temp_cannot_be_combined() {
 }
 
 /// And the ordinary removal still succeeds. The check above asks the manager one question and
-/// only about names the registry does not carry, so a package LiNix owns pays for none of it —
+/// only about names the registry does not carry, so a package Shall owns pays for none of it —
 /// verified here rather than assumed, because a verification that fires on the happy path
 /// turns every uninstall into a listing.
 #[tokio::test]
-async fn uninstalling_a_package_linix_owns_is_unaffected() {
+async fn uninstalling_a_package_shall_owns_is_unaffected() {
     let kernel = TestKernel::new().await;
     std::fs::write(kernel.tmp.path().join("profiles/Main"), "brew:owned-pkg\n").unwrap();
     {
@@ -497,15 +497,15 @@ async fn uninstalling_a_package_linix_owns_is_unaffected() {
         Ok(DryRunOutput::default().into()),
     );
 
-    linix::verbs::packages::handle_uninstall(
+    shall::verbs::packages::handle_uninstall(
         &confirming(&kernel),
         &["brew:owned-pkg".to_string()],
-        linix::core::Output::Human,
+        shall::core::Output::Human,
         None,
         false,
     )
     .await
-    .expect("removing a package LiNix owns failed");
+    .expect("removing a package Shall owns failed");
 
     let calls = kernel.mock_executor.get_calls().await;
     assert!(
@@ -520,9 +520,9 @@ async fn uninstalling_a_package_linix_owns_is_unaffected() {
 
 /// The same, written the other way a user writes it. A bare name means *the one I have*, so one
 /// manager owning it settles the question — widening it to every manager would turn an ordinary
-/// `linix uninstall jq` into a listing from every package manager on the box.
+/// `shall uninstall jq` into a listing from every package manager on the box.
 #[tokio::test]
-async fn a_bare_name_linix_owns_costs_no_listing_either() {
+async fn a_bare_name_shall_owns_costs_no_listing_either() {
     let kernel = TestKernel::new().await;
     std::fs::write(kernel.tmp.path().join("profiles/Main"), "brew:owned-pkg\n").unwrap();
     {
@@ -534,20 +534,20 @@ async fn a_bare_name_linix_owns_costs_no_listing_either() {
         Ok(DryRunOutput::default().into()),
     );
 
-    linix::verbs::packages::handle_uninstall(
+    shall::verbs::packages::handle_uninstall(
         &confirming(&kernel),
         &["owned-pkg".to_string()],
-        linix::core::Output::Human,
+        shall::core::Output::Human,
         None,
         false,
     )
     .await
-    .expect("removing a package LiNix owns, named without its manager, failed");
+    .expect("removing a package Shall owns, named without its manager, failed");
 
     let calls = kernel.mock_executor.get_calls().await;
     assert!(
         !calls.iter().any(|c| c.contains("list --versions")),
-        "a bare name LiNix already owns still cost a listing: {calls:?}"
+        "a bare name Shall already owns still cost a listing: {calls:?}"
     );
 }
 
@@ -559,7 +559,7 @@ async fn a_bare_name_linix_owns_costs_no_listing_either() {
 /// halves together, because `unmanage` that dropped only the registry entry would be re-adopted
 /// by the next sync, found declared nowhere, and uninstalled.
 #[tokio::test]
-async fn a_package_the_user_told_linix_to_forget_stays_forgotten() {
+async fn a_package_the_user_told_shall_to_forget_stays_forgotten() {
     let kernel = TestKernel::new().await;
     declares(&kernel, "brew:kept-pkg\n");
     brew_must_not_be_asked(&kernel, &["kept-pkg"]);
@@ -568,10 +568,10 @@ async fn a_package_the_user_told_linix_to_forget_stays_forgotten() {
         state.add("brew", "kept-pkg", None, Default::default(), "sync", false);
     }
 
-    linix::verbs::cleanup::handle_unmanage(
+    shall::verbs::cleanup::handle_unmanage(
         &kernel.app,
         &["brew:kept-pkg".to_string()],
-        linix::core::Output::Human,
+        shall::core::Output::Human,
     )
     .await
     .expect("unmanage failed");
@@ -597,7 +597,7 @@ async fn a_package_the_user_told_linix_to_forget_stays_forgotten() {
 
     assert!(
         !manages(&kernel, "kept-pkg").await,
-        "the repair took back a package the user had explicitly told LiNix to forget — the \
+        "the repair took back a package the user had explicitly told Shall to forget — the \
          next sync would find it declared nowhere and uninstall it"
     );
     assert!(
@@ -621,10 +621,10 @@ async fn forgetting_a_package_keeps_the_record_of_work_still_open() {
             .expect("could not write the WAL");
     }
 
-    linix::verbs::cleanup::handle_unmanage(
+    shall::verbs::cleanup::handle_unmanage(
         &kernel.app,
         &["brew:half-done-pkg".to_string()],
-        linix::core::Output::Human,
+        shall::core::Output::Human,
     )
     .await
     .expect("unmanage failed");
@@ -645,7 +645,7 @@ async fn a_preview_takes_nothing_back() {
 
     let mut previewing = (*kernel.app.config).clone();
     previewing.dry_run = true;
-    let engine = linix::app::sync::SyncEngine::new(
+    let engine = shall::app::sync::SyncEngine::new(
         &previewing,
         kernel.app.registry.clone(),
         kernel.app.executor.duplicate(),

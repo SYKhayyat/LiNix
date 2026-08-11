@@ -22,9 +22,9 @@
 
 use crate::mock_providers::TestKernel;
 
-use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope, Scope};
-use linix::app::sync::resolver::StateResolver;
-use linix::core::PackageSpec;
+use shall::app::sync::planner::{ChangePlanner, HostBackends, PlanScope, Scope};
+use shall::app::sync::resolver::StateResolver;
+use shall::core::PackageSpec;
 use std::collections::HashMap;
 
 fn spec(backend: &str, name: &str) -> PackageSpec {
@@ -45,7 +45,7 @@ fn desired_of(specs: &[PackageSpec]) -> HashMap<String, Vec<PackageSpec>> {
     out
 }
 
-/// Put four packages in the registry as LiNix-managed, across three managers.
+/// Put four packages in the registry as Shall-managed, across three managers.
 async fn machine_holding_four(kernel: &TestKernel) {
     let mut state = kernel.app.state.lock().await;
     for (backend, name) in [
@@ -61,7 +61,7 @@ async fn machine_holding_four(kernel: &TestKernel) {
 /// The transient shell's bug, at the layer it happened: a desired set holding only what the
 /// shell was asked for, planned as though it were the machine's whole config.
 ///
-/// `linix shell ripgrep` builds `desired = {cargo: [ripgrep]}` — it is not the config and was
+/// `shall shell ripgrep` builds `desired = {cargo: [ripgrep]}` — it is not the config and was
 /// never meant to be compared against the machine. Under the old `None` scope the other three
 /// managed packages had no declaration in that map, so all three were scheduled for removal, and
 /// `max_removals` was the only thing between the plan and the machine.
@@ -100,13 +100,13 @@ async fn a_plan_over_an_explicit_package_set_removes_nothing() {
         as_a_converge.total_remove(),
         3,
         "control: read as a whole-machine converge, the same input reaps the other three — \
-         which is exactly what `linix shell` was doing"
+         which is exactly what `shall shell` was doing"
     );
 }
 
 /// A converge reaps only the managers `priority` names (II.6).
 ///
-/// "Listed means LiNix uses it. Not listed means LiNix does not touch it at all" is the sentence
+/// "Listed means Shall uses it. Not listed means Shall does not touch it at all" is the sentence
 /// a new user reads when `priority` is missing. Four commands broke it by planning removals with
 /// no list at all.
 #[tokio::test]
@@ -204,7 +204,7 @@ async fn the_transient_shell_plans_no_removal_of_the_machines_packages() {
     ] {
         assert!(
             state.is_managed(backend, name),
-            "`linix shell` must not remove `{}:{}` — it was never asked about it",
+            "`shall shell` must not remove `{}:{}` — it was never asked about it",
             backend,
             name
         );

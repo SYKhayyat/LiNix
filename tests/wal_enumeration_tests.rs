@@ -1,4 +1,4 @@
-//! `readme.md`: "A write-ahead log records **every mutation** before it runs. If LiNix is
+//! `readme.md`: "A write-ahead log records **every mutation** before it runs. If Shall is
 //! killed mid-transaction, the next run heals it." This test does the counting that sentence
 //! quantifies over.
 //!
@@ -75,7 +75,7 @@ const LEDGER: &[Accounted] = &[
         file: "src/app/run.rs",
         calls: 1,
         recovery: Recovery::Journalled,
-        how: "journalled() around the auto-provision install — `linix run` installs a real \
+        how: "journalled() around the auto-provision install — `shall run` installs a real \
               package with a real manager, and calling it temporary describes the intent, not \
               what dpkg is left holding",
     },
@@ -138,7 +138,7 @@ const LEDGER: &[Accounted] = &[
         file: "src/verbs/declare.rs",
         calls: 1,
         recovery: Recovery::Recomputed,
-        how: "`linix service enable` writes a `service:` line and converges it — the \
+        how: "`shall service enable` writes a `service:` line and converges it — the \
               imperative twin of the Dependents phase above",
     },
 ];

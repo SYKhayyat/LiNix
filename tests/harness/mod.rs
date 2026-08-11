@@ -1,10 +1,10 @@
 //! **One `Fixture`.**
 //!
-//! The same twenty-five lines — a temp root, `linix init`, `run(&["…"])`, collect stdout and
+//! The same twenty-five lines — a temp root, `shall init`, `run(&["…"])`, collect stdout and
 //! stderr — were written **sixteen times**, and they had already drifted three ways:
 //!
 //! - **`current_dir`** was set by 3 of 16. The other thirteen ran the binary in the *repository
-//!   root*, where a stray `linix.txt` is a project-local shell manifest the product reads.
+//!   root*, where a stray `shall.txt` is a project-local shell manifest the product reads.
 //! - **`HOME`/`USERPROFILE`** was set by 3 of 16. The other thirteen resolved `~` to the machine's
 //!   real home directory — so a test that placed a `link:` at `~/.vimrc` was writing to the
 //!   developer's actual dotfiles, and passed or failed depending on where the checkout happened
@@ -30,7 +30,7 @@ pub struct Fixture {
 }
 
 impl Fixture {
-    /// A fresh root under `CARGO_TARGET_TMPDIR` with `linix init` already run in it.
+    /// A fresh root under `CARGO_TARGET_TMPDIR` with `shall init` already run in it.
     ///
     /// The root is removed first: `CARGO_TARGET_TMPDIR` persists between runs, so a fixture that
     /// only creates is a fixture carrying yesterday's state into today's assertion.
@@ -76,13 +76,13 @@ impl Fixture {
     /// The two streams, kept apart — for the tests asserting that a document goes to stdout and
     /// its diagnostics do not.
     pub fn run_split(&self, args: &[&str]) -> (String, String, i32) {
-        let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+        let out = Command::new(env!("CARGO_BIN_EXE_shall"))
             .args(args)
             // Every one of these four is here because a test that omitted it was measuring the
             // developer's machine rather than the fixture.
             .current_dir(&self.root)
-            .env("LINIX_CONFIG_DIR", self.cfg())
-            .env("LINIX_DATA_DIR", self.data())
+            .env("SHALL_CONFIG_DIR", self.cfg())
+            .env("SHALL_DATA_DIR", self.data())
             .env("HOME", &self.root)
             .env("USERPROFILE", &self.root)
             // A test that blocks on a prompt is a test that hangs CI rather than failing it.

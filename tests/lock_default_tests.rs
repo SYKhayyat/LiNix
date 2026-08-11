@@ -13,7 +13,7 @@
 //! | `--upgrade` | ignored | resolves freely | the line wins |
 //! | `--locked` | wins | **error** | **error** |
 
-use linix::app::sync::resolver::StateResolver;
+use shall::app::sync::resolver::StateResolver;
 
 use crate::mock_providers::TestKernel;
 
@@ -72,7 +72,7 @@ async fn upgrade_ignores_what_was_recorded() {
     );
 }
 
-/// A machine that has never run `linix lock` has nothing to converge to, and that is the
+/// A machine that has never run `shall lock` has nothing to converge to, and that is the
 /// ordinary state of a fresh install — not an error. This is the difference between the new
 /// default and strict `--locked`.
 #[tokio::test]

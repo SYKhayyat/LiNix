@@ -1,7 +1,7 @@
 // tests/time_travel_tests.rs
 
-use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
-use linix::core::GraphAction;
+use shall::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
+use shall::core::GraphAction;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -32,7 +32,7 @@ async fn test_lease_expiration_pruning_logic() {
         "expired-binary",
         Some("1.0.0".into()),
         {
-            let mut o = linix::config::grammar::Options::default();
+            let mut o = shall::config::grammar::Options::default();
             o.insert("lease".to_string(), "1h");
             o
         },
@@ -68,7 +68,7 @@ async fn test_lease_expiration_pruning_logic() {
     let mut desired = HashMap::new();
     desired.insert(
         "brew".to_string(),
-        vec![linix::core::PackageSpec {
+        vec![shall::core::PackageSpec {
             name: "active-binary".into(),
             backend: "brew".into(),
             options: Default::default(),
@@ -131,7 +131,7 @@ async fn test_lease_manifest_override_logic() {
     let mut desired = HashMap::new();
     desired.insert(
         "brew".to_string(),
-        vec![linix::core::PackageSpec {
+        vec![shall::core::PackageSpec {
             name: "manifest-protected".into(),
             backend: "brew".into(),
             options: Default::default(),

@@ -1,7 +1,7 @@
-//! The one Rhai LiNix ships — the engine and the standard library on it.
+//! The one Rhai Shall ships — the engine and the standard library on it.
 //!
-//! Two places run Rhai: `vars.linix` (Part IX) and a `#rhai` hook (II.12). They are the same
-//! trust — II.6b ruled `vars.linix` is *"trusted the same as a hook — a script in your own
+//! Two places run Rhai: `vars.shall` (Part IX) and a `#rhai` hook (II.12). They are the same
+//! trust — II.6b ruled `vars.shall` is *"trusted the same as a hook — a script in your own
 //! repo"* — so they get the same language. They used to get different ones: `vars` had the
 //! clock, a shell, files, the environment and the network, and a hook had `print`. That was
 //! never a security posture (a hook two lines away in the same config can open `#!` and run
@@ -97,7 +97,7 @@ fn register_stdlib(engine: &mut Engine) {
         std::path::Path::new(path).exists()
     });
 
-    // --- the environment (W7's escape hatch: LINIX_ROLE=work when hostname cannot say) ---
+    // --- the environment (W7's escape hatch: SHALL_ROLE=work when hostname cannot say) ---
     engine.register_fn("env", |name: &str| std::env::var(name).unwrap_or_default());
     engine.register_fn("env", |name: &str, fallback: &str| {
         std::env::var(name).unwrap_or_else(|_| fallback.to_string())
@@ -124,7 +124,7 @@ fn register_stdlib(engine: &mut Engine) {
 }
 
 /// A Rhai runtime error, which each caller surfaces in its own vocabulary — a `GrammarError`
-/// naming `vars.linix`, or a failed hook naming the package.
+/// naming `vars.shall`, or a failed hook naming the package.
 fn rt_err(msg: String) -> Box<EvalAltResult> {
     Box::new(EvalAltResult::ErrorRuntime(
         msg.into(),
@@ -158,7 +158,7 @@ fn shell_command(cmd: &str) -> std::process::Command {
 /// a runtime worker, so nothing is starved while the request is in flight.
 fn http_get(url: &str) -> std::result::Result<String, String> {
     let client =
-        crate::core::http::api("linix-vars", HTTP_TIMEOUT_SECS).map_err(|e| e.to_string())?;
+        crate::core::http::api("shall-vars", HTTP_TIMEOUT_SECS).map_err(|e| e.to_string())?;
     let url = url.to_string();
     let fut = async move {
         let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
@@ -177,7 +177,7 @@ fn http_get(url: &str) -> std::result::Result<String, String> {
             rx.recv()
                 .map_err(|_| "http_get: the request task disappeared".to_string())?
         }
-        // `linix eval` on a synchronous path, and the unit tests, have no runtime to borrow.
+        // `shall eval` on a synchronous path, and the unit tests, have no runtime to borrow.
         Err(_) => tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

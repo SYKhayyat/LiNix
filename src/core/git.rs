@@ -1,4 +1,4 @@
-// Version control for LiNix's *intent* — the manifest/config directory.
+// Version control for Shall's *intent* — the manifest/config directory.
 //
 // Filesystem snapshots version the *effect* of a change — the whole disk. Git is the other
 // half and the complementary one: the human-readable, diffable, branchable, pushable history
@@ -6,19 +6,19 @@
 // remote backs your whole setup up like dotfiles. There is no generation format; a generation
 // IS a commit.
 //
-// This is a thin, dependency-free wrapper that shells out to the system `git` (LiNix already
+// This is a thin, dependency-free wrapper that shells out to the system `git` (Shall already
 // shells out to every package manager, so this adds no new dependency and no libgit2 build
 // cost). Every method that could fail on a machine without git returns a `Result` the caller
 // can degrade gracefully on — auto-commit, for instance, simply no-ops when git is absent.
 //
-// The repo root is the LiNix config directory, so a single repo captures `preferences.toml`,
+// The repo root is the Shall config directory, so a single repo captures `preferences.toml`,
 // `modules/`, `profiles/`, `active`, `priority` and `locks/` together.
 
 use crate::core::{Error, Result};
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-/// What git says about a commit's signature (II.13). LiNix verifies nothing itself: `git`
+/// What git says about a commit's signature (II.13). Shall verifies nothing itself: `git`
 /// answers, and this is its answer carried without interpretation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Signature {
@@ -70,7 +70,7 @@ impl Signature {
     }
 }
 
-/// A commit as shown by `git log` — the data `linix git log` renders. A generation IS a
+/// A commit as shown by `git log` — the data `shall git log` renders. A generation IS a
 /// commit (II.13), so this is the whole of the history record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitCommit {
@@ -81,7 +81,7 @@ pub struct GitCommit {
     pub signature: Signature,
 }
 
-/// A git wrapper scoped to one directory (the LiNix config root).
+/// A git wrapper scoped to one directory (the Shall config root).
 #[derive(Debug, Clone)]
 pub struct GitManager {
     root: PathBuf,
@@ -117,8 +117,8 @@ impl GitManager {
             return Ok(());
         }
         Err(Error::Other(
-            "git is not installed; install it to use LiNix's manifest history — \
-             `linix git`, `diff`, `rollback` and `bundle`. Everything else works without it."
+            "git is not installed; install it to use Shall's manifest history — \
+             `shall git`, `diff`, `rollback` and `bundle`. Everything else works without it."
                 .into(),
         ))
     }
@@ -144,7 +144,7 @@ impl GitManager {
     }
 
     /// Nothing about the user's git is overridden here — not the identity, not the signing
-    /// flags. A commit signed by your key and authored by `linix@localhost` attributes a
+    /// flags. A commit signed by your key and authored by `shall@localhost` attributes a
     /// verified change to a person who does not exist (owner ruling, 2026-07-21), and a repo
     /// with no identity configured is git's error to report, in git's own words.
     fn run(&self, args: &[&str]) -> Result<Output> {
@@ -162,7 +162,7 @@ impl GitManager {
         // default on Windows, which pops a *window* — declines to open one.
         cmd.stdin(std::process::Stdio::null());
         Self::ask_nothing(&mut cmd);
-        // Blocking, from a synchronous API that async verbs call — and LiNix runs git after
+        // Blocking, from a synchronous API that async verbs call — and Shall runs git after
         // every successful sync. Held a runtime worker for the length of every commit.
         crate::core::blocking::command_output(&mut cmd)
             .map_err(|e| Error::command_failed(format!("git {:?} failed to spawn: {}", args, e)))
@@ -189,7 +189,7 @@ impl GitManager {
         self.run_checked(&["pull", "--ff-only"])
     }
 
-    /// Idempotent. The written `.gitignore` excludes the per-file backups LiNix drops
+    /// Idempotent. The written `.gitignore` excludes the per-file backups Shall drops
     /// during rollbacks, which would otherwise be committed as manifest content.
     pub fn init(&self) -> Result<()> {
         Self::require()?;
@@ -211,7 +211,7 @@ impl GitManager {
         // A pattern the user has commented out is not a pattern they have, which is why this
         // reads the meaningful lines rather than searching the text.
         let present = crate::utils::file::read_lines_filtered(&ignore)?;
-        for pat in ["*.linix-backup"] {
+        for pat in ["*.shall-backup"] {
             if !present.iter().any(|l| l == pat) {
                 crate::utils::file::append_line(&ignore, pat)?;
             }
@@ -232,7 +232,7 @@ impl GitManager {
         }
         if !self.is_repo() {
             return Err(Error::Other(format!(
-                "{} is not a git repo; run `linix git init` first",
+                "{} is not a git repo; run `shall git init` first",
                 self.root.display()
             )));
         }
@@ -271,7 +271,7 @@ impl GitManager {
     }
 
     /// The content of a tracked file as of HEAD, or `None` when the file was not tracked there
-    /// or the repo has no commits yet. Since LiNix commits only on a successful sync (V.30),
+    /// or the repo has no commits yet. Since Shall commits only on a successful sync (V.30),
     /// HEAD is the last-synced state — the baseline for showing what a working-tree edit changed.
     pub fn show_at_head(&self, relpath: &str) -> Result<Option<String>> {
         if self.head()?.is_none() {
@@ -350,7 +350,7 @@ impl GitManager {
             "active",
             "priority",
             "schedules",
-            // `vars`, `vars.linix`, `vars.py` … — the file that explains a change must be in the
+            // `vars`, `vars.shall`, `vars.py` … — the file that explains a change must be in the
             // change view, or a variable edit that removed a hundred packages is invisible (W14).
             "vars*",
         ])?;
@@ -377,7 +377,7 @@ impl GitManager {
         Ok(true)
     }
 
-    /// The manifest lines that differ between two commits — `linix diff <from> <to>` in
+    /// The manifest lines that differ between two commits — `shall diff <from> <to>` in
     /// packages, not text (Phase 4). `from` is the older baseline; pass `to = None` to diff
     /// `from` against the working tree (committed + uncommitted). Limited to the config files,
     /// keeping only the `+`/`-` content lines. Because manifests are package declarations, this
@@ -407,12 +407,12 @@ impl GitManager {
 }
 
 /// What to do about a commit git refused. The two reachable causes are configuration, and both
-/// became reachable when LiNix stopped injecting an identity and stopped forcing signing off —
-/// git's own message names the problem, this names the fix in LiNix's terms.
+/// became reachable when Shall stopped injecting an identity and stopped forcing signing off —
+/// git's own message names the problem, this names the fix in Shall's terms.
 fn commit_refusal_hint(stderr: &str) -> &'static str {
     let lower = stderr.to_lowercase();
     if lower.contains("tell me who you are") || lower.contains("empty ident") {
-        return "LiNix commits as you, not as itself, so git needs an identity:\n  \
+        return "Shall commits as you, not as itself, so git needs an identity:\n  \
                 git config --global user.name  \"Your Name\"\n  \
                 git config --global user.email \"you@example.com\"";
     }
@@ -471,7 +471,7 @@ mod tests {
 
     /// **A closed stdin does not stop a credential prompt** — git reads it from `/dev/tty`, the
     /// same way sudo does, which is what made `S88` a fifteen-minute silence rather than an
-    /// error. Asserted on the command LiNix builds, because the failure it guards against has
+    /// error. Asserted on the command Shall builds, because the failure it guards against has
     /// no output to match on: the run simply never returns.
     #[test]
     fn git_is_told_not_to_ask_for_anything() {
@@ -551,8 +551,8 @@ mod tests {
 
     #[test]
     fn a_missing_identity_is_named_as_the_reason_the_commit_failed() {
-        // Reachable only since LiNix stopped injecting `linix@localhost`: git's own message is
-        // about `user.email`, and the hint has to be about how LiNix uses it.
+        // Reachable only since Shall stopped injecting `shall@localhost`: git's own message is
+        // about `user.email`, and the hint has to be about how Shall uses it.
         let hint = commit_refusal_hint(
             "*** Please tell me who you are.
 
@@ -571,7 +571,7 @@ fatal: unable to auto-detect email address",
     /// Gate for the tests below, which drive real git. Returns false when git is absent so the
     /// suite still passes in a minimal environment.
     ///
-    /// The identity and the neutered config paths must be set before any of them runs: LiNix no
+    /// The identity and the neutered config paths must be set before any of them runs: Shall no
     /// longer injects an identity (a signed commit must not be authored by a name nobody owns),
     /// so without this the suite passes or fails according to the host's `~/.gitconfig` rather
     /// than according to the code (S33). Setting it here rather than per-test is deliberate —
@@ -582,14 +582,14 @@ fatal: unable to auto-detect email address",
         // this module. Change one, change the other.
         HERMETIC.call_once(|| {
             for (k, v) in [
-                ("GIT_AUTHOR_NAME", "linix-tests"),
+                ("GIT_AUTHOR_NAME", "shall-tests"),
                 ("GIT_AUTHOR_EMAIL", "test@example.invalid"),
-                ("GIT_COMMITTER_NAME", "linix-tests"),
+                ("GIT_COMMITTER_NAME", "shall-tests"),
                 ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
                 // Absent paths, so no `~/.gitconfig` or system config reaches these repos:
                 // a host that signs every commit would otherwise fail them at `git commit`.
-                ("GIT_CONFIG_GLOBAL", "linix-tests-absent-gitconfig"),
-                ("GIT_CONFIG_SYSTEM", "linix-tests-absent-gitconfig"),
+                ("GIT_CONFIG_GLOBAL", "shall-tests-absent-gitconfig"),
+                ("GIT_CONFIG_SYSTEM", "shall-tests-absent-gitconfig"),
             ] {
                 std::env::set_var(k, v);
             }
@@ -677,7 +677,7 @@ fatal: unable to auto-detect email address",
 
         // Roll the manifest back to v1's content; installed packages are irrelevant here.
         git.checkout_files(&c1).unwrap();
-        // Normalize line endings: git on Windows may apply autocrlf on checkout. LiNix reads
+        // Normalize line endings: git on Windows may apply autocrlf on checkout. Shall reads
         // manifests via `.lines()`, which tolerates CRLF, so this is cosmetic.
         let restored = std::fs::read_to_string(&manifest)
             .unwrap()

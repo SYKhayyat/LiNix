@@ -14,7 +14,7 @@
 //!   other extra uses."*
 //!
 //! No code wrote that row. `apply/dotfiles.rs` contained no reference to `ExtrasLedger` at all, so
-//! the tree got none of what `link:` has: no `<target>.linix-backup` before it replaced a file
+//! the tree got none of what `link:` has: no `<target>.shall-backup` before it replaced a file
 //! (T6), no ledger entry, and therefore no teardown, no restore, and no removal guard.
 //!
 //! Each test below runs the two statements against the same bytes in the same tree and asserts
@@ -87,11 +87,11 @@ impl Fixture {
     }
 
     fn backup_of(&self, name: &str) -> Option<String> {
-        std::fs::read_to_string(format!("{}.linix-backup", self.dest(name).display())).ok()
+        std::fs::read_to_string(format!("{}.shall-backup", self.dest(name).display())).ok()
     }
 }
 
-/// T6, asked of both statements: a file the user already had is preserved before LiNix takes the
+/// T6, asked of both statements: a file the user already had is preserved before Shall takes the
 /// path over, so nobody is silently robbed of a config file they hand-wrote.
 ///
 /// `--replace-existing` waives the *refusal* to overwrite. It has never meant "and throw the
@@ -133,7 +133,7 @@ fn a_users_existing_file_is_preserved_by_both_statements() {
         f.backup_of("by_tree").as_deref(),
         Some("the user wrote this\n"),
         "`dotfiles:` destroyed a file the user hand-wrote. The identical `link:` line on the \
-         same run preserved its own as `<target>.linix-backup`; the tree called `remove_file` \
+         same run preserved its own as `<target>.shall-backup`; the tree called `remove_file` \
          and symlinked over the top, so the original is not recoverable from anywhere:\n{out}"
     );
 }

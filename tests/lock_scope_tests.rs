@@ -3,7 +3,7 @@
 //!
 //! `Commands::writes` decides who takes the 120-second exclusive `DataLock` for the length of
 //! the process, and its own doc comment records this bug being found and fixed **three times**:
-//! `edit` blocks on `$EDITOR` and "once stopped every other LiNix on the machine for as long as
+//! `edit` blocks on `$EDITOR` and "once stopped every other Shall on the machine for as long as
 //! somebody read a manifest in vim"; `fleet` "took the 120-second exclusive lock for a purely
 //! remote report"; `history` "opens a TUI a person reads for as long as they like". Three
 //! siblings with the identical shape were never touched:
@@ -15,7 +15,7 @@
 //! | `run`   | the length of an arbitrary user command |
 //!
 //! `watch` is the sharp one. It is the GitOps daemon and the documented deployment is to leave
-//! it running — so `linix install`, `linix sync` and the `hook-reconcile` a hand-typed `apt
+//! it running — so `shall install`, `shall sync` and the `hook-reconcile` a hand-typed `apt
 //! install` fires all waited 120 seconds and then failed, for as long as the daemon was up. A
 //! user who followed the documentation disabled their own CLI.
 //!
@@ -28,7 +28,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use clap::Parser;
-use linix::cli::{Cli, LockScope};
+use shall::cli::{Cli, LockScope};
 
 fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -54,13 +54,13 @@ fn scopes() -> Vec<(String, LockScope)> {
 /// The scope of one subcommand, parsed through clap.
 ///
 /// **Filler arguments, and the reason is `run`.** The first draft parsed each name bare and
-/// skipped whatever would not parse — so `linix run`, which takes a command, was silently absent
+/// skipped whatever would not parse — so `shall run`, which takes a command, was silently absent
 /// from the walk, and the assertion that its name still exists passed against a set that did not
 /// contain it. A table checked against a set that quietly excluded its subject is the exact
 /// failure this file is about, one layer up.
 fn scope_of(name: &str) -> Option<LockScope> {
     for filler in 0..3 {
-        let mut argv = vec!["linix".to_string(), name.to_string()];
+        let mut argv = vec!["shall".to_string(), name.to_string()];
         argv.extend((0..filler).map(|i| format!("filler{i}")));
         if let Ok(cli) = Cli::try_parse_from(&argv) {
             return Some(cli.command.lock_scope());
@@ -71,7 +71,7 @@ fn scope_of(name: &str) -> Option<LockScope> {
 
 /// The commands whose duration is decided by something other than the package work they do.
 ///
-/// A person at a keyboard, a loop with no end, or a program LiNix does not own. This is a
+/// A person at a keyboard, a loop with no end, or a program Shall does not own. This is a
 /// statement about the *shape* of a verb, so it is written down; every entry is then checked
 /// against clap (it must still exist) and against `lock_scope` (it must not be a whole-run
 /// writer). Adding a seventh unbounded verb without answering `Deferred` or `Reader` fails here.
@@ -81,7 +81,7 @@ const UNBOUNDED: &[(&str, &str)] = &[
         "an unbounded loop — the GitOps daemon, meant to be left running",
     ),
     ("shell", "launches $SHELL and awaits it"),
-    ("run", "runs a command LiNix neither wrote nor bounds"),
+    ("run", "runs a command Shall neither wrote nor bounds"),
     (
         "history",
         "opens a TUI a person reads for as long as they like",
@@ -110,7 +110,7 @@ fn no_unbounded_command_holds_the_lock_for_its_whole_run() {
     assert!(
         offenders.is_empty(),
         "{} command(s) take the 120-second exclusive data lock for their whole run, and their \
-         run has no bound:\n  {}\n\nEvery other writing LiNix command on the machine waits two \
+         run has no bound:\n  {}\n\nEvery other writing Shall command on the machine waits two \
          minutes behind them and then fails. Answer `LockScope::Deferred` and take the lock at \
          the mutating action, the way `history` does.",
         offenders.len(),
@@ -191,11 +191,11 @@ fn walk(dir: &std::path::Path) -> Vec<PathBuf> {
     out
 }
 
-/// The measurement, not the declaration: `watch` is running, and a second LiNix can still write.
+/// The measurement, not the declaration: `watch` is running, and a second Shall can still write.
 ///
 /// This is the finding reproduced. Before the fix, taking the data lock while `watch` was up
-/// waited the full 120 seconds and then failed with "the LiNix data directory is locked by
-/// linix watch". It now succeeds between ticks.
+/// waited the full 120 seconds and then failed with "the Shall data directory is locked by
+/// shall watch". It now succeeds between ticks.
 #[test]
 fn a_running_watch_does_not_stop_the_next_writer() {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("watch-lock-scope");
@@ -208,10 +208,10 @@ fn a_running_watch_does_not_stop_the_next_writer() {
     std::fs::write(dir.join("config/priority"), "\n").unwrap();
     std::fs::write(dir.join("config/active"), "").unwrap();
 
-    let mut watch = Command::new(env!("CARGO_BIN_EXE_linix"))
+    let mut watch = Command::new(env!("CARGO_BIN_EXE_shall"))
         .args(["-y", "watch", "--interval", "1"])
-        .env("LINIX_CONFIG_DIR", dir.join("config"))
-        .env("LINIX_DATA_DIR", dir.join("data"))
+        .env("SHALL_CONFIG_DIR", dir.join("config"))
+        .env("SHALL_DATA_DIR", dir.join("data"))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -230,7 +230,7 @@ fn a_running_watch_does_not_stop_the_next_writer() {
         // A short wait on purpose: the question is whether the lock is free *between* ticks,
         // and a two-minute wait would answer "eventually" for a daemon that never releases it.
         let t0 = Instant::now();
-        if linix::core::datalock::DataLock::acquire(
+        if shall::core::datalock::DataLock::acquire(
             &dir.join("data"),
             "the lock-scope measurement",
             Duration::from_secs(3),
@@ -246,8 +246,8 @@ fn a_running_watch_does_not_stop_the_next_writer() {
 
     assert!(
         took.is_some(),
-        "`linix watch` was running and the data lock never came free in 45 seconds. That is the \
-         defect: the documented GitOps deployment disables every other writing LiNix command on \
+        "`shall watch` was running and the data lock never came free in 45 seconds. That is the \
+         defect: the documented GitOps deployment disables every other writing Shall command on \
          the machine for as long as the daemon is up. `watch` must take the lock per tick \
          (`LockScope::Deferred`), not for its lifetime."
     );

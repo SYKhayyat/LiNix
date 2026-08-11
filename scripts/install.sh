@@ -1,25 +1,25 @@
 #!/bin/sh
-# LiNix bootstrap installer — the 30-second first run.
+# Shall bootstrap installer — the 30-second first run.
 #
-#   curl -fsSL https://raw.githubusercontent.com/SYKhayyat/LiNix/HEAD/scripts/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/SYKhayyat/Shall/HEAD/scripts/install.sh | sh
 #
-# It installs the `linix` binary, runs a health check, and offers to adopt the packages
-# already on this machine into a LiNix manifest. Override defaults with env vars:
-#   LINIX_REPO      git source           (default: the SYKhayyat/LiNix repo)
-#   LINIX_REF       tag or branch        (default: the newest release tag)
-#   LINIX_BIN_DIR   install location     (default: cargo's bin dir)
-#   LINIX_NO_ADOPT  set to skip the `adopt` prompt
+# It installs the `shall` binary, runs a health check, and offers to adopt the packages
+# already on this machine into a Shall manifest. Override defaults with env vars:
+#   SHALL_REPO      git source           (default: the SYKhayyat/Shall repo)
+#   SHALL_REF       tag or branch        (default: the newest release tag)
+#   SHALL_BIN_DIR   install location     (default: cargo's bin dir)
+#   SHALL_NO_ADOPT  set to skip the `adopt` prompt
 #
-# Every name in that list is read below. It documented `LINIX_BIN_DIR`, which nothing read, and
-# omitted `LINIX_REF`, which everything did — in the file users pipe from the internet, where the
+# Every name in that list is read below. It documented `SHALL_BIN_DIR`, which nothing read, and
+# omitted `SHALL_REF`, which everything did — in the file users pipe from the internet, where the
 # list is the only interface anyone sees.
 set -eu
 
-REPO="${LINIX_REPO:-https://github.com/SYKhayyat/LiNix}"
-BIN_DIR="${LINIX_BIN_DIR:-}"
+REPO="${SHALL_REPO:-https://github.com/SYKhayyat/Shall}"
+BIN_DIR="${SHALL_BIN_DIR:-}"
 
-say() { printf '\033[1;36mlinix\033[0m %s\n' "$1"; }
-err() { printf '\033[1;31mlinix\033[0m %s\n' "$1" >&2; }
+say() { printf '\033[1;36mshall\033[0m %s\n' "$1"; }
+err() { printf '\033[1;31mshall\033[0m %s\n' "$1" >&2; }
 
 say "bootstrapping — detecting toolchain..."
 
@@ -49,12 +49,12 @@ target_triple() {
 fetch_binary() {
   triple="$(target_triple)"
   [ -n "$triple" ] || return 1
-  # `/releases/latest/download/` resolves to the newest release; a pinned `LINIX_REF` asks for
+  # `/releases/latest/download/` resolves to the newest release; a pinned `SHALL_REF` asks for
   # exactly that tag, because "install v0.7.0" must not quietly hand over v0.8.0.
   if [ -n "$REF" ]; then
-    url="$REPO/releases/download/$REF/linix-$triple"
+    url="$REPO/releases/download/$REF/shall-$triple"
   else
-    url="$REPO/releases/latest/download/linix-$triple"
+    url="$REPO/releases/latest/download/shall-$triple"
   fi
   out="$1"
   if command -v curl >/dev/null 2>&1; then
@@ -72,16 +72,16 @@ fetch_binary() {
   chmod 755 "$out"
 }
 
-# WHICH LiNix. `HEAD` is whatever was pushed last, which is not a thing anyone can ask for
+# WHICH Shall. `HEAD` is whatever was pushed last, which is not a thing anyone can ask for
 # twice — two machines installed an hour apart got different programs and neither could say
-# which. The default is the newest release TAG, and `LINIX_REF` overrides it:
+# which. The default is the newest release TAG, and `SHALL_REF` overrides it:
 #
-#   LINIX_REF=main   ...install.sh | sh     # follow the branch, deliberately
-#   LINIX_REF=v0.8.0 ...install.sh | sh     # a specific release
+#   SHALL_REF=main   ...install.sh | sh     # follow the branch, deliberately
+#   SHALL_REF=v0.8.0 ...install.sh | sh     # a specific release
 #
 # A repo with no tags yet falls back to the branch and SAYS SO, rather than silently
 # installing something else than it promised.
-REF="${LINIX_REF:-}"
+REF="${SHALL_REF:-}"
 if [ -z "$REF" ]; then
   REF="$(git ls-remote --tags --refs --sort=-v:refname "$REPO" 'v*' 2>/dev/null            | head -1 | sed 's#.*/##')"
   if [ -z "$REF" ]; then
@@ -89,14 +89,14 @@ if [ -z "$REF" ]; then
   fi
 fi
 
-# The published binary first. Where it lands is `LINIX_BIN_DIR` if given, and cargo's bin
+# The published binary first. Where it lands is `SHALL_BIN_DIR` if given, and cargo's bin
 # directory otherwise — the same two places the source path installs to, so a user who set the
 # variable gets the same answer whichever path ran.
-CARGO_BIN="${LINIX_BIN_DIR:-${CARGO_HOME:-$HOME/.cargo}/bin}"
+CARGO_BIN="${SHALL_BIN_DIR:-${CARGO_HOME:-$HOME/.cargo}/bin}"
 STAGE="$(mktemp -d)"
-if fetch_binary "$STAGE/linix"; then
+if fetch_binary "$STAGE/shall"; then
   mkdir -p "$CARGO_BIN"
-  mv "$STAGE/linix" "$CARGO_BIN/linix"
+  mv "$STAGE/shall" "$CARGO_BIN/shall"
   rm -rf "$STAGE"
   say "installed the published binary to $CARGO_BIN."
   DOWNLOADED=1
@@ -134,7 +134,7 @@ fi
 # `--tag` only when there is one: `cargo install --git X --tag ""` is not the same command.
 #
 # `--root` when the caller named a directory. cargo installs into `$root/bin`, so a
-# `LINIX_BIN_DIR` of `/usr/local/bin` is a root of `/usr/local` — computed here rather than
+# `SHALL_BIN_DIR` of `/usr/local/bin` is a root of `/usr/local` — computed here rather than
 # demanded of the user, who was told this variable names the install location.
 set -- --git "$REPO" --locked
 # An `if`, not `[ -n "$REF" ] && set -- …`: under `set -e` a trailing `&&` list whose test fails
@@ -157,11 +157,11 @@ if [ -n "$BIN_DIR" ]; then
     STAGE="$(mktemp -d)"
     cargo install "$@" --root "$STAGE"
     mkdir -p "$BIN_DIR"
-    cp "$STAGE/bin/linix" "$BIN_DIR/linix"
-    chmod 755 "$BIN_DIR/linix"
+    cp "$STAGE/bin/shall" "$BIN_DIR/shall"
+    chmod 755 "$BIN_DIR/shall"
     rm -rf "$STAGE"
     CARGO_BIN="$BIN_DIR"
-    say "installed to $BIN_DIR (LINIX_BIN_DIR)"
+    say "installed to $BIN_DIR (SHALL_BIN_DIR)"
   fi
 else
   cargo install "$@"
@@ -171,37 +171,37 @@ fi
 
 fi  # end of the build-from-source path
 
-# The shell caches where it found a name. Upgrading over an older `linix` on PATH leaves the
+# The shell caches where it found a name. Upgrading over an older `shall` on PATH leaves the
 # cache pointing at the binary that was just replaced, and every line below would then run
 # the old one — including the health check that is supposed to vouch for the new.
 hash -r 2>/dev/null || true
-if ! command -v linix >/dev/null 2>&1; then
+if ! command -v shall >/dev/null 2>&1; then
   case ":$PATH:" in
     *":$CARGO_BIN:"*) : ;;
-    *) err "Add $CARGO_BIN to your PATH to use \`linix\`." ;;
+    *) err "Add $CARGO_BIN to your PATH to use \`shall\`." ;;
   esac
 fi
 
-# The binary just installed, by path, in preference to whatever `linix` resolves to on this
+# The binary just installed, by path, in preference to whatever `shall` resolves to on this
 # PATH — that could be an older install elsewhere, and the health check is supposed to vouch
 # for the one this script produced.
-if [ -x "$CARGO_BIN/linix" ]; then
-  LINIX="$CARGO_BIN/linix"
+if [ -x "$CARGO_BIN/shall" ]; then
+  SHALL="$CARGO_BIN/shall"
 else
-  LINIX="$(command -v linix || echo "$CARGO_BIN/linix")"
+  SHALL="$(command -v shall || echo "$CARGO_BIN/shall")"
 fi
 
 say "running health check..."
-"$LINIX" check health || true
+"$SHALL" check health || true
 
-if [ -z "${LINIX_NO_ADOPT:-}" ]; then
-  printf '\033[1;36mlinix\033[0m adopt the packages already installed on this machine into a manifest now? [y/N] '
+if [ -z "${SHALL_NO_ADOPT:-}" ]; then
+  printf '\033[1;36mshall\033[0m adopt the packages already installed on this machine into a manifest now? [y/N] '
   # Read from the terminal even when the script itself arrived over a pipe.
   if [ -r /dev/tty ]; then read -r ans </dev/tty; else read -r ans || ans=n; fi
   case "$ans" in
-    y | Y | yes | YES) "$LINIX" adopt ;;
-    *) say "skipped — run \`linix adopt\` whenever you're ready." ;;
+    y | Y | yes | YES) "$SHALL" adopt ;;
+    *) say "skipped — run \`shall adopt\` whenever you're ready." ;;
   esac
 fi
 
-say "done. Try \`linix check\` or \`linix sync\`."
+say "done. Try \`shall check\` or \`shall sync\`."

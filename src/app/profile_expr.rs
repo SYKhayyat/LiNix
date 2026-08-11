@@ -23,7 +23,7 @@
 //
 // The evaluator preserves order: union appends new items in first-seen order; intersection
 // keeps the left operand's order; difference keeps the left operand minus the right members.
-// This keeps `linix profile show` output stable and readable.
+// This keeps `shall profile show` output stable and readable.
 
 use std::collections::HashSet;
 

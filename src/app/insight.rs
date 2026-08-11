@@ -1,4 +1,4 @@
-// Cross-backend "insight" commands that are only possible because LiNix sits above
+// Cross-backend "insight" commands that are only possible because Shall sits above
 // every ecosystem at once:
 //
 //   * `audit` — one security scan across every managed package (apt, npm, pip, cargo,
@@ -86,7 +86,7 @@ fn purl(backend: &str, name: &str, version: Option<&str>) -> Option<String> {
     })
 }
 
-/// Map a LiNix backend to its OSV.dev ecosystem identifier for vulnerability queries.
+/// Map a Shall backend to its OSV.dev ecosystem identifier for vulnerability queries.
 /// Returns None for backends OSV does not cover (so we skip them honestly).
 fn osv_ecosystem(backend: &str) -> Option<&'static str> {
     Some(match backend {
@@ -116,7 +116,7 @@ fn build_cyclonedx(pkgs: &[ResolvedPkg]) -> Value {
             let mut c = json!({
                 "type": "application",
                 "name": p.name,
-                "properties": [{ "name": "linix:backend", "value": p.backend }],
+                "properties": [{ "name": "shall:backend", "value": p.backend }],
             });
             if let Some(v) = &p.version {
                 if !v.is_empty() {
@@ -134,7 +134,7 @@ fn build_cyclonedx(pkgs: &[ResolvedPkg]) -> Value {
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
         "version": 1,
-        "metadata": { "tools": [{ "vendor": "LiNix", "name": "linix" }] },
+        "metadata": { "tools": [{ "vendor": "Shall", "name": "shall" }] },
         "components": components,
     })
 }
@@ -263,7 +263,7 @@ pub async fn audit(app: &App) -> Result<AuditReport> {
 
     // Honour the configured value (F1); the pool raises a literal 0 to 1s, because reqwest
     // reads a zero-second timeout as "fail instantly" rather than "no timeout".
-    let client = crate::core::http::api("linix-audit", app.config.network_timeout_secs)
+    let client = crate::core::http::api("shall-audit", app.config.network_timeout_secs)
         .map_err(|e| Error::Http(e.to_string()))?;
 
     let resp = client.post(OSV_BATCH_URL).json(&body).send().await?;
@@ -398,7 +398,7 @@ pub fn print_audit(report: &AuditReport, out: Output) -> Result<()> {
             None => println!("      fix: see https://osv.dev/{}", f.id),
         }
     }
-    println!("\nReview and run `linix upgrade` (or pin fixed versions) to remediate.");
+    println!("\nReview and run `shall upgrade` (or pin fixed versions) to remediate.");
     Ok(())
 }
 
@@ -670,11 +670,11 @@ async fn introduced_in_git(app: &App, name: &str) -> Option<crate::model::introd
 /// with the fallback and nothing says so.
 fn provenance(source: &str) -> String {
     match source {
-        "imperative" => "installed by `linix install`".to_string(),
+        "imperative" => "installed by `shall install`".to_string(),
         "adopt" => "adopted from this machine".to_string(),
         s => match s.strip_prefix("hook:") {
             Some(manager) => format!(
-                "installed behind LiNix's back with {}, and caught by the hook",
+                "installed behind Shall's back with {}, and caught by the hook",
                 manager
             ),
             None => format!("recorded by {}", s),
@@ -716,7 +716,7 @@ pub async fn why(app: &App, query: &str, out: Output) -> Result<()> {
         if out.is_json() {
             println!("{}", serde_json::json!({ "query": query, "matches": [] }));
         } else {
-            println!("'{}' is not under LiNix management.", query);
+            println!("'{}' is not under Shall management.", query);
         }
         return Ok(());
     }
@@ -785,7 +785,7 @@ pub async fn why(app: &App, query: &str, out: Output) -> Result<()> {
         }
 
         // XIII.19: when this declaration first appeared, asked of git rather than of a store
-        // LiNix writes at sync time. The config repo is a git repo and every sync commits, so
+        // Shall writes at sync time. The config repo is a git repo and every sync commits, so
         // the fact already exists — and a copy of it could only ever disagree.
         let introduced = introduced_in_git(app, &name).await;
 
@@ -868,7 +868,7 @@ mod tests {
     #[test]
     fn why_names_each_writer_by_the_string_that_writer_stores() {
         // `app/shell/mod.rs`, `app/leases.rs`, `app/snapshot_restore.rs`.
-        assert_eq!(provenance("imperative"), "installed by `linix install`");
+        assert_eq!(provenance("imperative"), "installed by `shall install`");
         // `app/adopt.rs`.
         assert_eq!(provenance("adopt"), "adopted from this machine");
         // `verbs/declare.rs` — `hook:<manager>`, one arm per manager it can be. Matching a

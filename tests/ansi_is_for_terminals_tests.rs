@@ -5,7 +5,7 @@
 //! points. Measured:
 //!
 //! ```text
-//! $ linix install nosuchpkg-zzz 2>&1 | grep -c $'\033'   → 1   (piped, still coloured)
+//! $ shall install nosuchpkg-zzz 2>&1 | grep -c $'\033'   → 1   (piped, still coloured)
 //! $ NO_COLOR=1 …                                          → 0   (respected)
 //! $ TERM=dumb  …                                          → 1   (ignored)
 //! ```
@@ -41,10 +41,10 @@ fn run(args: &[&str], env: &[(&str, &str)]) -> String {
     let _ = std::fs::write(dir.join("config/priority"), "\n");
     let _ = std::fs::write(dir.join("config/active"), "");
 
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_linix"));
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_shall"));
     cmd.args(args)
-        .env("LINIX_CONFIG_DIR", dir.join("config"))
-        .env("LINIX_DATA_DIR", dir.join("data"))
+        .env("SHALL_CONFIG_DIR", dir.join("config"))
+        .env("SHALL_DATA_DIR", dir.join("data"))
         .env_remove("NO_COLOR")
         .env_remove("TERM")
         .stdin(Stdio::null());
@@ -66,7 +66,7 @@ fn no_command_writes_an_escape_sequence_into_a_pipe() {
         let out = run(args, &[]);
         if out.contains(ESC) {
             coloured.push(format!(
-                "`linix {}` — first offending line: {:?}",
+                "`shall {}` — first offending line: {:?}",
                 args.join(" "),
                 out.lines()
                     .find(|l| l.contains(ESC))
@@ -103,7 +103,7 @@ fn the_environment_can_switch_colour_off_by_either_convention() {
         let out = run(&["install", "nosuchpkg-zzz-does-not-exist", "-y"], &env);
         assert!(
             !out.contains(ESC),
-            "with {env:?} set, LiNix still wrote escape sequences:\n{out}"
+            "with {env:?} set, Shall still wrote escape sequences:\n{out}"
         );
     }
 }

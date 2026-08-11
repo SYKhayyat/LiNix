@@ -26,7 +26,7 @@ use crate::core::{Error, PackageSpec, Result};
 /// fattest in common use are a few hundred megabytes, so this is roughly eight times the real
 /// worst case. It is not a security boundary — a hostile server that stays under it still gets a
 /// file written — it is the bound that stops a redirect to something enormous, or a server that
-/// never stops sending, from filling the disk while LiNix reports progress.
+/// never stops sending, from filling the disk while Shall reports progress.
 pub const DEFAULT_MAX_DOWNLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 /// Seeded from `Config::max_download_bytes`; `0` removes the bound.

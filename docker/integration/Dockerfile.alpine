@@ -1,13 +1,13 @@
-# LiNix integration image — Alpine (apk, musl). Build context = repo root.
-#   docker build -f docker/integration/Dockerfile.alpine -t linix-it-alpine .
-#   docker run --rm linix-it-alpine            # defaults to: apk jq
+# Shall integration image — Alpine (apk, musl). Build context = repo root.
+#   docker build -f docker/integration/Dockerfile.alpine -t shall-it-alpine .
+#   docker run --rm shall-it-alpine            # defaults to: apk jq
 #
 # Note: Alpine is musl, not glibc. build-base + openssl-dev cover the vendored C
 # dependencies (mlua, ring, etc.); this is the most likely image to need per-crate
 # tweaks if a native dep doesn't support musl cleanly. bun ships glibc-only builds,
 # so it is intentionally omitted here (the sweep auto-skips backends that aren't READY).
 FROM alpine:latest
-ENV LINIX_IT_IMAGE=alpine
+ENV SHALL_IT_IMAGE=alpine
 # Essential toolchain + language package managers so the harness can sweep many backends
 # in one container (apk + npm + yarn + pnpm + pipx + uv + cargo + gem).
 RUN apk add --no-cache curl build-base pkgconf openssl-dev perl git rustup bash \
@@ -24,6 +24,6 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh || true
 RUN apk update
 WORKDIR /src
 COPY . /src
-RUN cargo build --release && cp target/release/linix /usr/local/bin/linix && chmod 0755 /usr/local/bin/linix
+RUN cargo build --release && cp target/release/shall /usr/local/bin/shall && chmod 0755 /usr/local/bin/shall
 ENTRYPOINT ["sh", "/src/docker/integration/run-in-container.sh"]
 CMD ["apk", "jq"]

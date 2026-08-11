@@ -1,6 +1,6 @@
-//! `linix repl` — the resolved image, with a cursor (U34, XIII.31).
+//! `shall repl` — the resolved image, with a cursor (U34, XIII.31).
 //!
-//! Every question this answers is one `linix eval | jq` can answer too; the repl is the same
+//! Every question this answers is one `shall eval | jq` can answer too; the repl is the same
 //! answers reached by trying, not by reading the manual. Its non-negotiable (the U20 rule) is
 //! that it is a thin front end over the **one** parser and resolver the binary already uses —
 //! never a second implementation. So every line below delegates:
@@ -20,7 +20,7 @@ use crate::core::Result;
 use std::io::{BufRead, Write};
 
 const HELP: &str = "\
-linix repl — resolve names, evaluate `when`, and inspect the model against THIS machine.
+shall repl — resolve names, evaluate `when`, and inspect the model against THIS machine.
 
   <name>            resolve a bare or prefixed name, e.g. `ripgrep` or `cargo:ripgrep`
   when <expr>       evaluate a `when` predicate here, e.g. `when os == linux`
@@ -30,15 +30,15 @@ linix repl — resolve names, evaluate `when`, and inspect the model against THI
   :quit  /  Ctrl-D  leave";
 
 /// Run the interactive loop. Blocking stdin/stdout is deliberate — a prompt is a person at a
-/// keyboard, not a pipeline (that is what `linix eval` is for).
+/// keyboard, not a pipeline (that is what `shall eval` is for).
 pub async fn run(app: &App) -> Result<()> {
     let resolver = StateResolver::new(&app.config, app.registry.clone(), false).await;
 
     let stdin = std::io::stdin();
     let mut lines = stdin.lock().lines();
-    println!("linix repl — `:help` for commands, `:quit` to leave.");
+    println!("shall repl — `:help` for commands, `:quit` to leave.");
     loop {
-        print!("linix> ");
+        print!("shall> ");
         std::io::stdout().flush().ok();
         let Some(line) = lines.next() else {
             println!();

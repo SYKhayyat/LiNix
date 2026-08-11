@@ -6,7 +6,7 @@ use crate::verbs::sync::{handle_sync, SyncMode};
 pub async fn handle_teleport(app: &App, package: &str, backend: &str) -> Result<()> {
     if app.registry.get(backend).is_none() {
         anyhow::bail!(
-            "`{}` is not a package manager on this machine. `linix check` lists the ones that are.",
+            "`{}` is not a package manager on this machine. `shall check` lists the ones that are.",
             backend
         );
     }
@@ -26,7 +26,7 @@ pub async fn handle_teleport(app: &App, package: &str, backend: &str) -> Result<
     if edits.is_empty() {
         anyhow::bail!(
             "`{}` is not declared in any active file, so there is no line to move. \
-             To add it from `{}`, run `linix install {}:{}`.",
+             To add it from `{}`, run `shall install {}:{}`.",
             package,
             backend,
             backend,
@@ -122,10 +122,10 @@ pub async fn handle_install(
 
 /// When the sync that follows `install X` fails on something other than X, say so.
 ///
-/// `install X` converges the **whole** configuration, and that is the model working — LiNix is
+/// `install X` converges the **whole** configuration, and that is the model working — Shall is
 /// declarative and your files are the truth. The consequence is that a line you have never
 /// looked at can stop the install you just typed, and the error is then the failing line's
-/// manager talking about a command you did not ask for. Measured: `linix -y install
+/// manager talking about a command you did not ask for. Measured: `shall -y install
 /// bun:sort-package-json` on a machine with one unconvergeable `service:` line reported `` `sc`
 /// failed (exit 1056) `` and nothing at all about bun (`Q34`).
 ///
@@ -151,7 +151,7 @@ async fn say_if_the_failure_was_not_yours(app: &App, e: &anyhow::Error, lines: &
         "that failure is not about {}. `install` writes your line and then converges your \
          whole configuration, so a declaration you never touched can stop it — the one that \
          failed is named above, with the file it lives in. Your line was written and stays \
-         written. Fix or `linix unmanage` the declaration that failed, then re-run.",
+         written. Fix or `shall unmanage` the declaration that failed, then re-run.",
         asked_for.join(", ")
     );
 }
@@ -198,7 +198,7 @@ fn backend_absent_name(e: &anyhow::Error) -> Option<&str> {
 /// Whether a manager's output is talking about this package.
 ///
 /// Managers wrap their output at the terminal width and pixi breaks lines *inside* a package
-/// name (`No candidates were found for linix-\n      no-such-pkg-zzz`), so a name that is
+/// name (`No candidates were found for shall-\n      no-such-pkg-zzz`), so a name that is
 /// plainly there reads as a name nobody mentioned. Comparing with the whitespace taken out
 /// recovers it. This decides *which* line, never *whether* — a wrong answer here keeps a
 /// declaration that could have been withdrawn, which is the safe direction.
@@ -297,7 +297,7 @@ async fn withdraw_what_can_never_succeed(app: &App, e: &anyhow::Error, edits: &[
 /// situations exist has to be something a test can enumerate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WhyKept {
-    /// LiNix said no to *this line as written* — plain HTTP, no `@sha256=`, a `@target=`
+    /// Shall said no to *this line as written* — plain HTTP, no `@sha256=`, a `@target=`
     /// inside the repo. The refusal already says what to change, and the line is the thing
     /// the user edits, so deleting it would throw away the fix.
     Refused,
@@ -309,7 +309,7 @@ enum WhyKept {
     /// A name is absent and nothing tied it to this line — the manager reported about a
     /// command covering several, or wrapped its output through the middle of the name.
     NameAbsentElsewhere,
-    /// LiNix classified it as passing: a rate-limit window, a dropped connection, a lock
+    /// Shall classified it as passing: a rate-limit window, a dropped connection, a lock
     /// someone else holds. The retry that helps here is the *next run*, not this one, and the
     /// error above already says how long the window is — so this is the one branch that may
     /// promise a later attempt will work, because something did look.
@@ -346,7 +346,7 @@ fn why_kept(e: &anyhow::Error) -> WhyKept {
 ///
 /// Every branch names the file the line is in and the command that removes it — a wedge with
 /// an exit is not a wedge — and only [`WhyKept::Unclassified`] may suggest that `sync` trying
-/// again could work, because it is the only one where LiNix has not already been shown
+/// again could work, because it is the only one where Shall has not already been shown
 /// otherwise.
 fn kept_line_advice(why: WhyKept, line: &str, file: &std::path::Path) -> String {
     let where_it_is = format!("`{}` is still declared in {}", line, file.display());
@@ -354,12 +354,12 @@ fn kept_line_advice(why: WhyKept, line: &str, file: &std::path::Path) -> String 
         WhyKept::Exhausted => format!(
             "{}, but the failure above repeated on every retry, so `sync` will keep failing \
              the same way until its cause is fixed. Read the error above, or run \
-             `linix unmanage {}`.",
+             `shall unmanage {}`.",
             where_it_is, line
         ),
         WhyKept::Refused => format!(
             "{} — it is kept because the line is the thing to edit, not the thing to delete. \
-             Change it as the refusal above says, or run `linix unmanage {}`. Re-running \
+             Change it as the refusal above says, or run `shall unmanage {}`. Re-running \
              `sync` unchanged will refuse identically.",
             where_it_is, line
         ),
@@ -367,26 +367,26 @@ fn kept_line_advice(why: WhyKept, line: &str, file: &std::path::Path) -> String 
         // whose own name is the missing one has already been withdrawn by
         // `withdraw_what_can_never_succeed` and never reaches here, so anything that does is
         // being kept because some *other* declaration named a package that does not exist.
-        // Saying "run `linix unmanage <this line>`" then points at the one line that is fine —
+        // Saying "run `shall unmanage <this line>`" then points at the one line that is fine —
         // measured: `install bun:sort-package-json` on a config holding one bad `scoop:` line
         // advised unmanaging bun (`Q34`).
         WhyKept::NameAbsentElsewhere => format!(
             "{}, and it is not what failed. The failure above is a package name that does not \
              exist in a *different* declaration — the error names it and the file it lives in. \
              `sync` will keep failing the same way until that one is corrected or removed; \
-             `linix unmanage {}` would only take back the line you just wrote.",
+             `shall unmanage {}` would only take back the line you just wrote.",
             where_it_is, line
         ),
         WhyKept::Transient => format!(
             "{}, and the failure above is a passing one — a window, a lock or a connection, \
              not the line. That is why it is kept: the next `sync` is expected to succeed \
              without you changing anything. Read the error above for how long it lasts, or \
-             run `linix unmanage {}` if you did not mean the line at all.",
+             run `shall unmanage {}` if you did not mean the line at all.",
             where_it_is, line
         ),
         WhyKept::Unclassified => format!(
             "{}, so `sync` will try it again. Nothing classified the failure above, so if it \
-             repeats unchanged the cause is not a passing one — run `linix unmanage {}` if you \
+             repeats unchanged the cause is not a passing one — run `shall unmanage {}` if you \
              did not mean it.",
             where_it_is, line
         ),
@@ -409,13 +409,13 @@ pub async fn handle_uninstall(
     // true, and it names the wrong thing. The manager is what does not exist, and the message
     // sent the user looking through their modules for a line they never wrote.
     app.require_known_spec_backends(packages).await?;
-    // Bare `--temp` restores when a `linix shell` session ends. That is the ephemeral shell's
+    // Bare `--temp` restores when a `shall shell` session ends. That is the ephemeral shell's
     // business and it is outside the model by design (II.8), so it never touches a file.
     if let Some(None) = temp {
         let has_session = app.state.lock().await.active_session_id.is_some();
         if !has_session {
             anyhow::bail!(
-                "Bare `--temp` restores on shell exit, but no `linix shell` session is \
+                "Bare `--temp` restores on shell exit, but no `shall shell` session is \
                  active. Give a duration (e.g. --temp=2h) to schedule a timed restore."
             );
         }
@@ -440,7 +440,7 @@ pub async fn handle_uninstall(
 
     // Asked BEFORE the sync, because the sync is what empties the registry entry for
     // everything it removes — afterwards every name here reads as unmanaged and the check
-    // below could not tell a package that went from one that was never LiNix's.
+    // below could not tell a package that went from one that was never Shall's.
     let unmanaged_before = unmanaged_targets(app, packages).await;
 
     let mut never_declared: Vec<&str> = Vec::new();
@@ -519,24 +519,24 @@ pub async fn handle_uninstall(
         );
     }
 
-    // **Drift removal only removes what LiNix manages, so a name it does not manage plans
+    // **Drift removal only removes what Shall manages, so a name it does not manage plans
     // nothing and the sync above reports `already up to date` over a package still on PATH.**
     // The line was there and was deleted, so the check above says nothing about it, and the
     // exit code says success. Measured on the `void` leg, 2026-08-11: a sync killed after the
     // log recorded an install `Completed` but before the run wrote the registry left `pv`
-    // installed and owned by nobody, and `linix -y uninstall xbps:pv` answered `already up to
+    // installed and owned by nobody, and `shall -y uninstall xbps:pv` answered `already up to
     // date` at exit 0 three commands later.
     //
     // `heal` takes those packages back now (`reconcile_ownership`), which is where that bug
     // is fixed. This is the other half, and it holds for every way a package can be on the
-    // machine without being LiNix's: say plainly that it is still installed and that LiNix
+    // machine without being Shall's: say plainly that it is still installed and that Shall
     // has no record of installing it, rather than reporting a removal that did not happen.
     let survivors = still_installed(app, &unmanaged_before).await;
     if !survivors.is_empty() {
         anyhow::bail!(
-            "nothing was uninstalled: {} still installed, and LiNix has no record of \
-             installing {}. Removing drift is what `sync` does, and a package LiNix did not \
-             install is not drift — it is yours. `linix adopt` takes ownership of what is \
+            "nothing was uninstalled: {} still installed, and Shall has no record of \
+             installing {}. Removing drift is what `sync` does, and a package Shall did not \
+             install is not drift — it is yours. `shall adopt` takes ownership of what is \
              already on this machine, and `uninstall` then removes it; `--absent` removes it \
              without taking ownership first, and keeps it off; or take it off with the \
              manager directly.",
@@ -553,10 +553,10 @@ pub async fn handle_uninstall(
     Ok(())
 }
 
-/// `uninstall PKG… --absent` — remove it whether or not LiNix installed it, and keep it off.
+/// `uninstall PKG… --absent` — remove it whether or not Shall installed it, and keep it off.
 ///
 /// Not a second removal engine. `absent:` is already the one declaration that reaches outside
-/// what LiNix manages (II.2, V.7), so this writes that line and lets the ordinary converge do
+/// what Shall manages (II.2, V.7), so this writes that line and lets the ordinary converge do
 /// the work — the same guard, the same plan, the same counts. The line staying is the point:
 /// ownership is what an unowned removal has no record of, and a declaration is a record.
 ///
@@ -591,7 +591,7 @@ async fn uninstall_as_absent(app: &App, packages: &[String], out: Output) -> Res
     if !survivors.is_empty() {
         anyhow::bail!(
             "declared absent, and still installed: {}. The `absent:` line is written, so the \
-             next `linix sync` tries the removal again and reports why it failed.",
+             next `shall sync` tries the removal again and reports why it failed.",
             survivors.join("`, `")
         );
     }
@@ -633,7 +633,7 @@ async fn absent_targets(app: &App, packages: &[String]) -> Result<Vec<(String, S
                 let listed = match listed {
                     Ok(listed) => listed,
                     // Kept, so the refusal below can say which managers were silent. "Not
-                    // installed under any manager LiNix can ask" is true and useless when the
+                    // installed under any manager Shall can ask" is true and useless when the
                     // set of managers it could ask is not stated.
                     Err(e) => {
                         unasked.push(format!("{backend} ({e})"));
@@ -663,8 +663,8 @@ async fn absent_targets(app: &App, packages: &[String]) -> Result<Vec<(String, S
                 )
             };
             anyhow::bail!(
-                "`{}` is not installed under any manager LiNix can ask, so there is nothing \
-                 to declare absent. Name the manager — `linix uninstall <backend>:{} \
+                "`{}` is not installed under any manager Shall can ask, so there is nothing \
+                 to declare absent. Name the manager — `shall uninstall <backend>:{} \
                  --absent` — to write the line anyway.{}",
                 name,
                 name,
@@ -679,7 +679,7 @@ async fn absent_targets(app: &App, packages: &[String]) -> Result<Vec<(String, S
 /// The `(backend, name)` pairs among these arguments that the registry does not carry.
 ///
 /// Read before a removal runs, never after: the removal is what drops a registry entry, so
-/// afterwards every name it succeeded on reads exactly like a name that was never LiNix's.
+/// afterwards every name it succeeded on reads exactly like a name that was never Shall's.
 ///
 /// A bare name is expanded across the managers that could hold it, through the one parser for
 /// `backend:name` — a caller that split on `:` itself would take `github:owner/repo` apart in
@@ -699,7 +699,7 @@ async fn unmanaged_targets(app: &App, packages: &[String]) -> Vec<(String, Strin
             // A bare name means *the one I have*, so one manager owning it is an answer and
             // the question is settled without a subprocess. Only a name no manager owns at all
             // is worth asking every manager about — and asking them is what the check below
-            // does, so widening here on an ordinary `linix uninstall jq` would turn one
+            // does, so widening here on an ordinary `shall uninstall jq` would turn one
             // removal into a listing from every package manager on the box.
             None => {
                 if !app
@@ -725,7 +725,7 @@ async fn unmanaged_targets(app: &App, packages: &[String]) -> Vec<(String, Strin
 /// remove, and could not have removed.
 ///
 /// One listing per manager and no more. The list is empty on every ordinary uninstall (the
-/// package being removed is one LiNix manages), so the common path pays for nothing.
+/// package being removed is one Shall manages), so the common path pays for nothing.
 async fn still_installed(app: &App, targets: &[(String, String)]) -> Vec<String> {
     if targets.is_empty() {
         return Vec::new();
@@ -834,14 +834,14 @@ async fn preview_uninstall(
     // The same question the real run asks after its sync, asked here before anything is
     // written — a preview that promises a removal the run then refuses is the two halves of
     // this command describing different machines.
-    // Not asked under `--absent`: that flag's whole business is removing what LiNix has no
+    // Not asked under `--absent`: that flag's whole business is removing what Shall has no
     // record of installing, so the answer is never "would remove nothing".
     if temp.is_none() && !absent {
         let survivors = still_installed(app, &unmanaged_targets(app, packages).await).await;
         if !survivors.is_empty() {
             crate::would_print!(
-                "would remove nothing from the machine: {} installed, and LiNix has no record \
-                 of installing {}. `linix adopt` takes ownership of what is already here; \
+                "would remove nothing from the machine: {} installed, and Shall has no record \
+                 of installing {}. `shall adopt` takes ownership of what is already here; \
                  `--absent` removes it without taking ownership, and keeps it off.",
                 match survivors.as_slice() {
                     [one] => format!("`{}` is", one),
@@ -982,7 +982,7 @@ pub async fn handle_hold(app: &App, packages: &[String]) -> Result<()> {
     };
     if recorded {
         println!(
-            "Held {} package(s). `linix upgrade` will skip them until `linix unhold`.",
+            "Held {} package(s). `shall upgrade` will skip them until `shall unhold`.",
             n
         );
     } else {
@@ -1024,7 +1024,7 @@ pub fn print_package_row(p: &crate::core::Package) {
 pub async fn handle_search(app: &App, query: &str, out: Output, installed: bool) -> Result<()> {
     let mut results = app.search(query).await?;
     if installed {
-        // Keep only results LiNix already manages, so `search --installed foo` answers
+        // Keep only results Shall already manages, so `search --installed foo` answers
         // "which of my packages match" without a second command.
         let managed: std::collections::HashSet<(String, String)> = {
             let state = app.state.lock().await;
@@ -1062,7 +1062,7 @@ pub struct Outdated {
 ///
 /// **Two fields, because "nothing is outdated" and "nobody could be asked" printed the same
 /// sentence.** A `lookup` that fails is one package silently dropped from the answer, and a
-/// manager whose registry is down drops all of its packages — so `linix list --outdated`
+/// manager whose registry is down drops all of its packages — so `shall list --outdated`
 /// reported *"Everything is up to date"* over a manager it never heard from. That is the same
 /// category error as `info` reporting "not installed on this machine" for a resolve it could not
 /// run: absence and unavailability are different answers, and only one of them is knowable.
@@ -1231,11 +1231,11 @@ pub async fn handle_list(
                     r.backend, r.name, r.installed, r.latest
                 );
             }
-            println!("\nUpgrade all: `linix upgrade --all`  ·  one: `linix upgrade <name>`");
+            println!("\nUpgrade all: `shall upgrade --all`  ·  one: `shall upgrade <name>`");
         }
         if !report.unanswered.is_empty() && !out.is_json() {
             println!(
-                "\n{} package(s) could not be checked, so LiNix cannot tell you they are \
+                "\n{} package(s) could not be checked, so Shall cannot tell you they are \
                  current:\n  {}",
                 report.unanswered.len(),
                 report.unanswered.join("\n  ")
@@ -1256,18 +1256,18 @@ pub async fn handle_list(
 pub async fn handle_info(app: &App, package: &str) -> Result<()> {
     let Some(p) = app.get_info(package).await? else {
         // `info` reports on what is INSTALLED. "not found in any available backend" reads as
-        // "no such package", which is a different and usually false claim — `linix search
+        // "no such package", which is a different and usually false claim — `shall search
         // ripgrep` finds it on crates.io while `info cargo:ripgrep` says this. Say which
         // question was asked, and name the command that answers the other one.
         // The bare name comes from the grammar, not from `rsplit(':')`. There is one parser for
         // `backend:name` and a hand-rolled split is a bug by the same rule that made it one:
         // `web:https://example/x.deb` has three colons and the last of them is inside the URL,
-        // so the suffix after it is `//example/x.deb` — a `linix search` line nobody can use.
+        // so the suffix after it is `//example/x.deb` — a `shall search` line nobody can use.
         let (_, bare) =
             crate::config::parser::split_removal_target(package, |b| app.registry.get(b).is_some());
         println!(
             "'{}' is not installed on this machine, so there is nothing to describe.\n  \
-             `linix search {}` looks for it in the managers you use.",
+             `shall search {}` looks for it in the managers you use.",
             package, bare
         );
         return Ok(());
@@ -1291,7 +1291,7 @@ pub async fn handle_info(app: &App, package: &str) -> Result<()> {
     // Any remaining properties, surfaced rather than hidden — but not every property is a
     // field, and this loop used to render them all as though they were.
     //
-    // `linix info service:Appinfo` printed `status raw:    [SC] QueryServiceConfig SUCCESS`:
+    // `shall info service:Appinfo` printed `status raw:    [SC] QueryServiceConfig SUCCESS`:
     // a key name with its underscore swapped for a space, holding the whole of `sc qc`'s
     // multi-line output, squeezed into a 14-column aligned row. Two faults in one line — an
     // internal key shown as a label, and a tool's raw dump shown as a value (GRADER §4:
@@ -1519,22 +1519,22 @@ mod tests {
     #[test]
     fn the_variants_that_withdraw_carry_the_name_they_looked_up() {
         let no_such = Error::NoSuchPackage {
-            name: "linix-zzz-nope/nope".into(),
+            name: "shall-zzz-nope/nope".into(),
             message: "the repo has no published release".into(),
         };
         assert!(says_a_name_is_absent(&boxed(no_such.clone())));
-        assert_eq!(no_such.absent_name(), Some("linix-zzz-nope/nope"));
+        assert_eq!(no_such.absent_name(), Some("shall-zzz-nope/nope"));
         assert_eq!(
             backend_absent_name(&boxed(no_such)),
-            Some("linix-zzz-nope/nope")
+            Some("shall-zzz-nope/nope")
         );
 
         let unresolvable = Error::Unresolvable {
-            name: "linix-no-such-pkg-zzz".into(),
+            name: "shall-no-such-pkg-zzz".into(),
             message: "no backend claims it".into(),
         };
         assert!(says_a_name_is_absent(&boxed(unresolvable.clone())));
-        assert_eq!(unresolvable.absent_name(), Some("linix-no-such-pkg-zzz"));
+        assert_eq!(unresolvable.absent_name(), Some("shall-no-such-pkg-zzz"));
         // A spawned manager's failure is the one that does *not* know which name, which is
         // why the edits are consulted for that case and only that case.
         assert_eq!(
@@ -1547,10 +1547,10 @@ mod tests {
     #[test]
     fn an_unresolvable_name_is_still_recognised_and_carries_itself() {
         let e = boxed(Error::Unresolvable {
-            name: "linix-no-such-pkg-zzz".into(),
+            name: "shall-no-such-pkg-zzz".into(),
             message: "no backend claims it".into(),
         });
-        assert_eq!(unresolvable_name(&e), Some("linix-no-such-pkg-zzz"));
+        assert_eq!(unresolvable_name(&e), Some("shall-no-such-pkg-zzz"));
         assert_eq!(absent_command_message(&e), None);
     }
 
@@ -1601,13 +1601,13 @@ mod tests {
     #[test]
     fn a_name_wrapped_across_lines_is_still_recognised_as_mentioned() {
         let wrapped = "  × failed to solve the environment\n  ╰─▶ Cannot solve the request \
-                       because of: No candidates were found for linix-\n      \
+                       because of: No candidates were found for shall-\n      \
                        no-such-pkg-zzz *.\n";
         assert!(
-            !wrapped.contains("linix-no-such-pkg-zzz"),
+            !wrapped.contains("shall-no-such-pkg-zzz"),
             "the fixture no longer wraps, so it cannot test the wrap"
         );
-        assert!(mentions_package(wrapped, "linix-no-such-pkg-zzz"));
+        assert!(mentions_package(wrapped, "shall-no-such-pkg-zzz"));
         assert!(!mentions_package(wrapped, "some-other-package"));
     }
 
@@ -1631,7 +1631,7 @@ mod tests {
                 "{why:?} does not name the file the line is in: {advice}"
             );
             assert!(
-                advice.contains("linix unmanage npm:cowsay"),
+                advice.contains("shall unmanage npm:cowsay"),
                 "{why:?} does not name the command that removes it: {advice}"
             );
             let promises_a_retry = advice.contains("`sync` will try it again");
@@ -1710,8 +1710,8 @@ mod tests {
     #[test]
     fn attribution_does_not_spread_to_a_line_the_manager_never_named() {
         let message = "`npm` failed (exit 1): 404 Not Found - GET \
-                       https://registry.npmjs.org/linix-no-such-pkg-zzz-9";
-        assert!(mentions_package(message, "linix-no-such-pkg-zzz-9"));
+                       https://registry.npmjs.org/shall-no-such-pkg-zzz-9";
+        assert!(mentions_package(message, "shall-no-such-pkg-zzz-9"));
         assert!(!mentions_package(message, "cowsay"));
     }
 }

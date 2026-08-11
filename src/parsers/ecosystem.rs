@@ -308,7 +308,7 @@ pub fn slackpkg_search(output: &str, backend: &str) -> Vec<Package> {
 ///
 /// Taking the first comma-separated field of that yields `(version: 0.2.1`, which is what this
 /// build recorded as nimpy's version until a container was asked. A pin can never match it and
-/// `linix list` prints it verbatim.
+/// `shall list` prints it verbatim.
 pub fn nimble_list(output: &str, backend: &str) -> ParseResult {
     let clean = sanitize(output);
     let candidates: Vec<&str> = clean.lines().filter(|l| !is_noise_line(l)).collect();
@@ -688,7 +688,7 @@ mod tests {
     ///   1.8.2                No versions installed
     /// ```
     ///
-    /// The sweep found it as `asdf: jq is gone from list (expected non-zero, got 0)`. LiNix
+    /// The sweep found it as `asdf: jq is gone from list (expected non-zero, got 0)`. Shall
     /// removed the version correctly and went on reporting it as installed, which is permanent
     /// phantom drift: `sync` would take it away and put it back forever.
     #[test]

@@ -11,7 +11,7 @@ use std::path::Path;
 /// — `backend_priority`, `enabled_backends`, `hostname_backends`, `default_backend` — of
 /// which only two ever merged (V.15).
 ///
-/// **Listed = available to LiNix, in this order. Not listed = LiNix does not use it at
+/// **Listed = available to Shall, in this order. Not listed = Shall does not use it at
 /// all.** An explicit `snap:foo` failing when snap is not listed is the feature: it catches
 /// typos, and it makes your backend set declared rather than inherited from whatever
 /// happens to be installed.
@@ -102,7 +102,7 @@ impl Priority {
         self.options.get(backend)
     }
 
-    /// Whether LiNix uses this backend at all.
+    /// Whether Shall uses this backend at all.
     pub fn allows(&self, backend: &str) -> bool {
         self.backends.iter().any(|b| b == backend)
     }
@@ -123,7 +123,7 @@ impl Priority {
             format!("`{}` isn't in your priority list.", backend),
         )
         .with_hint(format!(
-            "add `{}` to `priority` if you want LiNix to use it. Not listed means LiNix \
+            "add `{}` to `priority` if you want Shall to use it. Not listed means Shall \
              does not use it at all.",
             backend
         ))
@@ -188,7 +188,7 @@ pub fn starter_file(detected: &[String]) -> String {
     let mut out = String::from(
         "# Which package managers this machine uses, and in what order.\n\
          #\n\
-         # Listed = LiNix uses it. Not listed = LiNix does not use it at all, and an\n\
+         # Listed = Shall uses it. Not listed = Shall does not use it at all, and an\n\
          # explicit `snap:foo` will say so rather than guess.\n\
          #\n\
          # The order only decides one thing: when two managers both have a package, which\n\
@@ -261,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn not_listed_means_linix_does_not_use_it() {
+    fn not_listed_means_shall_does_not_use_it() {
         // V.15. This is the feature, not a limitation: it catches typos and makes your
         // backend set declared rather than inherited.
         let p = parse("apt\ncargo\n").unwrap();

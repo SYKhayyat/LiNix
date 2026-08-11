@@ -2,8 +2,8 @@
 //!
 //! A config that declares `brew:ripgrep` on a machine with no Homebrew is not wrong; it is
 //! ahead of the machine. Today that is an error the user resolves by going and reading
-//! Homebrew's install page. **P8: LiNix does the thing, it does not hand you the thing to do**
-//! — so if the repo says how to get the manager, LiNix offers to get it.
+//! Homebrew's install page. **P8: Shall does the thing, it does not hand you the thing to do**
+//! — so if the repo says how to get the manager, Shall offers to get it.
 //!
 //! **Ask, then do.** The command is printed in full and confirmed before it runs. That is the
 //! shape P8 licenses and the one it does not: never *inform and leave*, never *act unasked*.

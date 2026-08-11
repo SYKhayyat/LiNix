@@ -58,7 +58,7 @@ impl SnapshotRestore {
 
         let snapshots = self.snapshot_manager.list_snapshots().await?;
         if snapshots.is_empty() {
-            println!("No system snapshots found. LiNix cannot perform time travel on this system.");
+            println!("No system snapshots found. Shall cannot perform time travel on this system.");
             return Ok(());
         }
 
@@ -71,7 +71,7 @@ impl SnapshotRestore {
             if !std::io::stdin().is_terminal() {
                 return Err(Error::Refused(
                     "Choosing a snapshot needs a terminal, and this shell has none.\n\
-                     `linix snapshot list` prints the same gallery, and `linix rollback <id>` \
+                     `shall snapshot list` prints the same gallery, and `shall rollback <id>` \
                      restores one by name without asking."
                         .to_string(),
                 ));
@@ -91,7 +91,7 @@ impl SnapshotRestore {
             }
         }
 
-        println!("\n--- LiNix Snapshot Gallery ---");
+        println!("\n--- Shall Snapshot Gallery ---");
         let items: Vec<String> = snapshots
             .iter()
             .map(|s| {
@@ -137,7 +137,7 @@ impl SnapshotRestore {
             if path_str.contains(forbidden) {
                 return Err(Error::Refused(format!(
                     "refusing to read a snapshot registry from '{}': that path is not a place a \
-                     LiNix registry can legitimately live, and reading it as JSON is a way to \
+                     Shall registry can legitimately live, and reading it as JSON is a way to \
                      turn `snapshot restore` into an arbitrary-file reader",
                     forbidden
                 )));
@@ -171,9 +171,9 @@ impl SnapshotRestore {
 
     async fn find_registry_in_snapshot(&self, snapshot_root: &Path) -> Result<Option<PathBuf>> {
         let possible_paths = vec![
-            snapshot_root.join("var/lib/linix/registry.json"),
-            snapshot_root.join("root/.local/share/linix/registry.json"),
-            snapshot_root.join(".local/share/linix/registry.json"),
+            snapshot_root.join("var/lib/shall/registry.json"),
+            snapshot_root.join("root/.local/share/shall/registry.json"),
+            snapshot_root.join(".local/share/shall/registry.json"),
         ];
 
         for path in possible_paths {

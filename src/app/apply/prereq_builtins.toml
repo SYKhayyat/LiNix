@@ -3,7 +3,7 @@
 # Rows, not Rust, for the reason every other adapter table here is data: the fourth manager
 # with this shape should be a row somebody writes, not a release somebody waits for. A user's
 # own rows live in `adapters/prereq.toml` and are read first, so disagreeing with one of these
-# is writing a row rather than editing LiNix.
+# is writing a row rather than editing Shall.
 #
 # Every argv below was measured in the `tools` image on 2026-07-29, not read off a manual.
 #

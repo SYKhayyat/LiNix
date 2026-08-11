@@ -5,24 +5,24 @@
 //! names each one in `--dry-run`. Measured on Windows, all four.
 //!
 //! `plan` and `apply` were not part of that sweep, and they are the *reviewable* half of the
-//! product — `linix plan --help` calls itself Terraform-style, "so the exact plan you inspect is
+//! product — `shall plan --help` calls itself Terraform-style, "so the exact plan you inspect is
 //! the one you later `apply`". Measured, on a fresh config with three `link:` lines declared and
 //! nothing on disk:
 //!
-//!     $ linix plan
-//!     Wrote plan to linix-plan.json — system already matches desired state (no changes).
-//!     $ cat linix-plan.json
+//!     $ shall plan
+//!     Wrote plan to shall-plan.json — system already matches desired state (no changes).
+//!     $ cat shall-plan.json
 //!     { … "installs": [], "removals": [], … }
-//!     $ linix apply linix-plan.json -y
+//!     $ shall apply shall-plan.json -y
 //!     Plan is empty — nothing to apply.
 //!     $ ls dest/
 //!     (empty)
 //!
 //! And in the other direction — three `link:` lines applied, then undeclared:
 //!
-//!     $ linix plan
-//!     Wrote plan to linix-plan.json — system already matches desired state (no changes).
-//!     $ linix --dry-run sync
+//!     $ shall plan
+//!     Wrote plan to shall-plan.json — system already matches desired state (no changes).
+//!     $ shall --dry-run sync
 //!     WARN [DRY-RUN] `link:…/dest/g1` is no longer declared — sync would undo it.   (×3)
 //!
 //! So the two previews disagree about the same machine, and the one a user is told to trust for
@@ -31,9 +31,9 @@
 //!     sync: refusing this removal.
 //!       - it removes 5 managed resources, over the limit of 1 ([guard] max_removals)
 //!       What to do:
-//!         linix plan                     see exactly what would be undone
+//!         shall plan                     see exactly what would be undone
 //!
-//! `linix plan` shows nothing at all. A user who follows that line sees "no changes" and
+//! `shall plan` shows nothing at all. A user who follows that line sees "no changes" and
 //! concludes the refusal was spurious.
 //!
 //! This is G-1's third failure — "the removal is invisible; nothing in `plan`, `--dry-run` or
@@ -93,13 +93,13 @@ fn plan_names_the_extras_it_would_place() {
     assert_eq!(code, 0, "`plan` failed:\n{out}");
     assert!(
         !out.contains("already matches desired state"),
-        "`linix plan` reported the system already matches, while three `link:` declarations \
+        "`shall plan` reported the system already matches, while three `link:` declarations \
          are unapplied and `sync` would place them.\n\
          `plan --help` promises the plan you inspect is the one you later `apply`; a plan that \
          cannot see the extras family promises that about half the model.\n{out}"
     );
 
-    let plan = std::fs::read_to_string(f.root.join("linix-plan.json")).expect("plan file");
+    let plan = std::fs::read_to_string(f.root.join("shall-plan.json")).expect("plan file");
     assert!(
         targets
             .iter()
@@ -108,7 +108,7 @@ fn plan_names_the_extras_it_would_place() {
     );
 
     // `apply` executes the frozen plan, so an empty plan is an apply that does nothing.
-    let (out, code) = f.run(&["apply", "linix-plan.json", "-y"]);
+    let (out, code) = f.run(&["apply", "shall-plan.json", "-y"]);
     assert_eq!(code, 0, "`apply` failed:\n{out}");
     for t in &targets {
         assert!(
@@ -121,7 +121,7 @@ fn plan_names_the_extras_it_would_place() {
 }
 
 /// The direction the guard's own refusal text points at. `sync: refusing this removal` tells the
-/// user to run `linix plan` to "see exactly what would be undone", and `plan` shows nothing.
+/// user to run `shall plan` to "see exactly what would be undone", and `plan` shows nothing.
 #[test]
 fn plan_names_the_extras_it_would_tear_down() {
     let f = setup("grade2-plan-teardown");
@@ -150,9 +150,9 @@ fn plan_names_the_extras_it_would_tear_down() {
     assert_eq!(code, 0, "`plan` failed:\n{out}");
     assert!(
         !out.contains("already matches desired state"),
-        "`linix plan` reported the system already matches, while `--dry-run sync` on the same \
+        "`shall plan` reported the system already matches, while `--dry-run sync` on the same \
          tree named three resources it would tear down.\n\
-         The guard's refusal text sends the user to `linix plan` to see exactly what would be \
+         The guard's refusal text sends the user to `shall plan` to see exactly what would be \
          undone — and it shows them nothing.\n{out}"
     );
 }

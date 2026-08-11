@@ -2,7 +2,7 @@
 //!
 //! `tests/` held 101 files and cargo auto-discovers each as its own target, so every one of them
 //! was fat-LTO-linked against a 100k-line crate under `codegen-units = 1` — and 36 of them never
-//! call the library API at all, only spawning `CARGO_BIN_EXE_linix`. The `target/` directory that
+//! call the library API at all, only spawning `CARGO_BIN_EXE_shall`. The `target/` directory that
 //! produced reached **194 GB** and filled a 944 GB disk mid-build.
 //!
 //! **The suite already paid this cost once and wrote it down.** `mock_providers/mod.rs` opens by

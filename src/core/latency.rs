@@ -1,7 +1,7 @@
-//! How long a command may take before LiNix says so.
+//! How long a command may take before Shall says so.
 //!
-//! Nothing measured latency, which is how a 98-second `linix info cargo:ripgrep` shipped —
-//! answering `not found in any available backend` about a package `linix search ripgrep` found
+//! Nothing measured latency, which is how a 98-second `shall info cargo:ripgrep` shipped —
+//! answering `not found in any available backend` about a package `shall search ripgrep` found
 //! in the same tree, seconds later (E14/E15). W14 fixed that one `info`; the budget it asked
 //! for was never built, so nothing would notice the next one.
 //!
@@ -16,8 +16,8 @@
 //! ```
 //!
 //! A command that only reads files is fast on every machine. A command that asks every manager
-//! costs whatever the managers cost, and that is a fact about the host rather than about LiNix.
-//! So the budget is per **class**, and only the two classes whose cost LiNix controls carry a
+//! costs whatever the managers cost, and that is a fact about the host rather than about Shall.
+//! So the budget is per **class**, and only the two classes whose cost Shall controls carry a
 //! hard one.
 //!
 //! **The numbers are ceilings a collapse crosses, not targets.** A budget tight enough to
@@ -31,7 +31,7 @@ use std::time::Duration;
 /// What a command has to do before it can answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Class {
-    /// Reads the config and answers. Asks no manager anything, so its cost is LiNix's alone.
+    /// Reads the config and answers. Asks no manager anything, so its cost is Shall's alone.
     ConfigOnly,
     /// Asks exactly one manager, because the user named it — `info cargo:ripgrep`. The
     /// qualifier is the whole point: it is what makes this cheaper than asking everybody, and
@@ -48,7 +48,7 @@ pub enum Class {
 ///
 /// **The budget the wall clock cannot express.** `EveryBackend` costs whatever 24 managers cost,
 /// so a ceiling in seconds is either useless or red on a busy afternoon — which is why it was
-/// `None`. But LiNix's *share* of that is measurable and it is already measured: `--timings`
+/// `None`. But Shall's *share* of that is measurable and it is already measured: `--timings`
 /// computes the overlap ratio and the wave count on every run that asks for them, and nothing
 /// read either. So the regression this could not see is the important one: a change that
 /// serialises a fan-out drops overlap from 6.3× to 1.2×, the wall clock stays inside a budget of
@@ -92,7 +92,7 @@ impl Shape {
 }
 
 impl Class {
-    /// The ceiling, or `None` where the cost is the host's rather than LiNix's.
+    /// The ceiling, or `None` where the cost is the host's rather than Shall's.
     pub fn budget(self) -> Option<Duration> {
         match self {
             Class::ConfigOnly => Some(Duration::from_secs(5)),
@@ -190,7 +190,7 @@ pub fn report_if_over(subcommand: &str, elapsed: Duration) {
         return;
     }
     tracing::warn!(
-        "`linix {}` took {:.1}s. A {} command is budgeted {}s — this one is over, which is the \
+        "`shall {}` took {:.1}s. A {} command is budgeted {}s — this one is over, which is the \
          shape of the 98-second `info` that could not be seen because nothing measured it.",
         subcommand,
         elapsed.as_secs_f64(),
@@ -269,7 +269,7 @@ fn report_shape(subcommand: &str, class: Class) {
         return;
     };
     tracing::warn!(
-        "`linix {}` asked every manager and did not overlap them: {}. The seconds a fan-out \
+        "`shall {}` asked every manager and did not overlap them: {}. The seconds a fan-out \
          costs belong to the host; the scheduling does not.",
         subcommand,
         why
@@ -363,7 +363,7 @@ mod tests {
     }
 
     #[test]
-    fn the_two_classes_linix_controls_carry_a_budget_and_the_others_do_not() {
+    fn the_two_classes_shall_controls_carry_a_budget_and_the_others_do_not() {
         assert!(Class::of("eval").budget().is_some());
         assert!(Class::of("info").budget().is_some());
         // A host with forty managers is slow because it has forty managers.

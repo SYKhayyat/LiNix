@@ -88,7 +88,7 @@ impl Bootstrap<'_> {
             // installer than failed over it. Never runs it unasked — an installer that arrives
             // with a pulled repo and executes because nobody was there to say no is the risk.
             let unattended = format!(
-                "Not asking in a non-interactive shell — run `linix sync` yourself, or install \
+                "Not asking in a non-interactive shell — run `shall sync` yourself, or install \
                  `{manager}` by hand."
             );
             let proceed = crate::core::prompt::confirm(

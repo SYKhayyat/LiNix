@@ -1,4 +1,4 @@
-//! Running the scripts attached to LiNix's own events (XIII.13, U15).
+//! Running the scripts attached to Shall's own events (XIII.13, U15).
 //!
 //! **Two locations, and both run (U15, ruled 2026-07-24).** A hook may live in the config
 //! repo's `hooks/` directory — the policy every machine should run, committed and shared — or
@@ -123,7 +123,7 @@ impl EventHooks {
     /// Event hooks warn-and-skip rather than blocking a sync — which is right (a down webhook
     /// is not a reason to fail a converged machine) but means they are the one supply-chain
     /// item nothing surfaces until the moment it silently does nothing. `check` asks this so a
-    /// hook you wrote and forgot to `linix lock` is a line in "what needs you", not a surprise
+    /// hook you wrote and forgot to `shall lock` is a line in "what needs you", not a surprise
     /// the next time the machine drifts.
     ///
     /// A ledger that cannot be read counts everything as unapproved: unreadable is not
@@ -136,7 +136,7 @@ impl EventHooks {
             .collect()
     }
 
-    /// Approve every event hook at its current hash — what `linix lock` does. The only path
+    /// Approve every event hook at its current hash — what `shall lock` does. The only path
     /// that writes an approval, so approval stays a deliberate act.
     pub fn approve_all(&self) -> Result<usize> {
         if self.hooks.is_empty() {
@@ -176,7 +176,7 @@ fn repo_hook(root: &Path, event: Event) -> Option<EventHook> {
 ///
 /// A table apart from `[hooks]`, which is the package-lifecycle hooks (`before_install`, …) the
 /// embedded Lua/Rhai interpreter runs. Both once read `[hooks]`, so a `preferences.toml`
-/// `after_sync` fired twice — once as Lua, once as a script here. LiNix's own events are their
+/// `after_sync` fired twice — once as Lua, once as a script here. Shall's own events are their
 /// own table now, and the two can never name the same key.
 fn preference_hook(config: &Config, event: Event) -> Option<EventHook> {
     let script = config.events.get(event.as_str())?;
@@ -234,9 +234,9 @@ async fn run(hook: &EventHook, stdin: &str) -> Result<()> {
     let mut command = tokio::process::Command::new(&launch.program);
     command
         .args(&launch.args)
-        .env("LINIX_EVENT", hook.event.as_str())
-        .env("LINIX_OS", std::env::consts::OS)
-        .env("LINIX_ARCH", std::env::consts::ARCH);
+        .env("SHALL_EVENT", hook.event.as_str())
+        .env("SHALL_OS", std::env::consts::OS)
+        .env("SHALL_ARCH", std::env::consts::ARCH);
 
     // Supervised: an event hook is arbitrary code fired by a timer or a package-manager hook,
     // with nobody at the terminal. Unowned and unbounded, one that waited on something waited
@@ -371,7 +371,7 @@ mod tests {
     }
 
     /// An empty file is not a hook. Touching `hooks/on_drift` to remind yourself to write one
-    /// must not make LiNix execute nothing and call it a success — nor refuse the sync because
+    /// must not make Shall execute nothing and call it a success — nor refuse the sync because
     /// nothing is unapproved.
     #[test]
     fn an_empty_hook_file_is_not_a_hook() {

@@ -119,7 +119,7 @@ fn the_macros_that_replaced_the_literal_actually_carry_it() {
         );
     }
     assert_eq!(
-        linix::core::dry_run::MARKER,
+        shall::core::dry_run::MARKER,
         MARKER,
         "the marker changed; this test and the fixtures that grep for it need to change with it"
     );

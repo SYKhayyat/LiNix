@@ -1,7 +1,7 @@
 //! The applied-extras ledger (S20): what `sync` has actually put in place, so it can tell
 //! when a `repo:` / `shim:` / `service:` / `link:` / `schedule:` line is *removed*.
 //!
-//! Packages have the registry: LiNix records what it installed, so deleting a package line
+//! Packages have the registry: Shall records what it installed, so deleting a package line
 //! makes the package drift and `sync` removes it. Extras had no such record — apply was
 //! one-way. Delete a `service:nginx` line and nothing disabled the service; delete a `repo:`
 //! line and the repository stayed configured. `sync` could not even *detect* the removal,
@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 /// the ledger on disk is a set of those strings.
 ///
 /// **Parsed at the boundary, not at load.** The ledger deserialises as strings and each row is
-/// parsed where it is used, so one unreadable row — a file written by a newer LiNix, an edit by
+/// parsed where it is used, so one unreadable row — a file written by a newer Shall, an edit by
 /// hand — is reported and kept rather than failing the whole file. Forgetting a row is the one
 /// outcome that cannot be undone.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -55,7 +55,7 @@ impl ExtraKey {
         }
     }
 
-    /// The ledger key of a file LiNix placed, from its destination.
+    /// The ledger key of a file Shall placed, from its destination.
     ///
     /// A second caller asks this question from the other end: a `dotfiles:` tree has the
     /// destination in hand and needs to know whether the ledger already claims it. That question
@@ -91,7 +91,7 @@ impl std::str::FromStr for ExtraKey {
 pub fn extra_key(stmt: &Statement) -> Option<ExtraKey> {
     match stmt {
         // A link is keyed by its DESTINATION, not by its source — the one place this ledger
-        // departs from [`Statement::key`]. The undo has to remove what LiNix wrote, and by the
+        // departs from [`Statement::key`]. The undo has to remove what Shall wrote, and by the
         // time it runs the declaration is gone, so a key naming the source would hand the
         // teardown the file in your repo and leave the deployed one in place. Keying the
         // destination also makes an edited `@target=` a removal of the old destination and an

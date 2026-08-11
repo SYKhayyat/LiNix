@@ -1,6 +1,6 @@
 //! What a command costs before it has done anything.
 //!
-//! `linix path` measured **272 ms** on a release build against a 61 ms process-spawn baseline,
+//! `shall path` measured **272 ms** on a release build against a 61 ms process-spawn baseline,
 //! and `--timings` said `no child commands — this run asked no package manager anything`. All of
 //! it was fixed overhead: `create_default_registry` runs for every subcommand, and one backend
 //! built a rate limiter in its constructor whose clock performs a 200 ms TSC calibration on
@@ -18,7 +18,7 @@
 //! * the invariant behind the specific one, asserted deterministically: a rate limiter costs
 //!   nothing until something is rate limited.
 
-use linix::backends::create_default_registry;
+use shall::backends::create_default_registry;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -31,16 +31,16 @@ const REGISTRY_BUDGET: Duration = Duration::from_millis(120);
 #[tokio::test]
 async fn building_the_registry_asks_nothing_and_therefore_costs_almost_nothing() {
     let vfs = Arc::new(dashmap::DashMap::new());
-    let mock = Arc::new(linix::core::executor::MockExecutor::new(vfs.clone()));
-    let exec = linix::core::CommandExecutor::with_layer(
+    let mock = Arc::new(shall::core::executor::MockExecutor::new(vfs.clone()));
+    let exec = shall::core::CommandExecutor::with_layer(
         true,
         false,
         mock,
         vfs,
         Arc::new(dashmap::DashMap::new()),
     );
-    let config = linix::config::Config::default();
-    let hooks = Arc::new(linix::app::hooks::LuaHooks::new(&config).expect("hooks"));
+    let config = shall::config::Config::default();
+    let hooks = Arc::new(shall::app::hooks::LuaHooks::new(&config).expect("hooks"));
 
     // The FIRST construction in this process is the one that matters: a one-off global
     // calibration is free on every subsequent call, so a warm-up here would measure the fix
@@ -57,7 +57,7 @@ async fn building_the_registry_asks_nothing_and_therefore_costs_almost_nothing()
         elapsed <= REGISTRY_BUDGET,
         "registering {} backends took {:.1?}, over the {:.1?} budget.\n\
          Registration runs for every subcommand and asks no manager anything, so this is fixed \
-         overhead on `linix path` as much as on `linix sync`. Something is being CONSTRUCTED \
+         overhead on `shall path` as much as on `shall sync`. Something is being CONSTRUCTED \
          eagerly that is only USED conditionally — build it where it is used, as `web.rs` and \
          `appimage.rs` build their HTTP clients.",
         registry.all().len(),
@@ -72,10 +72,10 @@ async fn a_rate_limiter_costs_nothing_until_something_is_rate_limited() {
     // backend calling `RateLimiter::github()` in `new`, and the sibling call site
     // (`vscode.rs`) does exactly the same thing.
     for limiter in [
-        linix::core::RateLimiter::github(),
-        linix::core::RateLimiter::github_authenticated(),
-        linix::core::RateLimiter::vscode_marketplace(),
-        linix::core::RateLimiter::new(10, "test"),
+        shall::core::RateLimiter::github(),
+        shall::core::RateLimiter::github_authenticated(),
+        shall::core::RateLimiter::vscode_marketplace(),
+        shall::core::RateLimiter::new(10, "test"),
     ] {
         assert!(
             !limiter.is_engaged(),
@@ -97,7 +97,7 @@ async fn a_rate_limiter_costs_nothing_until_something_is_rate_limited() {
 /// quietly breaks this — a per-clone cell would.
 #[tokio::test]
 async fn clones_share_the_quota_they_were_cloned_from() {
-    let original = linix::core::RateLimiter::new(5, "shared");
+    let original = shall::core::RateLimiter::new(5, "shared");
     let clone = original.clone();
 
     clone.wait().await.expect("first permit is immediate");

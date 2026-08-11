@@ -37,7 +37,7 @@ pub fn parse_installed(backend: &str, output: &str) -> ParseResult {
         // and `Done in 0.67s.` on the way out — so an EMPTY global install still prints two
         // lines. Neither is prose by the general rule (no trailing colon, no leading digit, and
         // "Done in 0.67s." is a three-word sentence), so the unread check counted them as rows it
-        // had failed to read and `linix list` warned about yarn on every run of a machine with no
+        // had failed to read and `shall list` warned about yarn on every run of a machine with no
         // global packages. Measured on a real Windows box, 2026-08-07.
         //
         // Dropped here rather than in `is_prose_line`, because "what yarn prints around its
@@ -214,7 +214,7 @@ fn parse_pipx_json(output: &str) -> ParseResult {
             // `package_version`, which is what pipx calls it. Reading `version` — a key that
             // schema does not have — gave every pipx package the version `unknown`, on every
             // machine, silently: `list` printed it, and `lock` skips a version reading
-            // `unknown`, so `linix lock` pinned no pipx package and said nothing. Caught by the
+            // `unknown`, so `shall lock` pinned no pipx package and said nothing. Caught by the
             // first fixture captured from the tool itself.
             let ver = data
                 .get("metadata")
@@ -279,7 +279,7 @@ fn parse_cargo_list(output: &str) -> Vec<Package> {
 /// neither. Measured on a host with `catj` installed: the JSON stream's only `list` record is
 /// `{"type":"list","data":{"type":"bins-catj","items":["catj"]}}` — the *binaries*, not the
 /// package — and the plain output has no tree either. So the filter that dropped every line
-/// containing `info` dropped the one line that carries the answer, and `linix list -b yarn`
+/// containing `info` dropped the one line that carries the answer, and `shall list -b yarn`
 /// returned nothing on a machine with yarn packages on it.
 ///
 /// That is not only `list`: `remove` is gated on `info`, which reads this same listing, so a
@@ -355,9 +355,9 @@ fn parse_gem_list(output: &str) -> Vec<Package> {
                 .unwrap_or_else(|| rest.trim().to_string());
             let ver = inside.split(',').next()?;
             // `bundler (default: 4.0.10)` — RubyGems marks the gems that ship with Ruby,
-            // and the marker is not part of the version. Kept as one, `linix list` printed
+            // and the marker is not part of the version. Kept as one, `shall list` printed
             // `default: 4.0.10` in its version column: an `@version=` can never match it,
-            // and `list --outdated` shows it beside a real version, which reads as LiNix
+            // and `list --outdated` shows it beside a real version, which reads as Shall
             // not knowing what is installed.
             let ver = ver.trim().strip_prefix("default:").unwrap_or(ver).trim();
             Some(Package::with_version(name.trim(), ver, "gem"))
@@ -443,7 +443,7 @@ mod tests {
     ///
     /// Before this, `parse_yarn_list` dropped every line containing `info` and looked for an
     /// ASCII tree. yarn prints no tree, and the `info` line is the only one carrying the
-    /// package. So `linix list -b yarn` was empty on a machine with yarn packages installed,
+    /// package. So `shall list -b yarn` was empty on a machine with yarn packages installed,
     /// and `remove` — which is gated on `info`, reading the same listing — could not remove
     /// them either.
     #[test]
@@ -856,7 +856,7 @@ mod composer_outdated_tests {
 mod an_empty_listing_is_not_an_unreadable_one_tests {
     use super::*;
 
-    /// **Both of these were found by `linix list` on a real Windows box, 2026-08-07** — the run
+    /// **Both of these were found by `shall list` on a real Windows box, 2026-08-07** — the run
     /// that `LX-1` made capable of complaining. Before it, each was a silent empty listing, which
     /// the planner reads as *"this machine has none of these"* and answers by installing every
     /// declared package and dropping every removal.

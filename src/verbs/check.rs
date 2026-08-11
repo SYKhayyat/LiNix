@@ -12,10 +12,10 @@ pub async fn handle_unmanaged(app: &App) -> Result<()> {
     let found = app.adopter().discover().await?;
 
     if found.adopt.is_empty() {
-        println!("Nothing to adopt: LiNix already manages everything you chose to install.");
+        println!("Nothing to adopt: Shall already manages everything you chose to install.");
     } else {
         println!(
-            "{} package(s) `linix adopt` would take:\n",
+            "{} package(s) `shall adopt` would take:\n",
             found.adopt.len()
         );
         println!("{:<15} PACKAGE", "BACKEND");
@@ -42,11 +42,11 @@ pub async fn handle_unmanaged(app: &App) -> Result<()> {
 /// nothing. Resolution is where every parse/validation error surfaces — a bad line, an
 /// unknown option, a `use` cycle — so a clean resolve IS a clean parse; this just says so,
 /// and prints the counts a reader wants before running `sync`.
-/// `linix check` — the one command that looks (U9, 7i).
+/// `shall check` — the one command that looks (U9, 7i).
 ///
 /// With no section it runs every question and prints a line each: the verdict, and the command
 /// that acts on it. With a section it prints that section's detail. It never changes anything;
-/// `linix heal` is what repairs.
+/// `shall heal` is what repairs.
 pub async fn handle_check(app: &App, section: Option<&str>, out: Output) -> Result<()> {
     use crate::app::check::Section;
 
@@ -73,9 +73,9 @@ pub async fn handle_check(app: &App, section: Option<&str>, out: Output) -> Resu
     }
 }
 
-/// How many extension surfaces this machine has written and LiNix is not using.
+/// How many extension surfaces this machine has written and Shall is not using.
 ///
-/// `Absent` is not one of them: not extending LiNix is the ordinary case, and a check that
+/// `Absent` is not one of them: not extending Shall is the ordinary case, and a check that
 /// reported it as work would be a check every machine fails on its first run.
 fn adapters_not_in_use(app: &App) -> usize {
     crate::app::adapters::survey(&app.config.layout())
@@ -129,7 +129,7 @@ pub async fn check_approvals(app: &App, out: Output) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{} event hook(s) are unapproved and will NOT run until you `linix lock`:",
+        "{} event hook(s) are unapproved and will NOT run until you `shall lock`:",
         unapproved.len()
     );
     for h in &unapproved {
@@ -197,7 +197,7 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
             findings.push(Finding::attention(
                 Section::Config,
                 format!("does not resolve — {}", e),
-                "linix check config",
+                "shall check config",
             ));
             None
         }
@@ -214,7 +214,7 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
         };
         // N-2: the model is packages *and* resources. Asking only the package planner is how
         // `check` came to report that the machine matched while a declared `link:` was not on
-        // disk — and again after one LiNix had placed was deleted behind its back.
+        // disk — and again after one Shall had placed was deleted behind its back.
         let resources = app.extras().changes(state).await;
         match (changes, resources) {
             // A skip is drift the planner declined to act on, so it belongs here and not in a
@@ -235,7 +235,7 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
                             .collect::<Vec<_>>()
                             .join("; ")
                     ),
-                    "linix protected",
+                    "shall protected",
                 )
                 .counting([
                     ("install", c.total_install()),
@@ -249,11 +249,11 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
                         Section::Drift,
                         match r.unverifiable.len() {
                             0 => "the machine matches your files".to_string(),
-                            // Not "it matches": LiNix looked at the packages and at every
+                            // Not "it matches": Shall looked at the packages and at every
                             // resource it can read back, and these it cannot. Saying so is the
                             // difference between a converged machine and an unexamined one.
                             n => format!(
-                                "the machine matches your files, except {} resource(s) LiNix \
+                                "the machine matches your files, except {} resource(s) Shall \
                                  cannot read back ({})",
                                 n,
                                 r.unverifiable.join(", ")
@@ -280,7 +280,7 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
                         c.total_remove(),
                         r.summary()
                     ),
-                    "linix sync",
+                    "shall sync",
                 )
                 .counting([
                     ("install", c.total_install()),
@@ -292,7 +292,7 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
             (Err(e), _) | (_, Err(e)) => findings.push(Finding::attention(
                 Section::Drift,
                 format!("could not be planned — {}", e),
-                "linix check drift",
+                "shall check drift",
             )),
         }
 
@@ -318,7 +318,7 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
                 Finding::attention(
                     Section::Conflicts,
                     format!("{} package(s) declared two ways", conflicts.len()),
-                    "linix check conflicts",
+                    "shall check conflicts",
                 )
             }
             .counting([("conflicts", conflicts.len())]),
@@ -334,15 +334,15 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
         Ok(found) => findings.push(
             Finding::attention(
                 Section::Unmanaged,
-                format!("{} package(s) `linix adopt` would take", found.adopt.len()),
-                "linix adopt",
+                format!("{} package(s) `shall adopt` would take", found.adopt.len()),
+                "shall adopt",
             )
             .counting([("unmanaged", found.adopt.len())]),
         ),
         Err(e) => findings.push(Finding::attention(
             Section::Unmanaged,
             format!("could not be crawled — {}", e),
-            "linix check unmanaged",
+            "shall check unmanaged",
         )),
     }
 
@@ -373,13 +373,13 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
             Finding::attention(
                 Section::Health,
                 format!("{} ready, {} cannot run", ok, critical),
-                "linix check health",
+                "shall check health",
             )
         } else if degraded > 0 {
             Finding::attention(
                 Section::Health,
                 format!("{} ready, {} degraded", ok, degraded),
-                "linix check health",
+                "shall check health",
             )
         } else {
             Finding::ok(Section::Health, format!("{} backend(s) ready", ok))
@@ -400,7 +400,7 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
             Finding::attention(
                 Section::Security,
                 format!("{} package(s) with advisories", report.findings.len()),
-                "linix check security",
+                "shall check security",
             )
             .counting([("advisories", report.findings.len())]),
         ),
@@ -409,7 +409,7 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
         Err(e) => findings.push(Finding::attention(
             Section::Security,
             format!("could not be checked — {}", e),
-            "linix check security",
+            "shall check security",
         )),
     }
 
@@ -424,7 +424,7 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
             Finding::attention(
                 Section::Approvals,
                 format!("{} event hook(s) will not run until approved", unapproved),
-                "linix lock",
+                "shall lock",
             )
         }
         .counting([("unapproved", unapproved)]),
@@ -435,12 +435,12 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
     let inert = adapters_not_in_use(app);
     findings.push(
         if inert == 0 {
-            Finding::ok(Section::Adapters, "nothing written that LiNix cannot use")
+            Finding::ok(Section::Adapters, "nothing written that Shall cannot use")
         } else {
             Finding::attention(
                 Section::Adapters,
                 format!("{} extension file(s) written but not in use", inert),
-                "linix adapters",
+                "shall adapters",
             )
         }
         .counting([("not_in_use", inert)]),
@@ -605,7 +605,7 @@ pub fn referenced_variable_names(
     refs
 }
 
-/// `linix eval` — the resolved configuration, as JSON (U17).
+/// `shall eval` — the resolved configuration, as JSON (U17).
 ///
 /// Deliberately *only* a resolution: no lock is taken (it is in `READ_ONLY_COMMANDS`), no
 /// backend is asked what is installed, nothing is written. It answers what the configuration
@@ -663,8 +663,8 @@ pub async fn handle_vars(app: &App) -> Result<()> {
     Ok(())
 }
 
-/// An origin as `linix vars`/`why` show it: the filename and, when it is a real line rather than
-/// a whole-provider attribution, the line number — `vars:6`, or `vars.linix` for a script.
+/// An origin as `shall vars`/`why` show it: the filename and, when it is a real line rather than
+/// a whole-provider attribution, the line number — `vars:6`, or `vars.shall` for a script.
 pub fn short_origin(origin: &crate::config::grammar::Origin) -> String {
     let file = origin
         .file
@@ -805,7 +805,7 @@ pub async fn check_health(app: &App, out: Output) -> Result<()> {
     // ---- Per-backend health, via each backend's own probe (not a shallow is_available). ----
     // See `probe_all_health` for why it is concurrent.
     // Absent means "not installed, and nothing asked for it" — so a manager listed in
-    // `priority` is not absent, it is broken. The user named it; LiNix cannot use it. That
+    // `priority` is not absent, it is broken. The user named it; Shall cannot use it. That
     // second half is what keeps Q2 from being a way to hide real failures: the state depends
     // on whether the machine was asked for the manager, not only on whether it is there.
     let wanted: std::collections::HashSet<String> =
@@ -817,7 +817,7 @@ pub async fn check_health(app: &App, out: Output) -> Result<()> {
         if report.status == HealthStatus::Absent && wanted.contains(name) {
             report.status = HealthStatus::Critical;
             report.message = Some(format!(
-                "{} — and `priority` lists it, so LiNix was told to use it",
+                "{} — and `priority` lists it, so Shall was told to use it",
                 report.message.as_deref().unwrap_or("it cannot run")
             ));
         }
@@ -940,7 +940,7 @@ pub async fn check_health(app: &App, out: Output) -> Result<()> {
             system.push((
                 label.into(),
                 HealthStatus::Degraded,
-                Some(format!("missing: {} (run `linix heal`)", dir.display())),
+                Some(format!("missing: {} (run `shall heal`)", dir.display())),
             ));
         }
     }
@@ -952,7 +952,7 @@ pub async fn check_health(app: &App, out: Output) -> Result<()> {
             system.push((
                 "lockfile".into(),
                 HealthStatus::Ok,
-                Some("none yet (run `linix lock` to pin versions)".into()),
+                Some("none yet (run `shall lock` to pin versions)".into()),
             ));
         } else {
             let managed: std::collections::HashSet<String> = {
@@ -1014,7 +1014,7 @@ pub async fn check_health(app: &App, out: Output) -> Result<()> {
                     "lockfile".into(),
                     HealthStatus::Degraded,
                     Some(format!(
-                        "drifted: {} (run `linix lock`, or `linix heal`)",
+                        "drifted: {} (run `shall lock`, or `shall heal`)",
                         parts.join("; ")
                     )),
                 ));
@@ -1032,7 +1032,7 @@ pub async fn check_health(app: &App, out: Output) -> Result<()> {
                 "git".into(),
                 HealthStatus::Degraded,
                 Some(
-                    "not installed. LiNix runs without it; generations, `rollback` and `diff` \
+                    "not installed. Shall runs without it; generations, `rollback` and `diff` \
                      are unavailable until it is present."
                         .into(),
                 ),
@@ -1043,7 +1043,7 @@ pub async fn check_health(app: &App, out: Output) -> Result<()> {
                 HealthStatus::Degraded,
                 Some(
                     "this config is not a git repo, so there is no history to roll back to. \
-                     `linix git init` here turns it on."
+                     `shall git init` here turns it on."
                         .into(),
                 ),
             ));
@@ -1092,7 +1092,7 @@ pub async fn check_health(app: &App, out: Output) -> Result<()> {
     );
     // Readiness roster: one `[READY] <backend>` line per healthy backend, printed at column 0
     // (unindented, uncolored) so it is both human-readable AND machine-greppable —
-    // `linix check health | grep '^\[READY\]'` enumerates every usable backend on this host. Without
+    // `shall check health | grep '^\[READY\]'` enumerates every usable backend on this host. Without
     // this, a healthy `doctor` printed nothing about which package managers actually work.
     for (name, r) in &reports {
         if r.status == HealthStatus::Ok {
@@ -1128,7 +1128,7 @@ pub async fn check_health(app: &App, out: Output) -> Result<()> {
 
     let sys_critical = system.iter().any(|(_, s, _)| *s == HealthStatus::Critical);
     if critical > 0 || sys_critical {
-        println!("\nSome checks are CRITICAL. Install the missing tools, or run `linix heal`.");
+        println!("\nSome checks are CRITICAL. Install the missing tools, or run `shall heal`.");
     } else if degraded > 0 {
         println!("\nAll critical checks pass; some backends are degraded (see WARN above).");
     } else {

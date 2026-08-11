@@ -126,7 +126,7 @@ $bashForPredicates = Find-Bash
 if ($null -eq $bashForPredicates) {
     Fail "no real bash found (install Git for Windows): cannot run the harness predicates"
 } else {
-    $env:LINIX_BIN = "$RepoRoot/target/release/linix.exe"
+    $env:SHALL_BIN = "$RepoRoot/target/release/shall.exe"
     & $bashForPredicates "scripts/harness-logic-test.sh"
     if ($LASTEXITCODE -eq 0) { Pass "harness predicates" } else { Fail "harness predicates FAILED" }
 }
@@ -155,13 +155,13 @@ if ($null -eq $bashForMutation) {
 if ($SkipIntegration) {
     Info "-SkipIntegration: skipped the native Windows sweep (hermetic gates only)"
 } else {
-    Step "2. NATIVE WINDOWS INTEGRATION SWEEP (real backends via linix)"
+    Step "2. NATIVE WINDOWS INTEGRATION SWEEP (real backends via shall)"
     $bashExe = Find-Bash
     if ($null -eq $bashExe) {
         Fail "no real bash found (install Git for Windows): cannot run the integration sweep"
     } else {
         Write-Host "Using bash: $bashExe"
-        $env:LINIX = "$RepoRoot/target/release/linix.exe"
+        $env:SHALL = "$RepoRoot/target/release/shall.exe"
         & $bashExe "scripts/integration-windows.sh" $Backend $Package $Package2
         if ($LASTEXITCODE -eq 0) { Pass "native Windows integration sweep PASS" } else { Fail "native Windows integration sweep FAILED" }
     }

@@ -27,7 +27,7 @@
 //! `registry.json` — the managed set, the file that decides whether the next `sync` *removes* a
 //! package. So `--dry-run adopt` recorded 112 packages as managed while correctly not writing
 //! the manifest that declares them, which is the one state the model reads as *the user deleted
-//! every line*; `linix check` then said `112 to remove … run linix sync`, and it did. The gate
+//! every line*; `shall check` then said `112 to remove … run shall sync`, and it did. The gate
 //! that says "every subcommand" could not have seen it: an exemption naming the instrument's
 //! blind spot is not a reason, it is the finding. Both snapshots now walk the whole fixture —
 //! config, data and the working directory — and the three excused verbs are driven.
@@ -133,7 +133,7 @@ const CASES: &[Case] = &[
         setup: &[(
             // One JSON value per line — the WAL is a log, not a document.
             "data/journal.jsonl",
-            r#"{"id":"github:linix-probe-zzz:wal","action":{"Remove":{"name":"linix-probe-zzz","backend":"github"}},"status":"InProgress","started_at_unix":1000000,"finished_at_unix":null,"error":null}"#,
+            r#"{"id":"github:shall-probe-zzz:wal","action":{"Remove":{"name":"shall-probe-zzz","backend":"github"}},"status":"InProgress","started_at_unix":1000000,"finished_at_unix":null,"error":null}"#,
         )],
         pre: &[],
         nothing_to_do: None,
@@ -167,7 +167,7 @@ const CASES: &[Case] = &[
 /// snapshot's blind spot and excused the verbs writing into it; that is how B-1 stayed invisible
 /// through two rounds of a gate named "every verb". `hooks` was excused as "read-only listing"
 /// while `hooks install` writes into a manager's system hook directory, and `path` as
-/// "read-only" while `path --set` writes LiNix's own settings file.
+/// "read-only" while `path --set` writes Shall's own settings file.
 const EXEMPT: &[(&str, &str)] = &[
     ("sync", "covered by grader_extras_guard_tests and dry_run_tests; needs backends"),
     ("rebuild", "removes and reinstalls through a real manager"),
@@ -224,7 +224,7 @@ const EXEMPT: &[(&str, &str)] = &[
     ("schedule", "covered by dry_run_tests; provisions onto the OS scheduler"),
     (
         "path",
-        "`--set` writes LiNix's own settings file, which lives outside any directory a fixture \
+        "`--set` writes Shall's own settings file, which lives outside any directory a fixture \
          controls — driven by a_preview_does_not_store_a_new_config_root below",
     ),
     ("init", "creates the config dir itself, so there is no before-state to compare"),
@@ -251,7 +251,7 @@ const EXEMPT: &[(&str, &str)] = &[
 ];
 
 fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_linix")
+    env!("CARGO_BIN_EXE_shall")
 }
 
 fn run(dir: &Path, args: &[&str]) -> (String, i32) {
@@ -260,8 +260,8 @@ fn run(dir: &Path, args: &[&str]) -> (String, i32) {
         // In the fixture, so a verb writing relative to the working directory writes where the
         // snapshot looks rather than into the repo.
         .current_dir(dir)
-        .env("LINIX_CONFIG_DIR", dir.join("config"))
-        .env("LINIX_DATA_DIR", dir.join("data"))
+        .env("SHALL_CONFIG_DIR", dir.join("config"))
+        .env("SHALL_DATA_DIR", dir.join("data"))
         .stdin(std::process::Stdio::null())
         .output()
         .expect("the binary should run");
@@ -323,7 +323,7 @@ fn fixture(name: &str, case: &Case) -> PathBuf {
         assert_eq!(
             code,
             0,
-            "the fixture's own `linix {}` failed:\n{out}",
+            "the fixture's own `shall {}` failed:\n{out}",
             argv.join(" ")
         );
     }
@@ -371,7 +371,7 @@ fn a_preview_leaves_the_config_byte_identical() {
         if let Some(marker) = case.nothing_to_do {
             if out.contains(marker) {
                 skipped.push(format!(
-                    "`linix {}` — this host gave it nothing to do (\"{marker}\")",
+                    "`shall {}` — this host gave it nothing to do (\"{marker}\")",
                     case.argv.join(" ")
                 ));
                 continue;
@@ -387,7 +387,7 @@ fn a_preview_leaves_the_config_byte_identical() {
 
         if ctl_changed.is_empty() {
             failures.push(format!(
-                "`linix {}` — THE CONTROL DID NOTHING. Without a run that changes the config, \
+                "`shall {}` — THE CONTROL DID NOTHING. Without a run that changes the config, \
                  the dry-run assertion below cannot fail and proves nothing. Fix the fixture.\n\
                  control output:\n{}",
                 case.argv.join(" "),
@@ -398,7 +398,7 @@ fn a_preview_leaves_the_config_byte_identical() {
 
         if !changed.is_empty() {
             failures.push(format!(
-                "`linix --dry-run {}` changed the fixture:\n    {}\n  \
+                "`shall --dry-run {}` changed the fixture:\n    {}\n  \
                  (the same command without --dry-run changes: {})\n  output:\n{}",
                 case.argv.join(" "),
                 changed.join("\n    "),
@@ -428,8 +428,8 @@ fn a_preview_leaves_the_config_byte_identical() {
     );
 }
 
-/// `path --set` writes `linix.settings.toml`, which lives beside the user's other application
-/// settings rather than in any directory `LINIX_CONFIG_DIR` moves — so the only honest way to
+/// `path --set` writes `shall.settings.toml`, which lives beside the user's other application
+/// settings rather than in any directory `SHALL_CONFIG_DIR` moves — so the only honest way to
 /// assert a preview leaves it alone is to look at the real one.
 ///
 /// It restores whatever it finds, in both directions, because a test that damages the machine
@@ -461,7 +461,7 @@ fn a_preview_does_not_store_a_new_config_root() {
             None => std::fs::remove_file(&settings).unwrap(),
         }
         panic!(
-            "`linix --dry-run path --set` wrote {} (restored). It said:\n{}",
+            "`shall --dry-run path --set` wrote {} (restored). It said:\n{}",
             settings.display(),
             out.trim()
         );
@@ -517,7 +517,7 @@ fn a_preview_does_not_write_native_manifests() {
 
     assert!(
         changed.is_empty(),
-        "`linix --dry-run export` wrote:
+        "`shall --dry-run export` wrote:
     {}
   (the control writes: {})
   output:

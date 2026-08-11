@@ -11,7 +11,7 @@
 > explaining why. This document did it anyway, forty-three times.
 > `tests/id_namespaces_do_not_collide_tests.rs` is now what stops the third one.
 
-**Your job: raise LiNix to an A by writing code.** Work through the numbered work orders in this
+**Your job: raise Shall to an A by writing code.** Work through the numbered work orders in this
 document, in tier order. Everything you need is here or named here.
 
 **Where the grade stands: C+ when this document was written, B− after round 5.** The per-round
@@ -21,7 +21,7 @@ every finding they raised was dispositioned into `docs/spec/bugs.md` and the reg
 went. **This document's work orders still stand on their own; its citations to those files are
 provenance, not homework.**
 
-You are working in the LiNix repo at the path given to you. Start by reading, in this order:
+You are working in the Shall repo at the path given to you. Start by reading, in this order:
 
 1. `CLAUDE.md` and `docs/SPEC.md` — the repo's binding rules.
 2. `docs/spec/bugs.md` — what is known broken and what was carried forward.
@@ -105,7 +105,7 @@ These break `sync` itself. Do them first.
 
 ### B1 · `E1` — a permanently-failed install wedges the config
 
-**Symptom.** `linix install scoop:<typo>` fails, the line is written to
+**Symptom.** `shall install scoop:<typo>` fails, the line is written to
 `modules/imperative.txt` anyway, and every later command that parses the model then fails. The
 only escape is hand-editing a file nothing names.
 
@@ -127,19 +127,19 @@ if matches!(e.downcast_ref(), Some(Error::Unresolvable { .. }))
 ```
 
 **Also required, regardless of the ruling:** when a line *is* deliberately left behind, the error
-must name `modules/imperative.txt` and suggest `linix unmanage <name>`. A wedge with an exit is
+must name `modules/imperative.txt` and suggest `shall unmanage <name>`. A wedge with an exit is
 not a wedge.
 
 **Test first.** `tests/` — install a `backend:nonexistent` against a mock backend whose policy
 marks the failure permanent; assert the manifest is unchanged **and** that a second command still
 parses the model. Then the transient case: assert the line *is* kept.
 
-**Siblings.** `linix add`, `adopt`, `activate` also write manifest lines — `READINESS` §3.1 clears
+**Siblings.** `shall add`, `adopt`, `activate` also write manifest lines — `READINESS` §3.1 clears
 all three with reasons; re-verify rather than trust. Check `handle_uninstall` still removes
 correctly.
 
-**Acceptance.** From a clean config: `linix install scoop:definitely-not-real-xyz123 -y` then
-`linix check` — `check` must succeed.
+**Acceptance.** From a clean config: `shall install scoop:definitely-not-real-xyz123 -y` then
+`shall check` — `check` must succeed.
 
 ### B2 · `E6` — `go`'s `list` is blind to a package that is installed
 
@@ -147,7 +147,7 @@ correctly.
 hello`**. Verified against disk: `~/go/bin/hello.exe` exists and is on `PATH`.
 
 **Why it matters most.** `sync` compares desired against `list`. A `list` that cannot see an
-installed package produces permanent phantom drift — LiNix reinstalls forever and `check` reports
+installed package produces permanent phantom drift — Shall reinstalls forever and `check` reports
 a problem that is not there.
 
 **Root cause.** Not isolated. Start at the `go` backend's list parser and its `manual`/listing
@@ -162,7 +162,7 @@ assert the installed module is reported under the name `sync` will look for.
 **Siblings.** Every backend whose install name ≠ binary name: `go`, `github` (`owner/repo`),
 `pub`, `krew`, `cargo` (crate vs bin). `cargo` passes today — use it as the reference.
 
-**Acceptance.** `linix install go:golang.org/x/example/hello -y && linix list -b go | grep hello`.
+**Acceptance.** `shall install go:golang.org/x/example/hello -y && shall list -b go | grep hello`.
 
 ### B3 · `E6b` — `nimble` install produces no binary and `list` cannot see it
 
@@ -178,7 +178,7 @@ nimble on Windows places binaries elsewhere. **Report the diagnosis before the p
 ### B4 · `E6c` — a successful install the user cannot invoke
 
 **Symptom.** `pub` installs correctly and `list` is correct, but the binary is unreachable:
-`~/.pub-cache/bin` is not on `PATH`. LiNix reports success and says nothing.
+`~/.pub-cache/bin` is not on `PATH`. Shall reports success and says nothing.
 
 **Fix.** After a successful install, if the backend's bin directory is not on `PATH`, say so —
 naming the directory and the shell line to add. One warning, not a refusal.
@@ -186,7 +186,7 @@ naming the directory and the shell line to add. One warning, not a refusal.
 **Siblings.** Every per-user-bin ecosystem: `pub`, `nimble`, `go`, `cargo`, `gem`, `luarocks`,
 `mix`, `stack`, `krew`, `pipx`, `composer`. Implement once on the shared path, not per backend.
 
-**Acceptance.** With `~/.pub-cache/bin` off `PATH`, `linix install pub:sass` warns by name.
+**Acceptance.** With `~/.pub-cache/bin` off `PATH`, `shall install pub:sass` warns by name.
 
 ---
 
@@ -202,19 +202,19 @@ assertion test the product.** It will go red until B1 lands — that is correct 
 
 **Siblings.** Audit both harnesses for any mutation (`mv`, `rm`, `sed`, `grep -v`, `unmanage`,
 `|| true`) within ~5 lines above an `ok`/`nok`. Then run the mutation experiment in
-`GRADER` §2.1: stub `linix` to exit 0 always, and treat **every still-passing check as a
+`GRADER` §2.1: stub `shall` to exit 0 always, and treat **every still-passing check as a
 check that tests nothing.**
 
-**Acceptance.** With a do-nothing `linix` stub, both harnesses fail loudly instead of passing.
+**Acceptance.** With a do-nothing `shall` stub, both harnesses fail loudly instead of passing.
 
 ### B6 · `E5` — the catch-all that launders real defects
 
 Both harnesses soften *any* install failure to
 `soft "<backend>: install of <pkg> failed (ecosystem/network variance)"` and **skip that
 backend's whole remaining lifecycle**. It fired four times in one run and not once was it network
-variance: one was LiNix correctly refusing, two were real backend defects (`helm`, `luarocks`).
+variance: one was Shall correctly refusing, two were real backend defects (`helm`, `luarocks`).
 
-**Fix — classify instead of assuming.** LiNix already exposes the distinction:
+**Fix — classify instead of assuming.** Shall already exposes the distinction:
 
 | observed | verdict |
 |---|---|
@@ -224,7 +224,7 @@ variance: one was LiNix correctly refusing, two were real backend defects (`helm
 | otherwise | hard fail |
 
 **Acceptance.** Point a backend at a package that cannot exist → the harness reports a failure,
-not a soft pass. Point it at something LiNix should refuse → reported as a refusal.
+not a soft pass. Point it at something Shall should refuse → reported as a refusal.
 
 ### B7 · `E3`,`E4` — the ship gate is weaker than CI
 
@@ -267,11 +267,11 @@ so the verified-correct PowerShell branch is actually reached. Then widen scoop'
 
 **Siblings — this is the important half.** Enumerate every backend whose `ExitPolicy` carries
 fewer than three `failure_markers` *and* whose program is reached through a shim. For each,
-produce one real failure outside the existing markers and assert LiNix reports it. Also fix the
+produce one real failure outside the existing markers and assert Shall reports it. Also fix the
 message: `` `scoop` failed (exit 0) `` is incoherent — when the verdict comes from output rather
 than status, say so.
 
-**Acceptance.** `linix uninstall scoop:<not-installed>` reports failure, not success.
+**Acceptance.** `shall uninstall scoop:<not-installed>` reports failure, not success.
 
 ### B11 · `E10` — `psresource` reports healthy and cannot run
 
@@ -300,7 +300,7 @@ claims health and cannot answer `list` is lying, whatever the reason. This would
 | `E12` | `luarocks` fails: `No results matching query were found for Lua 5.5` — no version pinned | luarocks backend argv |
 
 **Do not stop at the three.** Build the **argv-drift gate** (`GRADER` §3.2): for every
-manager installed on the runner, assert that every subcommand LiNix will invoke still appears in
+manager installed on the runner, assert that every subcommand Shall will invoke still appears in
 that manager's own help output. This is the single highest-leverage test in the programme — it
 converts silent upstream drift into a named failure, and it is the difference between fixing
 `pixi` today and fixing its successor automatically.
@@ -346,7 +346,7 @@ screen**:
 default in favour of `generic.rs`'s, parameterised by the program(s) actually probed. Two
 implementations of one sentence is the "two of everything" disease in miniature.
 
-**Acceptance.** `linix check health` on a machine missing several managers emits one message
+**Acceptance.** `shall check health` on a machine missing several managers emits one message
 shape, and each names the program it looked for.
 
 ---
@@ -355,8 +355,8 @@ shape, and each names the program it looked for.
 
 ### B14 · `E14`,`E15` — `info` takes 98s to return a wrong answer
 
-`linix info cargo:ripgrep` → `Package 'cargo:ripgrep' not found in any available backend.` in
-**1m37s**, while `linix search ripgrep` in the same tree returns `cargo ripgrep 15.2.0`. Two
+`shall info cargo:ripgrep` → `Package 'cargo:ripgrep' not found in any available backend.` in
+**1m37s**, while `shall search ripgrep` in the same tree returns `cargo ripgrep 15.2.0`. Two
 commands in one program contradict each other and the wrong one is the slow one. The explicit
 `cargo:` qualifier appears not to narrow the probe — start there.
 
@@ -372,11 +372,11 @@ about the same machine.** Propose: *absent* as its own state, distinct from *cri
 
 ### B16 · `E27`,`E28`,`E30`,`E22`,`E23`,`E12` — the first hour
 
-- First-run `linix sync` explains the `priority` format by hand and **never mentions `linix init`**
+- First-run `shall sync` explains the `priority` format by hand and **never mentions `shall init`**
   (`E27`). It is the first command a new user runs.
-- `linix init --help` promises "a starter module"; `modules/` is created empty (`E28`).
-- One failure prints **three times** — `WARN linix::core::journal` with a 32-hex WAL id, `ERROR
-  linix::core::transaction` naming a "Node", then `Error:` (`E30`). Print it once, in the user's
+- `shall init --help` promises "a starter module"; `modules/` is created empty (`E28`).
+- One failure prints **three times** — `WARN shall::core::journal` with a 32-hex WAL id, `ERROR
+  shall::core::transaction` naming a "Node", then `Error:` (`E30`). Print it once, in the user's
   words. Audit for leaked internals: `WAL`, `Node`, `DAG`, module paths, UUIDs.
 - `purge-unmanaged` (`src/verbs/cleanup.rs:262`) and the auto-remediation confirm
   (`src/app/diagnostics.rs:147`) lack the `is_terminal` refusal their siblings have — measured,
@@ -389,9 +389,9 @@ about the same machine.** Propose: *absent* as its own state, distinct from *cri
 ### B17 · `E24`,`E25` — the published exit-code contract is violated ⚠️ needs a ruling (0.1)
 
 `readme.md:708` publishes four codes and says *"a script can branch on them"*. Measured:
-`linix nosuchcommand`, `linix --nosuchflag` and `linix sync --badflag` all exit **2** — which the
+`shall nosuchcommand`, `shall --nosuchflag` and `shall sync --badflag` all exit **2** — which the
 table defines as *"a read-only command looked and found work to do"*. Clap's usage-error
-convention is 2 and it exits before LiNix's `finish()` mapping runs. **A CI job following the
+convention is 2 and it exits before Shall's `finish()` mapping runs. **A CI job following the
 documented table reads a typo as drift**, which defeats the stated purpose of code 2.
 
 Separately, a `purge-unmanaged` ratio refusal exits **1**, not the documented **3** — it is raised
@@ -412,7 +412,7 @@ decisions. Each of these is a one-line fix plus a check that stops it recurring.
   `U1` is *"where does a custom backend definition live"* (ruled 2026-07-23). Rename that
   document's labels. It costs nothing and removes a live trap for exactly the agent reading these
   briefs.
-- **`E29`** — both harnesses exempt `undo` from the coverage audit; `linix undo` does not exist
+- **`E29`** — both harnesses exempt `undo` from the coverage audit; `shall undo` does not exist
   (renamed to `snapshot`/`rollback`). Delete it, and **assert that every exempted name appears in
   `--help`** — `harness-logic-test.sh` already checks that every *invoked* subcommand exists and
   should do the same for every *exempted* one. That asymmetry is why this survived.
@@ -435,7 +435,7 @@ decisions. Each of these is a one-line fix plus a check that stops it recurring.
 > year later with a caption explaining why that is fine (`V.93`).
 >
 > **What the ruling binds, all of it:** no `experimental` or `supported` label anywhere — not in
-> `check health`, not in `priority`, not in the readme, nothing to grep for. **`linix init` keeps
+> `check health`, not in `priority`, not in the readme, nothing to grep for. **`shall init` keeps
 > scaffolding every manager it finds**, because scaffolding fewer is the same disclaimer written
 > as a default. A backend with no real lifecycle in an automated gate is a **release blocker**,
 > not a caption. No new backend until the current set passes.
@@ -461,7 +461,7 @@ exist. Every defect in this assessment lives in that remainder.
    round-trip, asserted while installed, in an automated gate.
 2. Everything else is **experimental**, and says so — in `check health`, in the `priority` file
    `init` writes, and in the readme.
-3. `linix init` currently writes **23 managers** into `priority` on a fresh Windows box, most
+3. `shall init` currently writes **23 managers** into `priority` on a fresh Windows box, most
    never run. Scaffold only supported ones by default.
 4. **Stop adding backends until (1) is true for the current set.**
 
@@ -528,9 +528,9 @@ paths and was never re-derived from the code:
 ### B21 · `G-1` — a removal path with no guard, no count, and no plan line
 
 **Symptom.** With `[guard] max_removals = 1` and `protected_packages = ["f3"]` — confirmed
-effective by `linix protected` — undeclaring five `link:` lines and running `linix sync -y`
+effective by `shall protected` — undeclaring five `link:` lines and running `shall sync -y`
 deleted all five target files **including the protected one**, exited 0, and printed
-`already up to date`. `linix --dry-run sync` printed `already up to date` as well.
+`already up to date`. `shall --dry-run sync` printed `already up to date` as well.
 
 **Root cause (verified).** `src/app/apply/extras.rs:105` calls `inst.remove(...)` directly for
 `service`/`link`/`setting` (and the sibling arms handle `shim`, `schedule`, `repo`). The word
@@ -570,10 +570,10 @@ a protected name.
 **Symptom.**
 
 ```
-$ linix install 'web:http://example.com/tool.tar.gz' -y
+$ shall install 'web:http://example.com/tool.tar.gz' -y
 Error: Validation error: refusing to download … over plain HTTP
 EXIT=1                                    # readme.md:708 says 3 means refused
-$ linix reset </dev/null
+$ shall reset </dev/null
 EXIT=3                                    # correct, same binary
 ```
 
@@ -600,15 +600,15 @@ fires for an unverified download, an unprotected secret, or an unapproved hook. 
 comment or make it true** — a comment asserting something about paths it never enumerated is the
 mistake `spec/history.md` calls the costliest in this repo.
 
-**It also un-blinds the harness.** `classify_install` keys `refused` on rc=3, so LiNix refusing
-correctly (`github:sharkdp/fd`, target exists and LiNix did not create it) arrives as rc=1 and is
+**It also un-blinds the harness.** `classify_install` keys `refused` on rc=3, so Shall refusing
+correctly (`github:sharkdp/fd`, target exists and Shall did not create it) arrives as rc=1 and is
 scored *"a defect, not ecosystem variance"*. `READINESS` §3.4 complained a correct refusal was
 laundered into a soft pass; it is now laundered into a **false hard failure**. Fixing this fixes
 the harness for free — do not patch `classify_install` instead.
 
 **⚠️ Needs a ruling (0.1)** — same reason B12/B17 did: it changes a published contract.
 
-> `readme.md` promises exit 3 means "LiNix refused on purpose". Right now that is true when it
+> `readme.md` promises exit 3 means "Shall refused on purpose". Right now that is true when it
 > refuses to remove too many packages, and false when it refuses to download over plain HTTP or
 > to write a secret nothing protects — those exit 1, the same code as a crash. Should all of them
 > return 3? Recommendation: **yes.** Scripts branch on this, and "I refused" and "I broke" are the
@@ -685,15 +685,15 @@ rejects, and the gate was green throughout.
 
 **Fix.** Two parts, and the second is the one that matters. (a) Make the helm flag conditional on
 what the installed helm accepts. (b) **Extend the drift gate to flags and operands** — for each
-manager, assert every flag LiNix may pass appears in that manager's help. This is the highest-value
+manager, assert every flag Shall may pass appears in that manager's help. This is the highest-value
 item in Round 2 for the same reason B12's gate was in Round 1.
 
 **Test first.** A fixture from helm 3's `plugin install --help` (no `--verify`) and one from
-helm 4's (with it); assert LiNix builds a different argv against each.
+helm 4's (with it); assert Shall builds a different argv against each.
 
-**Siblings.** Every conditional flag LiNix emits from a capability table, not just `VERIFIES_ITSELF`.
+**Siblings.** Every conditional flag Shall emits from a capability table, not just `VERIFIES_ITSELF`.
 
-**Acceptance.** `linix install 'helm:secrets@url=…,unverified'` succeeds in the `tools` container.
+**Acceptance.** `shall install 'helm:secrets@url=…,unverified'` succeeds in the `tools` container.
 
 ### B25 · `G-9` — four backends fail a real install, found the first time anyone ran them
 
@@ -718,7 +718,7 @@ lists correctly while its binary never reaches `PATH` (B4's family, in the conta
 B10 did not land. Measured, same failing command down each branch on this host:
 
 ```
-cmd /C …\scoop.cmd install <bad>   -> exit 0     # the branch LiNix takes
+cmd /C …\scoop.cmd install <bad>   -> exit 0     # the branch Shall takes
 powershell -Command "…; exit $LASTEXITCODE"  -> exit 1     # the branch it never reaches
 ```
 
@@ -738,7 +738,7 @@ branches rather than inferring from the extension).
 `luarocks install luafilesystem` fails identically three times in a row while
 `curl https://luarocks.org/manifest-5.5` returns **200** — luarocks' own downloader is what fails,
 because the `wget` first on PATH is a scoop shim. `exit_policy::luarocks()` lists
-`"failed downloading"` as transient, so LiNix keeps the declaration and tells the user `sync` will
+`"failed downloading"` as transient, so Shall keeps the declaration and tells the user `sync` will
 try it again. It will fail identically forever.
 
 The policy's doc comment **names this exact cause** and classifies it as the network anyway.
@@ -812,7 +812,7 @@ recorded 24/24 before testing my own oracle, and corrected it.
 
 **⚠️ Ruling needed** — user-visible behaviour change:
 
-> `linix list -b aptt` currently prints nothing and succeeds, which reads as "that manager has
+> `shall list -b aptt` currently prints nothing and succeeds, which reads as "that manager has
 > nothing installed" rather than "there is no such manager". Should it refuse the way `install`
 > does? Recommendation: **yes**, copying `install`'s message verbatim.
 
@@ -858,9 +858,9 @@ that was fixed at the reported instance and left live one layer over.
 ### B33 · `R-1` / **`Q16`** — a bare grammar keyword is a package name ✅ **ruled 2026-07-30**
 
 A module containing the single word `link` — which is what a half-typed
-`link:SRC @target=DEST` line looks like — declares a package. `linix eval` reports
-`{"backend": "cargo", "name": "link"}`, `--dry-run sync` plans one install, and `linix check`
-says *"1 to install … run `linix sync`"*. Thirteen of fourteen keywords do this, and each
+`link:SRC @target=DEST` line looks like — declares a package. `shall eval` reports
+`{"backend": "cargo", "name": "link"}`, `--dry-run sync` plans one install, and `shall check`
+says *"1 to install … run `shall sync`"*. Thirteen of fourteen keywords do this, and each
 resolves to a **real** backend holding a real package of that name: `when`→`cargo:when`,
 `absent`→`pip:absent`, `shim`→`scoop:shim`, `if`→`gem:if`, `else`→`npm:else`. Only `use` refuses.
 
@@ -920,7 +920,7 @@ and render the summary from the per-item `reason` each `Skipped` already carries
 collapsing three causes into one sentence that names none of them.
 
 **Test first.** Already red: `tests/grade4_adopt_respects_the_manifest_tests.rs` (2). It asks
-LiNix itself what this host can adopt, so it names a real package rather than guessing, and a
+Shall itself what this host can adopt, so it names a real package rather than guessing, and a
 host with nothing to adopt is **skipped and named** rather than passed.
 
 **Siblings.** Every other rollup count that explains itself with a reason belonging to one of its
@@ -954,14 +954,14 @@ stop telling them nothing looked, when something did.
 `Exhausted` is the model to follow — it is precise about what was tried.
 
 **Test first.** Already red: `verbs::packages::tests::a_transient_failure_is_not_reported_as_unclassified`
-and `…_is_not_advised_as_if_it_were_permanent` (`cargo test --bin linix`). Its sibling,
+and `…_is_not_advised_as_if_it_were_permanent` (`cargo test --bin shall`). Its sibling,
 `a_transient_or_unclassified_failure_keeps_the_line`, stays green — the line must still be kept.
 
 **And fix the harness half, which is costing two red CI jobs.** `classify_install` in
 `scripts/integration-windows.sh` tests transience by retrying the install *immediately*, which
 cannot succeed inside a 1236-second window — so it scored `defect`, the macOS leg went red, and
 the real-lifecycle ratchet fell 8 → 7 and went red behind it. `GRADER` §2.2 asked for this to be
-driven off LiNix's own `Retryability`; LiNix computes it correctly and the harness cannot see it.
+driven off Shall's own `Retryability`; Shall computes it correctly and the harness cannot see it.
 **Surface the classification** (a machine-readable line, or a distinct exit code) and have the
 harness read it, rather than guessing from a repeat.
 
@@ -983,14 +983,14 @@ package that does not exist, `heal` attempts the recovery, fails, and **leaves t
 
 ```
 ERROR could not recover npm:… — Some(CommandFailed { message: "…404…", retry: Permanent,
-absent_name: true }). … re-run `linix sync`.
- WARN 1 operation(s) could NOT be recovered: npm:… . Re-run `linix sync`.
+absent_name: true }). … re-run `shall sync`.
+ WARN 1 operation(s) could NOT be recovered: npm:… . Re-run `shall sync`.
 heal: reconciled locks/versions.json (1 entries)
 heal: refreshed backend metadata
 heal rc=0
 ```
 
-1. **rc=0** after *"1 operation(s) could NOT be recovered"*. `linix heal && echo ok` prints ok.
+1. **rc=0** after *"1 operation(s) could NOT be recovered"*. `shall heal && echo ok` prints ok.
    B17 audited *refusals* for the exit-code contract; failures were not in scope and are not
    covered.
 2. **`{:?}` on an `Option<Error>` printed at the user** — `Some(CommandFailed { … })`,
@@ -999,7 +999,7 @@ heal rc=0
 3. **The advice contradicts the struct it just printed.** `absent_name: true, retry: Permanent`
    means the name does not exist, and `packages.rs` has a whole `WhyKept::NameAbsentElsewhere`
    branch whose wording is *"`sync` will keep failing the same way until the line naming it is
-   corrected"*. `heal` says *"re-run `linix sync`"*.
+   corrected"*. `heal` says *"re-run `shall sync`"*.
 
 The last two lines a user sees are successes.
 
@@ -1016,7 +1016,7 @@ sweep, the shell-exit teardown. Check each for an exit code that ignores its own
 
 ## Tier 3 (round 6) — messages, and one platform defect
 
-### B37 · `R-4` — `linix list` and `linix info` contradict each other on macOS
+### B37 · `R-4` — `shall list` and `shall info` contradict each other on macOS
 
 `tests/grade2_info_tests.rs` is red on `macos-latest`: `list` reports
 `service:com.apple.SafariHistoryServiceAgent` and `info` about that exact name answers *"is not
@@ -1053,7 +1053,7 @@ from shared configs, not only from the user's own hand.
 
 **Fix.** Route the character validator's refusals through the same `Origin` the grammar's use, and
 escape non-printing characters in the message — name the codepoint (`U+202E`) rather than emitting
-it. `rustc` refuses to compile a doc comment containing this character; LiNix prints it.
+it. `rustc` refuses to compile a doc comment containing this character; Shall prints it.
 
 **Test first.** Already red: `tests/grade4_refusal_names_the_line_tests.rs` (2 red, 1 green control
 asserting the grammar's own refusal in the same fixture still names the line).
@@ -1091,10 +1091,10 @@ delete it. **Then add the check**: a test that every file under `tests/fixtures/
 Release binary, five samples, a machine with 24 ready backends:
 
 ```
-linix list           min  6.13s   median 20.43s   max 40.41s
-linix check health   min  8.47s   median 18.58s   max 35.92s
-linix check          min 17.02s   median 18.71s   max 55.40s
-linix policy / vars / eval / check config          ~0.25s
+shall list           min  6.13s   median 20.43s   max 40.41s
+shall check health   min  8.47s   median 18.58s   max 35.92s
+shall check          min 17.02s   median 18.71s   max 55.40s
+shall policy / vars / eval / check config          ~0.25s
 ```
 
 The split is diagnostic: config-only commands are instant, anything that queries the managers is
@@ -1126,9 +1126,9 @@ those reasons is a live defect currently indistinguishable from the two that are
 
 ### B43 · **`Q15`** — `bundle` and `export` honour `--dry-run`; `plan` does not ✅ **ruled 2026-07-30**
 
-`linix --dry-run bundle --out X` writes all nine files and prints *"Bundle written to X"* with no
+`shall --dry-run bundle --out X` writes all nine files and prints *"Bundle written to X"* with no
 marker — a preview that manufactured the artifact it was asked to describe, and said so in the past
-tense. `--dry-run plan` writes `linix-plan.json`, the same as `plan`.
+tense. `--dry-run plan` writes `shall-plan.json`, the same as `plan`.
 
 **RULED (owner, 2026-07-30): split them, and `export` goes with `bundle`.** The line is not *did
 the user name the path* — they name it for `bundle` too — but **is the file the preview or the
@@ -1196,14 +1196,14 @@ three of the ⚠️ rows in §0.1 that predate round 6 still are.
   after listing it; inspecting the machine afterwards proves nothing. Two findings in `READINESS`
   were initially wrong for exactly this reason, and the correction is recorded there.
 - **Do not test a stale artifact** *(added round 2, after it nearly produced four false findings)*.
-  The container images bake `linix` at **build** time — a cached image tests yesterday's binary, so
-  rebuild before believing a container result. `target/release/linix.exe` is **not** rebuilt by
+  The container images bake `shall` at **build** time — a cached image tests yesterday's binary, so
+  rebuild before believing a container result. `target/release/shall.exe` is **not** rebuilt by
   `cargo build --all-targets`, and on Windows `cargo build --release` fails with `Access is denied`
-  if any `linix` process is running — it will report the failure and leave the old binary in place.
+  if any `shall` process is running — it will report the failure and leave the old binary in place.
   `release-check.ps1` builds release first and is safe; invoking the harness directly is not.
   **Verify the artifact, not the build log**: run one known reproduction through it first.
 - **Do not run two integration sweeps at once.** Both harnesses use fixed paths
-  (`/tmp/linix-it-win-config`, `/tmp/linix-it-win-state`), so concurrent runs corrupt each other —
+  (`/tmp/shall-it-win-config`, `/tmp/shall-it-win-state`), so concurrent runs corrupt each other —
   producing 120-second lock timeouts and `Profile … already exists` failures that look like product
   defects and are not. Killing a wrapper process does not kill the `bash` script; check with
   `ps`/`Get-CimInstance` that it is actually gone.
@@ -1274,7 +1274,7 @@ no. An excuse on the only harness that can run a backend is indistinguishable fr
 - **`Dockerfile.storage`** — the first `--privileged` image, for `btrfs`, `lvm` and `zfs` on
   loopback devices. Authorised by the owner (`Q17`).
 - **Windows: `winget` has a real lifecycle**, canary `ajeetdsouza.zoxide` — measured by hand
-  first, with LiNix's exact argv, unelevated, no `--scope` flag: install, list, uninstall, gone.
+  first, with Shall's exact argv, unelevated, no `--scope` flag: install, list, uninstall, gone.
   `choco` and `psresource` are now skipped only for a **detected** reason (shell not elevated /
   host has no PSResourceGet cmdlets), the way `pip` already handled PEP 668.
 - **`LIFECYCLE_GAP_CEILING=11`** for the container harness — measured on the openSUSE run and
@@ -1410,8 +1410,8 @@ Two harness facts learned the hard way, both worth keeping:
   in `%LOCALAPPDATA%\Microsoft\WinGet\Links` and winget adds that directory to the **persisted**
   user PATH (`Path environment variable modified; restart your shell to use the new value`). A
   shell that is already running cannot see it, so `on_path` asks a question whose honest answer
-  is *"yes, in your next shell"*. The off-PATH fallback does not apply either: it reads LiNix's
-  own *"installs its executables into DIR, which is not on your PATH"* warning, and LiNix is
+  is *"yes, in your next shell"*. The off-PATH fallback does not apply either: it reads Shall's
+  own *"installs its executables into DIR, which is not on your PATH"* warning, and Shall is
   right not to print that here — the directory **is** on PATH, just not on this process's copy.
   The canary asserts no binary, with that reason written down, and `list --backend winget`
   remains the presence assertion.
@@ -1420,9 +1420,9 @@ Two harness facts learned the hard way, both worth keeping:
 not attribute them to this work. The recorded floor of **4** encodes that this host has been
 getting four real lifecycles for some time, so these have been failing here before tonight.
 
-- **`luarocks:luafilesystem` — checked, and it is not a LiNix defect.** This host's luarocks
+- **`luarocks:luafilesystem` — checked, and it is not a Shall defect.** This host's luarocks
   targets **Lua 5.5**, and no rock manifest is published for 5.5: all three mirrors 404, and the
-  summary is `No results matching query were found for Lua 5.5`. LiNix classifies the download
+  summary is `No results matching query were found for Lua 5.5`. Shall classifies the download
   failures transient, retries, and `falsify_transience` downgrades them to `Exhausted` — so the
   run hard-fails and withdraws nothing, which is correct. **Do not add the summary line to
   `luarocks()`'s permanent markers**: `exit_policy.rs:314` explains at length why it is
@@ -1475,12 +1475,12 @@ red-before / green-after evidence and an independent reproduction. The narrative
 | `G-3` | `assert_binary_reachable` takes the prior resolution, both harnesses, all four call sites; three predicates in `harness-logic-test.sh` |
 | `G-4` | `--no-fail-fast`, `opensuse`/`void`/`storage` in the local matrix, and a reachability row for every CI job |
 | `G-5` | a failed command's output is picked by the manager's own vocabulary, capped, counted, and sanitised through `validator::printable` |
-| `G-6` | `linix-failure-class:` only on a pipe |
+| `G-6` | `shall-failure-class:` only on a pipe |
 | `G-7` | four captured `winget` fixtures; the parser's hand-built table retired; an empty fixture directory now fails the gate |
 | `G-8` | `refuses_with_3` beside `nok`; the fail-everything stub is part of the mutation gate with its own ratchet. Found and fixed a live `B22` sibling: `restore`'s refusal exited 1 |
 
 **Built past the eight, because each pointed at a class rather than a line:** `nok_saying`
-(a negative check asserts LiNix's sentence, not only a non-zero code — the fail-everything
+(a negative check asserts Shall's sentence, not only a non-zero code — the fail-everything
 survivors went 12 -> 7 on Windows and 17 -> 12 in the container, both ratchets lowered);
 every grammar refusal drawn through `validator::printable`, so a config saved by Notepad no
 longer refuses with two identical-looking names; a width cap on a failed command's output,
@@ -1521,7 +1521,7 @@ judgement call — **more features, more extensibility, more intuitive** — and
 | `Q22` | a byte-order mark is an encoding artefact, not part of your first backend's name |
 | winget identifiers | `ARP\Machine\X64\{GUID}` and `MSIX\…` are names. The validator had to be taught what the grammar already knew — half a fix wedged the model |
 | `nix` | **installed at last** (its installer refuses to run as root and `\|\| echo SKIP` ate it), and its first lifecycle found a real bug |
-| nix `list` | blind to everything nix installs: schema v3 made `elements` a name-keyed object, LiNix asked for an array |
+| nix `list` | blind to everything nix installs: schema v3 made `elements` a name-keyed object, Shall asked for an array |
 | exemptions | five host-respect ones open on disposable hosts; `web:`/`appimage` given pinned canaries; `stack`/`flatpak` rewritten as PRICES |
 | canaries | one binary name per backend — `cowsay` had served four, `pycowsay` two, `hello` two |
 | gates | the heal check no longer asserts a premise the sweep falsifies; the union gate no longer counts an empty canary row as coverage |
@@ -1537,14 +1537,14 @@ container gap ceiling 11 -> **10** · full Windows suite **exit 0, 62 targets** 
 
 **`choco`'s first real lifecycle** (CI 30684191791) was written up as three failures admitting
 two readings, and left red pending "twenty minutes on an elevated Windows shell". It got them
-on 2026-08-01. **The three lines were one defect and it was LiNix's.** Full account in
+on 2026-08-01. **The three lines were one defect and it was Shall's.** Full account in
 `spec/history.md`; the short version:
 
 - `bat` pulls **eleven** packages, not one. The harness comment calling it dependency-free was
   never measured.
 - Chocolatey only raises its exit code to 1 for a failed package **when nothing has set one
   already**, so a dependency asking for a reboot leaves `3010` over an install of nothing —
-  and `3010` was on LiNix's `benign_exits`. LiNix reported success. The rest followed.
+  and `3010` was on Shall's `benign_exits`. Shall reported success. The rest followed.
 - The "refused over dependencies" reading was choco's *generic* troubleshooting footer, printed
   after any uninstall failure. `detail_for_user` falls back to the tail when **nothing matches**,
   and choco's one marker was an *install*-time phrasing a failed uninstall never prints — so
@@ -1580,7 +1580,7 @@ manager was in a position to say it.
 
 **Still open:**
 - Why the eleven-package install failed *on the runner specifically* — this box installs all
-  eleven clean. LiNix will now print choco's own reason instead of swallowing it, so the next
+  eleven clean. Shall will now print choco's own reason instead of swallowing it, so the next
   `Integration (Windows native)` run answers it rather than needing another round.
 - Whether `winget` has the absent-on-network-failure shape too. Unmeasured, not assumed. **The
   first probe design was wrong and the run said so:** `winget source add` validates the source
@@ -1591,7 +1591,7 @@ manager was in a position to say it.
 
 ## The lifecycle run that was meant to close that found two bigger things (2026-08-02)
 
-**LiNix bounded no child process at all, and it cost 76 minutes.** `linix -y uninstall
+**Shall bounded no child process at all, and it cost 76 minutes.** `shall -y uninstall
 choco:bat` wedged on the pre-sync `Checkpoint-Computer`; Windows event 8194 records the restore
 point **created 18 seconds in**, and the process then emitted nothing on either pipe for 76
 minutes without exiting. The only timeout in the tree wraps the transaction DAG, and
@@ -1679,7 +1679,7 @@ the escalation path stays unrun on every platform.
 ## What this round did NOT do
 
 - **The Windows harness has none of it.** `scripts/integration-windows.sh` is the twin and the
-  crash and two-writer checks belong there (`sudo` does not — LiNix escalates only off Windows).
+  crash and two-writer checks belong there (`sudo` does not — Shall escalates only off Windows).
   A check on one harness is a check on one platform, which is round 7's own finding.
 - **The grade's §3 reporting findings are open**: `--dry-run sync` names nothing and skips the
   guard (3.1), `manual_source` is wrong for 19 backends (3.3), an error names the wrong file

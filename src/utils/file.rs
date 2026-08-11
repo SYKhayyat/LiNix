@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
-/// Write a file LiNix owns — `active`, `preferences.toml`, a manifest, a lock under `locks/`,
+/// Write a file Shall owns — `active`, `preferences.toml`, a manifest, a lock under `locks/`,
 /// the WAL, its own state registry — atomically, and **the one place `--dry-run` stops bytes
 /// from reaching a disk**.
 ///
@@ -94,7 +94,7 @@ fn atomic_write(path: &Path, content: &str) -> Result<()> {
 /// at do, which leaves a file of the right name and zero length. `CommandExecutor::write_atomic`
 /// omitted both `flush` and `sync_all` and is what writes a systemd unit and a `link:` target,
 /// while `registry.json` and the WAL went through here and survived. That is the worst possible
-/// division: a crash keeps LiNix's record of what it did and loses what it did.
+/// division: a crash keeps Shall's record of what it did and loses what it did.
 ///
 /// `prepare` runs on the temporary file **after** the bytes and **before** the rename, which is
 /// the only window in which a mode change is not a window. A `chmod` after the rename means the
@@ -245,7 +245,7 @@ fn removal_error(path: &Path, e: &std::io::Error) -> Error {
 /// list carried `.tar.zst` for as long as `extract_archive` could not open one, which is how
 /// four lists of one fact stay wrong in four different ways. What is spelled out here is only
 /// what `Format` does not know about: the bare codec tails, which name a compressed file rather
-/// than an artifact LiNix would ever select, and `.7z`, which nothing opens and everything
+/// than an artifact Shall would ever select, and `.7z`, which nothing opens and everything
 /// should still strip.
 ///
 /// **Sorted longest-first, rather than written that way.** The lookup below takes the first
@@ -319,7 +319,7 @@ pub fn bin_destination(bin_dir: &Path, name: &str, confined: bool) -> Result<Pat
 }
 
 /// Put a downloaded artifact's executable on the user's PATH, refusing to destroy a file
-/// LiNix did not deploy.
+/// Shall did not deploy.
 ///
 /// `dest` must come from [`bin_destination`], which is what keeps an `@bin=` value from
 /// naming a file outside the bin directory (SEC1).
@@ -330,7 +330,7 @@ pub fn bin_destination(bin_dir: &Path, name: &str, confined: bool) -> Result<Pat
 /// hand-rolled a symlink that did not, so the same directory had opposite answers depending on
 /// which backend got there first.
 ///
-/// A destination counts as LiNix's when it is absent, when it is a symlink pointing inside
+/// A destination counts as Shall's when it is absent, when it is a symlink pointing inside
 /// `owned_root` (the backend's own install directory), or when it is the exact path this
 /// backend recorded deploying last time — which is what identifies a copy, since a copy
 /// carries no pointer home.
@@ -390,7 +390,7 @@ pub async fn ensure_deployable(
         return Ok(());
     }
     Err(Error::Refused(format!(
-        "refusing to deploy `{}`: {} already exists and LiNix did not create it. Move or \
+        "refusing to deploy `{}`: {} already exists and Shall did not create it. Move or \
          rename that file yourself if you want it managed here.",
         dest.file_name().unwrap_or_default().to_string_lossy(),
         dest.display()
@@ -547,15 +547,15 @@ mod tests {
     #[test]
     fn appending_to_a_file_that_ends_mid_line_does_not_join_onto_it() {
         // A `.gitignore` a user edited by hand is the case: without the newline, adding
-        // `*.linix-backup` to a file ending `target` produces `target*.linix-backup`, which
+        // `*.shall-backup` to a file ending `target` produces `target*.shall-backup`, which
         // ignores neither.
         let dir = TempDir::new().unwrap();
         let f = dir.path().join(".gitignore");
         std::fs::write(&f, b"target").unwrap();
-        append_line(&f, "*.linix-backup").unwrap();
+        append_line(&f, "*.shall-backup").unwrap();
         assert_eq!(
             read_lines_filtered(&f).unwrap(),
-            vec!["target".to_string(), "*.linix-backup".to_string()]
+            vec!["target".to_string(), "*.shall-backup".to_string()]
         );
     }
 
@@ -649,7 +649,7 @@ c"
     }
 
     #[tokio::test]
-    async fn it_refuses_to_replace_a_file_linix_did_not_deploy() {
+    async fn it_refuses_to_replace_a_file_shall_did_not_deploy() {
         // `~/.local/bin` is shared with the user. Deploying by name alone would make a
         // package called `fd` silently destroy whatever `fd` they already had.
         let (_d, src, bin) = fixture().await;

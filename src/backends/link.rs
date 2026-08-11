@@ -29,11 +29,11 @@ pub fn resolve_target(target: &str) -> Result<PathBuf> {
     }
 }
 
-/// Where the pre-existing file at `target` is kept while LiNix owns that path. One function,
+/// Where the pre-existing file at `target` is kept while Shall owns that path. One function,
 /// because the write path and the undo path must agree on the name or a restore looks for a
 /// file nothing wrote.
 pub fn backup_path(target: &Path) -> PathBuf {
-    PathBuf::from(format!("{}.linix-backup", target.display()))
+    PathBuf::from(format!("{}.shall-backup", target.display()))
 }
 
 /// Whether a `link:` line wants its pre-existing target preserved (T6). Backing up is the
@@ -89,7 +89,7 @@ fn decrypt_argv(tool: &str, source: &Path, identity: Option<&Path>) -> Result<Ve
         "age" => {
             let identity = identity.ok_or_else(|| {
                 Error::Other(
-                    "age decrypt needs an identity — set @identity=<path> or $LINIX_AGE_IDENTITY"
+                    "age decrypt needs an identity — set @identity=<path> or $SHALL_AGE_IDENTITY"
                         .into(),
                 )
             })?;
@@ -127,20 +127,20 @@ impl LinkBackendCore {
         self
     }
 
-    /// Resolve the age identity file: explicit `@identity=`, else `$LINIX_AGE_IDENTITY`,
-    /// else the conventional `~/.config/linix/age.key`.
+    /// Resolve the age identity file: explicit `@identity=`, else `$SHALL_AGE_IDENTITY`,
+    /// else the conventional `~/.config/shall/age.key`.
     fn age_identity(&self, spec: &PackageSpec) -> Option<PathBuf> {
         if let Some(id) = spec.options.one("identity") {
             return Some(PathBuf::from(id));
         }
-        if let Ok(id) = std::env::var("LINIX_AGE_IDENTITY") {
+        if let Ok(id) = std::env::var("SHALL_AGE_IDENTITY") {
             return Some(PathBuf::from(id));
         }
-        dirs::home_dir().map(|h| h.join(".config").join("linix").join("age.key"))
+        dirs::home_dir().map(|h| h.join(".config").join("shall").join("age.key"))
     }
 
     /// Decrypt an encrypted source file to plaintext by shelling out to the `age` or `sops`
-    /// binary. LiNix stays true to its "manager of managers" model: it orchestrates the
+    /// binary. Shall stays true to its "manager of managers" model: it orchestrates the
     /// tool the user already trusts rather than embedding crypto. stdout is captured raw
     /// (never trimmed) so key material survives byte-for-byte.
     /// Decrypt `source`, or return `Ok(None)` when an unattended run skips a touch-required
@@ -302,8 +302,8 @@ impl LinkBackendCore {
         Ok(())
     }
 
-    /// Preserve a pre-existing, unmanaged file before LiNix overwrites or replaces it —
-    /// exactly once, as `<target>.linix-backup`. So the user is never silently robbed of
+    /// Preserve a pre-existing, unmanaged file before Shall overwrites or replaces it —
+    /// exactly once, as `<target>.shall-backup`. So the user is never silently robbed of
     /// a config file they already had. Symlinks (mere pointers) and directories are
     /// skipped, and an existing backup is never clobbered, so the true original survives
     /// even across repeated syncs. Honors dry-run (previews instead of copying).
@@ -450,7 +450,7 @@ impl Installable for LinkInstallable {
                     continue;
                 };
                 // T1: no backup. `backup_once` exists so a user is not silently robbed of a
-                // config file they hand-wrote; a secret LiNix decrypted a moment ago is not
+                // config file they hand-wrote; a secret Shall decrypted a moment ago is not
                 // that, and the copy would sit beside the target under the ordinary umask,
                 // outlasting the declaration that made it.
                 if let Ok(existing) = self.core.executor.read_file(&target_path).await {
@@ -489,10 +489,10 @@ impl Installable for LinkInstallable {
                     }
                 }
 
-                // A copy LiNix made is as much "already in effect" as a symlink it made.
+                // A copy Shall made is as much "already in effect" as a symlink it made.
                 // Windows without the symlink privilege gets a copy, and asking only
                 // `read_link` meant every later sync backed up its own copy as
-                // `<target>.linix-backup` and wrote the file again, under a summary
+                // `<target>.shall-backup` and wrote the file again, under a summary
                 // reading `already up to date`.
                 if exists && !is_symlink {
                     if let (Ok(from), Ok(to)) = (
@@ -548,11 +548,11 @@ impl Installable for LinkInstallable {
         Ok(())
     }
 
-    /// Undo a `link:` declaration. Each name is the DESTINATION LiNix wrote — never the source
-    /// in your repo, which LiNix does not own and must not delete.
+    /// Undo a `link:` declaration. Each name is the DESTINATION Shall wrote — never the source
+    /// in your repo, which Shall does not own and must not delete.
     ///
-    /// **A declaration undoes what it did (T6).** If a `<target>.linix-backup` is sitting there,
-    /// the target was somebody's file before LiNix took it over: the backup is put back and the
+    /// **A declaration undoes what it did (T6).** If a `<target>.shall-backup` is sitting there,
+    /// the target was somebody's file before Shall took it over: the backup is put back and the
     /// backup file removed, so a `link:` line that comes and goes leaves the machine as it found
     /// it and nothing accumulates. With no backup there was nothing there before, so the target
     /// is removed.
@@ -687,7 +687,7 @@ mod tests {
     #[test]
     fn a_system_path_is_outside_home() {
         #[cfg(windows)]
-        let system = r"C:\ProgramData\linix\x";
+        let system = r"C:\ProgramData\shall\x";
         #[cfg(not(windows))]
         let system = "/etc/cron.d/x";
         assert!(is_outside_home(&resolve_target(system).unwrap()));
@@ -760,13 +760,13 @@ mod tests {
 
     #[test]
     fn the_source_path_goes_behind_the_terminator_and_the_identity_stays_in_front() {
-        let identity = PathBuf::from("/home/u/.config/linix/age.key");
+        let identity = PathBuf::from("/home/u/.config/shall/age.key");
         assert_eq!(
             decrypt_argv("age", Path::new("/cfg/token.age"), Some(&identity)).unwrap(),
             [
                 "--decrypt",
                 "-i",
-                "/home/u/.config/linix/age.key",
+                "/home/u/.config/shall/age.key",
                 "--",
                 "/cfg/token.age"
             ]
@@ -811,7 +811,7 @@ mod tests {
 
     #[tokio::test]
     async fn backup_no_opts_a_single_line_out_of_the_backup() {
-        // T6: @backup=no writes the managed content and leaves NO .linix-backup, so a user who
+        // T6: @backup=no writes the managed content and leaves NO .shall-backup, so a user who
         // explicitly does not want the original kept does not get a stray copy beside it.
         let dir = tempdir().unwrap();
         let target = dir.path().join("gitconfig");
@@ -865,7 +865,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(tokio::fs::read_to_string(&target).await.unwrap(), "v2");
-        // The backup still holds the true pre-LiNix original, not the interim edit.
+        // The backup still holds the true pre-Shall original, not the interim edit.
         let backup = backup_path(&target);
         assert_eq!(
             tokio::fs::read_to_string(&backup).await.unwrap(),

@@ -1,1 +1,1 @@
-ERROR 'linix-no-such-pkg-zzz' isn't installed.
+ERROR 'shall-no-such-pkg-zzz' isn't installed.

@@ -27,7 +27,7 @@ pub struct DesiredState {
     pub packages: HashMap<String, Vec<PackageSpec>>,
     /// Repositories, shims, links, services and schedules, in declaration order.
     pub extras: Vec<(Statement, Origin)>,
-    /// Dated lines whose date has passed. They linger — **LiNix must not rewrite your
+    /// Dated lines whose date has passed. They linger — **Shall must not rewrite your
     /// files** — so `sync` mentions them, naming the exact file and line (II.16).
     pub lapsed: Vec<(String, Origin)>,
     /// The variables this state resolved against (Part IX). Carried so a saved plan can freeze
@@ -165,7 +165,7 @@ impl DesiredState {
 /// lines belong to.
 ///
 /// The scopes are collected here because this is the only place that knows them. Once the
-/// statements are flattened, "profile `Work` reaches module `dev`" is gone, and `linix
+/// statements are flattened, "profile `Work` reaches module `dev`" is gone, and `shall
 /// upgrade --profile Work` has no way to ask.
 pub struct Reached {
     pub statements: Vec<(Statement, Origin, Gates)>,
@@ -279,7 +279,7 @@ impl<'a> Resolver<'a> {
     }
 
     /// [`load_vars`], plus where each variable was set — for the tooling that explains a variable
-    /// (`linix vars`, `why`; W11/W12). The value path calls [`load_vars`] and drops the origins,
+    /// (`shall vars`, `why`; W11/W12). The value path calls [`load_vars`] and drops the origins,
     /// so no producer runs twice: both share the one provider dispatch below.
     pub fn load_vars_with_origins(
         &self,
@@ -306,7 +306,7 @@ impl<'a> Resolver<'a> {
     /// A `vars` provider that executes goes through the hook ledger before it runs (V.55).
     /// It resolves at step 0 — before any plan, on `status`/`plan`, and under `watch --pull`
     /// on a pulled repo — so an unapproved or changed provider is a refusal here, exactly as
-    /// a changed hook stops a sync. `-y` cannot approve; `linix lock` does.
+    /// a changed hook stops a sync. `-y` cannot approve; `shall lock` does.
     fn verify_provider_approved(&self, path: &Path) -> Result<()> {
         use crate::core::hook_lock::{hash_script, refusal, vars_id, HookLedger};
         let origin = Origin::new(
@@ -832,11 +832,11 @@ impl<'a> Resolver<'a> {
                 Statement::Package(d) => (d, true),
                 Statement::Absent(d) => (d, false),
                 // V.47/V.15: a `repo:` names a backend, and a backend not in `priority` is
-                // one LiNix does not use — refused here so `sync`, `plan` and `check` all
+                // one Shall does not use — refused here so `sync`, `plan` and `check` all
                 // say the same thing, in the file, rather than at the add command.
                 Statement::Repo { backend, spec } if !self.priority.allows(&backend) => {
                     return Err(self.priority.reject(&backend, &origin).with_hint(format!(
-                        "add `{}` to `priority` to use `repo:{}:{}`. Not listed means LiNix \
+                        "add `{}` to `priority` to use `repo:{}:{}`. Not listed means Shall \
                          does not use it at all.",
                         backend, backend, spec
                     )));
@@ -881,7 +881,7 @@ impl<'a> Resolver<'a> {
                     .with_hint(
                         "a generator runs a command and treats its output as declarations — off \
                          by default. Set `allow_generators = true` to enable it, and run \
-                         `linix lock` to approve the command.",
+                         `shall lock` to approve the command.",
                     ));
                 }
                 // A `param` is a module's own declaration and is consumed when the module is
@@ -1007,7 +1007,7 @@ impl<'a> Resolver<'a> {
     fn backend_for(&self, decl: &PackageDecl, origin: &Origin) -> Result<String> {
         match &decl.backend {
             Some(b) => {
-                // V.15: not listed means LiNix does not use it at all, and saying so
+                // V.15: not listed means Shall does not use it at all, and saying so
                 // catches typos and makes your backend set declared, not inherited.
                 if !self.priority.allows(b) {
                     return Err(self.priority.reject(b, origin));
@@ -1041,7 +1041,7 @@ impl<'a> Resolver<'a> {
     }
 }
 
-/// Whether a package line asks for a PATH stand-in. `@sandbox` implies it: `linix run` confines
+/// Whether a package line asks for a PATH stand-in. `@sandbox` implies it: `shall run` confines
 /// the tool *through* the shim, so there is nothing to confine without one.
 pub fn wants_a_shim(options: &Options) -> bool {
     options.one("shim") == Some("true") || options.one("sandbox") == Some("true")
@@ -1105,7 +1105,7 @@ pub struct Provenance<'a> {
 }
 
 /// Build the seam's `PackageSpec` from one declaration. The only place this conversion
-/// happens: an imperative `linix install jq` and a line in a module must produce the same
+/// happens: an imperative `shall install jq` and a line in a module must produce the same
 /// spec, or the two paths drift (P4).
 pub fn to_spec(
     backend: &str,
@@ -1329,7 +1329,7 @@ mod tests {
 
     #[test]
     fn an_unreached_broken_module_is_never_parsed() {
-        // II.3: LiNix only parses what the active profiles reach.
+        // II.3: Shall only parses what the active profiles reach.
         let f = fx(
             "Work\n",
             &[("Work", "use editors\n")],
@@ -1373,7 +1373,7 @@ mod tests {
 
     #[test]
     fn an_explicit_backend_not_in_priority_is_refused() {
-        // The refusal has to name `priority`: a backend LiNix simply cannot see and one
+        // The refusal has to name `priority`: a backend Shall simply cannot see and one
         // the host deliberately does not list produce the same silence otherwise.
         let f = fx(
             "Work\n",
@@ -1386,7 +1386,7 @@ mod tests {
 
     #[test]
     fn a_lapsed_line_stops_counting_but_is_reported_with_its_file_and_line() {
-        // II.16: expired lines linger — LiNix must not rewrite your files — so it mentions
+        // II.16: expired lines linger — Shall must not rewrite your files — so it mentions
         // them, naming the exact file and line, never vaguely.
         let f = fx(
             "Work\n",
@@ -2144,7 +2144,7 @@ apt:nginx
 
     #[test]
     fn a_profile_cannot_use_absent() {
-        // II.4. `absent:` reaches outside what LiNix manages (V.7); `-` only says this
+        // II.4. `absent:` reaches outside what Shall manages (V.7); `-` only says this
         // profile does not want it.
         let f = fx("Work\n", &[("Work", "absent:apt:steam\n")], &[]);
         let err = resolve(&f).unwrap_err();
@@ -2196,7 +2196,7 @@ apt:nginx
             &[("base.txt", "apt:curl\n")],
         );
         // An embedded provider is a script that runs at step 0 — it must be approved first.
-        let provider = f.layout.config_root().join("vars.linix");
+        let provider = f.layout.config_root().join("vars.shall");
         std::fs::write(&provider, "#{ role: \"work\" }").unwrap();
 
         let run = || {
@@ -2208,12 +2208,12 @@ apt:nginx
         let err = run().unwrap_err().to_string();
         assert!(err.contains("never been approved"), "{}", err);
 
-        // `linix lock` records the current hash; the same provider now runs.
+        // `shall lock` records the current hash; the same provider now runs.
         let locks = f.layout.config_root().join("locks");
         let path = HookLedger::path_in(&locks);
         let mut ledger = HookLedger::load(&path).unwrap();
         let body = std::fs::read_to_string(&provider).unwrap();
-        ledger.approve(&vars_id("vars.linix"), &hash_script(&body));
+        ledger.approve(&vars_id("vars.shall"), &hash_script(&body));
         ledger.save(&path).unwrap();
 
         let (vars, _) = run().expect("an approved provider runs");

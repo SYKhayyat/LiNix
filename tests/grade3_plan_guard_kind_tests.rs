@@ -6,17 +6,17 @@
 //! keys — `src/verbs/plan.rs:259` merges `extra_removal_pairs(...)` into `guard::inspect(...)`, and
 //! `inspect` is `RemovalKind::Package`. Three `link:` lines, undeclared, on a default config:
 //!
-//!     $ linix plan
-//!     Wrote plan to linix-plan.json — 0 install(s), 0 removal(s), 0 resource(s) to place, 3 to undo.
+//!     $ shall plan
+//!     Wrote plan to shall-plan.json — 0 install(s), 0 removal(s), 0 resource(s) to place, 3 to undo.
 //!       - link:…/dest/s1 (no longer declared)
 //!
-//!     WARNING: `linix apply` will refuse this plan.
+//!     WARNING: `shall apply` will refuse this plan.
 //!     apply: refusing this removal.
 //!       - link:…/dest/s1 would be removed (its manager reports a name no package line can hold,
-//!         so LiNix cannot manage it — and removing what you cannot declare is not something you
+//!         so Shall cannot manage it — and removing what you cannot declare is not something you
 //!         asked for)
 //!
-//!     $ linix apply linix-plan.json -y
+//!     $ shall apply shall-plan.json -y
 //!     Applied plan: 0 installed, 0 removed, 3 resource(s) reconciled.     rc=0
 //!
 //! Every file was removed. `sync -y` does the same, also rc=0, no refusal.
@@ -98,14 +98,14 @@ fn plan_does_not_predict_a_refusal_apply_will_not_make() {
          {plan_out}"
     );
 
-    let (apply_out, apply_code) = f.run(&["apply", "linix-plan.json", "-y"]);
+    let (apply_out, apply_code) = f.run(&["apply", "shall-plan.json", "-y"]);
     let refused_for_real = apply_code == 3 || apply_out.contains("refusing this removal");
     let gone = targets.iter().all(|t| !t.exists());
 
     assert!(
         // The implication, unchanged: if `plan` predicted the refusal, `apply` has to make it.
         !plan_out.contains("will refuse this plan") || refused_for_real,
-        "`plan` warned `WARNING: linix apply will refuse this plan` and `apply` performed it \
+        "`plan` warned `WARNING: shall apply will refuse this plan` and `apply` performed it \
          (rc={apply_code}, every target removed: {gone}).\n\nplan said:\n{}\n\napply said:\n{}",
         plan_out
             .lines()

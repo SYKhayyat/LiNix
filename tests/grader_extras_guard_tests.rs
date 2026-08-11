@@ -6,19 +6,19 @@
 //! through `prune`, which nobody thought to check."
 //!
 //! `src/app/apply/extras.rs:105` deletes and the word `guard` does not appear in that file.
-//! It is the undo path for every non-package resource LiNix manages — `link:`, `service:`,
+//! It is the undo path for every non-package resource Shall manages — `link:`, `service:`,
 //! `setting:`, `shim:`, `schedule:`, `repo:`. When a declaration leaves the model, this loop
 //! tears the resource down directly through `inst.remove(...)`, outside the transaction, and
 //! outside `guard::enforce`.
 //!
-//! Measured, with the guard configured and confirmed effective by `linix protected`
+//! Measured, with the guard configured and confirmed effective by `shall protected`
 //! (`max_removals = 1`, `protected_packages = ["f3"]`):
 //!
-//!     $ linix sync -y          # five link: declarations applied
+//!     $ shall sync -y          # five link: declarations applied
 //!     $ : > modules/starter.txt
-//!     $ linix --dry-run sync
+//!     $ shall --dry-run sync
 //!     already up to date
-//!     $ linix sync -y
+//!     $ shall sync -y
 //!     already up to date
 //!     $ ls <targets>
 //!     (empty)
@@ -109,7 +109,7 @@ fn undeclaring_managed_extras_goes_through_the_removal_guard() {
         "`sync` deleted {} managed file(s) — {:?} — with the guard set to refuse more than \
          one removal and to protect `f3`.\n\
          It exited {rc} and reported no changes.\n\
-         --- linix --dry-run sync ---\n{}\n--- linix sync -y ---\n{}\n\n\
+         --- shall --dry-run sync ---\n{}\n--- shall sync -y ---\n{}\n\n\
          src/app/apply/extras.rs:105 calls `inst.remove(...)` directly; the word `guard` does \
          not appear in that file. readme.md says every path that removes anything goes \
          through one guard.",

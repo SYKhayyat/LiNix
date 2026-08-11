@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 use std::process::Command;
 
 fn help() -> String {
-    let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+    let out = Command::new(env!("CARGO_BIN_EXE_shall"))
         .arg("--help")
         .output()
         .expect("the binary should run");
@@ -102,7 +102,7 @@ fn the_map_names_no_command_that_does_not_exist() {
         // is precisely the shape the header is about.
         //
         // What makes it safe is a second gate, not this one:
-        // `named_commands_exist_tests.rs` resolves every `linix <word>` in `src/`, `tests/`,
+        // `named_commands_exist_tests.rs` resolves every `shall <word>` in `src/`, `tests/`,
         // `scripts/`, `docker/`, `examples/`, `.github/` and `readme.md` against clap's live
         // command tree, so a *live invocation* of `undo` fails there regardless of what this
         // list says. Since 2026-08-07 it also covers `docs/`, against `target-state.md` II.17's
@@ -146,8 +146,8 @@ fn the_map_names_no_command_that_does_not_exist() {
                 "any",
                 "one",
                 "them",
-                "linix",
-                "linix-plan",
+                "shall",
+                "shall-plan",
                 "modules/starter.txt",
             ]
             .contains(&t.as_str())

@@ -77,10 +77,10 @@ impl Sandbox {
     }
 
     fn run(&self, args: &[&str]) -> (String, i32) {
-        let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+        let out = Command::new(env!("CARGO_BIN_EXE_shall"))
             .args(args)
-            .env("LINIX_CONFIG_DIR", self.cfg())
-            .env("LINIX_DATA_DIR", self.root.path().join("data"))
+            .env("SHALL_CONFIG_DIR", self.cfg())
+            .env("SHALL_DATA_DIR", self.root.path().join("data"))
             .stdin(std::process::Stdio::null())
             .output()
             .expect("the binary should run");
@@ -225,7 +225,7 @@ fn the_fixture_is_drift_when_nothing_protects_it() {
 /// A `_ => ` arm would defeat it entirely, which is why there is not one.
 #[test]
 fn every_reason_a_removal_is_declined_says_whether_the_user_hears_about_it() {
-    use linix::app::sync::planner::Declined;
+    use shall::app::sync::planner::Declined;
 
     for declined in [
         Declined::AlreadyScheduled,
@@ -244,7 +244,7 @@ fn every_reason_a_removal_is_declined_says_whether_the_user_hears_about_it() {
             //
             // `BackendNotOnThisMachine` is one of them and it is worth saying why, because the
             // opposite reading is available: if the manager is gone, is the package not gone
-            // with it? No — the registry still carries the row, so LiNix still claims to
+            // with it? No — the registry still carries the row, so Shall still claims to
             // manage something it can no longer see, and a machine that gets its manager back
             // gets the package back with it. Silence there is `already up to date` over a
             // disagreement that outlives the run (II.7c).

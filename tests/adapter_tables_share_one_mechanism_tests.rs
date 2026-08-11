@@ -17,7 +17,7 @@
 //!    alone cannot give: the seven copies were each written by someone who had not read the
 //!    other six.
 
-use linix::core::adapter::{self, AdapterRow, Detected};
+use shall::core::adapter::{self, AdapterRow, Detected};
 use std::path::{Path, PathBuf};
 
 fn root() -> PathBuf {
@@ -222,35 +222,35 @@ fn every_adapter_row_answers_the_same_three_questions() {
         assert!(!R::WHAT.trim().is_empty(), "a table must name itself");
     }
 
-    let firewall: linix::backends::firewall::FirewallAdapter =
+    let firewall: shall::backends::firewall::FirewallAdapter =
         toml::from_str(FIREWALL_ROW).expect("the sample firewall row parses");
     asks(&firewall, "ufw");
     assert_eq!(firewall.detect_command(), "ufw");
 
-    let init: linix::backends::service::InitProvider =
+    let init: shall::backends::service::InitProvider =
         toml::from_str(INIT_ROW).expect("the sample init row parses");
     asks(&init, "systemd");
     assert_eq!(init.detect_command(), "systemctl");
 
-    let setting: linix::backends::setting::SettingAdapter =
+    let setting: shall::backends::setting::SettingAdapter =
         toml::from_str(SETTING_ROW).expect("the sample settings row parses");
     asks(&setting, "gsettings");
     assert_eq!(setting.detect_command(), "gsettings");
 
-    let snapshot: linix::core::snapshot::SnapshotProviderDef =
+    let snapshot: shall::core::snapshot::SnapshotProviderDef =
         toml::from_str(SNAPSHOT_ROW).expect("the sample snapshot row parses");
     asks(&snapshot, "lvm");
     assert_eq!(snapshot.detect_command(), "lvcreate");
 
-    let bootstrap: linix::model::bootstrap::BootstrapDef =
+    let bootstrap: shall::model::bootstrap::BootstrapDef =
         toml::from_str(BOOTSTRAP_ROW).expect("the sample bootstrap row parses");
     asks(&bootstrap, "brew");
 
-    let prereq: linix::model::prereq::PrereqDef =
+    let prereq: shall::model::prereq::PrereqDef =
         toml::from_str(PREREQ_ROW).expect("the sample prereq row parses");
     asks(&prereq, "mix");
 
-    let secret: linix::model::secret::SecretProvider =
+    let secret: shall::model::secret::SecretProvider =
         toml::from_str(SECRET_ROW).expect("the sample secret row parses");
     asks(&secret, "vault");
 }
@@ -279,13 +279,13 @@ fn every_adapter_row_can_be_restricted_to_one_os() {
         assert!(bare.applies_to("linux") && bare.applies_to("windows"));
     }
 
-    restricted::<linix::backends::firewall::FirewallAdapter>(FIREWALL_ROW, "firewall");
-    restricted::<linix::backends::service::InitProvider>(INIT_ROW, "init");
-    restricted::<linix::backends::setting::SettingAdapter>(SETTING_ROW, "setting_store");
-    restricted::<linix::core::snapshot::SnapshotProviderDef>(SNAPSHOT_ROW, "snapshot");
-    restricted::<linix::model::bootstrap::BootstrapDef>(BOOTSTRAP_ROW, "bootstrap");
-    restricted::<linix::model::prereq::PrereqDef>(PREREQ_ROW, "prereq");
-    restricted::<linix::model::secret::SecretProvider>(SECRET_ROW, "secret");
+    restricted::<shall::backends::firewall::FirewallAdapter>(FIREWALL_ROW, "firewall");
+    restricted::<shall::backends::service::InitProvider>(INIT_ROW, "init");
+    restricted::<shall::backends::setting::SettingAdapter>(SETTING_ROW, "setting_store");
+    restricted::<shall::core::snapshot::SnapshotProviderDef>(SNAPSHOT_ROW, "snapshot");
+    restricted::<shall::model::bootstrap::BootstrapDef>(BOOTSTRAP_ROW, "bootstrap");
+    restricted::<shall::model::prereq::PrereqDef>(PREREQ_ROW, "prereq");
+    restricted::<shall::model::secret::SecretProvider>(SECRET_ROW, "secret");
 }
 
 /// The shipped rows still clear the floor, through the same call a user's row does — which is
@@ -305,17 +305,17 @@ fn every_shipped_row_clears_the_floor() {
         }
     }
 
-    all_usable(linix::backends::firewall::adapters(Vec::new()), "firewall");
-    all_usable(linix::backends::service::providers(Vec::new()), "init");
-    all_usable(linix::backends::setting::adapters(Vec::new()), "setting");
+    all_usable(shall::backends::firewall::adapters(Vec::new()), "firewall");
+    all_usable(shall::backends::service::providers(Vec::new()), "init");
+    all_usable(shall::backends::setting::adapters(Vec::new()), "setting");
 
-    let prereqs: linix::model::prereq::PrereqFile =
-        toml::from_str(linix::app::apply::prereq::BUILTIN).expect("the built-in prereq rows parse");
+    let prereqs: shall::model::prereq::PrereqFile =
+        toml::from_str(shall::app::apply::prereq::BUILTIN).expect("the built-in prereq rows parse");
     all_usable(prereqs.prereq, "prereq");
 
     // `usable` drops rather than refuses, so a shipped row that stopped clearing the floor
     // would vanish silently. That it drops nothing is the assertion.
-    let shipped = linix::backends::firewall::adapters(Vec::new()).len();
+    let shipped = shall::backends::firewall::adapters(Vec::new()).len();
     assert!(
         shipped >= 3,
         "ufw, firewalld and windows-defender ship — found {}",
@@ -404,7 +404,7 @@ source = "vg0/root"
 create = ["lvcreate", "-s", "-n", "{id}", "{source}"]
 list = ["lvs", "--noheadings", "-o", "lv_name"]
 delete = ["lvremove", "-f", "{id}"]
-list_pattern = '(linix_\S+)'
+list_pattern = '(shall_\S+)'
 "#;
 
 const BOOTSTRAP_ROW: &str = r#"
@@ -538,10 +538,10 @@ fn rust_files(dir: &Path) -> Vec<PathBuf> {
 /// fails if a table goes back to hand-rolling the chain.
 #[test]
 fn a_tables_argv_is_filled_by_the_shared_substitution() {
-    let firewall: linix::backends::firewall::FirewallAdapter =
+    let firewall: shall::backends::firewall::FirewallAdapter =
         toml::from_str(FIREWALL_ROW).expect("the sample firewall row parses");
     assert_eq!(
-        firewall.allow_command(22, linix::model::firewall::Proto::Tcp),
+        firewall.allow_command(22, shall::model::firewall::Proto::Tcp),
         vec!["ufw", "allow", "22/tcp"]
     );
 

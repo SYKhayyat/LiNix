@@ -20,8 +20,8 @@
 //! (V.59): bundle a config, restore it into a clean directory, and assert the model resolves to
 //! the same package set. A backup nothing has ever restored is a guess.
 
-use linix::core::executor::DryRunOutput;
-use linix::core::{GraphAction, PackageSpec, Transaction, TransactionConfig};
+use shall::core::executor::DryRunOutput;
+use shall::core::{GraphAction, PackageSpec, Transaction, TransactionConfig};
 use tokio::fs;
 
 use crate::mock_providers::TestKernel;
@@ -87,7 +87,7 @@ async fn five_independent_installs_reach_the_manager_as_one_command() {
 /// A restored bundle resolves to the package set the source config resolved to.
 #[tokio::test]
 async fn a_restored_bundle_resolves_to_the_set_it_was_made_from() {
-    use linix::model::{Layout, Priority, Resolver};
+    use shall::model::{Layout, Priority, Resolver};
 
     let kernel = TestKernel::new().await;
     let root = kernel.app.config.config_root().to_path_buf();
@@ -117,7 +117,7 @@ async fn a_restored_bundle_resolves_to_the_set_it_was_made_from() {
 
     // Bundle (no artifacts, no archive, no git repo present → history simply not included).
     let bundle_dir = root.join("out-bundle");
-    linix::app::bundle::create_bundle(&kernel.app, &bundle_dir, false, false, None)
+    shall::app::bundle::create_bundle(&kernel.app, &bundle_dir, false, false, None)
         .await
         .unwrap();
 
@@ -131,7 +131,7 @@ async fn a_restored_bundle_resolves_to_the_set_it_was_made_from() {
         .join("restored-cfg");
     let _ = fs::remove_dir_all(&clean).await;
     let reg = clean.join("data/registry.json");
-    linix::app::bundle::restore_bundle(&bundle_dir, &clean, &reg, false)
+    shall::app::bundle::restore_bundle(&bundle_dir, &clean, &reg, false)
         .await
         .unwrap();
 

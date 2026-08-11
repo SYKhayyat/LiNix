@@ -159,7 +159,7 @@ impl<'a> ProfileLoader<'a> {
                 Statement::Expr(e) => out.ops.push((SetOp::Expr(e), origin)),
 
                 // II.4: `absent:` does not exist in profiles. `-` does. `absent:` reaches
-                // outside what LiNix manages and deletes something you never declared
+                // outside what Shall manages and deletes something you never declared
                 // (V.7); `-vim` only says this profile does not want vim.
                 Statement::Absent(d) => {
                     return Err(GrammarError::new(

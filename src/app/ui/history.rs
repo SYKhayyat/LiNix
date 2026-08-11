@@ -1,6 +1,6 @@
 // src/app/ui/history.rs
 //
-// A browser over LiNix's history. That history is now git (the
+// A browser over Shall's history. That history is now git (the
 // generation format was deleted — II.1: git IS the history), so the timeline is your commit
 // log and each entry shows what that commit changed in your manifests.
 //
@@ -286,7 +286,7 @@ impl HistoryBrowser {
         // Right: the selected commit's detail.
         let detail = match self.selected() {
             Some(c) => detail_lines(c).join("\n"),
-            None => "No commits yet. Run `linix git init`, then `sync` commits your history."
+            None => "No commits yet. Run `shall git init`, then `sync` commits your history."
                 .to_string(),
         };
         let detail_widget = Paragraph::new(detail)

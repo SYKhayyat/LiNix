@@ -1,4 +1,4 @@
-//! Eight ways to extend LiNix, and one place that knows there are eight.
+//! Eight ways to extend Shall, and one place that knows there are eight.
 //!
 //! Owner request, 2026-08-09: a plugin system, *"almost like how in Lisp you can add your own"*.
 //! The surfaces were already there and already worked — `[[backend]]` teaches a package manager,
@@ -8,10 +8,10 @@
 //! machine has extended.
 //!
 //! A list that lives only in a person's head grows a ninth entry silently, and the ninth is
-//! invisible to `linix adapters`, absent from the docs, and reported by a bespoke warning. These
+//! invisible to `shall adapters`, absent from the docs, and reported by a bespoke warning. These
 //! gates make each of those three a test failure instead.
 
-use linix::app::adapters::{self, Standing, SURFACES};
+use shall::app::adapters::{self, Standing, SURFACES};
 
 fn root() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -41,7 +41,7 @@ fn sources() -> Vec<std::path::PathBuf> {
 /// **Every `adapters/<name>.toml` the source names is a declared surface.**
 ///
 /// A ninth reader is one `layout.adapter_file("thing")` away, and nothing about adding it would
-/// fail: `linix adapters` would list eight, the docs would list eight, and the ninth would work
+/// fail: `shall adapters` would list eight, the docs would list eight, and the ninth would work
 /// perfectly and be invisible. This is the gate that makes the table the definition rather than
 /// a copy of one.
 #[test]
@@ -87,7 +87,7 @@ fn every_adapter_surface_is_in_the_table() {
     assert!(
         strangers.is_empty(),
         "these read an extension surface that `app::adapters::SURFACES` does not declare, so \
-         `linix adapters` cannot see it and the docs do not name it:\n  {}",
+         `shall adapters` cannot see it and the docs do not name it:\n  {}",
         strangers.join("\n  ")
     );
 }
@@ -163,7 +163,7 @@ fn a_surface_that_cannot_be_used_is_reported_in_one_voice() {
         offenders.is_empty(),
         "these write their own refusal for an unusable adapter file:\n  {}\n\n\
          `app::adapters::cannot_use` names the file, what a row teaches, how a row opens, and \
-         `linix adapters`.",
+         `shall adapters`.",
         offenders.join("\n  ")
     );
     // One caller per surface, plus the definition and its test.
@@ -189,7 +189,7 @@ fn the_readme_names_every_surface_and_the_verb_that_lists_them() {
         "the readme does not name these extension surfaces: {missing:?}"
     );
     assert!(
-        readme.contains("linix adapters"),
+        readme.contains("shall adapters"),
         "the readme never mentions the command that lists the surfaces"
     );
 }
@@ -200,7 +200,7 @@ fn the_readme_names_every_surface_and_the_verb_that_lists_them() {
 #[test]
 fn a_repo_with_no_adapters_directory_is_surveyed_without_complaint() {
     let dir = tempfile::TempDir::new().unwrap();
-    let layout = linix::model::layout::Layout::new(dir.path(), dir.path().join("data"));
+    let layout = shall::model::layout::Layout::new(dir.path(), dir.path().join("data"));
     let found = adapters::survey(&layout);
     assert_eq!(found.len(), SURFACES.len());
     assert!(found.iter().all(|e| e.standing == Standing::Absent));

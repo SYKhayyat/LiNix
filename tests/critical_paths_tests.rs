@@ -1,8 +1,8 @@
-use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
-use linix::app::sync::resolver::StateResolver;
-use linix::core::executor::DryRunOutput;
-use linix::core::journal::JournalAction;
-use linix::core::{Error, GraphAction, PackageSpec, Transaction, TransactionConfig};
+use shall::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
+use shall::app::sync::resolver::StateResolver;
+use shall::core::executor::DryRunOutput;
+use shall::core::journal::JournalAction;
+use shall::core::{Error, GraphAction, PackageSpec, Transaction, TransactionConfig};
 use std::collections::HashMap;
 
 // Import our authoritative A+ Test Infrastructure
@@ -10,7 +10,7 @@ use crate::mock_providers::TestKernel;
 
 /// S11: hermeticity is now structural, not remembered — a `TestKernel` isolates BOTH the
 /// config root and the data root (registry/snapshots/journal) inside its sandbox, so no test
-/// can touch the developer's real state, whether or not the test author set `$LINIX_DATA_DIR`.
+/// can touch the developer's real state, whether or not the test author set `$SHALL_DATA_DIR`.
 #[tokio::test]
 async fn test_kernel_isolates_both_config_and_data_roots() {
     let kernel = TestKernel::new().await;
@@ -40,10 +40,10 @@ async fn test_kernel_isolates_both_config_and_data_roots() {
 ///
 /// This test asserted the opposite until 2026-08-06 — that declaring `brew:pkg-a` produced two
 /// nodes, the second being whatever `brew deps` named. That second node was installed, and then
-/// written into `registry.json` as a package LiNix *manages*, with nobody declaring it: II.7
+/// written into `registry.json` as a package Shall *manages*, with nobody declaring it: II.7
 /// then makes it drift, and `sync` removes what is drift. brew installs its own dependencies at
 /// `brew install` time regardless, so the whole exchange bought a subprocess, a graph edge that
-/// split brew's command line in two, and a package LiNix would later take away.
+/// split brew's command line in two, and a package Shall would later take away.
 #[tokio::test]
 async fn a_declared_package_is_one_node_however_many_things_it_depends_on() {
     let kernel = TestKernel::new().await;
@@ -84,7 +84,7 @@ async fn a_declared_package_is_one_node_however_many_things_it_depends_on() {
     assert_eq!(
         plan.graph.node_count(),
         1,
-        "one line was declared, so one package is LiNix's to install and to own"
+        "one line was declared, so one package is Shall's to install and to own"
     );
     assert_eq!(
         plan.graph.edge_count(),
@@ -295,7 +295,7 @@ async fn a_dry_run_reports_the_recovery_and_performs_none_of_it() {
 
     let mut previewing = (*kernel.app.config).clone();
     previewing.dry_run = true;
-    let engine = linix::app::sync::SyncEngine::new(
+    let engine = shall::app::sync::SyncEngine::new(
         &previewing,
         kernel.app.registry.clone(),
         kernel.app.executor.duplicate(),
@@ -390,7 +390,7 @@ async fn test_semver_constraint_resolution_logic() {
 /// its own instance of the same bug.
 #[tokio::test]
 async fn a_preview_writes_no_manifest() {
-    use linix::model::Landing;
+    use shall::model::Landing;
 
     let kernel = TestKernel::new().await;
     let manifest = kernel.tmp.path().join("modules/imperative.txt");
@@ -458,8 +458,8 @@ async fn a_preview_writes_no_manifest() {
 /// destroy the previous adoption rather than add to it.
 #[tokio::test]
 async fn a_previewing_editor_writes_no_file_at_all() {
-    use linix::config::grammar::Origin;
-    use linix::model::{Editor, Target, Writes};
+    use shall::config::grammar::Origin;
+    use shall::model::{Editor, Target, Writes};
 
     let kernel = TestKernel::new().await;
     let layout = kernel.app.config.layout();

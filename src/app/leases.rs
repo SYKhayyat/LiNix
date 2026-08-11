@@ -49,7 +49,7 @@ impl Leases<'_> {
         for (backend, name) in &protected {
             warn!(
                 "lease on {}:{} expired, but it is protected — leaving it installed. \
-                 Run `linix protected {}:{}` to see why.",
+                 Run `shall protected {}:{}` to see why.",
                 backend, name, backend, name
             );
         }
@@ -175,7 +175,7 @@ impl Leases<'_> {
         self.restore_suspensions(due, "temporarily-removed").await
     }
     /// Reinstall a set of suspended packages and clear each suspension — whether the reinstall
-    /// succeeds or fails (a suspension LiNix cannot honour is dropped, not retried forever).
+    /// succeeds or fails (a suspension Shall cannot honour is dropped, not retried forever).
     /// One implementation shared by the timed sweep and the shell-exit restore, which used to
     /// carry byte-identical copies of this loop (E11); `occasion` is the only thing that
     /// differed, and it only ever changed the log wording.

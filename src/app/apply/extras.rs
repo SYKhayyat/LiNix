@@ -24,10 +24,10 @@ pub struct Extras<'a> {
 ///
 /// **One computation, because five code paths answering separately is what N-2 was.** `sync`
 /// placed three files under a summary reading `already up to date`; `check drift` reported that
-/// the machine matched while a declared `link:` was missing from it, and again after one LiNix
+/// the machine matched while a declared `link:` was missing from it, and again after one Shall
 /// had placed was deleted behind its back; `plan` froze an empty plan in both directions while
 /// `--dry-run sync` on the same tree named three teardowns — and the guard's own refusal text
-/// sent the user to `linix plan` to "see exactly what would be undone", where they saw nothing.
+/// sent the user to `shall plan` to "see exactly what would be undone", where they saw nothing.
 ///
 /// The package half has had this since II.7. This is its other half, and every reader of it —
 /// `check`, `plan`, `apply`, `sync`'s summary — now reads this one value.
@@ -45,7 +45,7 @@ pub struct ResourceChanges {
 
 impl ResourceChanges {
     /// Whether a sync would touch any resource. `unverifiable` is deliberately not work: it is
-    /// what LiNix cannot see, and treating "I cannot tell" as "there is drift" would make
+    /// what Shall cannot see, and treating "I cannot tell" as "there is drift" would make
     /// `check` permanently red on any machine declaring a `setting:`.
     pub fn is_empty(&self) -> bool {
         self.place.is_empty() && self.undo.is_empty()
@@ -90,7 +90,7 @@ impl Extras<'_> {
     ///
     /// Two questions, and they are answered by two different sources on purpose. *Has this ever
     /// been applied?* is the ledger's to answer — it is the only record of what a previous sync
-    /// put in place. *Is it still in effect?* is the machine's, because a file LiNix placed and
+    /// put in place. *Is it still in effect?* is the machine's, because a file Shall placed and
     /// a user then deleted is drift the record cannot see, and that was half of N-2's
     /// reproduction.
     pub async fn changes(&self, state: &crate::model::DesiredState) -> Result<ResourceChanges> {
@@ -119,7 +119,7 @@ impl Extras<'_> {
             // The probe first and the ledger only after it. `Dependents::apply` has never
             // consulted the ledger — it skips whatever the probe reports in effect — so a
             // short-circuit on "never applied" made `plan` promise work `sync` would not do.
-            // Invisible until `adopt` wrote 150 running services LiNix had never placed:
+            // Invisible until `adopt` wrote 150 running services Shall had never placed:
             // `plan` said 150 resources to place and `sync` correctly placed none.
             //
             // The record still answers the case nothing can be asked about: a resource this
@@ -202,10 +202,10 @@ impl Extras<'_> {
 
         // An undo that failed leaves the extra in place, so its key stays in the ledger and
         // the next sync tries again. Dropping it would turn one warning into a service or
-        // timer LiNix has permanently forgotten it owns.
+        // timer Shall has permanently forgotten it owns.
         let mut still_applied = std::collections::BTreeSet::new();
         for key in &drift {
-            // A key whose kind the grammar does not have is a ledger row LiNix cannot act on.
+            // A key whose kind the grammar does not have is a ledger row Shall cannot act on.
             // Skipped rather than dropped — `still_applied` keeps it, so the next sync reports
             // it again instead of quietly forgetting a resource that is still in effect.
             let Ok(parsed) = key.parse::<ExtraKey>() else {
@@ -281,7 +281,7 @@ impl Extras<'_> {
                 let Some(inst) = b.as_installable() else {
                     return Err(Error::Validation(format!(
                         "the `{}` backend is registered but cannot remove, so `{}:{}` could not \
-                         be undone. This is a wiring fault in LiNix.",
+                         be undone. This is a wiring fault in Shall.",
                         kind, kind, id
                     )));
                 };
@@ -327,7 +327,7 @@ impl Extras<'_> {
             K::Exec | K::Generate | K::Dotfiles => Err(Error::Validation(format!(
                 "`{kind}:{id}` is recorded in the extras ledger, and a `{kind}:` line has no \
                  teardown — it should never have been keyed there. This is a wiring fault in \
-                 LiNix; the row is kept rather than dropped."
+                 Shall; the row is kept rather than dropped."
             ))),
         }
     }
@@ -340,9 +340,9 @@ impl Extras<'_> {
 /// asks it before doing the work — because when only the reporting half asked, `check` said
 /// *the machine matches your files* and `plan` said *0 resource(s) to place* while `sync`
 /// re-copied all three under a summary reading `already up to date`, and the second run backed
-/// up the copies LiNix had made itself.
+/// up the copies Shall had made itself.
 ///
-/// `None` means LiNix cannot ask — **not** that the answer is yes. A `setting:` reads back
+/// `None` means Shall cannot ask — **not** that the answer is yes. A `setting:` reads back
 /// through an adapter that does not report a current value, a `service:` state costs a process
 /// launch per line, and a `@decrypt`ed secret's plaintext cannot be compared with its ciphertext
 /// without running the tool. Those are named `unverifiable` and placed rather than guessed,

@@ -54,10 +54,10 @@ impl Decision {
                 short, count, ceiling
             ),
             Decision::NeedsApproval(Verdict::New) => {
-                format!("sha256:{} — NOT APPROVED; `linix lock` to approve", short)
+                format!("sha256:{} — NOT APPROVED; `shall lock` to approve", short)
             }
             Decision::NeedsApproval(_) => format!(
-                "sha256:{} — CHANGED since you approved it; `linix lock` to approve",
+                "sha256:{} — CHANGED since you approved it; `shall lock` to approve",
                 short
             ),
         }
@@ -125,7 +125,7 @@ mod tests {
 
         let unapproved = Decision::NeedsApproval(Verdict::New).describe(hash);
         assert!(unapproved.contains("NOT APPROVED"), "{}", unapproved);
-        assert!(unapproved.contains("linix lock"), "{}", unapproved);
+        assert!(unapproved.contains("shall lock"), "{}", unapproved);
 
         let stale = Decision::NeedsApproval(changed()).describe(hash);
         assert!(stale.contains("CHANGED"), "{}", stale);

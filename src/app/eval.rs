@@ -1,11 +1,11 @@
-//! `linix eval` — the resolved desired state, as data (XIII.15, U17).
+//! `shall eval` — the resolved desired state, as data (XIII.15, U17).
 //!
-//! Everything else in LiNix answers a question about the machine. This answers the question
+//! Everything else in Shall answers a question about the machine. This answers the question
 //! *what did my configuration actually resolve to* — every `when` decided, every bare name
 //! given a backend, every variable substituted — without looking at the machine at all.
 //!
 //! **Versioned from the first release (U17, ruled 2026-07-24).** It is the one output that will
-//! acquire consumers LiNix cannot see, and P2 leaves no legacy to carry: the version is free
+//! acquire consumers Shall cannot see, and P2 leaves no legacy to carry: the version is free
 //! now and impossible to add later without breaking whatever grew up around it.
 //!
 //! **It takes no locks and changes nothing.** A command that reads has no business serialising
@@ -14,7 +14,7 @@
 
 use serde::Serialize;
 
-/// The schema version of `linix eval`'s output.
+/// The schema version of `shall eval`'s output.
 ///
 /// Bump when a consumer would break: a field removed, renamed, or given a new meaning. Adding a
 /// field is not a bump — a consumer that ignores unknown keys keeps working, and one that does
@@ -145,7 +145,7 @@ impl Evaluation {
         }
     }
 
-    /// The document as the bytes `linix eval` writes.
+    /// The document as the bytes `shall eval` writes.
     ///
     /// Pretty-printed with a trailing newline: this output is read by people at least as often
     /// as by programs, and a JSON document without a final newline is the kind of thing that
@@ -322,8 +322,8 @@ mod tests {
     fn sources_are_repo_relative() {
         assert_eq!(
             repo_relative(
-                "/home/a/.config/linix/modules/x.txt:7",
-                Path::new("/home/a/.config/linix")
+                "/home/a/.config/shall/modules/x.txt:7",
+                Path::new("/home/a/.config/shall")
             ),
             "modules/x.txt:7"
         );
@@ -360,8 +360,8 @@ mod tests {
     /// would name a different file. `preferences.toml` on the machine is not in the repo.
     #[test]
     fn a_source_outside_the_repo_stays_absolute() {
-        let out = repo_relative("/etc/linix/machine.toml:2", Path::new("/home/a/repo"));
-        assert_eq!(out, "/etc/linix/machine.toml:2");
+        let out = repo_relative("/etc/shall/machine.toml:2", Path::new("/home/a/repo"));
+        assert_eq!(out, "/etc/shall/machine.toml:2");
     }
 
     /// Rendered output ends in a newline — a JSON document without one puts the next shell

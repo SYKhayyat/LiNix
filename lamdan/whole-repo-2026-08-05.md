@@ -1,4 +1,4 @@
-# Lamdan — LiNix, whole repo
+# Lamdan — Shall, whole repo
 
 **2026-08-05 · branch `grade/2026-07-29` @ `3d321bf` · 390 tracked files, 93,909 lines of Rust in
 `src/`, 17,667 in `tests/`, 36,043 in docs.**
@@ -81,7 +81,7 @@ writes systemd units.
 ## Owner ruling, 2026-08-05: **everything is the product**
 
 Asked whether `firewall:`, `setting:`, `storage:`, `service:` and `schedule:` are the product or
-scope the grammar made cheap to admit, the owner ruled: **everything is the product.** LiNix
+scope the grammar made cheap to admit, the owner ruled: **everything is the product.** Shall
 converges declared machine state; packages are one kind of declared object, not the subject.
 
 This **withdraws** the want-lens finding that these are "six other products wearing a package
@@ -130,7 +130,7 @@ Findings keep their original numbers; the ranking is restated after F-0.
 > dispatch and still contains that substring. Caught by mutation, not by review — F-2's family
 > inside a check written for F-2's family, for the second time in two rulings.
 
-Region 6 traced `linix sync` end to end: **21 top-level stages, ~50 sub-stages.** Of the 7,916
+Region 6 traced `shall sync` end to end: **21 top-level stages, ~50 sub-stages.** Of the 7,916
 lines in the sync path, **~640 are `desired`, `present`, `owned` and two set differences** —
 `planner.rs:413` (present), `planner.rs:522` (owned), `resolver.rs:413` (desired),
 `planner.rs:503-578` and `:646` (the differences). Four of the ~50 stages.
@@ -206,7 +206,7 @@ Two structural consequences, both now core rather than peripheral:
 > The tree now expands into the `link:` lines it stands for, once, and everything downstream is
 > machinery that already existed. `exec:` and `@undo=` — the two mutations nothing can recompute
 > — are journalled before they start, and `heal` reports an interrupted script rather than
-> replaying it. A sibling found while building: `Dotfiles::plan` answered "did LiNix put this
+> replaying it. A sibling found while building: `Dotfiles::plan` answered "did Shall put this
 > here?" with `is_symlink`, which `link:` had already learned is wrong under the copy fallback.
 > Still open and the owner's: `is_same_drive` makes **every** Windows `link:` take that fallback
 > (`Q48`).
@@ -214,7 +214,7 @@ Two structural consequences, both now core rather than peripheral:
 **Created by the 2026-08-05 ruling. This is the top finding on the accuracy axis.**
 
 `readme.md:738` is the headline safety claim: *"A write-ahead log records every mutation before it
-runs. If LiNix is killed mid-transaction, the next run heals it."*
+runs. If Shall is killed mid-transaction, the next run heals it."*
 
 `JournalAction` (`core/journal.rs:22-25`) has exactly two variants:
 
@@ -236,11 +236,11 @@ transaction, including its journal cleanup — and `:217` then runs `apply_non_p
 **Every resource mutation happens after the transaction has closed.**
 
 When packages were the subject, that sentence in the readme was true. Under the ruling it is false
-for the majority of what LiNix converges.
+for the majority of what Shall converges.
 
 **Steelman, and it is a good one.** Resources are converged *idempotently from declarations* on
 every run: a half-applied firewall or a half-placed symlink tree is recomputed and finished by the
-next `sync`. Packages need a WAL because an interrupted `apt install` wedges dpkg in a state LiNix
+next `sync`. Packages need a WAL because an interrupted `apt install` wedges dpkg in a state Shall
 cannot recover from a manifest. The asymmetry is principled — for `link:`, `setting:`, `service:`,
 `schedule:` and `firewall:`, which are all read-then-write converges.
 
@@ -299,7 +299,7 @@ data, while a slow `apt install` loses time.
 > `@requires` edge is a user's declaration, `Y1` binds it explicitly, and the graph is what
 > carries cycle detection, `unreachable_from` and the per-node rollback history. And the 13
 > `MetadataProvider` stubs stay — the trait has two live consumers this review did not name
-> (`insight.rs:731` for `linix why`'s reverse dependencies, `verbs/packages.rs:965` for the
+> (`insight.rs:731` for `shall why`'s reverse dependencies, `verbs/packages.rs:965` for the
 > `Dependencies:` line), so deleting the trait would delete a feature. Reporting dependencies
 > was never the bug; planning from them was.
 
@@ -333,13 +333,13 @@ assert_eq!(h.counters[0].calls.load(Ordering::SeqCst), 2,
     "a required package and its dependent cannot go on one command line");
 ```
 
-A green test asserting that LiNix will take the slow path. And `rebuild --backend apt` — which
+A green test asserting that Shall will take the slow path. And `rebuild --backend apt` — which
 takes every one of that backend's packages down and puts them all back up together — is precisely
 the command that maximises the number of such edges.
 
 **The edges buy nothing.** `planner.rs`'s own recursion-guard comment says it: *"Every real
 package manager resolves and installs the full transitive closure itself at install time, so
-LiNix re-deriving it is redundant."* It then re-derives one level of it anyway. And the graph
+Shall re-deriving it is redundant."* It then re-derives one level of it anyway. And the graph
 cannot even produce cross-manager parallelism: `run_exclusive` (`executor.rs:1231`) already takes
 a per-backend tokio `Mutex` **and** a cross-process `flock`, and `generic.rs:712` routes every
 install through it. Two concurrent `apt` commands are structurally impossible regardless of what
@@ -374,7 +374,7 @@ coming back, and re-reporting it a ninth time would be worthless.** Here is the 
 
 The repo builds excellent gates. `removal_guard_enumeration_tests.rs:153` scans all of `src/` and
 fails the build when a removal call appears without a named guard — and self-tests the instrument
-at `:211`. `argv_drift_tests.rs:222` walks every subcommand LiNix invokes against the real
+at `:211`. `argv_drift_tests.rs:222` walks every subcommand Shall invokes against the real
 manager's `--help`. `help_map_tests.rs` gates `args.rs`'s command map against `--help` in both
 directions, and its header cites the `undo` disease as the reason it exists.
 
@@ -384,13 +384,13 @@ through the next copy of the fact:
 - `help_map_tests` gates `args.rs`. There is **no top-level `status`, `doctor` or `undo` verb**
   — the three `Status` variants at `args.rs:897/917/972` are `hooks status`, `git status`,
   `service status`. Outside the gate, invoking commands that do not exist:
-  - `app/fleet.rs:111` — `ssh <host> "linix status --json"`. **`linix fleet` cannot return
+  - `app/fleet.rs:111` — `ssh <host> "shall status --json"`. **`shall fleet` cannot return
     "in sync" for any correctly-installed host.**
-  - `scripts/install.sh:84` — `"$LINIX" doctor || true`, and `:96` signs off *"Try `linix status`
-    or `linix doctor`"*. `install.ps1:54,61` the same. **The first thing a new user runs, and the
+  - `scripts/install.sh:84` — `"$SHALL" doctor || true`, and `:96` signs off *"Try `shall status`
+    or `shall doctor`"*. `install.ps1:54,61` the same. **The first thing a new user runs, and the
     health check that vouches for the new binary, both address deleted commands.**
   - `verbs/cleanup.rs:348` — after `purge-undeclared`, the most destructive command in the
-    program, prints `Undo with 'linix undo <id>'.`
+    program, prints `Undo with 'shall undo <id>'.`
   - `verbs/check.rs:967`, `verbs/setup.rs:354,640`, `app/apply/dotfiles.rs:70`, `readme.md:610`.
   - `readme.md:670-673` lists `unmanaged`, `absent`, `conflicts`, `doctor` as commands — **four of
     eight rows in one table** — thirty lines after correctly explaining they were folded into
@@ -411,8 +411,8 @@ through the next copy of the fact:
   (see F-5).
 
 **The change.** One property-scoped gate, roughly forty lines: grep the entire tree — `src/`
-string literals, `scripts/`, `docker/`, `readme.md`, `docs/` — for `` `linix <word>` `` and
-`"linix <word>"`, and assert each word is a live subcommand of the clap surface. That single test
+string literals, `scripts/`, `docker/`, `readme.md`, `docs/` — for `` `shall <word>` `` and
+`"shall <word>"`, and assert each word is a live subcommand of the clap surface. That single test
 catches every bullet above. Then fix `decision-count.sh:157` to fail on `unrecognised`, and delete
 the `install.*` exemption in `harness-logic-test.sh:553`.
 
@@ -432,11 +432,11 @@ high-value change in the review.
 > not live; the argument that made it safe was two steps long and written nowhere.
 >
 > **The one the review missed is the worst of them, and it is a different bug.**
-> `app/shell/mod.rs:269` builds a desired map holding **only the packages `linix shell` was asked
+> `app/shell/mod.rs:269` builds a desired map holding **only the packages `shall shell` was asked
 > for** — not the config, never meant to be compared against the machine — and planned it as a
 > whole-machine converge. Every other managed package became a `Remove` node, handed to
 > `engine.sync(…, GuardScope::Sync)`. The test written for it prints, against the old code,
-> LiNix's own parallel breakdown uninstalling four packages in response to `linix shell fd`.
+> Shall's own parallel breakdown uninstalling four packages in response to `shall shell fd`.
 > `max_removals` was the only thing in the way. **`planner.rs:480` describes this exact
 > combination as the thing that must never happen**, four hundred lines below the call that does
 > it.
@@ -462,10 +462,10 @@ every backend"* (`planner.rs:353`).
 
 `with_enabled` is called at exactly two sites: `verbs/sync.rs:115` and `verbs/plan.rs:49`.
 
-`app/profile.rs:438-465` — `sync_now`, reached by `linix activate`, `linix deactivate` and
+`app/profile.rs:438-465` — `sync_now`, reached by `shall activate`, `shall deactivate` and
 `profile save` — builds its own `SyncEngine`, its own `StateResolver`, and
-`ChangePlanner::new(...).plan(&desired, None)` **with no `with_enabled` call**. So `linix sync`
-confines removals to the managers your `priority` file names, and `linix activate Work` does not.
+`ChangePlanner::new(...).plan(&desired, None)` **with no `with_enabled` call**. So `shall sync`
+confines removals to the managers your `priority` file names, and `shall activate Work` does not.
 
 It also skips `enforce_policy`, `bootstrap().offer`, `prereqs().offer`, `repositories().apply`,
 dotfiles, firewall, schedules, execs and the extras teardown. It is a second, stripped reconcile
@@ -536,8 +536,8 @@ or `execute_with_telemetry`. `handle_apply` walks `installs` serially calling `i
 (`plan.rs:525`), then `removals` serially calling `inst.remove` (`plan.rs:558`).
 
 No write-ahead log, no transaction, no auto-rollback, no snapshot, no health check, no hooks. So
-`linix heal` — which reads the journal (`verbs/setup.rs:489`) — **cannot recover an interrupted
-`linix apply`, because `apply` never wrote one.** The safety story that justifies the whole
+`shall heal` — which reads the journal (`verbs/setup.rs:489`) — **cannot recover an interrupted
+`shall apply`, because `apply` never wrote one.** The safety story that justifies the whole
 `core/transaction.rs` subsystem has a hole exactly where the feature named after review and
 deliberation lives.
 
@@ -598,7 +598,7 @@ stops being a second copy of six columns of the same table.
 ### F-6 · Dead subsystems, and the four dependencies they hold hostage — `delete`
 
 - **`app/scheduler/notify.rs` — 183 lines, zero callers.** `NotificationManager` is constructed
-  on **every run**, including `linix path` (`context.rs:115`), stored as a field
+  on **every run**, including `shall path` (`context.rs:115`), stored as a field
   (`context.rs:38`), and `notify()` is never called anywhere in `src/` or `tests/`. **[verified]**
   It is the sole use site of `lettre` (a full async SMTP client with rustls) and `notify-rust`
   (D-Bus / WinRT). There is no config key to enable it either: `examples/preferences.toml` is 207
@@ -620,7 +620,7 @@ stops being a second copy of six columns of the same table.
   `sync/mod.rs:611-615`. `start()`, `println()` and four of `ProgressHandle`'s five methods have
   zero callers. The one live handle ends in `finish_and_clear()`, so it leaves no output.
 - **`app/repl.rs` — its own docstring concedes the case** (`repl.rs:3`: *"Every question this
-  answers is one `linix eval | jq` can answer too"*).
+  answers is one `shall eval | jq` can answer too"*).
 - **`app/ui/` — 641 lines of ratatui.** The preview's headline feature is `cycle_backend`
   (`preview.rs:218`) and **both call sites pass `HashMap::new()` for alternatives**
   (`verbs/sync.rs:197`, `verbs/plan.rs:475`) — the `b` key is permanently wired to nothing.
@@ -638,7 +638,7 @@ stops being a second copy of six columns of the same table.
   comment is fiction.
 
 Net: **~2,300 lines and four dependencies** (`mlua`, `lettre`, `notify-rust`, `ratatui`) with no
-user-visible loss except that `linix fleet` stops lying.
+user-visible loss except that `shall fleet` stops lying.
 
 ### F-7 · `.tar.zst` is selected as installable and cannot be opened — `delete` the fifth copy **[verified]**
 
@@ -702,7 +702,7 @@ table.
 ### F-9 · Smaller, but each is a family, not an instance
 
 - **`examples/groups/` — five files naming deleted features.** `bloatware.txt:3` says *"removed
-  when running `linix sync --remove-bloatware`"*; `remove_bloatware` is in `target-state.md:2035`'s
+  when running `shall sync --remove-bloatware`"*; `remove_bloatware` is in `target-state.md:2035`'s
   deleted-config list and `bloatware.txt` itself is in the deleted-*files* list at `:2040`. A
   straight NO-LEGACY violation. `examples/preferences.toml` — the one example with an
   `include_str!` test behind it (`verbs/setup.rs:969`) — is the one that did not rot. That is the
@@ -813,7 +813,7 @@ will want something that fails if the change is wrong.
    face, and that is not in the repo. If the answer involves more statement kinds, the `extras`
    catch-all (`resolve.rs:29`) and the phase list that has already drifted into two copies are
    where the next bug is — and given the ruling, that is now a defect in the product's centre.
-3. **Is `linix fleet` used by anyone?** If yes, F-2 is urgent and F-6's "delete it" is wrong. If
+3. **Is `shall fleet` used by anyone?** If yes, F-2 is urgent and F-6's "delete it" is wrong. If
    no — and it cannot currently have worked — it is 265 lines of evidence for F-2 and nothing else.
 
 ## Suggested order

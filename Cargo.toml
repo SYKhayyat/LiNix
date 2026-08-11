@@ -1,5 +1,5 @@
 [package]
-name = "linix"
+name = "shall"
 version = "0.8.0"
 edition = "2021"
 # The oldest toolchain this is known to build on.
@@ -9,7 +9,7 @@ edition = "2021"
 # contributor on a distro-packaged Rust found out by watching it fail. The number moves when a
 # change needs it to, deliberately and in a commit that says why; it does not drift.
 rust-version = "1.89"
-authors = ["LiNix Contributors"]
+authors = ["Shall Contributors"]
 # `Z1`, ruled by the owner 2026-08-09. The Rust ecosystem's default pair, and the reason it is a
 # pair: MIT is the shortest permissive licence anyone will read, and Apache-2.0 carries the
 # explicit patent grant a company's lawyer looks for. A user takes whichever they can accept.
@@ -74,7 +74,7 @@ tera = "1.19"
 # builds fail to link and required openssl-dev on every distro.
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 # Rate limiting. Without `quanta`: its clock calibrates the TSC on first construction, which
-# measured 200ms, once, on whichever thread got there first — a fifth of a second on `linix path`
+# measured 200ms, once, on whichever thread got there first — a fifth of a second on `shall path`
 # for a GitHub API budget it never spends. `MonotonicClock` (std `Instant`) resolves to
 # nanoseconds, and the fastest quota here is 80 requests per MINUTE.
 governor = { version = "0.6", default-features = false, features = ["std", "jitter"] }

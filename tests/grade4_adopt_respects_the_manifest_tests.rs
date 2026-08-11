@@ -6,10 +6,10 @@
 //!
 //!     $ cat config/modules/mine.txt
 //!     cargo:ripgrep
-//!     $ linix check config
+//!     $ shall check config
 //!     OK: … 1 present, 0 absent, 0 repo/shim/service/link/schedule line(s).
 //!
-//!     $ linix adopt -y
+//!     $ shall adopt -y
 //!     Adopted 111 package(s).
 //!     Left alone: 185 (listed in the manifest)          <- the manifest has one line
 //!     …
@@ -31,9 +31,9 @@
 //! below the count instructs — and nothing happens, because `adopted.txt` still declares it:
 //!
 //!     $ : > config/modules/mine.txt
-//!     $ linix --dry-run sync -y
+//!     $ shall --dry-run sync -y
 //!     already up to date
-//!     $ linix why cargo:ripgrep
+//!     $ shall why cargo:ripgrep
 //!       declared:    at …/config/modules/adopted.txt:44 (module:adopted, profile:Main)
 //!
 //! It fails safe — nothing is removed — which is what keeps this at medium.
@@ -46,11 +46,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn run(dir: &Path, args: &[&str]) -> (String, i32) {
-    let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+    let out = Command::new(env!("CARGO_BIN_EXE_shall"))
         .args(args)
         .current_dir(dir)
-        .env("LINIX_CONFIG_DIR", dir.join("config"))
-        .env("LINIX_DATA_DIR", dir.join("data"))
+        .env("SHALL_CONFIG_DIR", dir.join("config"))
+        .env("SHALL_DATA_DIR", dir.join("data"))
         .stdin(std::process::Stdio::null())
         .output()
         .expect("the binary should run");
@@ -84,7 +84,7 @@ fn declared_in(module: &Path) -> Vec<String> {
         .collect()
 }
 
-/// Ask LiNix itself what this host has to adopt, so the test names a package that really is
+/// Ask Shall itself what this host has to adopt, so the test names a package that really is
 /// adoptable here rather than guessing one. Returns `None` on a host with nothing.
 fn one_adoptable_package(tag: &str) -> Option<String> {
     let probe = fixture(&format!("grade4-adopt-probe-{tag}"));
@@ -117,7 +117,7 @@ fn adopt_does_not_re_declare_a_package_the_manifest_already_names() {
     p.push_str("\nuse mine\n");
     std::fs::write(&profile, p).unwrap();
 
-    // The control: LiNix agrees the package is declared before `adopt` runs.
+    // The control: Shall agrees the package is declared before `adopt` runs.
     let (cfg, code) = run(&root, &["check", "config"]);
     assert_eq!(code, 0, "{cfg}");
     assert!(

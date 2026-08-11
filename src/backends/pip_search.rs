@@ -20,7 +20,7 @@ pub async fn registry_search(query: &str, backend: &str) -> Result<Vec<Package>>
         return Ok(vec![]);
     }
 
-    let client = crate::core::http::api("linix-manager", http_timeout().as_secs())?;
+    let client = crate::core::http::api("shall-manager", http_timeout().as_secs())?;
 
     let url = format!("https://pypi.org/pypi/{}/json", name);
     let res = client.get(&url).send().await.map_err(Error::from)?;

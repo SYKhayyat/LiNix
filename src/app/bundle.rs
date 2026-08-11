@@ -1,6 +1,6 @@
 // src/app/bundle.rs
 //
-// Offline / air-gapped bundling. `linix bundle` packs a portable copy of the declarative
+// Offline / air-gapped bundling. `shall bundle` packs a portable copy of the declarative
 // configuration (manifests, modules, lockfile, keep-list, config) plus a resolved package
 // list, so an environment can be reproduced on a disconnected machine. With `--artifacts`
 // it additionally tries to pre-download package files for the backends that support an
@@ -162,7 +162,7 @@ pub async fn create_bundle(
 
     // The ownership registry (`registry.json`), which lives in the data root (II.1), NOT the
     // config repo — so the config-root copy above never included it. Without it the far side
-    // knows what to install but not what LiNix considers *its own* to manage.
+    // knows what to install but not what Shall considers *its own* to manage.
     {
         let registry_path = {
             let state = app.state.lock().await;
@@ -242,14 +242,14 @@ pub async fn create_bundle(
     }
 
     let restore = format!(
-        "# LiNix offline bundle\n\n\
+        "# Shall offline bundle\n\n\
          Packages: {}\nConfig files: {}\nArtifacts pre-fetched: {}\n\n\
          ## Restore on the target machine\n\n\
          1. Copy this directory to the machine.\n\
-         2. `linix restore <dir>` — puts the declarations, `locks/` and registry back.\n\
+         2. `shall restore <dir>` — puts the declarations, `locks/` and registry back.\n\
             It refuses a config directory that already has something in it; `--force`\n\
             overwrites.\n\
-         3. Reproduce the exact versions:  `linix sync --locked`\n\
+         3. Reproduce the exact versions:  `shall sync --locked`\n\
             (`locks/versions.json` pins every version).\n\n\
          If you bundled with `--artifacts`, the `artifacts/<backend>/` folders hold the\n\
          downloaded package files for a fully air-gapped install; point your package manager\n\
@@ -278,7 +278,7 @@ pub async fn create_bundle(
         let root_name = out
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "linix-bundle".to_string());
+            .unwrap_or_else(|| "shall-bundle".to_string());
         let tar_path = PathBuf::from(format!("{}.tar.gz", out.display()));
         let src = out.to_path_buf();
         let dest = tar_path.clone();
@@ -329,13 +329,13 @@ pub async fn restore_bundle(
 ) -> Result<RestoreReport> {
     if !bundle_dir.join("packages.json").exists() && !bundle_dir.join("modules").exists() {
         return Err(Error::Other(format!(
-            "{} does not look like a LiNix bundle — no `packages.json` and no `modules/`.",
+            "{} does not look like a Shall bundle — no `packages.json` and no `modules/`.",
             bundle_dir.display()
         )));
     }
 
     if !force && dir_has_entries(config_root).await {
-        // `Error::Refused`, not `Other`: LiNix worked correctly and declined on purpose, which
+        // `Error::Refused`, not `Other`: Shall worked correctly and declined on purpose, which
         // readme.md's table calls exit 3. It said "refuses" where the rest of the family says
         // "refusing to", which is how it survived the round-2 sweep of exactly this class.
         return Err(Error::Refused(format!(
@@ -401,7 +401,7 @@ mod tests {
 
     #[tokio::test]
     async fn restore_refuses_a_nonempty_config_unless_forced() {
-        let tmp = std::env::temp_dir().join(format!("linix-restore-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("shall-restore-{}", std::process::id()));
         let bundle = tmp.join("bundle");
         let cfg = tmp.join("cfg");
         let data = tmp.join("data");
@@ -417,7 +417,7 @@ mod tests {
         let refused = restore_bundle(&bundle, &cfg, &reg, false).await;
         assert!(refused.is_err(), "a non-empty config must be refused");
         // And refused as a REFUSAL: `Error::Other` here exited 1, which readme.md's table
-        // defines as "LiNix could not carry it out", and never fired `on_guard_refusal`.
+        // defines as "Shall could not carry it out", and never fired `on_guard_refusal`.
         assert!(
             matches!(refused, Err(Error::Refused(_))),
             "a deliberate refusal is `Error::Refused` (exit 3), got {refused:?}"
@@ -442,7 +442,7 @@ mod tests {
     /// every container run was green and only the macOS sweep failed.
     #[tokio::test]
     async fn force_restores_over_files_the_first_restore_left_read_only() {
-        let tmp = std::env::temp_dir().join(format!("linix-restore-ro-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("shall-restore-ro-{}", std::process::id()));
         let bundle = tmp.join("bundle");
         let cfg = tmp.join("cfg");
         let data = tmp.join("data");
@@ -498,7 +498,7 @@ mod tests {
     /// copied paths, with nothing to say which.
     #[tokio::test]
     async fn a_copy_that_fails_names_the_file() {
-        let tmp = std::env::temp_dir().join(format!("linix-copy-names-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("shall-copy-names-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         let missing = tmp.join("no-such-source");

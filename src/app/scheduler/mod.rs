@@ -4,13 +4,13 @@ use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use tracing::debug;
 
-/// Delete a unit file LiNix generated. A file that is already gone is the wanted end state;
-/// any other failure leaves a schedule armed that LiNix is about to report as removed.
+/// Delete a unit file Shall generated. A file that is already gone is the wanted end state;
+/// any other failure leaves a schedule armed that Shall is about to report as removed.
 fn remove_generated(path: &Path) -> Result<()> {
     crate::utils::file::force_remove(path).map_err(|e| {
         Error::Io(format!(
             "{e}. The schedule may still be armed; remove the file by hand and re-run \
-             `linix sync`."
+             `shall sync`."
         ))
     })
 }
@@ -21,7 +21,7 @@ pub trait TaskProvisioner: Send + Sync {
         &self,
         executor: &CommandExecutor,
         config: &ScheduleConfig,
-        linix_path: &Path,
+        shall_path: &Path,
     ) -> Result<()>;
     async fn remove_task(&self, executor: &CommandExecutor, name: &str) -> Result<()>;
     async fn is_task_active(&self, executor: &CommandExecutor, name: &str) -> bool;
@@ -29,15 +29,15 @@ pub trait TaskProvisioner: Send + Sync {
 
 pub struct SchedulerManager {
     provisioner: Box<dyn TaskProvisioner>,
-    linix_bin_path: PathBuf,
+    shall_bin_path: PathBuf,
 }
 
 impl SchedulerManager {
     pub fn new() -> Result<Self> {
         debug!("Detecting system-native task runner.");
 
-        let linix_bin_path = std::env::current_exe()
-            .map_err(|e| Error::Io(format!("Failed to locate current LiNix binary: {}", e)))?;
+        let shall_bin_path = std::env::current_exe()
+            .map_err(|e| Error::Io(format!("Failed to locate current Shall binary: {}", e)))?;
 
         let provisioner: Box<dyn TaskProvisioner> = if cfg!(target_os = "linux") {
             Box::new(LinuxSystemdProvisioner)
@@ -53,7 +53,7 @@ impl SchedulerManager {
 
         Ok(Self {
             provisioner,
-            linix_bin_path,
+            shall_bin_path,
         })
     }
 
@@ -64,7 +64,7 @@ impl SchedulerManager {
     pub async fn provision(&self, executor: &CommandExecutor, cfg: &ScheduleConfig) -> Result<()> {
         Self::validate_cron(&cfg.name, &cfg.cron)?;
         self.provisioner
-            .add_task(executor, cfg, &self.linix_bin_path)
+            .add_task(executor, cfg, &self.shall_bin_path)
             .await
     }
 
@@ -101,7 +101,7 @@ impl TaskProvisioner for LinuxSystemdProvisioner {
         &self,
         executor: &CommandExecutor,
         config: &ScheduleConfig,
-        linix_bin: &Path,
+        shall_bin: &Path,
     ) -> Result<()> {
         let systemd_dir = dirs::config_dir()
             .ok_or_else(|| Error::Io("User configuration directory not found".into()))?
@@ -110,18 +110,18 @@ impl TaskProvisioner for LinuxSystemdProvisioner {
 
         crate::utils::file::ensure_dir(&systemd_dir)?;
 
-        let unit_name = format!("linix-{}", config.name);
+        let unit_name = format!("shall-{}", config.name);
         let service_path = systemd_dir.join(format!("{}.service", unit_name));
         let timer_path = systemd_dir.join(format!("{}.timer", unit_name));
 
         let use_boot_timer = config.cron == "@reboot";
 
         let service_content = format!(
-            "[Unit]\nDescription=LiNix Job: {name}\n\n\
+            "[Unit]\nDescription=Shall Job: {name}\n\n\
              [Service]\nType=oneshot\nExecStart={bin} {cmd}\n\
              StandardOutput=append:{log}\nStandardError=append:{log}\n",
             name = config.name,
-            bin = linix_bin.display(),
+            bin = shall_bin.display(),
             cmd = config.command,
             log = crate::utils::safe_data_dir().join("schedule.log").display()
         );
@@ -132,11 +132,11 @@ impl TaskProvisioner for LinuxSystemdProvisioner {
 
         if use_boot_timer {
             let boot_service = format!(
-                "[Unit]\nDescription=LiNix Reboot Job: {name}\n\n\
+                "[Unit]\nDescription=Shall Reboot Job: {name}\n\n\
                  [Service]\nType=oneshot\nExecStart={bin} {cmd}\n\n\
                  [Install]\nWantedBy=default.target\n",
                 name = config.name,
-                bin = linix_bin.display(),
+                bin = shall_bin.display(),
                 cmd = config.command
             );
             executor.write_atomic(&service_path, &boot_service).await?;
@@ -162,7 +162,7 @@ impl TaskProvisioner for LinuxSystemdProvisioner {
         } else {
             let calendar_spec = self.map_cron_to_systemd(&config.cron);
             let timer_content = format!(
-                "[Unit]\nDescription=LiNix Schedule Timer for {name}\n\n\
+                "[Unit]\nDescription=Shall Schedule Timer for {name}\n\n\
                  [Timer]\nOnCalendar={calendar}\nPersistent=true\n\n\
                  [Install]\nWantedBy=timers.target\n",
                 name = config.name,
@@ -195,8 +195,8 @@ impl TaskProvisioner for LinuxSystemdProvisioner {
     }
 
     async fn remove_task(&self, executor: &CommandExecutor, name: &str) -> Result<()> {
-        let timer_name = format!("linix-{}.timer", name);
-        let service_name = format!("linix-{}.service", name);
+        let timer_name = format!("shall-{}.timer", name);
+        let service_name = format!("shall-{}.service", name);
 
         let _ = executor
             .run(
@@ -220,7 +220,7 @@ impl TaskProvisioner for LinuxSystemdProvisioner {
         }
         // `disable` is allowed to fail — a unit that was never enabled reports failure — so
         // the end state is what gets asserted. A timer still running after this is a schedule
-        // LiNix would otherwise report as removed while it keeps firing.
+        // Shall would otherwise report as removed while it keeps firing.
         if self.is_task_active(executor, name).await {
             return Err(Error::Io(format!(
                 "the systemd timer for `{}` is still active after removal. Check \
@@ -232,7 +232,7 @@ impl TaskProvisioner for LinuxSystemdProvisioner {
     }
 
     async fn is_task_active(&self, executor: &CommandExecutor, name: &str) -> bool {
-        let unit = format!("linix-{}.timer", name);
+        let unit = format!("shall-{}.timer", name);
         match executor
             .run(
                 "systemctl",
@@ -323,9 +323,9 @@ impl TaskProvisioner for MacLaunchdProvisioner {
         &self,
         executor: &CommandExecutor,
         config: &ScheduleConfig,
-        linix_bin: &Path,
+        shall_bin: &Path,
     ) -> Result<()> {
-        let label = format!("com.linix.{}", config.name);
+        let label = format!("com.shall.{}", config.name);
         let plist_path = dirs::home_dir()
             .ok_or_else(|| Error::Io("Could not locate home directory".into()))?
             .join("Library/LaunchAgents")
@@ -352,7 +352,7 @@ impl TaskProvisioner for MacLaunchdProvisioner {
             <key>StandardOutPath</key><string>{log}</string>\n\
             <key>StandardErrorPath</key><string>{log}</string>\n\
             </dict>\n</plist>",
-            label = label, bin = linix_bin.display(), cmd = config.command,
+            label = label, bin = shall_bin.display(), cmd = config.command,
             schedule = schedule_xml,
             log = crate::utils::safe_data_dir().join("schedule.log").display()
         );
@@ -365,7 +365,7 @@ impl TaskProvisioner for MacLaunchdProvisioner {
     }
 
     async fn remove_task(&self, executor: &CommandExecutor, name: &str) -> Result<()> {
-        let label = format!("com.linix.{}", name);
+        let label = format!("com.shall.{}", name);
         if let Some(home) = dirs::home_dir() {
             let plist_path = home
                 .join("Library/LaunchAgents")
@@ -392,7 +392,7 @@ impl TaskProvisioner for MacLaunchdProvisioner {
     }
 
     async fn is_task_active(&self, executor: &CommandExecutor, name: &str) -> bool {
-        let label = format!("com.linix.{}", name);
+        let label = format!("com.shall.{}", name);
         match executor.run("launchctl", &["list", &label], false).await {
             Ok(o) => o.status.success(),
             Err(_) => false,
@@ -617,13 +617,13 @@ impl TaskProvisioner for WindowsTaskProvisioner {
         &self,
         executor: &CommandExecutor,
         config: &ScheduleConfig,
-        linix_bin: &Path,
+        shall_bin: &Path,
     ) -> Result<()> {
-        let name = format!("LiNix_{}", config.name);
-        let cmd = format!("\"{}\" {}", linix_bin.display(), config.command);
+        let name = format!("Shall_{}", config.name);
+        let cmd = format!("\"{}\" {}", shall_bin.display(), config.command);
 
         // Refused here, before anything is created: a schedule Task Scheduler cannot express
-        // must not become the nearest one it can. `Refused` and not `Io` — LiNix looked and
+        // must not become the nearest one it can. `Refused` and not `Io` — Shall looked and
         // declined on purpose, which is exit code 3 (U21), and a script that retries on failure
         // must not retry this.
         let schedule = map_cron_to_schtasks(&config.cron)
@@ -640,7 +640,7 @@ impl TaskProvisioner for WindowsTaskProvisioner {
             if e.to_string().to_lowercase().contains("access is denied") {
                 Error::Permission(format!(
                     "creating the scheduled task `{}` needs an elevated shell — Windows Task \
-                     Scheduler refuses to register one otherwise. Re-run `linix sync` from a \
+                     Scheduler refuses to register one otherwise. Re-run `shall sync` from a \
                      terminal opened with \"Run as administrator\".",
                     name
                 ))
@@ -652,7 +652,7 @@ impl TaskProvisioner for WindowsTaskProvisioner {
     }
 
     async fn remove_task(&self, executor: &CommandExecutor, name: &str) -> Result<()> {
-        let tn = format!("LiNix_{}", name);
+        let tn = format!("Shall_{}", name);
         // `/Delete` on a task that does not exist exits non-zero, so the exit code cannot
         // tell "already gone" from "refused"; the end state can.
         let _ = executor
@@ -669,7 +669,7 @@ impl TaskProvisioner for WindowsTaskProvisioner {
     }
 
     async fn is_task_active(&self, executor: &CommandExecutor, name: &str) -> bool {
-        let tn = format!("LiNix_{}", name);
+        let tn = format!("Shall_{}", name);
         match executor
             .run("schtasks", &["/Query", "/TN", &tn], false)
             .await
@@ -686,13 +686,13 @@ mod tests {
     #[test]
     fn a_generated_file_that_is_already_gone_is_the_wanted_end_state() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(remove_generated(&dir.path().join("linix-nightly.timer")).is_ok());
+        assert!(remove_generated(&dir.path().join("shall-nightly.timer")).is_ok());
     }
 
     #[test]
     fn a_generated_file_that_exists_is_removed() {
         let dir = tempfile::tempdir().unwrap();
-        let unit = dir.path().join("linix-nightly.timer");
+        let unit = dir.path().join("shall-nightly.timer");
         std::fs::write(&unit, "[Timer]\n").unwrap();
         remove_generated(&unit).unwrap();
         assert!(!unit.exists());
@@ -701,7 +701,7 @@ mod tests {
     #[test]
     fn a_removal_that_cannot_happen_is_an_error_naming_the_file() {
         // The point is that the failure is reported at all: swallowing it left a timer armed
-        // under a schedule LiNix had just reported as removed. Making a path undeletable is
+        // under a schedule Shall had just reported as removed. Making a path undeletable is
         // the platform-specific part; the assertion is not.
         //
         // It used to be a directory, back when the removal was `remove_file` and a directory
@@ -709,7 +709,7 @@ mod tests {
         // that stand-in silently became a success — a test asserting an error over a call that
         // could no longer produce one.
         let dir = tempfile::tempdir().unwrap();
-        let unit = dir.path().join("linix-nightly.timer");
+        let unit = dir.path().join("shall-nightly.timer");
         std::fs::write(&unit, b"[Timer]\n").unwrap();
 
         // Windows: an open handle with no sharing at all. `File::open` will not do — Rust's
@@ -743,7 +743,7 @@ mod tests {
         }
         let err = outcome.unwrap_err().to_string();
         assert!(
-            err.contains("linix-nightly.timer"),
+            err.contains("shall-nightly.timer"),
             "the error does not name the file: {}",
             err
         );

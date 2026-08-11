@@ -18,10 +18,10 @@
 //!    formats to the artifact reader, one scope to the planner, and a single string to whoever
 //!    printed it — three answers to one question, decided by which layer split last.
 
-use linix::config::grammar::options::parse_short;
-use linix::config::grammar::{Origin, Selector};
-use linix::core::PackageSpec;
-use linix::model::resolve::{to_spec, Provenance};
+use shall::config::grammar::options::parse_short;
+use shall::config::grammar::{Origin, Selector};
+use shall::core::PackageSpec;
+use shall::model::resolve::{to_spec, Provenance};
 
 fn origin() -> Origin {
     Origin::new(std::path::Path::new("modules/dev.txt"), 1)
@@ -80,7 +80,7 @@ fn a_semicolon_inside_a_value_is_data_and_not_a_separator() {
     assert_eq!(spec.options.all("bin"), &["weird;name".to_string()]);
     assert_eq!(spec.options.one("bin"), Some("weird;name"));
 
-    let read = linix::backends::artifact::ArtifactOptions::read(&spec.options)
+    let read = shall::backends::artifact::ArtifactOptions::read(&spec.options)
         .expect("the artifact reader accepts it");
     assert_eq!(
         read.bin.as_deref(),

@@ -5,9 +5,9 @@
 //! happens. Plus the two rules that are easy to get wrong — II.12 approval is required, and a
 //! failed script is not recorded as having run.
 
-use linix::core::hook_lock::{exec_id, hash_script, HookLedger};
-use linix::core::ExecLedger;
-use linix::core::LockFile;
+use shall::core::hook_lock::{exec_id, hash_script, HookLedger};
+use shall::core::ExecLedger;
+use shall::core::LockFile;
 
 use crate::mock_providers::TestKernel;
 
@@ -23,7 +23,7 @@ async fn declare_exec(kernel: &TestKernel, line: &str, script_rel: &str, body: &
     std::fs::write(root.join("profiles/Main"), "use tools\n").unwrap();
 }
 
-/// What `linix lock` does: record the script's current hash as approved.
+/// What `shall lock` does: record the script's current hash as approved.
 fn approve(kernel: &TestKernel, script_rel: &str, body: &str) {
     let locks = kernel.app.config.layout().locks_dir();
     let path = HookLedger::path_in(&locks);
@@ -45,9 +45,9 @@ fn runs_of(kernel: &TestKernel, body: &str) -> u32 {
 /// second look inside one run: variables resolve once per invocation (IX.6), so a test that
 /// edits `vars` between two resolutions has to say that a new invocation began — the same thing
 /// `reconcile` says at the top of every `sync` and every `watch` tick.
-async fn resolve(kernel: &TestKernel) -> linix::model::DesiredState {
-    linix::app::sync::resolver::new_resolution();
-    linix::app::sync::resolver::StateResolver::new(
+async fn resolve(kernel: &TestKernel) -> shall::model::DesiredState {
+    shall::app::sync::resolver::new_resolution();
+    shall::app::sync::resolver::StateResolver::new(
         &kernel.app.config,
         kernel.app.registry.clone(),
         false,
@@ -125,7 +125,7 @@ async fn an_unapproved_script_refuses_the_sync_and_never_runs() {
         .expect_err("an unapproved script must stop the sync");
     let msg = err.to_string();
     assert!(msg.contains("never been approved"), "{}", msg);
-    assert!(msg.contains("linix lock"), "{}", msg);
+    assert!(msg.contains("shall lock"), "{}", msg);
     assert_eq!(runs_of(&kernel, body), 0, "it ran anyway");
 }
 
@@ -187,7 +187,7 @@ async fn a_false_when_runs_nothing_and_keeps_the_count() {
     assert_eq!(runs_of(&kernel, body), 1, "the ledger row was lost");
 }
 
-/// The command LiNix issues for a script, matching `App::run_exec_script`, so a test can prime
+/// The command Shall issues for a script, matching `App::run_exec_script`, so a test can prime
 /// the mock executor to fail exactly that invocation.
 fn exec_command_for(path: &std::path::Path) -> String {
     let script = path.to_string_lossy().to_string();
@@ -213,7 +213,7 @@ async fn a_failed_script_is_not_recorded_and_runs_again() {
     let script = kernel.app.config.config_root().join("./fails.sh");
     kernel.mock_executor.set_response(
         &exec_command_for(&script),
-        Err(linix::core::Error::command_failed("the script exited 1")),
+        Err(shall::core::Error::command_failed("the script exited 1")),
     );
 
     let state = resolve(&kernel).await;
@@ -277,7 +277,7 @@ async fn removing_an_exec_runs_the_undo_it_declared() {
     );
 }
 
-/// A script that declared no `@undo=` is forgotten and nothing is run. LiNix cannot invent an
+/// A script that declared no `@undo=` is forgotten and nothing is run. Shall cannot invent an
 /// inverse for a script, and pretending to would be worse than saying nothing.
 #[tokio::test]
 async fn removing_an_exec_without_an_undo_runs_nothing() {

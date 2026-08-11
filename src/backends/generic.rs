@@ -164,7 +164,7 @@ pub enum ManualListing {
     ExportFile {
         /// `None` falls back to `list_binary`, then the backend name.
         binary: Option<String>,
-        /// `{file}` is replaced with a path in a directory LiNix owns for the call. The
+        /// `{file}` is replaced with a path in a directory Shall owns for the call. The
         /// manager writes there; nothing reads its stdout for the set.
         args: Vec<String>,
         format: ExportFormat,
@@ -249,7 +249,7 @@ pub struct OutdatedProbe {
 ///
 /// **Asked for, not assumed.** Every one of these is a flag that arrived in some version of the
 /// tool — `dotnet tool list --format json` needs SDK 10, `pixi global list --json` a recent
-/// pixi — and LiNix does not control which version is installed. Passing an unsupported flag
+/// pixi — and Shall does not control which version is installed. Passing an unsupported flag
 /// makes the command fail with a usage message, and a caller that reads that as the listing has
 /// reproduced `Q40`: a manager silently reporting an empty machine, for users on older tooling
 /// only, who are the least likely to notice.
@@ -289,7 +289,7 @@ pub struct MachineListing {
     ///
     /// Fallible for the same reason the text parser is. This path is *more* exposed, not less:
     /// it exists because a flag may or may not be present in the installed version of the tool,
-    /// so it is the one listing whose shape LiNix has already admitted it cannot predict.
+    /// so it is the one listing whose shape Shall has already admitted it cannot predict.
     pub parse: InstalledReader,
 }
 
@@ -302,7 +302,7 @@ pub type NameReader = std::sync::Arc<dyn Fn(&str) -> Vec<String> + Send + Sync>;
 /// **`None` is a claim that the manager has no cache verb, not that nobody wrote one.** Until
 /// 2026-08-06 it was neither: `ManagerConfig` had no field at all and `GenericUpgradable` did
 /// not implement `clean_cache`, so every one of the forty data-path backends answered
-/// `Unsupported`. `handle_clean_cache` filters that out silently, so `linix clean-cache` on a
+/// `Unsupported`. `handle_clean_cache` filters that out silently, so `shall clean-cache` on a
 /// Debian machine printed *"No backend on this machine has a cache to clear"* while
 /// `/var/cache/apt/archives` sat there. Six hand-written modules had the verb; the shared
 /// machinery could not express it, which is the terminator split running the other way.
@@ -674,7 +674,7 @@ impl GenericBackendCore {
     ///
     /// **The manager, never the program.** OpenBSD installs with `pkg_add` and removes with
     /// `pkg_delete`, and keying on the program gave those two verbs two different locks over one
-    /// package database — so a `linix` installing and a `linix` removing could hold both at
+    /// package database — so a `shall` installing and a `shall` removing could hold both at
     /// once. Every hand-written backend already named its manager here; the shared machinery was
     /// the one place that named the binary.
     /// What this backend takes an exclusive lock on — the **manager**, not the backend.
@@ -739,7 +739,7 @@ impl BackendCore for GenericBackendCore {
     /// A manager reached as a *plugin* of another program needs both halves: `kubectl krew …`
     /// works only because krew installed `kubectl-krew` on PATH, and a host with kubectl and no
     /// krew reported this backend READY and then failed every command with `unknown command
-    /// "krew"` — including `linix update`, which refreshes every backend at once. That was
+    /// "krew"` — including `shall update`, which refreshes every backend at once. That was
     /// found and fixed once, in a hand-written backend; expressing it here is what lets the
     /// hand-written one be deleted instead of kept for the one thing it knew.
     fn is_available(&self) -> bool {
@@ -1017,7 +1017,7 @@ impl GenericInstallable {
                 }
                 // A manager that will not install without a version gets the one it accepts
                 // for "current". Without this, `asdf:nodejs` builds `asdf install nodejs` and
-                // asdf rejects it — an argv LiNix constructs perfectly and the tool refuses,
+                // asdf rejects it — an argv Shall constructs perfectly and the tool refuses,
                 // which is E13's family.
                 (_, Some(pin)) if pin.unpinned().is_some() => {
                     let fallback = pin.unpinned().unwrap_or_default().to_string();
@@ -1138,8 +1138,8 @@ impl GenericInstallable {
     ///
     /// pip's own refusal is a wall of text about `--break-system-packages`, virtual
     /// environments and `pipx`, addressed to somebody typing `pip install` — not to somebody
-    /// who wrote a line in a manifest and does not know which of those LiNix supports. Both
-    /// answers it names here are ones a declaration can hold: `pipx:` is a backend LiNix ships,
+    /// who wrote a line in a manifest and does not know which of those Shall supports. Both
+    /// answers it names here are ones a declaration can hold: `pipx:` is a backend Shall ships,
     /// and `@system=true` is the flag that flips this exact refusal.
     fn explain_os_owned_environment(&self, e: crate::core::Error) -> crate::core::Error {
         if capability::os_owned_env_arg(&self.core.name).is_none() {
@@ -1168,7 +1168,7 @@ impl GenericInstallable {
                  what PEP 668's marker file says, and `{}` will not write into it.\n  \
                  What a declaration can do about it:\n    \
                  pipx:{name}         install it in its own environment — the tool built for \
-                 this, and a backend LiNix already drives\n    \
+                 this, and a backend Shall already drives\n    \
                  {backend}:{name}@system=true   write into the system Python anyway, on this \
                  line only",
                 message.trim_end(),
@@ -1442,7 +1442,7 @@ impl GenericQueryable {
             .or(self.core.config.list_binary.as_deref())
             .unwrap_or(self.core.binary());
         let dir = tempfile::Builder::new()
-            .prefix("linix-export-")
+            .prefix("shall-export-")
             .tempdir()
             .map_err(|e| {
                 Error::Io(format!(
@@ -1462,7 +1462,7 @@ impl GenericQueryable {
         let _ = self.core.executor.run_output(bin, &argv, false).await?;
         let text = tokio::fs::read_to_string(&path).await.map_err(|e| {
             Error::Io(format!(
-                "`{bin} {}` wrote no export for LiNix to read ({e}). Nothing was adopted from \
+                "`{bin} {}` wrote no export for Shall to read ({e}). Nothing was adopted from \
                  `{}` — rather than reporting the machine as empty.",
                 rendered.join(" "),
                 self.core.name
@@ -1531,12 +1531,12 @@ impl std::fmt::Debug for OutdatedProbe {
 /// hand-written backends existed largely for this — it is what `info` needed and the generic
 /// queryable could not do.
 ///
-/// A **list**, not one install path, because `linix info` prints every property a package
+/// A **list**, not one install path, because `shall info` prints every property a package
 /// carries: npm, pnpm and yarn each report `bin_path` beside `install_path`, and collapsing
 /// that to one probe would have quietly removed a line from a user's output.
 #[derive(Debug, Clone)]
 pub struct PropertyProbe {
-    /// The property key, as `linix info` prints it — `install_path`, `bin_path`.
+    /// The property key, as `shall info` prints it — `install_path`, `bin_path`.
     pub property: String,
     /// Argv run against the backend's binary; its stdout is the base value.
     pub args: Vec<String>,
@@ -1546,7 +1546,7 @@ pub struct PropertyProbe {
 }
 
 impl PropertyProbe {
-    /// `None` rather than an error on every failure path: these are enrichment for `linix
+    /// `None` rather than an error on every failure path: these are enrichment for `shall
     /// info`, and a manager that will not answer must not turn a working `info` into a failed
     /// one — which is what the hand-written backends did, each in its own words.
     async fn resolve(&self, core: &GenericBackendCore, name: &str) -> Option<String> {
@@ -1844,13 +1844,13 @@ fn verification_note(
 ) -> Option<String> {
     if opting_out {
         // The flag went out and the manager still refused: its own words are the whole story,
-        // and LiNix has nothing to add.
+        // and Shall has nothing to add.
         if !withheld {
             return None;
         }
         return Some(format!(
             "the line already says `@unverified`, and this `{}` has no flag that turns its \
-             verification off — `{}` is not in its help, so LiNix did not send it. There is \
+             verification off — `{}` is not in its help, so Shall did not send it. There is \
              nothing to add to the line: this version cannot install a source it cannot verify.",
             binary, flag
         ));
@@ -1899,7 +1899,7 @@ mod verification_advice_tests {
             .expect("a verification refusal still earns an explanation");
         assert!(
             !withheld.contains("Add `@unverified`"),
-            "advised a flag this tool does not document, which LiNix would withhold: {withheld}"
+            "advised a flag this tool does not document, which Shall would withhold: {withheld}"
         );
         assert!(
             withheld.contains("--verify=false") && withheld.contains("not in its help"),
@@ -1964,8 +1964,8 @@ fn reject_shell_meta(field: &str, value: &str) -> Result<()> {
 
 /// A repository name that is about to become part of a FILE PATH.
 ///
-/// `{name}` is an argument a manager parses; `{name_component}` is a path segment LiNix builds —
-/// `/etc/yum.repos.d/<name>.repo`, `/etc/pacman.d/linix-<name>.conf` — and the difference is
+/// `{name}` is an argument a manager parses; `{name_component}` is a path segment Shall builds —
+/// `/etc/yum.repos.d/<name>.repo`, `/etc/pacman.d/shall-<name>.conf` — and the difference is
 /// that `../../../etc/cron.d/x` is a perfectly ordinary argument and a directory escape. Both
 /// hand-written modules validated it and the shared repo path did not, because until dnf and
 /// pacman became rows no row put a name in a path.
@@ -2010,7 +2010,7 @@ fn find_placeholder(s: &str) -> Option<String> {
 ///
 /// apk's removal row is `sed -i '\|{url}|d' /etc/apk/repositories`. With `{url}` never filled,
 /// sed searched for the literal text `{url}`, matched nothing, and **exited 0** — so `run()`
-/// saw success and LiNix reported a repository removed that was still there. An unfilled
+/// saw success and Shall reported a repository removed that was still there. An unfilled
 /// placeholder has to be a loud failure, or the next row with a new placeholder repeats that
 /// silently.
 fn reject_unsubstituted(backend: &str, args: &[String]) -> Result<()> {
@@ -2050,7 +2050,7 @@ impl GenericRepoManager {
         Err(crate::core::Error::Other(format!(
             "`{backend}` identifies a repository by its URL, and `{ident}` is neither a URL nor \
              a name `{backend}` reports.\n  \
-             Run `linix repo list -b {backend}` and pass the source exactly as it appears there.",
+             Run `shall repo list -b {backend}` and pass the source exactly as it appears there.",
             backend = self.core.name,
             ident = ident
         )))
@@ -2153,7 +2153,7 @@ impl RepoManager for GenericRepoManager {
 
         // Bare names, and the source is a separate question per name. Asked once each, and a
         // name whose detail cannot be read keeps its row with an empty source: a repository
-        // LiNix cannot describe is still a repository the user has, and dropping it here would
+        // Shall cannot describe is still a repository the user has, and dropping it here would
         // make `repo remove` unable to find something `repo list` was hiding.
         if let RepoListing::NamesThenDetail(detail) = &self.core.config.repo_list_shape {
             let mut repos = Vec::new();
@@ -2437,7 +2437,7 @@ mod tests {
 
     /// Q43: **a manager too old for the machine-readable listing must fall back, not vanish.**
     ///
-    /// `--format json` needs dotnet SDK 10, `--json` a recent pixi, and LiNix does not choose
+    /// `--format json` needs dotnet SDK 10, `--json` a recent pixi, and Shall does not choose
     /// which is installed. An unsupported flag exits non-zero with a usage message, and every
     /// other reader here hands that back as an empty result — so asking for the better format
     /// without negotiating would report an empty machine to exactly the users on older
@@ -2543,7 +2543,7 @@ ripgrep 15.2.0
     /// `run_output` handed back `Ok("")` for a lister that died without a word, the parser
     /// found no packages in the empty string, and `list_installed` reported `Ok(vec![])` — a
     /// manager with nothing installed. Nothing in the chain thought anything had failed.
-    /// Measured on winget: 1 run in 16 under concurrent cold start, and `linix list --backend
+    /// Measured on winget: 1 run in 16 under concurrent cold start, and `shall list --backend
     /// winget` printed nothing and exited 0 with 280 packages on the machine.
     #[tokio::test]
     async fn a_lister_that_died_silently_is_a_failure_not_an_empty_machine() {
@@ -3222,7 +3222,7 @@ ripgrep 15.2.0
     }
 
     /// The finding: `{url}` was never substituted on the removal path, so `sed` searched for
-    /// the literal text `{url}`, matched nothing, and **exited 0** — LiNix reported a
+    /// the literal text `{url}`, matched nothing, and **exited 0** — Shall reported a
     /// repository removed that was still in the file.
     #[tokio::test]
     async fn apk_repo_removal_carries_the_real_url_and_no_placeholder() {
@@ -3252,7 +3252,7 @@ ripgrep 15.2.0
         );
     }
 
-    /// A removal LiNix cannot address must refuse, not run a command that matches nothing.
+    /// A removal Shall cannot address must refuse, not run a command that matches nothing.
     #[tokio::test]
     async fn a_repo_named_by_something_that_is_not_a_url_is_refused() {
         let vfs = Arc::new(DashMap::new());

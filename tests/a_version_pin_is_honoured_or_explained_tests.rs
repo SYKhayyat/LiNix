@@ -1,6 +1,6 @@
 //! **A backend may be unable to install an exact version. It may not be *silently* unable.**
 //!
-//! `@version=1.2.3` on a declaration, and every version `linix lock` records by itself, reach
+//! `@version=1.2.3` on a declaration, and every version `shall lock` records by itself, reach
 //! `generic.rs` as a `version` option. There the backend's `version_pin` decides what happens:
 //! a manager that has one gets its native syntax, and a manager that has none falls through the
 //! match to `names.push(spec.name.clone())` — the version is dropped, the install runs at
@@ -18,9 +18,9 @@
 //! version or appear in the ledger with a reason. Two lists, and they are not the same list:
 //!
 //! - `capability::CANNOT_PIN_VERSION` — the manager has no mechanism. Dropping the pin is the
-//!   manager's limit, not LiNix's, and the entry is permanent. It lives in the **program**
+//!   manager's limit, not Shall's, and the entry is permanent. It lives in the **program**
 //!   because the refusal quotes it at the user.
-//! - [`COULD_PIN_AND_DOES_NOT`] — the manager takes a version and LiNix does not send one. Every
+//! - [`COULD_PIN_AND_DOES_NOT`] — the manager takes a version and Shall does not send one. Every
 //!   entry here is a live `@version=` that reports success at the wrong version. A to-do, not a
 //!   reason, under a ceiling that only shrinks. Empty since `Q53`.
 //!
@@ -75,7 +75,7 @@ fn backends_of(registrar: &str) -> Vec<String> {
     }
 }
 
-/// The manager takes a version and LiNix does not send one. **Every entry is a live defect**: a
+/// The manager takes a version and Shall does not send one. **Every entry is a live defect**: a
 /// declared `@version=` is dropped and the install reports success at the wrong version.
 ///
 /// Under a ceiling, and the ceiling only goes down. Lower it in the same change that builds one.
@@ -105,7 +105,7 @@ fn ledger_reason(key: &str) -> Option<&'static str> {
     }
     backends_of(key)
         .iter()
-        .find_map(|b| linix::backends::capability::cannot_pin_reason(b))
+        .find_map(|b| shall::backends::capability::cannot_pin_reason(b))
 }
 
 /// Every registrar in `registry.rs` that builds a `ManagerConfig`, and whether it names a
@@ -156,7 +156,7 @@ fn registrars_and_their_pins() -> BTreeMap<String, bool> {
 /// Parsed by the program's own loader rather than by matching text, so a row this test reads is
 /// the row the backend is built from.
 fn data_rows_and_their_pins() -> BTreeMap<String, bool> {
-    linix::backends::onboarder::builtin_rows()
+    shall::backends::onboarder::builtin_rows()
         .into_iter()
         // A row with an install *source* takes a URL or a path where a package manager takes a
         // name, so there is no version to pin — `github:owner/repo` carries its release tag in
@@ -188,7 +188,7 @@ fn every_registrar_that_builds_a_config_pins_a_version_or_says_why() {
     assert!(
         silent.is_empty(),
         "these registrars drop a declared `@version=` and report success, with nothing recorded \
-         saying whether the manager cannot take one or LiNix does not send one: {silent:?}. Add \
+         saying whether the manager cannot take one or Shall does not send one: {silent:?}. Add \
          a `version_pin`, or an entry to NO_VERSION_TO_ASK_FOR / COULD_PIN_AND_DOES_NOT."
     );
 }
@@ -237,7 +237,7 @@ fn pins_by_backend_name() -> BTreeMap<String, bool> {
 fn the_ledger_names_nothing_that_now_pins() {
     let all = pins_by_backend_name();
 
-    let stale: Vec<&str> = linix::backends::capability::backends_that_cannot_pin()
+    let stale: Vec<&str> = shall::backends::capability::backends_that_cannot_pin()
         .into_iter()
         .filter(|b| all.get(*b).copied().unwrap_or(false))
         .collect();
@@ -280,14 +280,14 @@ fn the_ledger_names_nothing_that_now_pins() {
 /// `every_hand_written_backend_answers_the_pin_question` below is what closed it.
 #[test]
 fn every_reason_in_the_program_s_ledger_is_worth_printing() {
-    let names = linix::backends::capability::backends_that_cannot_pin();
+    let names = shall::backends::capability::backends_that_cannot_pin();
     assert!(
         names.len() >= 20,
         "only {} backend(s) in the ledger; it has stopped covering the hand-written ones",
         names.len()
     );
     for name in names {
-        let why = linix::backends::capability::cannot_pin_reason(name)
+        let why = shall::backends::capability::cannot_pin_reason(name)
             .expect("a name from the ledger has a reason in the ledger");
         assert!(
             why.len() > 20,
@@ -350,7 +350,7 @@ fn every_hand_written_backend_answers_the_pin_question() {
             continue;
         }
         for backend in backends_named_by(module) {
-            if linix::backends::capability::cannot_pin_reason(&backend).is_none() {
+            if shall::backends::capability::cannot_pin_reason(&backend).is_none() {
                 unanswered.push(backend);
             }
         }
@@ -377,7 +377,7 @@ fn backends_named_by(module: &str) -> Vec<String> {
 fn the_backends_that_could_pin_and_do_not_only_get_fewer() {
     assert!(
         COULD_PIN_AND_DOES_NOT.is_empty(),
-        "{} backend(s) take a version LiNix does not send, which means a declared `@version=` \
+        "{} backend(s) take a version Shall does not send, which means a declared `@version=` \
          there installs the wrong version and reports success: {:?}. Build the pin, or move it \
          to `capability::CANNOT_PIN_VERSION` with the reason it cannot be built.",
         COULD_PIN_AND_DOES_NOT.len(),

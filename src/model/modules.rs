@@ -23,7 +23,7 @@ pub fn set_math_in_a_module(stmt: &Statement) -> Option<&'static str> {
 
 /// Loads modules on demand (SPEC II.3).
 ///
-/// **LiNix only parses what the active profiles reach.** Not an optimisation: the old
+/// **Shall only parses what the active profiles reach.** Not an optimisation: the old
 /// resolver seeded every `.txt` in the folder unconditionally, which is why `group:editors`
 /// was already a no-op before anyone deleted it — the file was loaded before you named it,
 /// so it looked like opt-in and was not (V.4). Nothing is active unless a profile names it.

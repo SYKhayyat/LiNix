@@ -74,7 +74,7 @@ pub enum Outcome {
         snapshot: String,
     },
     /// Something failed and there is nothing to revert to. The machine is left as it is —
-    /// LiNix will not pretend it fixed anything — and the failure is loud.
+    /// Shall will not pretend it fixed anything — and the failure is loud.
     FailedWithoutRevert { failed: Vec<String> },
 }
 

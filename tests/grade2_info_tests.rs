@@ -9,18 +9,18 @@
 //! **H-2 — an unknown backend prefix costs 83 seconds and gets the wrong answer.** Measured on
 //! Windows, back to back, same config:
 //!
-//!     $ linix install nosuchbackend:foo -y
-//!     Error: Configuration error: `nosuchbackend` is not a backend LiNix uses
+//!     $ shall install nosuchbackend:foo -y
+//!     Error: Configuration error: `nosuchbackend` is not a backend Shall uses
 //!       add `nosuchbackend` to your `priority` file, or check the spelling.
 //!     rc=1                                                             215 ms
 //!
-//!     $ linix list -b nosuchbackend
-//!     Error: Configuration error: `nosuchbackend` is not a backend LiNix uses …
+//!     $ shall list -b nosuchbackend
+//!     Error: Configuration error: `nosuchbackend` is not a backend Shall uses …
 //!     rc=1                                                             fast
 //!
-//!     $ linix info nosuchbackend:foo
+//!     $ shall info nosuchbackend:foo
 //!     'nosuchbackend:foo' is not installed on this machine, so there is nothing to describe.
-//!       `linix search foo` looks for it in the managers you use.
+//!       `shall search foo` looks for it in the managers you use.
 //!     rc=0                              5 523 – 83 522 ms, measured repeatedly across a day
 //!
 //! The spread is the network, not the build: two consecutive debug runs agreed at 82.5 s and
@@ -37,14 +37,14 @@
 //! backend the resolver picked and returns `Ok(None)`. Measured, same machine, same binary,
 //! with a control between the two:
 //!
-//!     $ linix list -b cargo    →  cargo  ripgrep  15.2.0
-//!     $ linix info cargo:ripgrep →  Package: ripgrep  Backend: cargo  Version: 15.2.0
-//!     $ linix info ripgrep     →  'ripgrep' is not installed on this machine …
-//!     $ linix list -b cargo    →  cargo  ripgrep  15.2.0        (unchanged)
+//!     $ shall list -b cargo    →  cargo  ripgrep  15.2.0
+//!     $ shall info cargo:ripgrep →  Package: ripgrep  Backend: cargo  Version: 15.2.0
+//!     $ shall info ripgrep     →  'ripgrep' is not installed on this machine …
+//!     $ shall list -b cargo    →  cargo  ripgrep  15.2.0        (unchanged)
 //!
-//! `linix eval` shows the mechanism: bare `hexyl` resolves to `choco:hexyl` because `choco` is
+//! `shall eval` shows the mechanism: bare `hexyl` resolves to `choco:hexyl` because `choco` is
 //! first in `priority` and choco's index carries the name — so `info hexyl` asks choco, choco
-//! does not have it installed, and LiNix reports the package absent while `list` reports it
+//! does not have it installed, and Shall reports the package absent while `list` reports it
 //! present at 0.17.0 under cargo.
 //!
 //! This is E6's class ("a `list` that disagrees with the machine breaks the one thing it
@@ -66,7 +66,7 @@ fn info_refuses_an_unknown_backend_prefix_the_way_install_does() {
         "the control failed — `install` no longer refuses an unknown backend:\n{out}"
     );
     assert!(
-        out.contains("is not a backend LiNix uses"),
+        out.contains("is not a backend Shall uses"),
         "the control failed — `install`'s refusal changed wording:\n{out}"
     );
 
@@ -79,9 +79,9 @@ fn info_refuses_an_unknown_backend_prefix_the_way_install_does() {
          instead of a typo.\n{out}"
     );
     assert!(
-        out.contains("is not a backend LiNix uses"),
+        out.contains("is not a backend Shall uses"),
         "`info` did not name the unknown backend. `install` says `nosuchbackend` is not a \
-         backend LiNix uses; `list -b nosuchbackend` says the same; `info` says the package is \
+         backend Shall uses; `list -b nosuchbackend` says the same; `info` says the package is \
          not installed. One question, three answers.\n{out}"
     );
     assert_ne!(
@@ -119,7 +119,7 @@ fn info_agrees_with_list_about_what_is_installed() {
         .find(|c| c.len() >= 2 && !c[0].starts_with('-'));
     let Some(cols) = row else {
         panic!(
-            "`linix list` reported no installed package on this machine, so there is nothing to \
+            "`shall list` reported no installed package on this machine, so there is nothing to \
              cross-examine `info` about. This test needs a host with at least one package under \
              any backend.\n{listing}"
         );
@@ -141,7 +141,7 @@ fn info_agrees_with_list_about_what_is_installed() {
     assert_eq!(code, 0, "`info {name}` failed:\n{out}");
     assert!(
         !out.contains("is not installed on this machine"),
-        "`linix list` reports `{name}` installed under `{backend}`, and `info {qualified}` \
+        "`shall list` reports `{name}` installed under `{backend}`, and `info {qualified}` \
          confirms it — but `info {name}` says it is not installed on this machine.\n\
          A bare name is resolved by `priority` order rather than by where the package is, and \
          `get_info` then asks only the backend the resolver picked. The machine is not \
@@ -193,7 +193,7 @@ fn info_agrees_with_list_about_every_backend_not_only_the_first() {
     let rows = one_row_per_backend(&listing);
     assert!(
         !rows.is_empty(),
-        "`linix list` reported nothing at all, so there is nothing to cross-examine `info` \
+        "`shall list` reported nothing at all, so there is nothing to cross-examine `info` \
          about:\n{listing}"
     );
 
@@ -233,7 +233,7 @@ fn info_agrees_with_list_about_every_backend_not_only_the_first() {
 }
 
 /// GRADER §4: *flag every place internal vocabulary leaks.* `info` rendered every leftover
-/// property as an aligned field, so `linix info service:Appinfo` printed
+/// property as an aligned field, so `shall info service:Appinfo` printed
 ///
 ///     status raw:    [SC] QueryServiceConfig SUCCESS
 ///

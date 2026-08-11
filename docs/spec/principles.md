@@ -1,6 +1,6 @@
 # Part I — Principles
 
-*[LiNix v7](../SPEC.md) — the map is there; this is one part of it.*
+*[Shall v7](../SPEC.md) — the map is there; this is one part of it.*
 
 **P1. Every imperative command is a shortcut for editing a file and syncing.** Nothing can
 be done only imperatively. If a command can make a change that no file could have made,
@@ -25,7 +25,7 @@ reason. If you can't state the reason, don't add the number.
 does — the line does that. Not where it came from — git does that. Not that it's good —
 that's the reader's call.
 
-**P7. LiNix is not Linux-first, whatever the name says (owner ruling, 2026-07-23).** Windows
+**P7. Shall is not Linux-first, whatever the name says (owner ruling, 2026-07-23).** Windows
 and macOS are not ports and not a later phase. **A feature designed for one system is not
 finished until the other two have an equivalent or a stated, written reason there can be
 none** — and "the Linux tool has no counterpart" is a reason only after someone looked. The
@@ -41,11 +41,11 @@ This is a design rule, not an aspiration, and it has teeth in three places:
   what is missing; it never reports success (X.4's `SettingStore::None`).
 - **The competition is Linux-only.** Nix, decman, metapac and the rest stop at the Linux
   boundary. Being the tool that declares a Windows machine as readily as a Debian one is not
-  a courtesy to Windows users; it is the only ground where LiNix is alone.
+  a courtesy to Windows users; it is the only ground where Shall is alone.
 
-**P8. LiNix does the thing. It does not hand you the thing to do (owner ruling, 2026-07-23).**
+**P8. Shall does the thing. It does not hand you the thing to do (owner ruling, 2026-07-23).**
 Output whose next step is the user retyping it is not a feature — a command that prints lines
-to paste into a module has done the easy half and left the half that fails. Where LiNix knows
+to paste into a module has done the easy half and left the half that fails. Where Shall knows
 what should happen, it happens: it edits the declaration (`install`, `adopt`, `teleport`) or it
 performs the repair. **Two things this does not license**, both already rules here: it must not
 rewrite your files unasked (II.16), and it must not act without the plan being visible first

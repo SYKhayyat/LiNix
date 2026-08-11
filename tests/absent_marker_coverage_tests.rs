@@ -1,4 +1,4 @@
-//! Which managers cannot tell LiNix that a package name does not exist.
+//! Which managers cannot tell Shall that a package name does not exist.
 //!
 //! N-1 was E1 — a name nothing can install, left in `modules/imperative.txt`, failing every
 //! later command — found alive on `npm` and `github` after it had been closed on `scoop` and
@@ -17,7 +17,7 @@
 //! for: `CLAUDE.md`'s "no silent caps" and `GRADER` §2's rule that a check must be able to
 //! fail both say the same thing, which is that a bounded claim has to state its bound.
 
-use linix::core::exit_policy;
+use shall::core::exit_policy;
 use std::sync::Arc;
 
 /// Every installable backend that cannot yet report a missing name.
@@ -112,22 +112,22 @@ const RESOLVES_ITS_OWN_NAMES: &[&str] = &["github"];
 #[tokio::test]
 async fn every_backend_that_cannot_report_a_missing_name_is_recorded() {
     // Every backend the program registers, not the ones this host happens to have installed:
-    // the count is a property of LiNix, and measuring it against a developer's machine is how
+    // the count is a property of Shall, and measuring it against a developer's machine is how
     // G-11's coverage audit came to report four lifecycles and call it a pass.
     let vfs = Arc::new(dashmap::DashMap::new());
-    let mock = Arc::new(linix::core::executor::MockExecutor::new(vfs.clone()));
-    let exec = linix::core::CommandExecutor::with_layer(
+    let mock = Arc::new(shall::core::executor::MockExecutor::new(vfs.clone()));
+    let exec = shall::core::CommandExecutor::with_layer(
         true,
         false,
         mock,
         vfs,
         Arc::new(dashmap::DashMap::new()),
     );
-    let config = linix::config::Config::default();
-    let registry = linix::backends::create_default_registry(
+    let config = shall::config::Config::default();
+    let registry = shall::backends::create_default_registry(
         exec,
         &config,
-        Arc::new(linix::app::hooks::LuaHooks::new(&config).expect("hooks")),
+        Arc::new(shall::app::hooks::LuaHooks::new(&config).expect("hooks")),
     )
     .await;
 
@@ -177,7 +177,7 @@ async fn every_backend_that_cannot_report_a_missing_name_is_recorded() {
         .collect();
     assert!(
         unrecorded.is_empty(),
-        "these installable backends cannot tell LiNix a package name does not exist, and are \
+        "these installable backends cannot tell Shall a package name does not exist, and are \
          not on the recorded list: {:?}\n\nEach one wedges `modules/imperative.txt` on a typo — \
          the line stays and every later command fails parsing the model, which is E1. Give it \
          an `absent_markers` entry in `src/core/exit_policy::for_manager`, taken from that \
@@ -228,19 +228,19 @@ fn the_named_exceptions_really_do_answer_structurally() {
 #[test]
 fn a_covered_manager_recognises_its_own_words_for_a_missing_name() {
     let cases = [
-        ("npm", "npm error 404 Not Found - GET https://registry.npmjs.org/linix-no-such-pkg-zzz-9 - Not found"),
-        ("gem", "ERROR:  Could not find a valid gem 'linix-no-such-gem-zzz' (>= 0) in any repository"),
-        ("pipx", "ERROR: No matching distribution found for linix-no-such-pkg-zzz"),
-        ("go", "go: module github.com/linix-zzz-nope/nope: git ls-remote failed: remote: Repository not found."),
-        ("pixi", "  \u{2570}\u{2500}\u{25b6} Cannot solve the request because of: No candidates were found for linix-no-such-pkg-zzz *."),
-        ("cargo", "error: could not find `linix-no-such-crate-zzz` in registry `crates-io` with version `*`"),
-        ("scoop", "ERROR Couldn't find manifest for 'linix-no-such-pkg-zzz'."),
-        ("apt", "E: Unable to locate package linix-no-such-pkg-zzz"),
-        ("dnf", "Error: Unable to find a match: linix-no-such-pkg-zzz"),
-        ("pacman", "error: target not found: linix-no-such-pkg-zzz"),
+        ("npm", "npm error 404 Not Found - GET https://registry.npmjs.org/shall-no-such-pkg-zzz-9 - Not found"),
+        ("gem", "ERROR:  Could not find a valid gem 'shall-no-such-gem-zzz' (>= 0) in any repository"),
+        ("pipx", "ERROR: No matching distribution found for shall-no-such-pkg-zzz"),
+        ("go", "go: module github.com/shall-zzz-nope/nope: git ls-remote failed: remote: Repository not found."),
+        ("pixi", "  \u{2570}\u{2500}\u{25b6} Cannot solve the request because of: No candidates were found for shall-no-such-pkg-zzz *."),
+        ("cargo", "error: could not find `shall-no-such-crate-zzz` in registry `crates-io` with version `*`"),
+        ("scoop", "ERROR Couldn't find manifest for 'shall-no-such-pkg-zzz'."),
+        ("apt", "E: Unable to locate package shall-no-such-pkg-zzz"),
+        ("dnf", "Error: Unable to find a match: shall-no-such-pkg-zzz"),
+        ("pacman", "error: target not found: shall-no-such-pkg-zzz"),
         ("apk", "ERROR: unable to select packages:"),
-        ("brew", "Error: No available formula with the name \"linix-no-such-pkg-zzz\"."),
-        ("choco", "linix-no-such-pkg-zzz not installed. The package was not found with the source(s) listed."),
+        ("brew", "Error: No available formula with the name \"shall-no-such-pkg-zzz\"."),
+        ("choco", "shall-no-such-pkg-zzz not installed. The package was not found with the source(s) listed."),
         ("winget", "No package found matching input criteria."),
         ("nimble", "Error:  Package not found in nimble's package list."),
     ];
@@ -292,7 +292,7 @@ fn a_failure_about_a_name_that_exists_is_not_read_as_absent() {
             !exit_policy::for_manager(manager).names_an_absent_package(
                 &exit_policy::ExitPolicy::haystack(output.as_bytes(), b"")
             ),
-            "`{manager}` read this as a name that does not exist, so LiNix would delete a \
+            "`{manager}` read this as a name that does not exist, so Shall would delete a \
              declaration whose package is real:\n  {output}"
         );
     }

@@ -53,9 +53,9 @@ impl Firewall<'_> {
         let Some(adapter) = crate::backends::firewall::detect(&all, &present) else {
             let known: Vec<&str> = all.iter().map(|a| a.name.as_str()).collect();
             return Err(Error::Validation(format!(
-                "`firewall:` lines are declared and LiNix found no firewall here. It looked for \
+                "`firewall:` lines are declared and Shall found no firewall here. It looked for \
                  {}. Add a `[[firewall]]` row to `adapters/firewall.toml` for the one this \
-                 machine runs, or remove the lines — a perimeter LiNix cannot apply must not \
+                 machine runs, or remove the lines — a perimeter Shall cannot apply must not \
                  read as one it did.",
                 known.join(", ")
             )));
@@ -87,7 +87,7 @@ impl Firewall<'_> {
             // ports against an unknown baseline is how a machine goes dark. Refuse.
             Err(e) => {
                 return Err(Error::Validation(format!(
-                    "could not read the current rules from `{}` ({}). LiNix will not change a \
+                    "could not read the current rules from `{}` ({}). Shall will not change a \
                      perimeter it cannot see first.",
                     adapter.name, e
                 )))
@@ -247,7 +247,7 @@ impl Firewall<'_> {
             }
         }
     }
-    /// The local port carrying the connection LiNix is being run over, if any.
+    /// The local port carrying the connection Shall is being run over, if any.
     ///
     /// Read from `SSH_CONNECTION` — the shell sets it to
     /// `<client ip> <client port> <server ip> <server port>`, and the last field is the port
@@ -266,7 +266,7 @@ impl Firewall<'_> {
             .split_first()
             .expect("an adapter command is never empty");
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        // A firewall is root's business on every platform LiNix drives.
+        // A firewall is root's business on every platform Shall drives.
         self.executor.run(program, &refs, true).await.map(|_| ())
     }
 

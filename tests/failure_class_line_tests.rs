@@ -1,4 +1,4 @@
-//! BUILDER round 6, W35's second half — the classification LiNix computes has to reach the
+//! BUILDER round 6, W35's second half — the classification Shall computes has to reach the
 //! caller that needs it.
 //!
 //! `Error::retryability()` answers "could a second attempt differ" from the backend's own exit
@@ -13,11 +13,11 @@
 //! an English sentence:
 //!
 //! ```text
-//! linix-failure-class: permanent
+//! shall-failure-class: permanent
 //! ```
 //!
 //! **This file exists so the token is the stable part.** `scripts/integration-windows.sh` and
-//! `docker/integration/run-in-container.sh` both read it; every other sentence LiNix prints
+//! `docker/integration/run-in-container.sh` both read it; every other sentence Shall prints
 //! about a failure is free to be reworded, and this one is not.
 
 use std::path::{Path, PathBuf};
@@ -33,11 +33,11 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn run(dir: &Path, args: &[&str]) -> (String, i32) {
-    let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+    let out = Command::new(env!("CARGO_BIN_EXE_shall"))
         .args(args)
         .current_dir(dir)
-        .env("LINIX_CONFIG_DIR", dir.join("config"))
-        .env("LINIX_DATA_DIR", dir.join("data"))
+        .env("SHALL_CONFIG_DIR", dir.join("config"))
+        .env("SHALL_DATA_DIR", dir.join("data"))
         .env("NO_COLOR", "1")
         .stdin(std::process::Stdio::null())
         .output()
@@ -59,7 +59,7 @@ fn a_failing_command_names_its_failure_class() {
 
     // A crate that does not exist: cargo says so, the policy calls it permanent, and no retry
     // anywhere can change that answer.
-    let (out, code) = run(&dir, &["install", "cargo:linix-no-such-crate-zzz", "-y"]);
+    let (out, code) = run(&dir, &["install", "cargo:shall-no-such-crate-zzz", "-y"]);
     assert_ne!(
         code, 0,
         "the fixture succeeded, so nothing was classified:\n{out}"
@@ -67,10 +67,10 @@ fn a_failing_command_names_its_failure_class() {
 
     let class = out
         .lines()
-        .find_map(|l| l.trim().strip_prefix("linix-failure-class: "))
+        .find_map(|l| l.trim().strip_prefix("shall-failure-class: "))
         .unwrap_or_else(|| {
             panic!(
-                "a failing command printed no `linix-failure-class:` line. Both sweep harnesses \
+                "a failing command printed no `shall-failure-class:` line. Both sweep harnesses \
                  read it and score a defect when it is missing, because its absence means the \
                  binary under test is not the tree that was built.\n{out}"
             )
@@ -108,7 +108,7 @@ fn the_class_vocabulary_is_the_four_the_harnesses_know() {
     ] {
         let body = std::fs::read_to_string(&harness).unwrap();
         assert!(
-            body.contains("linix-failure-class"),
+            body.contains("shall-failure-class"),
             "{} does not read the failure class, so it is still guessing by retrying",
             harness.display()
         );
@@ -128,7 +128,7 @@ fn the_class_vocabulary_is_the_four_the_harnesses_know() {
             harness.display()
         );
         assert!(
-            live("linix-failure-class"),
+            live("shall-failure-class"),
             "{} mentions the class only in prose — it has to read it",
             harness.display()
         );
@@ -143,7 +143,7 @@ fn a_successful_command_prints_no_class_at_all() {
     let (out, code) = run(&dir, &["eval"]);
     assert_eq!(code, 0, "{out}");
     assert!(
-        !out.contains("linix-failure-class"),
+        !out.contains("shall-failure-class"),
         "`eval` succeeded and still announced a failure class:\n{out}"
     );
 }
@@ -160,7 +160,7 @@ fn a_refusal_is_not_given_a_failure_class() {
          otherwise:\n{out}"
     );
     assert!(
-        !out.contains("linix-failure-class"),
+        !out.contains("shall-failure-class"),
         "a refusal was given a failure class. Exit 3 already says what this is, and the \
          harnesses branch on it before they ever look for a class:\n{out}"
     );

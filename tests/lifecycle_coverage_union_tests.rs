@@ -182,7 +182,7 @@ const NOWHERE: &[Nowhere] = &[
     Nowhere {
         backend: "slackpkg",
         why: "Slackware images exist but are community-built and ship a Rust too old to build \
-              LiNix in-image. Closable by copying in a statically-linked binary.",
+              Shall in-image. Closable by copying in a statically-linked binary.",
     },
     Nowhere {
         backend: "yay",
@@ -250,7 +250,7 @@ const NOWHERE: &[Nowhere] = &[
 /// ran for months.
 ///
 /// The run-time half of that question now exists and lives in the sweep: each image writes what
-/// it actually ships to `/etc/linix-image-managers`, and the coverage audit reports a manager
+/// it actually ships to `/etc/shall-image-managers`, and the coverage audit reports a manager
 /// that failed to install as MISSING rather than impossible. This test and that check answer
 /// different halves — *is it claimed anywhere* and *is it really there* — and neither is the
 /// whole answer alone.
@@ -319,10 +319,10 @@ fn every_exemption_names_a_backend() {
 /// between Windows and Linux CI every entry is covered.
 #[tokio::test]
 async fn every_backend_this_host_registers_is_in_the_universe() {
-    let config = linix::config::Config::default();
-    let hooks = linix::app::LuaHooks::new(&config).expect("hooks for a default config");
-    let registry = linix::backends::registry::create_default_registry(
-        linix::core::CommandExecutor::new(true, false),
+    let config = shall::config::Config::default();
+    let hooks = shall::app::LuaHooks::new(&config).expect("hooks for a default config");
+    let registry = shall::backends::registry::create_default_registry(
+        shall::core::CommandExecutor::new(true, false),
         &config,
         std::sync::Arc::new(hooks),
     )

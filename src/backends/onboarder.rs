@@ -1,4 +1,4 @@
-// The "onboarder": let users teach LiNix a new CLI package manager entirely from
+// The "onboarder": let users teach Shall a new CLI package manager entirely from
 // config, with no source changes. A built-in backend is just a `ManagerConfig` (the
 // argv templates) plus an `OutputParser` (Rust code). The onboarder makes BOTH data:
 // the argv come straight from TOML, and the parser is a declarative `ParserSpec` (JSON /
@@ -20,7 +20,7 @@
 //     needs_root   = false
 //     outdated_args = ["list", "--upgradable"]   # what has an update, in ONE call (Q44)
 //     machine_list_args = ["list", "--json"]     # preferred over list_args if accepted (Q43)
-//     clean_cache_args = ["cache", "clean"]      # `linix clean-cache`; absent = it has none
+//     clean_cache_args = ["cache", "clean"]      # `shall clean-cache`; absent = it has none
 //     clean_cache_binary = "xbps-remove"         # when a different program empties the cache
 //     repo_remove_binary = "rm"                  # when adding and dropping a source differ
 //     [backend.parser]
@@ -40,7 +40,7 @@
 //
 // **The file is argv a shared repo can execute, so it is II.12's supply-chain surface and
 // goes through the hook ledger** — the same approval a hook needs, not a second mechanism.
-// An unapproved or changed file registers nothing and says so; `linix lock` approves it.
+// An unapproved or changed file registers nothing and says so; `shall lock` approves it.
 
 use crate::backends::generic::{
     CacheClean, DependsProbe, GenericBackendCore, GenericEnumerable, GenericInstallable,
@@ -455,9 +455,9 @@ pub struct CustomBackendDef {
     ///
     /// For a manager that is a plugin of another: `kubectl` alone is not krew, and a host with
     /// kubectl and no krew reported READY and then failed every command — including
-    /// `linix update`, which refreshes every backend at once.
+    /// `shall update`, which refreshes every backend at once.
     pub extra_probes: Option<Vec<String>>,
-    /// Paths `linix info` reports, each read out of the manager rather than guessed.
+    /// Paths `shall info` reports, each read out of the manager rather than guessed.
     #[serde(default)]
     pub property_probes: Vec<PropertyProbeDef>,
 
@@ -507,7 +507,7 @@ pub struct CustomBackendDef {
     /// Querying a package's dependencies (reverse-dependency reports, `why`). `{name}` is the
     /// package, and it must be an argument of its own so the terminator can precede it.
     pub depends_args: Option<Vec<String>>,
-    /// Emptying this manager's download cache, for `linix clean-cache`. Absent ⇒ it has none,
+    /// Emptying this manager's download cache, for `shall clean-cache`. Absent ⇒ it has none,
     /// which is what the verb reports rather than pretending it cleaned something.
     pub clean_cache_args: Option<Vec<String>>,
     /// Binary for `clean_cache_args`, when the cache is emptied by a different program than
@@ -767,7 +767,7 @@ struct CustomBackendsFile {
     backend: Vec<CustomBackendDef>,
 }
 
-/// True for a program LiNix will run for a custom backend: a plain command name found on
+/// True for a program Shall will run for a custom backend: a plain command name found on
 /// `$PATH`, or a path to an executable.
 ///
 /// **A path is allowed (U16, ruled 2026-07-24).** A prefix that runs `/opt/vendor/thing` is
@@ -812,7 +812,7 @@ fn is_valid_backend_name(name: &str) -> bool {
 
 /// Loads and registers the config repo's custom backends. Never fails the program: a missing
 /// file is normal, and a malformed or unapproved one is reported and skipped so the built-in
-/// backends still come up — including `linix lock`, which is how an unapproved file is fixed.
+/// backends still come up — including `shall lock`, which is how an unapproved file is fixed.
 pub fn load_default_custom_backends(
     reg: &mut BackendRegistry,
     exec: &CommandExecutor,
@@ -887,7 +887,7 @@ fn unapproved(path: &Path, content: &str, locks_dir: &Path) -> Option<String> {
     crate::core::hook_lock::adapter_refusal(path, content, locks_dir)
 }
 
-/// The backends LiNix ships with, as rows in the table a user adds a row to.
+/// The backends Shall ships with, as rows in the table a user adds a row to.
 ///
 /// **An adapter mechanism the built-ins bypass is one nobody has tested** — `setting_stores.toml`
 /// states that in its own header, and the one table with sixty rows was the one bypassing it.
@@ -949,7 +949,7 @@ pub fn register_custom_backends(
             if !is_valid_binary(binary) {
                 warn!(
                     "Skipping custom backend '{}': `binary = \"{}\"` is empty or contains \
-                     whitespace, so it is not a command LiNix can run.",
+                     whitespace, so it is not a command Shall can run.",
                     def.name, binary
                 );
                 continue;
@@ -1788,7 +1788,7 @@ list_args = ["-Qm"]
 "#;
 
     /// 7a: the definition travels with the repo. A machine that has never seen this file
-    /// registers the backend from it — after `linix lock`, because the file is argv the repo
+    /// registers the backend from it — after `shall lock`, because the file is argv the repo
     /// can run and that is II.12's question, not a new one.
     #[test]
     fn a_repo_definition_registers_once_it_is_approved() {
@@ -1806,7 +1806,7 @@ list_args = ["-Qm"]
         assert_eq!(n, 0, "an unapproved definition file registered a backend");
         assert!(reg.get("paru").is_none());
 
-        // What `linix lock` writes.
+        // What `shall lock` writes.
         let mut ledger = HookLedger::new();
         ledger.approve(&adapter_id("backends.toml"), &hash_script(PARU_TOML));
         ledger.save(&HookLedger::path_in(&locks)).unwrap();

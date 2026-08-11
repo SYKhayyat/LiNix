@@ -1,10 +1,10 @@
 //! Out-of-tree kernel modules, after a kernel changes (XIII.1).
 //!
-//! **LiNix builds nothing.** It drives DKMS, which is already on the machine and already knows
-//! how to rebuild a module. What LiNix adds is the one thing DKMS cannot know: *that the kernel
+//! **Shall builds nothing.** It drives DKMS, which is already on the machine and already knows
+//! how to rebuild a module. What Shall adds is the one thing DKMS cannot know: *that the kernel
 //! just changed*, across managers.
 //!
-//! The distribution's own DKMS hook fires for the distribution's own package manager. LiNix's
+//! The distribution's own DKMS hook fires for the distribution's own package manager. Shall's
 //! whole premise is several managers at once — a kernel from `apt` and a driver installed some
 //! other way, or a kernel from a manager whose hook nobody wired — so the cross-manager case is
 //! the one nothing covers, and it is the one that leaves a machine without its graphics driver
@@ -18,7 +18,7 @@
 
 /// Whether a package being installed or removed is a kernel.
 ///
-/// Matched on the name across the distributions LiNix drives, because there is no cross-manager
+/// Matched on the name across the distributions Shall drives, because there is no cross-manager
 /// "is this a kernel" flag to ask for. The tension is real in both directions: a false negative
 /// costs a driver after the reboot, but a false positive is not free either — it runs
 /// `dkms autoinstall` (harmless) *and then fails the sync if any DKMS module is stuck*, even a
@@ -106,7 +106,7 @@ impl std::fmt::Display for Module {
 /// ```
 ///
 /// A line that does not parse is skipped rather than guessed at: inventing a module out of a
-/// warning would have LiNix report a rebuild of something that does not exist.
+/// warning would have Shall report a rebuild of something that does not exist.
 pub fn parse_status(output: &str) -> Vec<Module> {
     let mut out: Vec<Module> = Vec::new();
     for line in output.lines() {
@@ -155,7 +155,7 @@ pub fn parse_status(output: &str) -> Vec<Module> {
 /// **Asked after `dkms autoinstall`, not before.** A module still sitting at `added` or `built`
 /// once autoinstall has run is one that did not make it — the fact worth failing on.
 ///
-/// Deliberately NOT "not installed for the new kernel". LiNix cannot reliably name the release
+/// Deliberately NOT "not installed for the new kernel". Shall cannot reliably name the release
 /// that was just installed: `linux-image-6.8.0-35-generic` carries it and Arch's plain `linux`
 /// does not, and the *running* kernel is still the old one at this point — so a check against a
 /// release string would be right on one distribution and quietly vacuous on another. This asks
@@ -289,7 +289,7 @@ v4l2loopback/0.12.7, 6.8.0-31-generic, x86_64: installed
     }
 
     /// A line that is not a module must not become one. `dkms status` prints warnings, and a
-    /// phantom module would have LiNix report rebuilding something that does not exist.
+    /// phantom module would have Shall report rebuilding something that does not exist.
     #[test]
     fn noise_does_not_become_a_module() {
         assert!(parse_status("").is_empty());

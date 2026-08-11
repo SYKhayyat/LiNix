@@ -1,4 +1,4 @@
-//! A config file saved by a Windows editor starts with a byte-order mark, and every file LiNix
+//! A config file saved by a Windows editor starts with a byte-order mark, and every file Shall
 //! reads has to work anyway (`Q22`, ruled 2026-07-31).
 //!
 //! Notepad writes UTF-8 **with** a BOM by default, and so does PowerShell 5.1's
@@ -7,8 +7,8 @@
 //! ruling they became part of the first name on the first line:
 //!
 //! ```text
-//! $ linix eval
-//! Error: …/modules/starter.txt:1: `<U+FEFF>cargo` is not a backend LiNix uses
+//! $ shall eval
+//! Error: …/modules/starter.txt:1: `<U+FEFF>cargo` is not a backend Shall uses
 //!   add `<U+FEFF>cargo` to your `priority` file, or check the spelling.
 //! ```
 //!
@@ -95,11 +95,11 @@ fn every_line_file_may_carry_one() {
 
 /// `preferences.toml` is TOML rather than a line file, and its reader is a different one — the
 /// same mark, the other parser. Its failure would be the loudest of the family: an unreadable
-/// preferences file stops every command LiNix has.
+/// preferences file stops every command Shall has.
 ///
 /// **This one was already green before the fix**, and saying so matters. The `toml` crate
 /// tolerates a leading BOM, so nothing here was broken; the strip in `Config::load` makes the
-/// rule hold for LiNix's own reasons rather than by a dependency's courtesy, and this assertion
+/// rule hold for Shall's own reasons rather than by a dependency's courtesy, and this assertion
 /// is a pin on behaviour rather than a repair of it. The three line-file tests above were red.
 #[test]
 fn the_preferences_file_may_carry_one() {
@@ -130,7 +130,7 @@ fn the_preferences_file_may_carry_one() {
     );
 }
 
-/// The control, and the reason none of the above is "LiNix ignores junk it does not understand":
+/// The control, and the reason none of the above is "Shall ignores junk it does not understand":
 /// a mark in the MIDDLE of a line is not an encoding artefact — nothing puts it there but a
 /// paste — and it is still refused, by a message that names it.
 #[test]

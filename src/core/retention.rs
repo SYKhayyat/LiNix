@@ -1,4 +1,4 @@
-// Declarative retention for the one history LiNix stores itself: filesystem snapshots.
+// Declarative retention for the one history Shall stores itself: filesystem snapshots.
 // Archived manifests and generations were the other two, and both are git's job now — this
 // file opened by naming all three for a phase after they went, which is how a reader ends up
 // looking for the other two policies.

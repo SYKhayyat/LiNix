@@ -23,14 +23,14 @@ const DOWNLOADS: &[&str] = &["web", "appimage", "github"];
 
 /// Managers that verify a signature themselves, and the argument that turns it off (Q5).
 ///
-/// `@unverified` is not only about LiNix's own `@sha256`: a manager can be the thing doing the
+/// `@unverified` is not only about Shall's own `@sha256`: a manager can be the thing doing the
 /// checking, and then the line still needs a way to say "not here". helm v4 verifies plugin
 /// signatures by default and **refuses outright** a source that cannot carry one — a git URL
 /// has no `.prov` file — so without this there is no declaration that installs a helm plugin
 /// at all.
 ///
 /// `allow_http` deliberately has no such table. The two flags never imply each other (SEC2),
-/// and helm's plain-HTTP switch addresses OCI registries LiNix does not reach.
+/// and helm's plain-HTTP switch addresses OCI registries Shall does not reach.
 const VERIFIES_ITSELF: &[(&str, &str)] = &[("helm", "--verify=false")];
 
 /// Backends that publish one artifact in several version streams.
@@ -174,7 +174,7 @@ pub fn unverified_arg(backend: &str) -> Option<&'static str> {
 /// package manager. pip then refuses every install, `--user` included, and it is right to: two
 /// package managers writing the same site-packages is how a system python ends up unbootable.
 ///
-/// So the default is the refusal, with `pipx:` named in it — LiNix ships pipx, pipx exists for
+/// So the default is the refusal, with `pipx:` named in it — Shall ships pipx, pipx exists for
 /// exactly this, and it works on all of those distros. This flag is the escape hatch for
 /// someone who means it, per line, never as a global switch.
 const OS_OWNED_ENV: &[(&str, &str)] = &[("pip", "--break-system-packages")];
@@ -201,7 +201,7 @@ pub fn system_backends() -> String {
         .join(", ")
 }
 
-/// Whether `@unverified` says anything on `backend` — LiNix's checksum, or the manager's own
+/// Whether `@unverified` says anything on `backend` — Shall's checksum, or the manager's own
 /// signature check. Wider than [`downloads`], which is `@allow_http`'s set alone.
 pub fn accepts_unverified(backend: &str) -> bool {
     downloads(backend) || unverified_arg(backend).is_some()

@@ -1,19 +1,19 @@
 //! GRADER round 4, 2026-07-30 — RED. `--dry-run` writes the managed-state registry, and the
 //! gate that says "every subcommand" never looks at the directory it writes to.
 //!
-//! Measured on Windows, fresh `LINIX_CONFIG_DIR`/`LINIX_DATA_DIR`, one binary:
+//! Measured on Windows, fresh `SHALL_CONFIG_DIR`/`SHALL_DATA_DIR`, one binary:
 //!
-//!     $ linix --dry-run adopt -y
+//!     $ shall --dry-run adopt -y
 //!     Adopted 112 package(s).                      <- past tense, no [DRY-RUN] marker
 //!     Manifest:  …/cfg/modules/adopted.txt         <- and this file was NOT written
 //!
 //!     $ ls data/registry.json
 //!     -rw-r--r-- 29645 registry.json               <- 112 packages recorded as managed
 //!
-//!     $ linix check
+//!     $ shall check
 //!     ok  config      0 package(s) declared
 //!     ->  drift       0 to install, 112 to remove, 0 to place, 0 to undo
-//!                        run `linix sync`
+//!                        run `shall sync`
 //!
 //! So a preview leaves the machine in the one state the model reads as *the user deleted every
 //! line*: managed, undeclared. Driven end to end in a disposable data directory — one github
@@ -30,7 +30,7 @@
 //! and `unhold` do the same (`src/verbs/packages.rs:605,624`). The sibling that was fixed proves
 //! the class was known — `src/verbs/cleanup.rs:467`:
 //!
-//!     // The registry is what LiNix believes it manages. A preview that persisted `forget`
+//!     // The registry is what Shall believes it manages. A preview that persisted `forget`
 //!     // would leave the package unmanaged for real while promising it had changed nothing.
 //!     if !app.config.dry_run {
 //!
@@ -90,7 +90,7 @@ fn dry_run_hold_does_not_record_a_hold() {
     assert_eq!(
         after,
         before,
-        "`linix --dry-run hold` wrote the managed-state registry. It also said `{}` in the past \
+        "`shall --dry-run hold` wrote the managed-state registry. It also said `{}` in the past \
          tense, with no [DRY-RUN] marker.",
         out.lines().next().unwrap_or("").trim()
     );
@@ -117,7 +117,7 @@ fn dry_run_unhold_does_not_release_a_hold() {
     assert_eq!(
         after,
         before,
-        "`linix --dry-run unhold` wrote the managed-state registry, and printed `{}`.",
+        "`shall --dry-run unhold` wrote the managed-state registry, and printed `{}`.",
         out.lines().next().unwrap_or("").trim()
     );
 }
@@ -150,7 +150,7 @@ fn dry_run_adopt_leaves_nothing_managed_and_undeclared() {
 
     assert!(
         !registry_written,
-        "`linix --dry-run adopt` wrote data/registry.json. It printed `{}` — past tense, no \
+        "`shall --dry-run adopt` wrote data/registry.json. It printed `{}` — past tense, no \
          [DRY-RUN] marker — and did NOT write the manifest it named, so every package it \
          discovered is now managed and undeclared. `check` says:\n{}\n\nThat is the state the \
          model reads as \"the user deleted every line\", and the `sync` this output recommends \
@@ -194,7 +194,7 @@ fn the_dry_run_gate_does_not_excuse_a_verb_for_writing_where_it_cannot_see() {
 
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     for l in src.lines() {
-        if l.contains("LINIX_DATA_DIR") {
+        if l.contains("SHALL_DATA_DIR") {
             *counts.entry("data dir wired into the fixture").or_default() += 1;
         }
         if l.contains("fn snapshot") {

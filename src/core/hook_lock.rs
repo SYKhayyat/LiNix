@@ -4,8 +4,8 @@
 //! a `before_sync` step. When that code lives in a module you pulled from `github:x/y`, or
 //! even in your own config, the supply-chain question is the same: *is this the script I
 //! agreed to run, or has it changed since?* The lock answers it. `locks/hooks.toml` records
-//! the sha256 of every hook script the moment you approved it (`linix lock`); before a sync
-//! runs any hook, LiNix re-hashes it and refuses if the hash is new or different.
+//! the sha256 of every hook script the moment you approved it (`shall lock`); before a sync
+//! runs any hook, Shall re-hashes it and refuses if the hash is new or different.
 //!
 //! Two rules, both from II.12:
 //!
@@ -13,7 +13,7 @@
 //!    chain that trusts "local" scripts is a supply chain with a hole the exact shape of the
 //!    thing an attacker drops in your repo.
 //! 2. **`-y` cannot approve.** A confirmation prompt is answered by every CI job; approval is
-//!    a deliberate, separate act (`linix lock`) so an unattended run can never rubber-stamp a
+//!    a deliberate, separate act (`shall lock`) so an unattended run can never rubber-stamp a
 //!    script that changed under it.
 //!
 //! This module is pure: hashing, the ledger, and the New/Changed/Approved verdict. Enforcement
@@ -42,7 +42,7 @@ pub fn hook_id(hook_name: &str, package_name: &str) -> String {
     format!("{}:{}", hook_name, package_name)
 }
 
-/// The ledger identity of a `vars` provider (V.55). A provider that executes — `vars.linix`
+/// The ledger identity of a `vars` provider (V.55). A provider that executes — `vars.shall`
 /// or an external `vars.<ext>` — is a script that runs on your machine, so it lives in the
 /// same ledger as a hook, keyed by its filename. It runs at step 0 of resolution, before any
 /// plan and on read-only commands, so this is the only thing between a pulled config and a
@@ -55,7 +55,7 @@ pub fn vars_id(filename: &str) -> String {
 ///
 /// An `exec:` runs code the repo carries, which is II.12's question exactly — *"the ledger is
 /// the only thing between a pulled config and a shell"* — and II.12 admits no exceptions, so a
-/// script is approved before it runs, by `linix lock`, and `-y` cannot approve it.
+/// script is approved before it runs, by `shall lock`, and `-y` cannot approve it.
 ///
 /// Keyed by the declared path, while `locks/exec.toml` is keyed by content: the two ledgers
 /// answer different questions. *Is this allowed to run?* is about a script you reviewed at a
@@ -75,13 +75,13 @@ pub fn health_id(command: &str) -> String {
 
 /// The ledger identity of a `generate:` command (XIII.30, U33). A generator runs code the repo
 /// carries and treats its stdout as declarations, so it is II.12's supply-chain question exactly
-/// — approved before it runs, by `linix lock`, `-y` cannot approve. Keyed by the declared
+/// — approved before it runs, by `shall lock`, `-y` cannot approve. Keyed by the declared
 /// command so a changed command reads as a new, unapproved generator.
 pub fn generate_id(command: &str) -> String {
     format!("generate:{}", command)
 }
 
-/// The ledger identity of a hook on one of LiNix's own events (XIII.13, U15).
+/// The ledger identity of a hook on one of Shall's own events (XIII.13, U15).
 ///
 /// **Keyed by event AND location**, because U15 put the same event's hook in two places: the
 /// config repo's `hooks/<event>` and this machine's `preferences.toml`. They are separately
@@ -91,7 +91,7 @@ pub fn event_id(event: &str, origin: &str) -> String {
     format!("event:{}@{}", event, origin)
 }
 
-/// The ledger identity of one file under `adapters/` (7a/U1, U10). A definition is argv LiNix
+/// The ledger identity of one file under `adapters/` (7a/U1, U10). A definition is argv Shall
 /// will run, and it travels with the repo, so it is the same supply-chain surface a hook is.
 ///
 /// **One identity per file, whatever number of definitions it holds.** A per-definition
@@ -105,7 +105,7 @@ pub fn adapter_id(filename: &str) -> String {
 pub enum Verdict {
     /// The current hash matches the approved one. Run it.
     Approved,
-    /// No approval on record. A hook LiNix has never seen is not implicitly trusted (II.12).
+    /// No approval on record. A hook Shall has never seen is not implicitly trusted (II.12).
     New,
     /// An approval exists, but the script has changed since. This is the case the whole
     /// mechanism exists for: the script you approved is not the script about to run.
@@ -149,7 +149,7 @@ impl HookLedger {
         }
     }
 
-    /// Record `hash` as the approved hash for `id`. This is what `linix lock` does; nothing
+    /// Record `hash` as the approved hash for `id`. This is what `shall lock` does; nothing
     /// else writes an approval, so approval stays a deliberate act.
     pub fn approve(&mut self, id: &str, hash: &str) {
         self.approvals.insert(id.to_string(), hash.to_string());
@@ -160,7 +160,7 @@ impl HookLedger {
         self.approvals.get(id).map(String::as_str)
     }
 
-    /// Every approved id and its hash, for `linix lock --list` to report.
+    /// Every approved id and its hash, for `shall lock --list` to report.
     pub fn entries(&self) -> impl Iterator<Item = (&str, &str)> {
         self.approvals.iter().map(|(i, h)| (i.as_str(), h.as_str()))
     }
@@ -189,14 +189,14 @@ pub fn refusal(id: &str, source: &str, verdict: &Verdict) -> String {
         Verdict::Approved => String::new(),
         Verdict::New => format!(
             "`{}` ({}) has never been approved.\n  \
-             It runs code on this machine, and LiNix will not run what it has not seen.\n  \
-             Review it, then run `linix lock` to approve it.",
+             It runs code on this machine, and Shall will not run what it has not seen.\n  \
+             Review it, then run `shall lock` to approve it.",
             id, source
         ),
         Verdict::Changed { was, now } => format!(
             "`{}` ({}) changed since you approved it.\n  \
              was: sha256:{}\n  now: sha256:{}\n  \
-             Review the change, then run `linix lock` to approve it.",
+             Review the change, then run `shall lock` to approve it.",
             id,
             source,
             short(was),
@@ -293,7 +293,7 @@ mod tests {
 
     #[test]
     fn re_approving_updates_to_the_new_hash() {
-        // `linix lock` after a reviewed change: the new hash becomes the approved one.
+        // `shall lock` after a reviewed change: the new hash becomes the approved one.
         let mut ledger = HookLedger::new();
         ledger.approve("after_install:nginx", "old");
         ledger.approve("after_install:nginx", "new");
@@ -363,7 +363,7 @@ mod tests {
         let msg = refusal("after_install:nginx", "github:acme/fonts", &Verdict::New);
         assert!(msg.contains("after_install:nginx"));
         assert!(msg.contains("github:acme/fonts"));
-        assert!(msg.contains("linix lock"));
+        assert!(msg.contains("shall lock"));
     }
 
     #[test]

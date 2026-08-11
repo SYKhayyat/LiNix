@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use tokio::fs;
 use tracing::{debug, info};
 
-/// A shim is the linix binary itself, deployed under the target's name: on startup linix
+/// A shim is the shall binary itself, deployed under the target's name: on startup shall
 /// reads `current_exe()`'s filename and re-dispatches when it is not its own
 /// (`attempt_shim_hijack`). The shim's NAME is therefore the entire mechanism.
 pub struct ShimManager {
@@ -23,16 +23,16 @@ impl ShimManager {
         Ok(Self { bin_dir })
     }
 
-    /// Whether `path` is a shim LiNix deployed, i.e. the linix binary under another name:
+    /// Whether `path` is a shim Shall deployed, i.e. the shall binary under another name:
     /// the same file as the running binary (the hard-link path) or a byte-identical copy
     /// of it (the cross-filesystem fallback).
     ///
-    /// `bin_dir` is `~/.local/bin`, which LiNix shares with the user and with every other
+    /// `bin_dir` is `~/.local/bin`, which Shall shares with the user and with every other
     /// tool that installs there. Without this test, removal deletes by NAME alone, so a
     /// managed package called `jq` makes every sync delete whatever `~/.local/bin/jq` is —
-    /// a file LiNix never created and does not own.
+    /// a file Shall never created and does not own.
     /// `pub(crate)` for one caller beyond this file: the runner has to know a shim when it sees
-    /// one on `PATH`, because running a shim is how a shim re-enters LiNix for ever.
+    /// one on `PATH`, because running a shim is how a shim re-enters Shall for ever.
     pub(crate) async fn is_deployed_shim(path: &Path) -> bool {
         let Ok(current_exe) = std::env::current_exe() else {
             return false;
@@ -91,28 +91,28 @@ impl ShimManager {
     pub async fn create_shim(&self, binary_name: &str) -> Result<()> {
         let target_path = self.shim_path(binary_name);
 
-        // A "linix" shim would overwrite linix itself with itself — and on the copy path,
+        // A "shall" shim would overwrite shall itself with itself — and on the copy path,
         // truncate the running binary.
-        if binary_name == "linix" {
+        if binary_name == "shall" {
             return Ok(());
         }
 
         let current_exe = tokio::task::spawn_blocking(std::env::current_exe)
             .await
             .map_err(|e| Error::Other(e.to_string()))?
-            .map_err(|e| Error::Io(format!("Failed to locate linix binary: {}", e)))?;
+            .map_err(|e| Error::Io(format!("Failed to locate shall binary: {}", e)))?;
 
         // Remove first: hard_link/copy onto an existing path fails, and a dangling symlink
         // reports as non-existent to `try_exists`, hence the explicit `is_symlink` check.
         if tokio::fs::try_exists(&target_path).await.unwrap_or(false) || target_path.is_symlink() {
-            // S4: only overwrite a file LiNix itself deployed. `bin_dir` is `~/.local/bin`,
+            // S4: only overwrite a file Shall itself deployed. `bin_dir` is `~/.local/bin`,
             // shared with the user and every other tool; a same-named binary they put there is
             // an unmanaged file, and deploying a shim must not silently destroy it — the same
-            // ownership rule `remove_shim` already follows. Redeploying LiNix's own shim is
-            // fine (it hashes identical to the linix binary).
+            // ownership rule `remove_shim` already follows. Redeploying Shall's own shim is
+            // fine (it hashes identical to the shall binary).
             if !Self::is_deployed_shim(&target_path).await {
                 return Err(Error::Refused(format!(
-                    "refusing to deploy the `{}` shim: {:?} already exists and LiNix did not \
+                    "refusing to deploy the `{}` shim: {:?} already exists and Shall did not \
                      create it. Move or rename that file yourself if you want the shim there.",
                     binary_name, target_path
                 )));
@@ -125,7 +125,7 @@ impl ShimManager {
         #[cfg(unix)]
         {
             // Hard link, never a symlink: `current_exe()` resolves symlinks, so a symlinked
-            // shim would report the name "linix" and dispatch to itself instead of the
+            // shim would report the name "shall" and dispatch to itself instead of the
             // shimmed tool. Copy is the fallback since a link cannot cross filesystems.
             if let Err(e) = fs::hard_link(&current_exe, &target_path).await {
                 debug!("Hard link failed ({}), falling back to copy...", e);
@@ -165,7 +165,7 @@ impl ShimManager {
             return Ok(());
         }
         if !Self::is_deployed_shim(&target_path).await {
-            debug!("{:?} is not a LiNix shim — leaving it alone.", target_path);
+            debug!("{:?} is not a Shall shim — leaving it alone.", target_path);
             return Ok(());
         }
         debug!("Removing shim {:?}", target_path);
@@ -189,7 +189,7 @@ impl ShimManager {
 
             if metadata.is_file() {
                 if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                    if name != "linix" && name != "linix.exe" && Self::is_deployed_shim(&path).await
+                    if name != "shall" && name != "shall.exe" && Self::is_deployed_shim(&path).await
                     {
                         #[cfg(windows)]
                         {
@@ -221,10 +221,10 @@ mod tests {
     /// `bin_dir` is `~/.local/bin`, shared with the user and every other tool. Removal
     /// used to match on FILENAME alone, so a managed package named `jq` made every sync
     /// delete whatever `~/.local/bin/jq` happened to be. The ownership test is what stands
-    /// between a teardown and a file LiNix never wrote, so it belongs here rather than in
+    /// between a teardown and a file Shall never wrote, so it belongs here rather than in
     /// whichever caller happens to reach it.
     #[tokio::test]
-    async fn remove_shim_never_deletes_a_file_linix_did_not_deploy() {
+    async fn remove_shim_never_deletes_a_file_shall_did_not_deploy() {
         let tmp = tempdir().unwrap();
         let bin = tmp.path().join("bin");
         let mgr = ShimManager::with_bin_dir(bin.clone()).await.unwrap();
@@ -246,7 +246,7 @@ mod tests {
 
         assert!(
             victim.exists(),
-            "sync deleted a file LiNix never created: {:?}",
+            "sync deleted a file Shall never created: {:?}",
             victim
         );
     }
@@ -301,7 +301,7 @@ mod tests {
     /// would then clobber the user's own `jq` on the next sync. Deploy must refuse, not
     /// destroy, an unmanaged file.
     #[tokio::test]
-    async fn create_shim_refuses_to_clobber_a_file_linix_did_not_deploy() {
+    async fn create_shim_refuses_to_clobber_a_file_shall_did_not_deploy() {
         let tmp = tempdir().unwrap();
         let bin = tmp.path().join("bin");
         let mgr = ShimManager::with_bin_dir(bin.clone()).await.unwrap();
@@ -332,7 +332,7 @@ mod tests {
         let bin = tmp.path().join("bin");
         let mgr = ShimManager::with_bin_dir(bin.clone()).await.unwrap();
 
-        // A shim is the linix binary under another name. The test binary stands in for it:
+        // A shim is the shall binary under another name. The test binary stands in for it:
         // `is_deployed_shim` compares against `current_exe`, which here is the test runner.
         // Windows shims carry `.exe`, which is the name `remove_shim` will look for.
         let exe = std::env::current_exe().unwrap();
@@ -378,7 +378,7 @@ mod tests {
         assert!(shims.iter().any(|s| s.starts_with("ripgrep")));
         assert!(
             !shims.iter().any(|s| s.starts_with("my-script")),
-            "a file LiNix never deployed is not a shim: {:?}",
+            "a file Shall never deployed is not a shim: {:?}",
             shims
         );
     }

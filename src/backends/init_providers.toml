@@ -1,4 +1,4 @@
-# The init/service systems LiNix ships (U36).
+# The init/service systems Shall ships (U36).
 #
 # Rows, not Rust — the same ruling that turned firewalls and settings stores into data. Each
 # init is a name, a way to tell it is here (`detect` + optional `os`), and the argv for each
@@ -24,7 +24,7 @@ os = "linux"
 detect = "systemctl"
 # `--no-pager` on every row, not only the two that print a screenful. systemctl decides to page
 # from the terminal and from $SYSTEMD_PAGER, and a pager waits for a keypress that a captured
-# child never receives — `linix check health` hung there, on a read-only command.
+# child never receives — `shall check health` hung there, on a read-only command.
 enable  = [["systemctl", "--no-pager", "enable", "--", "{name}"]]
 disable = [["systemctl", "--no-pager", "disable", "--", "{name}"]]
 start   = [["systemctl", "--no-pager", "start", "--", "{name}"]]
@@ -105,7 +105,7 @@ stop_benign_exits  = [1062]
 #   sc query type= service                 ->  156 services
 # Measured on Windows 11 26200. `sc query` already answers about ACTIVE services by default,
 # so the rejected argument was asking for the behaviour it already had — and because `sc`
-# exits 0 while printing `ERROR:`, `linix list -b service` returned an empty list rather than
+# exits 0 while printing `ERROR:`, `shall list -b service` returned an empty list rather than
 # a failure, on every Windows machine, since this row was written.
 list = ["sc", "query", "type=", "service"]
 list_pattern = 'SERVICE_NAME:\s+(\S+)'

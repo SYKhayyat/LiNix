@@ -10,7 +10,7 @@ use tracing::{debug, error, info, instrument, warn};
 pub struct Runner {
     registry: Arc<BackendRegistry>,
     config: Arc<Config>,
-    /// `linix run` provisions what the command needs and does not remove it afterwards, so
+    /// `shall run` provisions what the command needs and does not remove it afterwards, so
     /// the install it performs is as real and as interruptible as any other. Calling it
     /// temporary describes the intent, not what the package manager is left holding.
     journal: Arc<tokio::sync::Mutex<crate::core::Journal>>,
@@ -101,8 +101,8 @@ impl Runner {
         }
 
         // **The lock covers the provisioning, not the command** (`LockScope::Deferred`).
-        // `linix run -p X -- some-command` installs what the command needs and then runs a
-        // command LiNix neither wrote nor bounds — a server, an editor, a shell one-liner that
+        // `shall run -p X -- some-command` installs what the command needs and then runs a
+        // command Shall neither wrote nor bounds — a server, an editor, a shell one-liner that
         // waits on input. Held for the whole verb, the 120-second exclusive lock was held for
         // the length of somebody else's program. The scope below ends before it is spawned.
         {
@@ -175,14 +175,14 @@ impl Runner {
 
         // The terminal-handoff door: streams inherited because the user is looking at it, no idle
         // bound because a program waiting for them to type is not a hung one — but owned, so it
-        // does not keep the terminal after LiNix has gone.
+        // does not keep the terminal after Shall has gone.
         crate::core::executor::supervised_status(child, &command).await
     }
 
     /// What a `shim:` line says to provision and run under this name, or the bare name when the
     /// line names no source.
     ///
-    /// The declaration is the record. A shim is a copy of the linix binary and carries no data of
+    /// The declaration is the record. A shim is a copy of the shall binary and carries no data of
     /// its own, so `@source=` had nowhere to be *stored* — but it does not need storing: the
     /// config that declared the shim is the same config this process has already loaded, and it
     /// still says `shim:jq@source=cargo:jq`.
@@ -210,15 +210,15 @@ impl Runner {
     }
 }
 
-/// `command` resolved through `PATH`, skipping any LiNix shim on the way.
+/// `command` resolved through `PATH`, skipping any Shall shim on the way.
 ///
 /// **A shim must never resolve to itself.** `bin_dir` is on `PATH` *ahead* of the real binary —
 /// that is the entire mechanism — so spawning the shimmed name by bare name finds the shim
-/// again, which re-enters LiNix, which spawns the name again. One process per turn, for ever.
+/// again, which re-enters Shall, which spawns the name again. One process per turn, for ever.
 ///
 /// Identity is asked of the file, not of the directory: `web:`, `github:` and `appimage:` all
 /// deploy real executables into that same `bin_dir`, and excluding the directory would make
-/// `linix run` unable to find them.
+/// `shall run` unable to find them.
 async fn real_program(command: &str) -> String {
     real_program_on(command, std::env::var_os("PATH")).await
 }
@@ -284,7 +284,7 @@ mod tests {
     /// The shim spawning itself, closed.
     ///
     /// `bin_dir` sits on `PATH` ahead of the real binary — that is what makes a shim a shim — so
-    /// resolving the shimmed name by bare name found the shim, which re-entered LiNix, which
+    /// resolving the shimmed name by bare name found the shim, which re-entered Shall, which
     /// resolved the name again. Nothing in the tree stopped it: no depth counter, no marker,
     /// no exclusion.
     #[tokio::test]
@@ -306,7 +306,7 @@ mod tests {
         assert_eq!(
             real_program_on("jq", Some(path.clone())).await,
             decoy.to_string_lossy(),
-            "a file LiNix did not deploy is a normal binary and must still be found first"
+            "a file Shall did not deploy is a normal binary and must still be found first"
         );
 
         // And now the same PATH with a real shim in front of the real binary.
@@ -341,7 +341,7 @@ mod tests {
         assert_eq!(real_program_on("jq", Some(path)).await, "jq");
     }
 
-    /// A command that is already a path is not a `PATH` question. `linix run ./build.sh` names
+    /// A command that is already a path is not a `PATH` question. `shall run ./build.sh` names
     /// one file, and re-resolving it through directories would run a different one.
     #[tokio::test]
     async fn a_command_that_names_a_path_is_left_exactly_as_written() {

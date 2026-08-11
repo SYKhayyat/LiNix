@@ -38,7 +38,7 @@ impl HostFacts {
 
     fn value_for(&self, key: &str) -> Option<Value> {
         // IX.4: `$name` is a variable you decided, `name` is a fact the machine reported. The
-        // sigil is what lets LiNix add a detected fact without changing the meaning of a file
+        // sigil is what lets Shall add a detected fact without changing the meaning of a file
         // where someone happened to use that word as a variable.
         if let Some(var) = key.strip_prefix('$') {
             return self.vars.get(var).cloned();
@@ -319,7 +319,7 @@ mod conditional_tests {
 
     #[test]
     fn a_variable_can_never_shadow_a_detected_fact() {
-        // IX.4: the sigil exists so LiNix can add a detected fact forever without changing the
+        // IX.4: the sigil exists so Shall can add a detected fact forever without changing the
         // meaning of a file where someone used that word as a variable name.
         let mut vars = crate::model::vars::Vars::new();
         vars.insert("os".to_string(), Value::Str("definitely-not-linux".into()));

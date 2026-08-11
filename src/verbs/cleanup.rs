@@ -4,7 +4,7 @@ use crate::verbs::prelude::*;
 
 /// `remove-orphans` — each manager's own "no longer needed by anything" set.
 ///
-/// The orphan set is the backend's opinion, not LiNix's model, which is exactly why it gets
+/// The orphan set is the backend's opinion, not Shall's model, which is exactly why it gets
 /// the same shape as `sync`: name every package first, put it through the guard, then ask.
 /// The old `clean` ran `apt autoremove -y` / `pacman -Rs --noconfirm` across every available
 /// backend with no preview and outside the guard.
@@ -41,7 +41,7 @@ pub async fn handle_remove_orphans(app: &App) -> Result<()> {
     if !cannot_say.is_empty() {
         println!(
             "No orphan removal for: {}. These managers cannot say what they would delete, so \
-             LiNix does not let them delete it.",
+             Shall does not let them delete it.",
             cannot_say.join(", ")
         );
     }
@@ -119,7 +119,7 @@ pub async fn handle_remove_orphans(app: &App) -> Result<()> {
 ///
 /// The graph is built here rather than by `ChangePlanner` because these removals are not
 /// `desired − present`: the orphan set comes from each manager's own answer, and the undeclared
-/// set from LiNix's registry. The planner's job is deciding *what* to remove and both commands
+/// set from Shall's registry. The planner's job is deciding *what* to remove and both commands
 /// have already decided; what they were missing is the engine that carries it out.
 async fn execute_removals_through_the_engine(
     app: &App,
@@ -160,21 +160,21 @@ pub fn confirm_orphan_removal(app: &App) -> Result<bool> {
 /// package, so it needs no preview and no guard: the guard protects packages, not disk space,
 /// and widening it to cover caches would dilute what a refusal means (K16).
 ///
-/// `--all` additionally clears LiNix's own transient download area. It does NOT touch the
+/// `--all` additionally clears Shall's own transient download area. It does NOT touch the
 /// installed artifact directories — those hold software that is on `PATH`, and deleting them
 /// is a removal (level 4), not a cache clean.
 pub async fn handle_clean_cache(app: &App, all: bool) -> Result<()> {
     if app.config.dry_run {
         crate::would_print!("Would clear the package cache for every backend that has one.");
-        crate::would_print!("Would forget the installed listings LiNix has cached.");
+        crate::would_print!("Would forget the installed listings Shall has cached.");
         if all {
-            crate::would_print!("Would also clear LiNix's own download cache.");
+            crate::would_print!("Would also clear Shall's own download cache.");
         }
         return Ok(());
     }
 
     // The listings go first, and unconditionally. This is the command a user reaches for when
-    // something outside LiNix changed the machine and they know it before `installed_cache_secs`
+    // something outside Shall changed the machine and they know it before `installed_cache_secs`
     // does — so it must work even on a machine where the cache is turned off, since the files
     // could have been written by a run that had it on.
     match crate::core::installed::InstalledListings::forget_on_disk() {
@@ -223,19 +223,19 @@ pub async fn handle_clean_cache(app: &App, all: bool) -> Result<()> {
             match tokio::fs::remove_dir_all(tmp).await {
                 Ok(()) => {
                     tokio::fs::create_dir_all(tmp).await.ok();
-                    println!("Cleared LiNix's download cache ({}).", tmp.display());
+                    println!("Cleared Shall's download cache ({}).", tmp.display());
                 }
                 Err(e) => warn!("could not clear {}: {}", tmp.display(), e),
             }
         } else {
-            println!("LiNix's download cache is already empty.");
+            println!("Shall's download cache is already empty.");
         }
     }
 
     perform_maintenance(app).await
 }
 
-/// How little LiNix must manage before "delete the rest" reads as a mistake (II.11).
+/// How little Shall must manage before "delete the rest" reads as a mistake (II.11).
 ///
 /// A ratio, not a count. On Alpine, `adopt` correctly took 14 packages and a mis-scoped
 /// removal scheduled all 14 — under any sane count limit, none protected, all things you
@@ -243,14 +243,14 @@ pub async fn handle_clean_cache(app: &App, all: bool) -> Result<()> {
 /// about to delete and you have made a mistake, on every machine, at every scale (V.20).
 pub const PURGE_RATIO: f64 = 0.1;
 
-/// `purge-undeclared` (II.11): delete everything LiNix does not manage.
+/// `purge-undeclared` (II.11): delete everything Shall does not manage.
 ///
 /// The residual risk, stated plainly because the docs must state it: `adopt` is an estimate.
 /// If it missed something, this deletes it.
 pub async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Result<()> {
     let undeclared = app.installed_but_undeclared().await?;
     if undeclared.is_empty() {
-        println!("Nothing to do: LiNix manages every installed package.");
+        println!("Nothing to do: Shall manages every installed package.");
         return Ok(());
     }
 
@@ -263,7 +263,7 @@ pub async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Resul
     // The whole list. 576 packages is 576 lines: the pain is the feature, and a summary
     // here is a summary of what you are about to lose.
     println!(
-        "LiNix manages {} package(s). This will remove {}:\n",
+        "Shall manages {} package(s). This will remove {}:\n",
         managed,
         undeclared.len()
     );
@@ -277,10 +277,10 @@ pub async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Resul
     if ratio < PURGE_RATIO && !allow_mass_purge {
         let sample: Vec<String> = undeclared.iter().take(3).map(|p| p.name.clone()).collect();
         return Err(crate::core::Error::Refused(format!(
-            "LiNix manages {} packages.\n\
+            "Shall manages {} packages.\n\
              This will remove {}, including {}.\n\
              That looks like you haven't adopted this machine yet.\n\
-             Run `linix adopt` first, or --allow-mass-purge if you're sure.",
+             Run `shall adopt` first, or --allow-mass-purge if you're sure.",
             managed,
             undeclared.len(),
             sample.join(", ")
@@ -396,7 +396,7 @@ pub async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Resul
     println!("\nRemoved {} package(s); {} failed.", gone, failed);
     if let Some(id) = &snapshot {
         println!(
-            "Snapshot {} was taken before this ran; `linix snapshot restore` opens the gallery \
+            "Snapshot {} was taken before this ran; `shall snapshot restore` opens the gallery \
              to put the filesystem back.",
             id
         );
@@ -404,7 +404,7 @@ pub async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Resul
     Ok(())
 }
 
-/// `linix reset` — LiNix forgets it manages anything (X.3, level 3). The packages stay; the
+/// `shall reset` — Shall forgets it manages anything (X.3, level 3). The packages stay; the
 /// registry and snapshots go.
 ///
 /// This is not a widening of `clean-cache`. Level 3 is a different command precisely because
@@ -413,7 +413,7 @@ pub async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Resul
 pub async fn handle_reset(app: &App, force: bool) -> Result<()> {
     let managed = app.state.lock().await.packages.len();
 
-    // K5: forgetting the registry while the declarations remain leaves LiNix believing it
+    // K5: forgetting the registry while the declarations remain leaves Shall believing it
     // manages nothing and the files saying otherwise. Refuse unless the repo is gone, or the
     // user says `--force`.
     let config_root = app.config.config_root();
@@ -423,7 +423,7 @@ pub async fn handle_reset(app: &App, force: bool) -> Result<()> {
     if repo_exists && !force {
         return Err(crate::core::Error::Refused(format!(
             "A config repo still exists at {}.\n\
-             Resetting the registry while your files declare packages would leave LiNix \
+             Resetting the registry while your files declare packages would leave Shall \
              believing it manages nothing while the files say otherwise.\n\
              Delete the repo first, or pass --force if you mean to keep the files and forget \
              the registry anyway.",
@@ -433,8 +433,8 @@ pub async fn handle_reset(app: &App, force: bool) -> Result<()> {
     }
 
     println!(
-        "LiNix will forget it manages {} package(s). They stay installed.\n\
-         `linix adopt` is how you get them back, and it will guess.\n\
+        "Shall will forget it manages {} package(s). They stay installed.\n\
+         `shall adopt` is how you get them back, and it will guess.\n\
          The registry and all snapshots are deleted. This cannot be undone.\n",
         managed
     );
@@ -556,7 +556,7 @@ pub async fn handle_unmanage(app: &App, packages: &[String], out: Output) -> Res
         }));
     }
 
-    // The registry is what LiNix believes it manages. A preview that persisted `forget` would
+    // The registry is what Shall believes it manages. A preview that persisted `forget` would
     // leave the package unmanaged for real while promising it had changed nothing.
     if !app.config.dry_run {
         app.state.lock().await.save()?;
@@ -583,7 +583,7 @@ pub async fn handle_unmanage(app: &App, packages: &[String], out: Output) -> Res
             continue;
         }
         println!(
-            "{}: no longer managed by LiNix. It is still installed.",
+            "{}: no longer managed by Shall. It is still installed.",
             spec
         );
         for f in r["forgotten"].as_array().into_iter().flatten() {
@@ -716,7 +716,7 @@ pub async fn handle_protected(app: &App, packages: &[String], out: Output) -> Re
         return Ok(());
     }
 
-    println!("Removal guard — what LiNix refuses to remove.\n");
+    println!("Removal guard — what Shall refuses to remove.\n");
     println!(
         "Protected packages ({}):",
         cfg.guard.protected_packages.len()
@@ -759,11 +759,11 @@ pub async fn handle_protected(app: &App, packages: &[String], out: Output) -> Re
         "\nPackages the OS itself reports as essential are also refused, on top of this list.\n\
          Every command that removes is guarded — there is no way to opt one out.\n\
          Edit `protected_packages`, `unprotected_packages` or any ceiling under [guard] in {}.\n\
-         Check one package:      linix protected apt:python3\n\
-         Machine-readable:       linix protected --json\n\
-         Allow a big removal:    linix <command> --allow-mass-removal (the count only —\n\
+         Check one package:      shall protected apt:python3\n\
+         Machine-readable:       shall protected --json\n\
+         Allow a big removal:    shall <command> --allow-mass-removal (the count only —\n\
                                  it never lets a protected or essential package through)\n\
-         Allow a big install:    linix <command> --allow-mass-install (answers `max_installs`,\n\
+         Allow a big install:    shall <command> --allow-mass-install (answers `max_installs`,\n\
                                  off unless you set it)\n\
          Either flag answers `max_total_changes`; neither answers a protected name.",
         cfg.preferences_file.display()

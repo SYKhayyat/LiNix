@@ -11,7 +11,7 @@
 //! So the engine grew the mode instead, and this pins both halves of it: what still stops, and
 //! what now carries on.
 
-use linix::core::{GraphAction, PackageSpec, Transaction, TransactionConfig};
+use shall::core::{GraphAction, PackageSpec, Transaction, TransactionConfig};
 use petgraph::stable_graph::StableDiGraph;
 
 use crate::mock_providers::TestKernel;

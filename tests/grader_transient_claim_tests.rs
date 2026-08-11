@@ -16,7 +16,7 @@
 //! The manifest is reachable; luarocks' own downloader is what fails, because the `wget` first
 //! on this PATH is a scoop shim that does not take the flags luarocks passes. `exit_policy.rs`
 //! lists `"failed downloading"` and `"failed searching manifest"` as transient markers, so
-//! LiNix calls this Transient, keeps the declaration, and tells the user `sync` will try it
+//! Shall calls this Transient, keeps the declaration, and tells the user `sync` will try it
 //! again. It will fail identically forever.
 //!
 //! The policy's own doc comment names this exact cause — "a machine whose only problem is that
@@ -24,16 +24,16 @@
 //! and then classifies it as the network anyway. That is READINESS §3.4's defect (a real
 //! failure reported as ecosystem variance) moved from the harness into the product.
 //!
-//! This test states the property the classification is making: if LiNix says a failure is
+//! This test states the property the classification is making: if Shall says a failure is
 //! worth retrying, retrying it must be capable of a different answer.
 
 use std::process::Command;
 
-fn linix(args: &[&str], cfg: &std::path::Path) -> (String, i32) {
-    let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+fn shall(args: &[&str], cfg: &std::path::Path) -> (String, i32) {
+    let out = Command::new(env!("CARGO_BIN_EXE_shall"))
         .args(args)
-        .env("LINIX_CONFIG_DIR", cfg.join("config"))
-        .env("LINIX_DATA_DIR", cfg.join("data"))
+        .env("SHALL_CONFIG_DIR", cfg.join("config"))
+        .env("SHALL_DATA_DIR", cfg.join("data"))
         .stdin(std::process::Stdio::null())
         .output()
         .expect("the binary should run");
@@ -57,20 +57,20 @@ fn a_failure_called_transient_can_actually_differ_on_a_second_attempt() {
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("transient-claim");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let (out, code) = linix(&["init"], &dir);
+    let (out, code) = shall(&["init"], &dir);
     assert_eq!(code, 0, "the fixture's own `init` failed:\n{out}");
 
-    let (first, rc1) = linix(&["install", "luarocks:luafilesystem", "-y"], &dir);
+    let (first, rc1) = shall(&["install", "luarocks:luafilesystem", "-y"], &dir);
     if rc1 == 0 {
         eprintln!("luarocks works on this host; there is no failure to classify");
         return;
     }
 
-    // LiNix keeps the declaration and says `sync` will retry exactly when it judged the
+    // Shall keeps the declaration and says `sync` will retry exactly when it judged the
     // failure retryable. That sentence is the claim under test.
     let called_transient = first.contains("is still declared") && first.contains("try it again");
     if !called_transient {
-        // Not "nothing to falsify, move on". LiNix declining to call this transient is the
+        // Not "nothing to falsify, move on". Shall declining to call this transient is the
         // fix, and a test that merely returns here would go green just as readily on a build
         // that had stopped saying anything at all. So assert the honest alternative: it must
         // still keep the declaration (the cause is a broken `wget` on the PATH, which is
@@ -85,7 +85,7 @@ fn a_failure_called_transient_can_actually_differ_on_a_second_attempt() {
         );
         assert!(
             first.contains("repeated on every retry"),
-            "LiNix stopped promising a retry, but did not say why. `Transient` was falsified \
+            "Shall stopped promising a retry, but did not say why. `Transient` was falsified \
              by evidence the program already had — it retried and got the same answer — and \
              the user needs that sentence, not silence:\n{}",
             tail(&first)
@@ -93,11 +93,11 @@ fn a_failure_called_transient_can_actually_differ_on_a_second_attempt() {
         return;
     }
 
-    let (second, rc2) = linix(&["install", "luarocks:luafilesystem", "-y"], &dir);
+    let (second, rc2) = shall(&["install", "luarocks:luafilesystem", "-y"], &dir);
 
     assert!(
         rc2 == 0,
-        "LiNix classified this failure as worth retrying and told the user so, then the retry \
+        "Shall classified this failure as worth retrying and told the user so, then the retry \
          failed identically (rc {rc1} then {rc2}).\n\
          `Transient` is a claim that a second attempt could differ; nothing in the product \
          tests it, and here it is false.\n\

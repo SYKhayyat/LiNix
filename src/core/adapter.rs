@@ -26,7 +26,7 @@
 //! everything asked *about* rows. Adding an eighth table means implementing three methods, not
 //! copying a loader.
 
-/// A row in an adapter table: something LiNix drives, which a user can add to without waiting
+/// A row in an adapter table: something Shall drives, which a user can add to without waiting
 /// for a release.
 pub trait AdapterRow {
     /// What this table is called in the sentence a dropped row prints — "firewall adapter",
@@ -50,7 +50,7 @@ pub trait AdapterRow {
         None
     }
 
-    /// Why LiNix will not act on this row, beyond the empty-key floor every table shares.
+    /// Why Shall will not act on this row, beyond the empty-key floor every table shares.
     ///
     /// The answer is a sentence a user reads, not a bool, because a row that is dropped
     /// without a reason is a row whose author cannot fix it.
@@ -70,12 +70,12 @@ pub trait AdapterRow {
         }
     }
 
-    /// Whether this row applies to the machine LiNix is running on.
+    /// Whether this row applies to the machine Shall is running on.
     fn applies_here(&self) -> bool {
         self.applies_to(std::env::consts::OS)
     }
 
-    /// Why LiNix will not act on this row, or `None`.
+    /// Why Shall will not act on this row, or `None`.
     fn unusable(&self) -> Option<&'static str> {
         if self.name().trim().is_empty() {
             return Some(Self::NAMELESS);
@@ -90,9 +90,9 @@ pub trait Detected: AdapterRow {
     fn detect_command(&self) -> &str;
 }
 
-/// The rows LiNix will act on, in the order given, each dropped row saying why.
+/// The rows Shall will act on, in the order given, each dropped row saying why.
 ///
-/// **Dropped loudly, never half-trusted.** A row LiNix cannot drive is not a row it drives
+/// **Dropped loudly, never half-trusted.** A row Shall cannot drive is not a row it drives
 /// badly: a settings store it can write but not read would be rewritten on every sync, and an
 /// init it can start but not stop would half-apply a `service:` line. The reason is printed
 /// because the person who can fix the row is reading.
@@ -110,7 +110,7 @@ pub fn usable<R: AdapterRow>(rows: impl IntoIterator<Item = R>) -> Vec<R> {
 
 /// The rows in force, with the first claim on a name winning.
 ///
-/// **Chain the shipped rows first and a user's row can never shadow one LiNix ships** — the
+/// **Chain the shipped rows first and a user's row can never shadow one Shall ships** — the
 /// `custom_backends.toml` rule (K17/U1), applied to every table that has built-ins. Both
 /// halves go through this one function on purpose: an adapter mechanism the built-ins bypass
 /// is one nobody has tested.

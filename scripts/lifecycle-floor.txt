@@ -17,7 +17,7 @@
 # already has half of them. Holding a developer to CI's number would make the gate red on every
 # machine that has ever been used, which is how a gate learns to be ignored.
 #
-# For a container, `<os>` is the IMAGE (`LINIX_IT_IMAGE`, declared by each Dockerfile), not the
+# For a container, `<os>` is the IMAGE (`SHALL_IT_IMAGE`, declared by each Dockerfile), not the
 # distro underneath it. `/etc/os-release` says `ubuntu` for both the ubuntu image and the `tools`
 # image, because `tools` is built on Ubuntu — so the two runs that differ most in coverage (7 and
 # 25) were filed under one record, and whichever wrote it last made the other permanently wrong.

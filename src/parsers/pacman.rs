@@ -199,7 +199,7 @@ pub fn parse_pacman_outdated(output: &str) -> Vec<Package> {
 mod outdated_tests {
     use super::*;
 
-    /// Verbatim from `pacman -Qu` in a `linix-it-arch` container.
+    /// Verbatim from `pacman -Qu` in a `shall-it-arch` container.
     const PACMAN: &str = "\
 archlinux-keyring 20260707.1-1 -> 20260727-1
 audit 4.1.4-2 -> 4.2.1-1

@@ -312,7 +312,7 @@ fn every_shell_script_the_repo_runs_has_lf_endings() {
                 let candidate = root().join(&rest[..end]);
                 // **A file, and a file made of text.** The sweep collects any `$PWD/`-rooted
                 // path the workflow names, and `ci.yml` names one that is not a script at all:
-                // `LINIX="$PWD/target/release/linix.exe"`. On a machine that has done a release
+                // `SHALL="$PWD/target/release/shall.exe"`. On a machine that has done a release
                 // build that path exists, the scan reads it, an executable contains `\r` in the
                 // ordinary course of being an executable, and the gate reported the release
                 // binary as a CRLF shell script. A check that fails for a reason unrelated to
@@ -403,7 +403,7 @@ fn every_integration_image_declares_its_own_identity() {
         let want = base(df).trim_start_matches("Dockerfile.").to_string();
         let got = read(&format!("docker/integration/{}", base(df)))
             .lines()
-            .filter_map(|l| l.trim().strip_prefix("ENV LINIX_IT_IMAGE="))
+            .filter_map(|l| l.trim().strip_prefix("ENV SHALL_IT_IMAGE="))
             .map(|v| v.trim().to_string())
             .next_back();
         if got.as_deref() != Some(want.as_str()) {
@@ -529,7 +529,7 @@ fn every_workflow_value_that_yaml_would_read_as_a_key_is_quoted() {
 /// produced a single `Build for x86_64-pc-windows-msvc` and nothing else: Linux and both Macs
 /// were never compiled here at all, while the release job asserts four binaries in `dist/`.
 ///
-/// It is the same shape as the four release assets that were all named `linix`, and it survived
+/// It is the same shape as the four release assets that were all named `shall`, and it survived
 /// the same way — by being a claim about a run nobody read. So the claim is checked: the targets
 /// the release step names by hand and the targets the matrix builds are one list, and a matrix
 /// that cannot expand to one job per row fails here rather than in six months at a tag.
@@ -568,10 +568,10 @@ fn every_target_the_release_publishes_is_one_the_matrix_actually_builds() {
     // The targets the release step names by hand, which is the list that must agree.
     let published: std::collections::BTreeSet<String> = ci
         .lines()
-        .filter(|l| l.contains("dist/linix-"))
+        .filter(|l| l.contains("dist/shall-"))
         .flat_map(|l| {
             l.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'))
-                .filter_map(|w| w.strip_prefix("linix-"))
+                .filter_map(|w| w.strip_prefix("shall-"))
                 .map(|t| t.trim_end_matches(".exe").to_string())
                 .collect::<Vec<_>>()
         })
@@ -588,7 +588,7 @@ fn every_target_the_release_publishes_is_one_the_matrix_actually_builds() {
 
 /// **Every triple the installer asks for is a triple the release publishes.**
 ///
-/// `install.sh` maps `uname` to a target and downloads `linix-<triple>`; when there is no asset
+/// `install.sh` maps `uname` to a target and downloads `shall-<triple>`; when there is no asset
 /// it falls back to building from source — 448 crates under fat LTO, on whatever hardware the
 /// user has. That fallback is silent, so a triple the installer names and the release does not
 /// publish is not a 404 anybody sees: it is a thirty-second promise that takes twenty minutes.

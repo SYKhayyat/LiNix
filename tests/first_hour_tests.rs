@@ -21,10 +21,10 @@ impl Fresh {
     }
 
     fn run(&self, args: &[&str]) -> (String, i32) {
-        let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+        let out = Command::new(env!("CARGO_BIN_EXE_shall"))
             .args(args)
-            .env("LINIX_CONFIG_DIR", self.dir.join("config"))
-            .env("LINIX_DATA_DIR", self.dir.join("data"))
+            .env("SHALL_CONFIG_DIR", self.dir.join("config"))
+            .env("SHALL_DATA_DIR", self.dir.join("data"))
             .stdin(std::process::Stdio::null())
             .output()
             .expect("the binary should run");
@@ -46,7 +46,7 @@ impl Fresh {
 /// The first command a new user runs, on a machine with no config.
 ///
 /// It explained the `priority` file format and asked them to write it by hand, and never
-/// mentioned `linix init` — which exists to do exactly that, detects the managers actually on
+/// mentioned `shall init` — which exists to do exactly that, detects the managers actually on
 /// the machine, and is one word. Describing a format well is not the same as naming the
 /// command that fills it in.
 #[test]
@@ -54,7 +54,7 @@ fn the_first_sync_names_the_command_that_fixes_it() {
     let fresh = Fresh::new("first-sync");
     let (out, _) = fresh.run(&["sync"]);
     assert!(
-        out.contains("linix init"),
+        out.contains("shall init"),
         "the first thing a new user sees does not mention the command that fixes it:\n{out}"
     );
 }

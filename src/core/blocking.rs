@@ -1,6 +1,6 @@
 //! Work that blocks a thread, run from a command that is `async`.
 //!
-//! **LiNix's slowest waits are not on the network — they are on a person, or on a program.** A
+//! **Shall's slowest waits are not on the network — they are on a person, or on a program.** A
 //! confirm sits at a prompt until someone types; a TUI reads keys for as long as they browse;
 //! `git commit` runs after every sync; a `btrfs subvolume snapshot` takes as long as it takes.
 //! Every one of those was a plain blocking call reached straight from an `async fn`, which parks
@@ -19,7 +19,7 @@
 
 /// Wait where the call cannot move, without parking a runtime worker.
 ///
-/// `block_in_place` panics on a current-thread runtime, and LiNix builds one of those as a
+/// `block_in_place` panics on a current-thread runtime, and Shall builds one of those as a
 /// fallback in `rhai_stdlib`, so the flavour is asked rather than assumed. Nothing reaches a
 /// prompt from there today; a check that costs nothing is cheaper than a panic that depends on
 /// that staying true — and cheaper still than one that only fires for whoever writes the hook

@@ -12,7 +12,7 @@
 //! `upgrade`. The cases below are the shapes those call sites can be handed, not the one that
 //! was reported.
 
-use linix::config::parser::split_removal_target;
+use shall::config::parser::split_removal_target;
 
 /// The backends these tests pretend this machine has.
 fn known(name: &str) -> bool {
@@ -48,8 +48,8 @@ fn a_scoped_name_with_options_keeps_the_name_and_drops_the_options() {
 
 #[test]
 fn a_quoted_name_is_taken_whole() {
-    // V.113: `winget list` answers with identifiers containing spaces, and a name LiNix lists
-    // has to be a name LiNix can be given back. Splitting on `@` cut inside the quotes.
+    // V.113: `winget list` answers with identifiers containing spaces, and a name Shall lists
+    // has to be a name Shall can be given back. Splitting on `@` cut inside the quotes.
     assert_eq!(
         split(r#"winget:"Some App@2""#),
         (Some("winget".into()), "Some App@2".into())

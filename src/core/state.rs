@@ -22,7 +22,7 @@ pub struct ManagedPackage {
     /// nothing is written to read it.
     pub options: crate::config::grammar::Options,
     /// Why this row exists — a `file:line` a user wrote, or the verb that took ownership
-    /// (`adopt`, `imperative`, `plan`, `sync`). Not optional: a managed row LiNix cannot
+    /// (`adopt`, `imperative`, `plan`, `sync`). Not optional: a managed row Shall cannot
     /// attribute is one II.7 will remove with no answer to `why`, and that is exactly the
     /// shape the dependency expander wrote before Y9 (V.115a).
     pub source: String,
@@ -135,8 +135,8 @@ impl StateRegistry {
         let mut registry: Self = serde_json::from_str(&data).map_err(|e| {
             Error::Other(format!(
                 "the state registry at {} cannot be read: {}\n  \
-                 It records what LiNix believes it manages. A missing or unreadable one is \
-                 not something to guess at — move it aside and run `linix adopt` to rebuild \
+                 It records what Shall believes it manages. A missing or unreadable one is \
+                 not something to guess at — move it aside and run `shall adopt` to rebuild \
                  it from what is actually installed.",
                 path.display(),
                 e
@@ -165,7 +165,7 @@ impl StateRegistry {
     /// whether the run was a preview, so the decision lives in [`persist`] instead of here.
     /// `adopt` was the expensive one: it recorded every discovered package as managed while its
     /// *manifest* write correctly went nowhere, which is the one state the model reads as **the
-    /// user deleted every line** — and the next `sync`, the one `linix check` then recommends,
+    /// user deleted every line** — and the next `sync`, the one `shall check` then recommends,
     /// uninstalls them.
     ///
     /// A caller says `Held` or `would hold` from the returned answer rather than by asking the
@@ -183,7 +183,7 @@ impl StateRegistry {
     pub fn snapshot(&self) -> Result<StateSnapshot> {
         trace!("serialising state for {:?}", self.path);
         // Compact, not pretty: this is a machine-read registry of every managed package,
-        // rewritten in full after every mutation, and `linix` is the only thing that reads it
+        // rewritten in full after every mutation, and `shall` is the only thing that reads it
         // back. Pretty printing roughly doubles the bytes for a file nobody opens.
         let data = serde_json::to_string(self)
             .map_err(|e| Error::Other(format!("State Serialization Error: {}", e)))?;
@@ -280,12 +280,12 @@ impl StateRegistry {
     ///
     /// **This was two functions until the ghosts went.** `remove` archived a `GhostMetadata`
     /// stamped `removed_at` and `forget` did not, and the doc comment on `forget` explained the
-    /// difference at length: after `linix unmanage` the package is still installed, so calling
+    /// difference at length: after `shall unmanage` the package is still installed, so calling
     /// it removed would tell every later reader it was deleted. That distinction was expressed
     /// *only* by the ghost record — which nothing ever read — so with the ghosts deleted the two
     /// bodies were the same six lines under two names, one of them carrying a comment about a
     /// record that no longer existed. Whether a package was uninstalled or merely unmanaged is
-    /// not a thing LiNix stores, and there is now one function saying so.
+    /// not a thing Shall stores, and there is now one function saying so.
     pub fn remove(&mut self, backend: &str, name: &str) -> bool {
         if let Some(pos) = self
             .packages
@@ -466,17 +466,17 @@ mod tests {
     use super::*;
 
     fn reg() -> StateRegistry {
-        StateRegistry::new(PathBuf::from("/tmp/linix-test-registry.json"))
+        StateRegistry::new(PathBuf::from("/tmp/shall-test-registry.json"))
     }
 
     /// A managed row with no origin is the shape the dependency expander wrote (`Y9`,
-    /// V.115a): II.7 removes what LiNix manages and nobody declared, so an unattributable
+    /// V.115a): II.7 removes what Shall manages and nobody declared, so an unattributable
     /// row is a package scheduled for deletion with no answer to `why`. The type stops one
     /// being *written*; this stops one being *read back in* — quietly dropping it would
     /// unmanage a package that is still installed, and quietly keeping it is the original bug.
     #[test]
     fn a_row_with_no_origin_is_refused_rather_than_read() {
-        let dir = std::env::temp_dir().join("linix-sourceless-row-test");
+        let dir = std::env::temp_dir().join("shall-sourceless-row-test");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("registry.json");
 

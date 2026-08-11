@@ -1,6 +1,6 @@
 # Real GitHub release asset lists, fetched 2026-07-23, verified by hand (D2).
 #
-# A block is `## owner/repo tag`, then one `-> platform = expected` line per platform LiNix
+# A block is `## owner/repo tag`, then one `-> platform = expected` line per platform Shall
 # was checked on, then the release's assets exactly as the API returned them. The expectation
 # is the asset `select` must choose with that platform's default format order; `none` means
 # no asset is installable there and the error must say so.
@@ -8,7 +8,7 @@
 # This file exists because `binary` is the one classification that fails quietly: a wrong
 # extension guess errors, a wrong `binary` guess installs the wrong file and says nothing.
 #
-# Every expectation below is the file LiNix installs and the file a human would pick. Two
+# Every expectation below is the file Shall installs and the file a human would pick. Two
 # earlier findings were fixed to make it so (owner-approved 2026-07-24), and both were about a
 # DETECTED format order overruling the machine:
 #   - the tie-break now leads with specificity when the order was detected rather than written

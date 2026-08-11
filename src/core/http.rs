@@ -100,10 +100,10 @@ mod tests {
     #[test]
     fn asking_twice_for_one_policy_builds_one_client() {
         for _ in 0..20 {
-            let _ = client("linix-pool-a", false, 15).unwrap();
+            let _ = client("shall-pool-a", false, 15).unwrap();
         }
         assert_eq!(
-            mine("linix-pool-a"),
+            mine("shall-pool-a"),
             1,
             "twenty asks for one policy built more than one client — the pool is not pooling"
         );
@@ -111,10 +111,10 @@ mod tests {
 
     #[test]
     fn a_client_that_would_follow_a_downgrade_is_never_handed_to_one_that_refuses() {
-        let _strict = client("linix-pool-b", false, 15).unwrap();
-        let _loose = client("linix-pool-b", true, 15).unwrap();
+        let _strict = client("shall-pool-b", false, 15).unwrap();
+        let _loose = client("shall-pool-b", true, 15).unwrap();
         assert_eq!(
-            mine("linix-pool-b"),
+            mine("shall-pool-b"),
             2,
             "the two redirect policies collapsed into one client — SEC2 would be enforced by \
              whichever caller happened to ask first"
@@ -123,19 +123,19 @@ mod tests {
 
     #[test]
     fn the_timeout_is_part_of_the_key() {
-        let _bounded = client("linix-pool-c", false, 15).unwrap();
-        let _unbounded = client("linix-pool-c", false, 0).unwrap();
-        assert_eq!(mine("linix-pool-c"), 2);
+        let _bounded = client("shall-pool-c", false, 15).unwrap();
+        let _unbounded = client("shall-pool-c", false, 0).unwrap();
+        assert_eq!(mine("shall-pool-c"), 2);
     }
 
     #[test]
     fn an_api_client_never_asks_reqwest_for_a_zero_second_timeout() {
         // reqwest reads a zero-second timeout as "fail instantly", not "no bound", so an API
         // caller handed a configured 0 must not pass it through.
-        let _ = api("linix-pool-d", 0).unwrap();
-        let _ = api("linix-pool-d", 1).unwrap();
+        let _ = api("shall-pool-d", 0).unwrap();
+        let _ = api("shall-pool-d", 1).unwrap();
         assert_eq!(
-            mine("linix-pool-d"),
+            mine("shall-pool-d"),
             1,
             "a 0-second API timeout was not raised to 1 — it built a distinct, \
              instantly-failing client"

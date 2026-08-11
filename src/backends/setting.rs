@@ -11,12 +11,12 @@
 //! declaration, and only the second belongs in this model.
 //!
 //! **Removal resets the key to its schema default** (owner ruling, 2026-07-20), rather than
-//! restoring whatever value preceded LiNix. There is no per-key store of prior values to keep,
+//! restoring whatever value preceded Shall. There is no per-key store of prior values to keep,
 //! and "undeclared means the desktop's own default" is the same shape every other statement's
 //! removal follows.
 //!
 //! **An adapter is a row in a table, and the built-ins are rows in it** (K17, ruled
-//! 2026-07-23). A closed enum cannot mean *everywhere* — every new desktop would be a LiNix
+//! 2026-07-23). A closed enum cannot mean *everywhere* — every new desktop would be a Shall
 //! release, and the machine running the unusual store is the one that cannot wait for one. So
 //! `gsettings` is not special: it is `setting_stores.toml`, shipped, parsed by the loader a
 //! user's own row goes through. An adapter mechanism the built-ins bypass is one nobody has
@@ -67,7 +67,7 @@ pub struct SettingStoreFile {
     pub setting_store: Vec<SettingAdapter>,
 }
 
-/// The rows LiNix ships. Parsed rather than constructed, so the shipped adapters exercise the
+/// The rows Shall ships. Parsed rather than constructed, so the shipped adapters exercise the
 /// same loader a user's row does.
 const BUILTIN_STORES: &str = include_str!("setting_stores.toml");
 
@@ -133,7 +133,7 @@ impl AdapterRow for SettingAdapter {
         self.os.as_deref()
     }
 
-    /// A row LiNix will act on: it can be detected, and all three commands are present. A
+    /// A row Shall will act on: it can be detected, and all three commands are present. A
     /// store that can be written but not read cannot answer X.4's read-before-write question,
     /// so it is not an adapter — it is a command that runs every sync, which is the thing
     /// `setting:` exists not to be.
@@ -143,7 +143,7 @@ impl AdapterRow for SettingAdapter {
         }
         if self.read.is_empty() {
             return Some(
-                "its `read` command is empty — a store LiNix cannot read is one it would write \
+                "its `read` command is empty — a store Shall cannot read is one it would write \
                  on every sync",
             );
         }
@@ -265,7 +265,7 @@ impl SettingBackendCore {
         let scope = Scope::resolve(written, Scope::User);
         if scope == Scope::System && !adapter.has_system_scope() {
             return Err(Error::Validation(format!(
-                "`setting:{}` asks for scope=system, and the `{}` store LiNix found here has \
+                "`setting:{}` asks for scope=system, and the `{}` store Shall found here has \
                  no machine-wide commands. Writing the per-user value instead would apply your \
                  setting to one account while the line says every account. Add `system_read`, \
                  `system_write` and `system_reset` to that `[[setting_store]]` row, or drop \
@@ -279,7 +279,7 @@ impl SettingBackendCore {
     fn no_adapter(&self, name: &str) -> Error {
         let known: Vec<&str> = self.adapters.iter().map(|a| a.name.as_str()).collect();
         Error::Validation(format!(
-            "`setting:{}` — no settings adapter matches this machine. LiNix looked for {}, and \
+            "`setting:{}` — no settings adapter matches this machine. Shall looked for {}, and \
              found none of them. Add a `[[setting_store]]` row to `adapters/settings.toml` \
              naming the command your store is driven by; a key silently unapplied is worse \
              than an error.",
@@ -403,7 +403,7 @@ impl Installable for SettingInstallable {
 /// what every ledger row written before this said.
 ///
 /// An unrecognised scope spelling reads as the default rather than refusing: this runs during a
-/// teardown, and a row LiNix cannot fully parse is still a row naming something it put there.
+/// teardown, and a row Shall cannot fully parse is still a row naming something it put there.
 /// Resetting the default is what it did before the scope was carried at all.
 fn split_scope(subject: &str) -> (&str, Scope) {
     match subject.split_once("@scope=") {
@@ -423,7 +423,7 @@ impl Queryable for SettingQueryable {
     }
 
     async fn fetch_installed(&self) -> Result<Vec<Package>> {
-        // A setting is not software with an inventory: LiNix knows the keys it declares, not
+        // A setting is not software with an inventory: Shall knows the keys it declares, not
         // every key the store holds. Nothing to enumerate.
         Ok(vec![])
     }
@@ -538,7 +538,7 @@ mod tests {
         }
     }
 
-    /// K17: a store LiNix has never heard of is a row, not a release. This is the whole point
+    /// K17: a store Shall has never heard of is a row, not a release. This is the whole point
     /// of the ruling — the adapter below is driven from a definition, through the same code
     /// path the shipped one uses.
     #[test]
@@ -673,7 +673,7 @@ mod tests {
     #[test]
     fn a_reg_query_block_is_read_as_its_value() {
         // 7e: `reg query PATH /v NAME` prints a verbose block. The value after the REG_* type
-        // token is what LiNix compares, so a matching value is not re-written every sync.
+        // token is what Shall compares, so a matching value is not re-written every sync.
         let out = "\r\nHKEY_CURRENT_USER\\Software\\App\r\n    Theme    REG_SZ    Dark\r\n\r\n";
         assert!(already_set(out, "Dark"));
         assert!(!already_set(out, "Light"));
@@ -682,7 +682,7 @@ mod tests {
         assert!(already_set(path, "C:\\Users\\me\\a b.jpg"));
     }
 
-    /// The refusal names what LiNix looked for, so a machine running an unlisted store learns
+    /// The refusal names what Shall looked for, so a machine running an unlisted store learns
     /// what to write a row about rather than only that it failed.
     #[test]
     fn the_refusal_names_the_stores_it_looked_for() {

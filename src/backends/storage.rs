@@ -322,7 +322,7 @@ fn resize_plan(
     }
     if !allow_shrink {
         return Err(Error::Validation(format!(
-            "`lvm:{}/{}` is {} and the line declares {} — LiNix will not shrink a volume unless \
+            "`lvm:{}/{}` is {} and the line declares {} — Shall will not shrink a volume unless \
              the line says so. Shrinking takes space back off a live filesystem, and one that \
              cannot be shrunk at all (xfs) loses whatever is past the new end. Add \
              `@allow_shrink=true` to mean it, or restore `@size={}`.",

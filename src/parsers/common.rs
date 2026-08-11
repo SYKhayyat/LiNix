@@ -164,7 +164,7 @@ pub fn parse_apk_outdated(output: &str, backend: &str) -> Vec<Package> {
 mod apk_outdated_tests {
     use super::*;
 
-    /// Verbatim from `apk version -l '<'` in a `linix-it-alpine` container.
+    /// Verbatim from `apk version -l '<'` in a `shall-it-alpine` container.
     const APK: &str = "\
 Installed:                                Available:
 apk-tools-3.0.6-r0                      < 3.0.7-r0 

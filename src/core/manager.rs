@@ -114,7 +114,7 @@ pub trait BackendCore: Send + Sync {
 /// - **On the dependent path** (II.7's phase 3), `Dependents::apply` asks
 ///   `apply::extras::in_effect` per resource and skips anything already in force. That probe
 ///   exists because the loop once did *not* ask it: every sync re-copied all three declared
-///   links on Windows and left `.linix-backup` files beside them — backups of the copies LiNix
+///   links on Windows and left `.shall-backup` files beside them — backups of the copies Shall
 ///   had made itself — under a summary reading `already up to date`.
 ///
 /// So a new implementor's obligation is not "write a converge loop". It is: **be reachable
@@ -242,7 +242,7 @@ pub trait Queryable: Send + Sync {
         true
     }
 
-    /// Whether a bare `linix adopt` takes this backend, or waits to be asked for it by name.
+    /// Whether a bare `shall adopt` takes this backend, or waits to be asked for it by name.
     ///
     /// The neighbour of [`tracks_manual`](Self::tracks_manual), one step further along the same
     /// question. That one refuses a backend that cannot tell a user's choices from
@@ -255,7 +255,7 @@ pub trait Queryable: Send + Sync {
     /// stops them when idle. A manifest is a list of what you want, and deleting a line from it
     /// undoes the thing, so 93% of that file was a loaded list nobody wrote.
     ///
-    /// `false` does not mean unadoptable: `linix adopt <backend>` takes it, and says so when it
+    /// `false` does not mean unadoptable: `shall adopt <backend>` takes it, and says so when it
     /// skips (owner ruling, 2026-08-05 — `Q39`).
     fn adopted_unasked(&self) -> bool {
         true
@@ -305,7 +305,7 @@ pub trait Queryable: Send + Sync {
     /// asks that here.** [`Searchable`] does. Three backends answered the catalogue anyway and
     /// each produced the same three failures: `install` reported *already up to date* while
     /// installing nothing, a `@version=` pin compared against the latest published version and
-    /// so re-installed for ever once upstream moved, and `linix info` claimed a package was on a
+    /// so re-installed for ever once upstream moved, and `shall info` claimed a package was on a
     /// machine that had never seen it. `mise` was caught by the `tools` container on 2026-07-24;
     /// `vscode`, `brew` and `snap` were still doing it on 2026-08-09.
     ///
@@ -421,11 +421,11 @@ pub trait RepoManager: Send + Sync {
 
 /// What a manager says one package depends on — **reported, never acted on**.
 ///
-/// `linix info <name>` prints it and `linix why` searches it for reverse dependencies.
+/// `shall info <name>` prints it and `shall why` searches it for reverse dependencies.
 /// Nothing plans from it. The planner used to: it added each returned name as an install node,
 /// which took ownership of a package nobody declared and wired an edge that split the manager's
 /// own command line in two. Whatever a manager installs alongside what you asked for is that
-/// manager's business, and it does it at install time whether or not LiNix asks first.
+/// manager's business, and it does it at install time whether or not Shall asks first.
 ///
 /// So a backend answering here owes only what it can honestly report — direct dependencies or
 /// the whole closure, whichever its own verb gives — and owes nothing about installability.

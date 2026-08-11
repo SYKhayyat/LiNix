@@ -13,7 +13,7 @@ use crate::utils::text::sanitize;
 ///
 /// The distinction is not academic: on the stock `base` env of the test image,
 /// `conda list` reports 88 packages while `--from-history` reports 4. Adopting the other
-/// 84 would hand LiNix an entire dependency graph to later treat as removable.
+/// 84 would hand Shall an entire dependency graph to later treat as removable.
 ///
 /// `dependencies` is an array of match-specs, not names — `"python=3.13"`,
 /// `"conda[version='>=26.3.2']"`, or a bare `"pip"` — so the name is everything before

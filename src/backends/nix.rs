@@ -299,17 +299,17 @@ impl NixBackendCore {
     }
 }
 
-/// `nix profile list --json` -> the packages LiNix owns.
+/// `nix profile list --json` -> the packages Shall owns.
 ///
 /// **Two shapes, one manager.** `elements` was an ARRAY (position = identity) until Nix 2.20 and
-/// is an OBJECT KEYED BY NAME from schema v3 onward. LiNix read only the array, so on a modern
+/// is an OBJECT KEYED BY NAME from schema v3 onward. Shall read only the array, so on a modern
 /// nix `list` returned nothing it had just installed — E6's class, a blind `list` producing
 /// permanent phantom drift, on the one backend no image had ever installed. Measured against
 /// Determinate Nix 3.21.9 in the tools image; the capture is
 /// `tests/fixtures/nix/profile-list-json.txt`.
 ///
 /// Both are read here because they are one tool's output across versions, not two mechanisms of
-/// LiNix's own — the NO-LEGACY rule is about this codebase's formats, not upstream's.
+/// Shall's own — the NO-LEGACY rule is about this codebase's formats, not upstream's.
 fn parse_profile_list(json: &Value) -> Vec<Package> {
     let fields = |el: &Value, key: Option<&str>| {
         let attr_path = el.get("attrPath").and_then(|v| v.as_str());
@@ -388,7 +388,7 @@ mod tests {
 
     /// `nix profile list --json`, captured from Determinate Nix 3.21.9 in the tools image the
     /// hour this was written. The schema is v3: `elements` is an OBJECT KEYED BY NAME, and
-    /// LiNix asked it for an array — so `nix` listed nothing it had just installed, which is
+    /// Shall asked it for an array — so `nix` listed nothing it had just installed, which is
     /// E6's class (a blind `list` is permanent phantom drift) on a backend that until tonight
     /// had never been installed in any image to notice.
     #[test]

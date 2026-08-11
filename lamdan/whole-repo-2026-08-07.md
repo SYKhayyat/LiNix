@@ -1,4 +1,4 @@
-# Lamdan — LiNix, whole repo
+# Lamdan — Shall, whole repo
 
 **2026-08-07 · `main` @ `f8b4f0c` · 400 tracked files · 97,034 lines of Rust in `src/`, 22,354 in
 `tests/`, 37,289 lines and 2,537,934 bytes of prose in `docs/`.**
@@ -19,8 +19,8 @@ correctness bug appears only where a design choice is the reason it is possible.
 **Owner ruling, 2026-08-07. Every recommendation in this document preserves every verb, every
 backend, every declared statement kind, and every behaviour a user could reach.** Where a finding
 says `delete`, it means *delete the second implementation of a thing that already works*, never the
-thing. `appimage:` keeps working; it stops being 325 lines that duplicate `web.rs`. `linix fleet`
-keeps working; it stops reaching into the internals and starts standing on `eval`. `linix watch`
+thing. `appimage:` keeps working; it stops being 325 lines that duplicate `web.rs`. `shall fleet`
+keeps working; it stops reaching into the internals and starts standing on `eval`. `shall watch`
 keeps running; it stops being a private loop.
 
 This is not a softening. It is a **harder** constraint than the one I drafted under, and it kills
@@ -88,7 +88,7 @@ You have already found this bug once, at one layer, and fixed it beautifully. `4
 3 exit `0x8A150001` in ~310 ms having written zero bytes), swept across every config layer, and
 self-critical about its own first cut. Its diagnosis names the whole chain:
 
-> *"Through LiNix that became `Ok("")` → **a parser finding nothing** → `list_installed` answering
+> *"Through Shall that became `Ok("")` → **a parser finding nothing** → `list_installed` answering
 > `Ok(vec![])`. Nothing in the chain believed anything had failed."*
 
 It then fixed `run_output`, `info`, `list`, `hook-reconcile`, and checked `planner::installed_sets`.
@@ -192,22 +192,22 @@ draft of this said *"ship at 12 backends,"* which is a capability cut and is the
    is how you ship 62 honestly without cutting to 22.
 3. **Let other people's machines be the fixture source.** The forty unproven backends cannot be
    validated from here — `docs/SPEC.md` says so in its own words. Five strangers running
-   `linix adopt` produce more parser truth in a week than the container matrix can, because the
+   `shall adopt` produce more parser truth in a week than the container matrix can, because the
    matrix tests the managers you thought to install.
 
 ### `eval` is the seam, and the commands were built beside it instead of on it
 
 `insight.rs` + `bundle.rs` + `fleet.rs` + `export.rs` + `sandbox.rs` + `bisect.rs` + `repl.rs` ≈
-**2,500 non-test lines.** `fleet.rs:67-70` is `ssh host "linix check --json"` and
-`ssh host "linix sync -y"` in a `for` loop with a table renderer. `export.rs` is four output
+**2,500 non-test lines.** `fleet.rs:67-70` is `ssh host "shall check --json"` and
+`ssh host "shall sync -y"` in a `for` loop with a table renderer. `export.rs` is four output
 templates over the managed set. `repl.rs:9-12` concedes the case in its own docstring: *"Every
-question this answers is one `linix eval | jq` can answer too."*
+question this answers is one `shall eval | jq` can answer too."*
 
 And `eval.rs` is **right** — versioned schema from day one (`eval.rs:22`), sorted, repo-relative
 paths. It is the honest seam every one of those satellites should have been built against.
 
 **Under the constraint, this is not a deletion finding — it is a re-plumbing one.** Every verb
-stays. `linix fleet`, `linix export`, `linix sbom`, `linix repl` keep working and keep their names.
+stays. `shall fleet`, `shall export`, `shall sbom`, `shall repl` keep working and keep their names.
 What changes is that they consume `eval`'s versioned document instead of reaching into
 `StateResolver` and `Queryable` directly. Two things fall out that are worth more than the line
 count: the N+1 in `insight.rs:38` and `export.rs:29` disappears (they stop calling `info()` 298
@@ -222,9 +222,9 @@ Where lens 1 lands on things that were built twice:
   (`LX-6`). 429,405 words. ~570k tokens — more than half a 1M context, before a line of Rust.
 - **Deletable with no capability at risk — verified, each one:**
   - `src/bin/shim.rs` — a second shim implementation that **has never worked**. The live mechanism
-    is `attempt_shim_hijack` (`main.rs:854`) deploying the `linix` binary under the target's name
+    is `attempt_shim_hijack` (`main.rs:854`) deploying the `shall` binary under the target's name
     (`shim_manager.rs:6-8`); this separate cargo-autodiscovered binary shells out to
-    `linix run --packages X -- X args…`, and `Run { command: String }` (`args.rs:230`) is one
+    `shall run --packages X -- X args…`, and `Run { command: String }` (`args.rs:230`) is one
     positional. **The invocation cannot parse.** Deleting it removes no capability because it never
     provided one.
   - `parsers/utils.rs` — 50 lines, **zero callers** in `src/` or `tests/`, containing a proud
@@ -308,7 +308,7 @@ records *"a gate shipped unable to fail, for the second time in two rulings"*; `
 guard is a funnel and `guard.rs:10-13` explains why — *"A guard on one command is a guard on
 nothing."* The install-side guard (`deny_packages`, `pinned_only`) does the opposite:
 `inspect_desired` is reachable only via `enforce_policy`, which has six call sites, **all in
-`verbs/`**. `app/profile.rs:475` (`linix activate`) and `app/shell/mod.rs:283` (`linix shell`)
+`verbs/`**. `app/profile.rs:475` (`shall activate`) and `app/shell/mod.rs:283` (`shall shell`)
 call `engine.sync` directly, and `app/run.rs:84` installs with no planner at all. A policy saying
 *"never install this"* is honoured by `sync` and ignored by `activate`. `sync_now`'s own comment
 (`profile.rs:458`) records that they already fixed *one* asymmetry between `activate` and `sync` —
@@ -391,7 +391,7 @@ What is still live, ranked:
    `audit`/`sbom`/`export`, in the same crate as `installed_sets`, whose comment explains why that
    shape is wrong.
 3. **`brew info --json=v1 <name>` per name, unmemoised** (`brew.rs:140`), on the hottest read path.
-4. **`linix path` builds the whole program to print a directory** — `handle_path` takes `&Cli`, not
+4. **`shall path` builds the whole program to print a directory** — `handle_path` takes `&Cli`, not
    `&App`, and `main.rs:140` constructs the 62-backend registry, a state read, a WAL open and a
    **serial** snapshot-provider probe (`snapshot.rs:660`) first.
 5. **92 test binaries under `lto = true, codegen-units = 1`** — 1,087 MB linked, ~12 MB each, over
@@ -614,7 +614,7 @@ Keep every verb name. Rip out the four private paths and route them through `Cha
 Two more, and **the constraint changes the verdict on both — I had written "delete" and that is
 now wrong:**
 
-- ~~**Delete `watch`.**~~ It is `while :; do linix sync -y; sleep 30; done` with `--pull` as
+- ~~**Delete `watch`.**~~ It is `while :; do shall sync -y; sleep 30; done` with `--pull` as
   `git pull` (`sync.rs:642-701`), 74 lines of daemon to avoid a cron line — but a cron line is not
   the same capability on Windows, and `watch` is the only supported way to get GitOps behaviour on
   a box without systemd timers. **It stays.** What it exposes is real and is a one-line fix
@@ -623,7 +623,7 @@ now wrong:**
   the cache; keep the verb.
 - ~~**Delete `policy`.**~~ `setup.rs:637-647` re-implements `enforce_policy` (`sync.rs:730-750`)
   **minus `deny_vulnerable`**, then prints a footnote at `:646` admitting the gap. So
-  `linix policy` can report "compliant" for a config that `sync` will refuse — which is not an
+  `shall policy` can report "compliant" for a config that `sync` will refuse — which is not an
   argument for deleting a preview, it is an argument that **the preview is not calling the thing
   it previews.** Point `handle_policy` at `enforce_policy` in report-only mode. One implementation,
   same verb, and the footnote deletes itself.
@@ -704,21 +704,21 @@ repo names is a command this repo has"* guards 49 KB of README and skips 2,538 K
 
 It is not a hypothetical hole. `docs/spec/bugs.md:100`:
 
-> *"the generated count lives in `linix doctor` ("of 43 total"), which already builds the
+> *"the generated count lives in `shall doctor` ("of 43 total"), which already builds the
 > registry… **CLOSED — owner confirmed 2026-07-26: leave as-is, do not wire `--help` to the
 > registry** (it would make help read config from disk and give it a way to fail; **`doctor`
 > already carries the live count**). Nothing further to build."*
 
-**`linix doctor` does not exist.** Zero top-level declarations in `args.rs`. The program knows —
+**`shall doctor` does not exist.** Zero top-level declarations in `args.rs`. The program knows —
 `main.rs:1235` lists it by name as a command it does not have. `decisions.md:1305` records that two
 *user-facing messages* pointing at it were swept. The code was fixed; the register entry was not,
 because `docs/` is outside the scan.
 
 So there is a **closed owner ruling whose entire stated justification evaporated**, marked "Nothing
 further to build," and the fix is adding four characters to one array. That test's own header
-records it catching `app/fleet.rs` asking every host for `linix status --json` with no `status`
-verb in the program — so `linix fleet` could never report a healthy machine — and `install.sh`
-running `linix doctor` to vouch for the binary it had just built. Those are shipped product
+records it catching `app/fleet.rs` asking every host for `shall status --json` with no `status`
+verb in the program — so `shall fleet` could never report a healthy machine — and `install.sh`
+running `shall doctor` to vouch for the binary it had just built. Those are shipped product
 defects. Point it at `docs/` and it will find more.
 
 ### LX-8 · The mock says yes to everything, and 6,175 lines of tests run against it — `rewrite`
@@ -743,7 +743,7 @@ Each is a family, not an instance. Sweep the siblings.
   **adding `sh` to the Rhai stdlib** (`rhai_stdlib.rs:59`) so the dialects would agree. Three arms
   disagreed; the resolution levelled them up rather than deleting two. `mlua` and `ratatui`
   survived `F-6`'s kill order; `lettre` and `notify-rust` went. *(I chased whether this made
-  `linix plan --dry-run` execute shell from a config file, and it does not: `verify_provider_approved`
+  `shall plan --dry-run` execute shell from a config file, and it does not: `verify_provider_approved`
   gates both the Embedded and External `vars` paths at `resolve.rs:277`/`:282`, and
   `vars_embedded.rs:12-17` documents the step-0 exposure honestly. The design is ruled, gated, and
   the docstring is more forthright than most security notes. Finding withdrawn.)*
@@ -770,7 +770,7 @@ Each is a family, not an instance. Sweep the siblings.
 - **Nine `apply/` sub-appliers, four names for one verb** (`offer`, `apply`, `reconcile`, and
   `apply` with an extra arg), no `Applier` trait, no dispatch, and 27 `[DRY-RUN]` string literals
   across 18 files — each a separate chance for the preview to disagree with the run.
-- **`profile.rs:430` — a read command that writes.** `linix profile show Work` overwrites the
+- **`profile.rs:430` — a read command that writes.** `shall profile show Work` overwrites the
   user's `active` file, resolves, and writes it back, deliberately bypassing `--dry-run` (`:424`).
   The error path restores it; Ctrl-C does not; a concurrent `sync` in another shell reads whatever
   it left there.

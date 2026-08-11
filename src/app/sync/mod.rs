@@ -114,7 +114,7 @@ impl<'a> SyncEngine<'a> {
         })
     }
 
-    /// The scripts attached to LiNix's own events (XIII.13).
+    /// The scripts attached to Shall's own events (XIII.13).
     ///
     /// Read at the moment of firing rather than held: the three files are tiny, and re-reading
     /// means the hash the approval ledger checks is the hash of what is on disk *now* — a hook
@@ -240,7 +240,7 @@ impl<'a> SyncEngine<'a> {
             // U31: a health-check COMMAND is argv from the config, so it rides II.12's ledger.
             // An unapproved command cannot run, and a check that cannot run is a failed check —
             // so this refuses before the change rather than doing it and then reverting on a
-            // check LiNix was never allowed to execute.
+            // check Shall was never allowed to execute.
             self.require_health_commands_approved(&changes)?;
             Ok(reaped)
         }
@@ -357,10 +357,10 @@ impl<'a> SyncEngine<'a> {
 
     /// Rebuild the out-of-tree kernel modules, when this sync changed a kernel (XIII.1).
     ///
-    /// **LiNix builds nothing.** DKMS is already on the machine and already knows how to build
-    /// a module; what LiNix contributes is the fact DKMS cannot know — that the kernel just
+    /// **Shall builds nothing.** DKMS is already on the machine and already knows how to build
+    /// a module; what Shall contributes is the fact DKMS cannot know — that the kernel just
     /// changed, under a manager whose hook does not cover it. The distribution's own DKMS hook
-    /// fires for the distribution's own package manager, and LiNix's premise is several at once.
+    /// fires for the distribution's own package manager, and Shall's premise is several at once.
     ///
     /// **It runs before the reboot and fails loudly**, because that is the whole value: a
     /// module that will not build is recoverable while the running kernel still has it, and
@@ -483,7 +483,7 @@ impl<'a> SyncEngine<'a> {
     }
 
     /// Refuse before the change when a declared health *command* has not been approved through
-    /// the II.12 ledger (U31). Port probes run no code and are never gated. `linix lock` is the
+    /// the II.12 ledger (U31). Port probes run no code and are never gated. `shall lock` is the
     /// one place that approves, so the refusal names it.
     fn require_health_commands_approved(&self, changes: &SyncChanges) -> Result<()> {
         use crate::core::hook_lock::{hash_script, health_id, HookLedger};
@@ -519,10 +519,10 @@ impl<'a> SyncEngine<'a> {
             return Ok(());
         }
         Err(Error::Refused(format!(
-            "refusing to start: {} health-check command(s) have not been approved and LiNix will \
+            "refusing to start: {} health-check command(s) have not been approved and Shall will \
              not run a command from the configuration it has not seen — a check it cannot run is \
              a failed check, and a failed check reverts the change.\n  {}\n  \
-             Review them, then run `linix lock` to approve them.",
+             Review them, then run `shall lock` to approve them.",
             unapproved.len(),
             unapproved.join("\n  ")
         )))
@@ -696,7 +696,7 @@ impl<'a> SyncEngine<'a> {
         // unchanged; with it, the run continues and the graph carries nodes that did not
         // happen. Recording those as managed is `S87`'s contradiction pointing the other way — the
         // registry claiming a package the machine does not have — and the next time somebody
-        // deletes the declaration LiNix issues a removal for something that was never
+        // deletes the declaration Shall issues a removal for something that was never
         // installed. A node the engine reported *nothing* for is deliberately NOT in here:
         // silence is not evidence of failure, and treating it as one would drop the ownership
         // record for a package that did install, which is the bug this whole change is about.
@@ -735,7 +735,7 @@ impl<'a> SyncEngine<'a> {
                     );
 
                     // S18: auto-locking used to splice `@sha256=…` into the line you wrote
-                    // — II.16 says LiNix must not rewrite your files, and a checksum is a
+                    // — II.16 says Shall must not rewrite your files, and a checksum is a
                     // generated fact, which II.6 keeps in `locks/`. The recording of an
                     // artifact hash is a real supply-chain feature (II.12); it lands in
                     // `locks/<backend>.toml` in Phase 4, not in your module.
@@ -817,19 +817,19 @@ impl<'a> SyncEngine<'a> {
     /// files fall out of step in exactly one direction, and the result is a package that is
     /// installed, `Completed` in the log, and owned by nobody. Nothing else puts it right:
     /// the entry is terminal so `heal` has nothing to replay, the package is present so no
-    /// later sync reinstalls it, and drift removal only removes what LiNix manages — so the
+    /// later sync reinstalls it, and drift removal only removes what Shall manages — so the
     /// one command for removing it plans no change and reports `already up to date` while the
     /// binary stays on PATH.
     ///
     /// Measured on the `void` leg, 2026-08-11, killing a sync once the log recorded its first
     /// `Completed`: 3 of 3 canaries on disk, registry empty, `heal` recovered only the one
-    /// operation still open, and `linix -y uninstall xbps:pv` then answered `already up to
+    /// operation still open, and `shall -y uninstall xbps:pv` then answered `already up to
     /// date` at exit 0 over an installed `pv`. Killing the same sync a tenth of a second later
     /// — after the final write — left all three removable, which is the whole of the
     /// intermittency.
     ///
     /// **Ownership follows the declaration, not the install.** A package this machine declares
-    /// and already has is LiNix's, whether LiNix put it there or the user did. That is what
+    /// and already has is Shall's, whether Shall put it there or the user did. That is what
     /// makes the repair total: the orphan above is still declared — the declaration is written
     /// before the install and survives the kill that lost the registry — so nothing has to be
     /// remembered about *how* the package arrived, and there is no window in which the evidence
@@ -847,7 +847,7 @@ impl<'a> SyncEngine<'a> {
     /// recorded by the install that follows.
     ///
     /// **And only `present` declarations.** An `absent:` line is a declaration that the package
-    /// must *not* be here — claiming it would have LiNix take ownership of something it is
+    /// must *not* be here — claiming it would have Shall take ownership of something it is
     /// under orders to remove.
     async fn reconcile_ownership(&self, declared: &[PackageSpec]) -> Result<()> {
         let unclaimed: Vec<PackageSpec> = {
@@ -883,7 +883,7 @@ impl<'a> SyncEngine<'a> {
                 continue;
             };
             // A manager that cannot answer leaves its packages unclaimed. The opposite default
-            // — assume they are there — would have LiNix claim to manage packages that are
+            // — assume they are there — would have Shall claim to manage packages that are
             // not on the machine, and the next sync would issue a removal for each.
             let Ok(installed) = queryable.list_installed().await else {
                 debug!(
@@ -927,7 +927,7 @@ impl<'a> SyncEngine<'a> {
                 );
             }
         }
-        // Written here and not left to the caller: `linix heal` is a whole command, and an
+        // Written here and not left to the caller: `shall heal` is a whole command, and an
         // ownership record that dies with the process leaves the package exactly as orphaned
         // as it was.
         let to_write = self.state.lock().await.snapshot()?;
@@ -943,7 +943,7 @@ impl<'a> SyncEngine<'a> {
         // declaration goes, so a machine that quietly adopted software the user installed by
         // hand would be deciding something on their behalf without saying so.
         info!(
-            "took ownership of {} declared package(s) already installed: {}. LiNix now removes \
+            "took ownership of {} declared package(s) already installed: {}. Shall now removes \
              them when their declaration goes.",
             names.len(),
             names.join(", ")
@@ -965,7 +965,7 @@ impl<'a> SyncEngine<'a> {
         // One package, one recovery. `record_start` mints a fresh id per attempt, so a
         // declaration that fails on every sync appends a *new* operation every time and none of
         // them is ever purged — one sweep's journal held **22 operations for a single
-        // `scoop:linix-no-such-pkg-zzz`**, and `heal` made 23 real `scoop install` round trips
+        // `scoop:shall-no-such-pkg-zzz`**, and `heal` made 23 real `scoop install` round trips
         // for that one name. The cost is unbounded in the number of past attempts, on the
         // command that runs before every `sync` and inside every `watch` tick.
         //
@@ -1141,7 +1141,7 @@ impl<'a> SyncEngine<'a> {
             // one unfinished.
             //
             // V.64: recovery reinstates what was wanted and does not delete to get there.
-            // Re-running the install over a half-installed package is what every manager LiNix
+            // Re-running the install over a half-installed package is what every manager Shall
             // drives can do; uninstalling first was a removal the plan could not show and the
             // guard never saw (S24).
             // An interrupted install whose dependency is also interrupted must wait for it, or
@@ -1248,9 +1248,9 @@ impl<'a> SyncEngine<'a> {
                         // package `heal` put back was on the machine and under nobody's
                         // management. Measured, with a control:
                         //
-                        //   no crash:  linix -y uninstall apt:pv   -> remove 1, gone
+                        //   no crash:  shall -y uninstall apt:pv   -> remove 1, gone
                         //   SIGKILL + heal, then the same command  -> "already up to date", still there
-                        //   linix why apt:dos2unix -> 'apt:dos2unix' is not under LiNix management.
+                        //   shall why apt:dos2unix -> 'apt:dos2unix' is not under Shall management.
                         //
                         // Nothing looked wrong: the sync after `heal` converges, because the
                         // package IS installed. The damage only appears when you try to take it
@@ -1354,7 +1354,7 @@ impl<'a> SyncEngine<'a> {
         }
 
         // A command that says "1 operation(s) could NOT be recovered" and then exits 0 has
-        // told a script the opposite of what it told the person reading it — `linix heal &&
+        // told a script the opposite of what it told the person reading it — `shall heal &&
         // echo ok` printed ok. U21 gave this program an exit vocabulary; the recovery path
         // was the last one not using it.
         //
@@ -1371,7 +1371,7 @@ impl<'a> SyncEngine<'a> {
             } else {
                 "Each is still recorded as interrupted. `heal` will try again, but an operation \
                  whose manager is not set up here cannot complete until that manager is — \
-                 `linix check health` says which are."
+                 `shall check health` says which are."
             };
             return Err(Error::Other(format!(
                 "{} interrupted operation(s) could not be recovered: {}. {}",
@@ -1388,29 +1388,29 @@ impl<'a> SyncEngine<'a> {
 ///
 /// Driven off the classification the error already carries rather than a single sentence for
 /// every case: `heal` used to print `retry: Permanent, absent_name: true` — in Rust's `Debug`
-/// syntax, internal field names and all — and then advise *"re-run `linix sync`"*, which is
+/// syntax, internal field names and all — and then advise *"re-run `shall sync`"*, which is
 /// the one thing that cannot help when the name does not exist.
 fn what_to_do_about(e: Option<&Error>, key: &str) -> String {
     let Some(e) = e else {
-        return "Re-run `linix heal`.".to_string();
+        return "Re-run `shall heal`.".to_string();
     };
     if e.says_a_name_is_absent() {
         return format!(
             "The manager says that name does not exist, so `sync` will keep failing the same \
-             way until the line naming it is corrected or removed with `linix unmanage {key}`."
+             way until the line naming it is corrected or removed with `shall unmanage {key}`."
         );
     }
     match e.retryability() {
         Retryability::Transient => {
-            "That failure is a passing one — a window, a lock or a connection. Run `linix heal` \
+            "That failure is a passing one — a window, a lock or a connection. Run `shall heal` \
              again."
                 .to_string()
         }
         Retryability::Permanent | Retryability::Exhausted => {
             "The same command will fail the same way, so fix the cause the error names before \
-             re-running `linix heal`."
+             re-running `shall heal`."
                 .to_string()
         }
-        Retryability::Unknown => "Re-run `linix heal`.".to_string(),
+        Retryability::Unknown => "Re-run `shall heal`.".to_string(),
     }
 }

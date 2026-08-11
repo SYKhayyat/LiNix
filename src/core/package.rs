@@ -35,7 +35,7 @@ pub struct PackageSpec {
     /// and everything downstream consumes it, so `absent:` arriving as a field means most
     /// of the codebase never notices the model changed.
     ///
-    /// `absent:` is the one exception to "LiNix only removes what it manages" — because
+    /// `absent:` is the one exception to "Shall only removes what it manages" — because
     /// you named it (V.7).
     pub present: bool,
 }
@@ -59,12 +59,12 @@ impl PackageSpec {
     /// **The option existed, the grammar validated it, and nothing read it.** `@hold` is in
     /// `PACKAGE_OPTION_KEYS`, `validate_package` refuses it beside `@version` as a
     /// contradiction, and II.2 documents it — and the only writer of the hold set was the
-    /// imperative `linix hold` command, so `apt:jq@hold=true` in a manifest parsed, validated,
+    /// imperative `shall hold` command, so `apt:jq@hold=true` in a manifest parsed, validated,
     /// and did nothing at all. Found by enumerating that table rather than by anybody hitting
     /// it, which is the point of the enumeration: an option nobody reads passes every
     /// lifecycle test for ever.
     ///
-    /// Read here rather than folded into the ledger on sync: the ledger is `linix hold`'s, the
+    /// Read here rather than folded into the ledger on sync: the ledger is `shall hold`'s, the
     /// declaration is the manifest's, and a sync that wrote one into the other would have to
     /// decide which of them owns an entry when the line goes away. Two sources, one question,
     /// asked at both places that ask it.

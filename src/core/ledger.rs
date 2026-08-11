@@ -12,7 +12,7 @@
 //! the family; this was one rule found once and correctly written out six times. The cost was
 //! never the lines. The cost is that the *seventh* ledger inherits the rules only if whoever
 //! writes it remembers them, and `locks/versions.json` and `locks/hooks.toml` being left behind
-//! by `linix --dry-run lock` is what remembering them looks like when it fails.
+//! by `shall --dry-run lock` is what remembering them looks like when it fails.
 //!
 //! So the rules are a trait with provided methods, and a new ledger gets them by existing.
 //!
@@ -56,7 +56,7 @@ pub trait LockFile: Default + Serialize + DeserializeOwned + Sized {
     /// Write the file.
     ///
     /// Through `persist`, and the directory is not created during a dry run — **a preview must
-    /// not leave an approval or a pin behind.** `linix --dry-run lock` used to write
+    /// not leave an approval or a pin behind.** `shall --dry-run lock` used to write
     /// `locks/versions.json` and `locks/hooks.toml` for real, which is a preview that changes
     /// what the next real run will do.
     fn save(&self, path: &Path) -> Result<()> {

@@ -56,8 +56,8 @@ pub async fn perform_maintenance(app: &App) -> Result<()> {
     if let Err(e) = app.leases().sweep_due_suspensions().await {
         warn!("Maintenance: suspension sweep failed: {}", e);
     }
-    // Version-control the manifests/config if the user opted in via `linix git init`.
-    app.git_autocommit("linix: sync manifest state").await;
+    // Version-control the manifests/config if the user opted in via `shall git init`.
+    app.git_autocommit("shall: sync manifest state").await;
     if app.config.snapshot_retention().prunes() {
         app.prune_snapshots(false).await?;
     }

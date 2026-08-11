@@ -96,7 +96,7 @@ impl ProfileManager {
     /// the file is in git (V.44).
     #[instrument(skip(self))]
     pub async fn activate(&self, names: &[String], add: bool) -> Result<()> {
-        // `linix activate $PROFILE` with `$PROFILE` unset would otherwise read as "turn
+        // `shall activate $PROFILE` with `$PROFILE` unset would otherwise read as "turn
         // everything off" and be perfectly valid. The guard would catch the removals, but
         // the guard is for decisions you meant, and nobody means this one (V.44).
         if names.is_empty() {
@@ -171,7 +171,7 @@ impl ProfileManager {
         }
 
         // Appended at the top level, never inside a `when` block: a block is something you
-        // wrote, and LiNix does not edit it (II.6).
+        // wrote, and Shall does not edit it (II.6).
         let mut body = body;
         if !body.is_empty() && !body.ends_with('\n') {
             body.push('\n');
@@ -484,7 +484,7 @@ const PROFILE_TEMPLATE: &str = "\
 # You can write packages here directly, but no module can reach them:
 #
 #   apt:curl
-#   ripgrep             (no backend named — LiNix asks each one in `priority` order)
+#   ripgrep             (no backend named — Shall asks each one in `priority` order)
 #
 # Set math, if you need it:
 #

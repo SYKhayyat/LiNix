@@ -461,7 +461,7 @@ pub fn nimble() -> ExitPolicy {
 /// retry already happened and did not help. So a wrong marker here costs a few seconds of
 /// backoff instead of a permanent lie — which is what this list was before, when
 /// `luarocks install luafilesystem` matched `"failed downloading"` on a machine whose only
-/// problem was its `wget`, and LiNix promised forever that `sync` would try again.
+/// problem was its `wget`, and Shall promised forever that `sync` would try again.
 pub fn luarocks() -> ExitPolicy {
     ExitPolicy {
         transient_markers: vec![
@@ -592,7 +592,7 @@ pub fn pixi() -> ExitPolicy {
 /// *which managers have a policy* is a question with one answer rather than one answer per
 /// registration site — and `tests/absent_marker_coverage_tests.rs` can ask it. npm had no
 /// policy at all through three rounds of assessment: nothing was wrong with npm, and nothing
-/// anywhere counted the managers that could not tell LiNix a name was missing.
+/// anywhere counted the managers that could not tell Shall a name was missing.
 ///
 /// An unknown name yields the default policy, which classifies nothing. That is the safe
 /// direction — an unclassified failure keeps the declaration — and it is not a silent one: a
@@ -637,7 +637,7 @@ pub fn for_manager(name: &str) -> ExitPolicy {
     }
 }
 
-/// Whether this manager can tell LiNix that a name does not exist.
+/// Whether this manager can tell Shall that a name does not exist.
 ///
 /// The one the coverage ratchet counts, because it is the one a wedged config turns on: a
 /// manager that cannot say "no such package" leaves the line in `modules/imperative.txt` and
@@ -812,7 +812,7 @@ mod tests {
         include_str!("../../tests/fixtures/scoop/uninstall-not-installed.txt");
 
     /// nimble reports every failure on a line beginning `Error:` and exits 0 regardless, so
-    /// without a policy LiNix called a build that never produced a binary a successful
+    /// without a policy Shall called a build that never produced a binary a successful
     /// install — and then the harness's `list` and on-PATH checks failed, which is the
     /// product telling the truth downstream about a lie it told upstream.
     #[test]

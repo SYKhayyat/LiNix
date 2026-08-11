@@ -676,7 +676,7 @@ mod tests {
         let exec = CommandExecutor::with_layer(true, false, mock, vfs, Arc::new(DashMap::new()));
         // A distinct file per test: the tests run in parallel in one process.
         let stem = format!(
-            "linix-btrfs-{}-{:?}",
+            "shall-btrfs-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         );

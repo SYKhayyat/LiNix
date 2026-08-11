@@ -6,7 +6,7 @@ use crate::verbs::plan::{
 use crate::verbs::prelude::*;
 use crate::verbs::sync::{enforce_policy, print_flight_plan};
 
-/// `adapters` — the eight ways to extend LiNix, and what this machine has on each.
+/// `adapters` — the eight ways to extend Shall, and what this machine has on each.
 ///
 /// **The surfaces all worked; there was no way to ask about them.** A `[[backend]]` row teaches a
 /// package manager, a `[[snapshot]]` row teaches a rollback provider, and every one of the eight
@@ -59,7 +59,7 @@ pub async fn handle_adapters(app: &App, surface: Option<&str>, out: Output) -> R
     }
 
     println!(
-        "Extension surfaces — a row in one of these teaches LiNix something it does not ship.\n"
+        "Extension surfaces — a row in one of these teaches Shall something it does not ship.\n"
     );
     println!("{:<11} {:<18} {:<12} ROWS", "SURFACE", "ROW", "STANDING");
     for e in &found {
@@ -104,7 +104,7 @@ pub async fn handle_adapters(app: &App, surface: Option<&str>, out: Output) -> R
     if found.iter().all(|e| e.standing == Standing::Absent) {
         println!(
             "\nThis machine has extended nothing. Write `{}` to \
-             {} and run `linix sync`; the first run asks you to approve it.",
+             {} and run `shall sync`; the first run asks you to approve it.",
             adapters::SURFACES[0].row(),
             adapters::SURFACES[0].path_in(&layout).display()
         );
@@ -112,14 +112,14 @@ pub async fn handle_adapters(app: &App, surface: Option<&str>, out: Output) -> R
     Ok(())
 }
 
-/// `absent` (II.8): every `absent:` line in force, and the module it comes from — what LiNix
+/// `absent` (II.8): every `absent:` line in force, and the module it comes from — what Shall
 /// keeps OFF this machine, and where each rule is written. Read-only.
 /// `vars` (Part IX, W12): the variables resolved on this machine, so a `when $name` block that
 /// does not fire can be debugged by seeing the value the machine actually derived.
-/// `linix add` — vendor someone else's modules into this repo (7/U14, XIII.14).
+/// `shall add` — vendor someone else's modules into this repo (7/U14, XIII.14).
 ///
 /// Fetch → plan → refuse-or-copy → optionally approve. The safety story is not the fetch; it is
-/// that anything executable lands unapproved and II.12 holds it until `linix lock`. `--trust`
+/// that anything executable lands unapproved and II.12 holds it until `shall lock`. `--trust`
 /// runs that lock in the same step; without it, the vendored code sits inert and reviewable.
 pub async fn handle_add(app: &App, source: &str, trust: bool, force: bool) -> Result<()> {
     use crate::model::vendor::{self, Source, Vendored};
@@ -248,10 +248,10 @@ pub async fn handle_add(app: &App, source: &str, trust: bool, force: bool) -> Re
         code,
         src.label()
     );
-    println!("  Review the diff (`linix git status`), then `use` the module(s) by name.");
+    println!("  Review the diff (`shall git status`), then `use` the module(s) by name.");
 
     // The supply-chain gate. Vendored code is unapproved by default and will not run until
-    // `linix lock` — the review the default forces. `--trust` runs that lock now, for a source
+    // `shall lock` — the review the default forces. `--trust` runs that lock now, for a source
     // the user has decided to trust.
     if code > 0 {
         if trust {
@@ -270,7 +270,7 @@ pub async fn handle_add(app: &App, source: &str, trust: bool, force: bool) -> Re
         } else {
             println!(
                 "  {} file(s) it brought can run code and are UNAPPROVED — they will not run \
-                 until you review them and `linix lock`.",
+                 until you review them and `shall lock`.",
                 code
             );
         }
@@ -308,9 +308,9 @@ pub fn collect_relative_files(root: &std::path::Path) -> Vec<std::path::PathBuf>
     out
 }
 
-/// `linix try` — rehearse this config on a clean machine (7h/U12).
+/// `shall try` — rehearse this config on a clean machine (7h/U12).
 ///
-/// Read-only on the host by construction: the config is mounted `:ro`, the container's LiNix
+/// Read-only on the host by construction: the config is mounted `:ro`, the container's Shall
 /// data lives in the container, and nothing here is consulted except the config's path. It is
 /// therefore in `READ_ONLY_COMMANDS` and takes no data lock — a rehearsal has no business
 /// blocking a real sync.
@@ -376,10 +376,10 @@ pub async fn image_exists(app: &App, runtime: &str, image: &str) -> bool {
         .is_ok()
 }
 
-pub const CONFIG_TEMPLATE: &str = r#"# LiNix refusals and behaviour (preferences.toml). Nothing writes to this but you.
+pub const CONFIG_TEMPLATE: &str = r#"# Shall refusals and behaviour (preferences.toml). Nothing writes to this but you.
 # Every key is optional; omit a key to use its built-in default.
 #
-# Where your repo lives is NOT a key here — this file is inside it. Use `linix path --set`.
+# Where your repo lives is NOT a key here — this file is inside it. Use `shall path --set`.
 
 # Maximum number of packages installed/removed (and searched) in parallel.
 # Omit to auto-detect this machine's core count (respecting container CPU limits).
@@ -388,7 +388,7 @@ pub const CONFIG_TEMPLATE: &str = r#"# LiNix refusals and behaviour (preferences
 # Timeout (seconds) for outbound HTTP search requests (npm/PyPI/marketplace).
 network_timeout_secs = 15
 
-# How long a command may print NOTHING before LiNix kills it and says which one.
+# How long a command may print NOTHING before Shall kills it and says which one.
 # Not a cap on how long a command may run: a build that prints for an hour is untouched.
 # Raise it if you drive something legitimately silent for longer; 0 removes the bound.
 command_idle_timeout_secs = 900
@@ -417,7 +417,7 @@ nix_gc_age = "30d"
 # and /var/cache are always searched; add anywhere else this machine keeps downloads.
 # cache_dirs = ["/opt/downloads"]
 
-# Default SSH destinations for `linix fleet` when none are given on the command line.
+# Default SSH destinations for `shall fleet` when none are given on the command line.
 # fleet_hosts = ["user@web-01", "user@web-02"]
 
 # Which backends this host uses, and in what order, live in the `priority` file (II.6) —
@@ -434,7 +434,7 @@ nix_gc_age = "30d"
 # mis-scoped manifest, a bad `adopt` run, or a state file from another machine can
 # make hundreds of working packages look unwanted. The guard refuses those.
 # Every rule here is a refusal, not a preference: `-y` cannot skip any of them.
-# `linix protected` shows the effective rules.
+# `shall protected` shows the effective rules.
 # ---------------------------------------------------------------------------
 [guard]
 
@@ -456,7 +456,7 @@ max_removals = 20
 # above each bound one kind, and twenty of each is sixty. 0 (the default) is off.
 # max_total_changes = 0
 
-# Names removal must never touch, ADDED to the built-in list (`linix protected`
+# Names removal must never touch, ADDED to the built-in list (`shall protected`
 # prints the full effective set). Matching is exact and case-insensitive, or a
 # prefix if the entry ends in `*` — so `libpam*` covers libpam0g, while `libc`
 # still does not cover `libc-bin`.
@@ -475,7 +475,7 @@ max_removals = 20
 # Refuse to change anything unless a snapshot can be taken first.
 # require_snapshot = false
 
-# Refuse to apply when `linix check security` reports a managed package as vulnerable.
+# Refuse to apply when `shall check security` reports a managed package as vulnerable.
 # deny_vulnerable = false
 
 # Refuse to put a downloaded file anywhere but the backend's own bin directory,
@@ -539,7 +539,7 @@ pub async fn handle_edit(cli: &Cli, file: Option<&str>) -> Result<()> {
     command.arg(&target);
     // The terminal-handoff door: `$EDITOR` owns the terminal for as long as somebody is typing
     // in it, so no bound — but owned, because an editor still holding the config file after
-    // LiNix has gone is the state AU6 is about.
+    // Shall has gone is the state AU6 is about.
     let status = crate::core::executor::supervised_status(command, &editor)
         .await
         .with_context(|| format!("launching editor '{}'", editor))?;
@@ -555,7 +555,7 @@ pub async fn handle_edit(cli: &Cli, file: Option<&str>) -> Result<()> {
         match tokio::task::spawn_blocking(move || crate::config::Config::from_file(&p)).await? {
             Ok(_) => println!("Saved. {} parses cleanly.", target.display()),
             Err(e) => anyhow::bail!(
-                "{} no longer parses ({}). Re-run `linix edit {}` to fix it.",
+                "{} no longer parses ({}). Re-run `shall edit {}` to fix it.",
                 target.display(),
                 e,
                 crate::config::PREFERENCES_FILE_NAME
@@ -711,7 +711,7 @@ async fn settle_manager_locks(app: &App) -> Vec<String> {
             )),
             crate::app::stale_lock::Waited::StillHeld => said.push(format!(
                 "{who} has been running for {}s and still holds {}'s lock — nothing is broken, \
-                 it is working. Run `linix heal` again when it has finished.",
+                 it is working. Run `shall heal` again when it has finished.",
                 budget.as_secs(),
                 lock.holder()
             )),
@@ -747,7 +747,7 @@ async fn clear_stale_manager_locks(app: &App) -> Vec<String> {
         }
         // Through the executor, so it is elevated the way every other privileged step is and
         // shows up in the same log. A failure here is reported and does not stop the rest: a
-        // lock LiNix could not remove is still a lock the user can remove, now that they have
+        // lock Shall could not remove is still a lock the user can remove, now that they have
         // been told which one and why.
         let path = stale.path.display().to_string();
         match app.executor.run("rm", &["-f", &path], true).await {
@@ -894,7 +894,7 @@ pub async fn handle_canary(
     }
 }
 
-/// `linix policy` — report whether the desired state complies with the `[guard]` rules.
+/// `shall policy` — report whether the desired state complies with the `[guard]` rules.
 pub async fn handle_policy(app: &App) -> Result<()> {
     let guard = &app.config.guard;
     if guard.is_empty() {
@@ -906,7 +906,7 @@ pub async fn handle_policy(app: &App) -> Result<()> {
             .await;
     let desired = resolver.resolve_desired_state().await?;
     // **The preview calls the thing it previews.** This used to re-implement `enforce_policy`
-    // minus `deny_vulnerable`, then print a footnote admitting the gap — so `linix policy` could
+    // minus `deny_vulnerable`, then print a footnote admitting the gap — so `shall policy` could
     // report "compliant" for a config `sync` would refuse, which is the one thing a preview must
     // never do. The footnote is gone because the gap is.
     let violations = crate::verbs::sync::policy_violations(app, &desired).await;
@@ -921,7 +921,7 @@ pub async fn handle_policy(app: &App) -> Result<()> {
     Ok(())
 }
 
-/// Scaffold the on-disk layout LiNix expects and drop a starter manifest so a fresh
+/// Scaffold the on-disk layout Shall expects and drop a starter manifest so a fresh
 /// machine (or a freshly-cloned checkout) is immediately usable.
 pub async fn handle_init(app: &App, force: bool, interactive: bool) -> Result<()> {
     let cfg = &app.config;
@@ -933,11 +933,11 @@ pub async fn handle_init(app: &App, force: bool, interactive: bool) -> Result<()
 
     scaffold_repo(app, force).await?;
 
-    println!("(Run `linix config init` to also write a commented preferences.toml, or `linix init -i` for guided setup.)");
+    println!("(Run `shall config init` to also write a commented preferences.toml, or `shall init -i` for guided setup.)");
     Ok(())
 }
 
-/// Create every on-disk directory LiNix expects. Idempotent.
+/// Create every on-disk directory Shall expects. Idempotent.
 pub async fn scaffold_dirs(cfg: &crate::config::Config) -> Result<()> {
     let layout = cfg.layout();
     let modules = layout.modules_dir();
@@ -952,7 +952,7 @@ pub async fn scaffold_dirs(cfg: &crate::config::Config) -> Result<()> {
         ("web", &cfg.web_dir),
         ("appimages", &cfg.appimage_dir),
     ];
-    println!("Scaffolding LiNix directories:");
+    println!("Scaffolding Shall directories:");
     for (label, path) in dirs {
         tokio::fs::create_dir_all(path)
             .await
@@ -969,7 +969,7 @@ pub async fn scaffold_dirs(cfg: &crate::config::Config) -> Result<()> {
 /// aggressive answer is `purge-undeclared`, a command, not a mode — V.21), "protect
 /// imperative installs?" (they have a line now, so they are declared like everything else),
 /// "preferred default backend?" (that is `priority`, generated from what this machine has —
-/// V.15). A question whose answer LiNix can work out, or which no longer means anything, is
+/// V.15). A question whose answer Shall can work out, or which no longer means anything, is
 /// homework (V.41).
 #[derive(Debug, Clone, Default)]
 pub struct InitAnswers {
@@ -990,8 +990,8 @@ pub fn apply_init_answers(
     base
 }
 
-/// Guided setup: write the II.1 repo, then ask the few things LiNix genuinely cannot work
-/// out. Refuses to run without a TTY so CI falls back to `linix init` instead of hanging.
+/// Guided setup: write the II.1 repo, then ask the few things Shall genuinely cannot work
+/// out. Refuses to run without a TTY so CI falls back to `shall init` instead of hanging.
 pub async fn interactive_init(app: &App, force: bool) -> Result<()> {
     use dialoguer::Input;
     use std::io::IsTerminal;
@@ -999,7 +999,7 @@ pub async fn interactive_init(app: &App, force: bool) -> Result<()> {
     if !std::io::stdin().is_terminal() {
         return Err(crate::core::Error::Refused(
             "`init -i` is interactive but stdin is not a terminal. \
-             Run `linix init` (non-interactive) or `linix config init` instead."
+             Run `shall init` (non-interactive) or `shall config init` instead."
                 .to_string(),
         )
         .into());
@@ -1008,12 +1008,12 @@ pub async fn interactive_init(app: &App, force: bool) -> Result<()> {
     let config_path = app.config.preferences_file.clone();
     if config_path.exists() && !force {
         anyhow::bail!(
-            "Config already exists at {}. Re-run `linix init -i --force` to overwrite it.",
+            "Config already exists at {}. Re-run `shall init -i --force` to overwrite it.",
             config_path.display()
         );
     }
 
-    println!("\nLet's set up LiNix. Press Enter to accept the [default].\n");
+    println!("\nLet's set up Shall. Press Enter to accept the [default].\n");
 
     let defaults = crate::config::Config::default();
     let mut answers = InitAnswers::default();
@@ -1054,7 +1054,7 @@ pub async fn interactive_init(app: &App, force: bool) -> Result<()> {
 
     scaffold_repo(app, force).await?;
 
-    // Starter packages go through the same door as `linix install`: one writer, so what a
+    // Starter packages go through the same door as `shall install`: one writer, so what a
     // wizard produces and what a command produces cannot be different shapes.
     for pkg in &answers.starter_packages {
         app.declare(pkg, None, crate::model::Landing::Imperative)
@@ -1062,7 +1062,7 @@ pub async fn interactive_init(app: &App, force: bool) -> Result<()> {
     }
     if !answers.starter_packages.is_empty() {
         println!(
-            "\nRun `linix sync` to install {}.",
+            "\nRun `shall sync` to install {}.",
             answers.starter_packages.join(", ")
         );
     }
@@ -1071,7 +1071,7 @@ pub async fn interactive_init(app: &App, force: bool) -> Result<()> {
 
 /// Write the II.1 repo: `priority`, `active`, and a profile to hang things on.
 ///
-/// `priority` is generated from what this machine actually has (V.41: LiNix should look, not
+/// `priority` is generated from what this machine actually has (V.41: Shall should look, not
 /// ask you to maintain a list by hand on every machine forever), ordered by the one rule
 /// that decides anything — a system manager beats a language manager (V.14). The file says
 /// why, because a default nobody can explain is a default nobody can safely change (P5).
@@ -1115,13 +1115,13 @@ pub async fn scaffold_repo(app: &App, force: bool) -> Result<()> {
             &starter,
             "# A module is a list of packages, one per line. This one is yours to edit.\n\
              #\n\
-             # Uncomment a line, then run `linix sync`:\n\
+             # Uncomment a line, then run `shall sync`:\n\
              #\n\
-             #   jq                 let LiNix pick the manager, best first from `priority`\n\
+             #   jq                 let Shall pick the manager, best first from `priority`\n\
              #   cargo:ripgrep      or name the manager yourself\n\
              #   git@version=2.44   pin a version\n\
              #\n\
-             # Nothing is installed until a line is here and `linix sync` has run. Deleting a\n\
+             # Nothing is installed until a line is here and `shall sync` has run. Deleting a\n\
              # line and syncing again removes the package.\n",
         )
         .await
@@ -1149,7 +1149,7 @@ pub async fn scaffold_repo(app: &App, force: bool) -> Result<()> {
         println!("  created  {:<10} {}", "profile", profile.display());
     }
 
-    // II.1 lists `vars` beside `active` and `priority`. It is scaffolded empty: a name LiNix
+    // II.1 lists `vars` beside `active` and `priority`. It is scaffolded empty: a name Shall
     // invented would be a condition nobody chose (IX.3 makes every reference to an undefined
     // name an error, and a helpful `role = desktop` is exactly the default P5 bans).
     let vars = layout.vars_file();
@@ -1182,7 +1182,7 @@ pub async fn scaffold_repo(app: &App, force: bool) -> Result<()> {
         println!("  created  {:<10} {}", "active", active.display());
     }
 
-    println!("\nReady. `linix install jq` writes a line you own; `linix sync` makes it so.");
+    println!("\nReady. `shall install jq` writes a line you own; `shall sync` makes it so.");
     Ok(())
 }
 
@@ -1216,7 +1216,7 @@ mod init_tests {
     #[test]
     fn config_from_answers_round_trips_through_toml() {
         // The interactive config must serialize to valid TOML and load back identically —
-        // otherwise `init -i` writes a file `linix` cannot read.
+        // otherwise `init -i` writes a file `shall` cannot read.
         let answers = InitAnswers {
             snapshot_count: Some(7),
             starter_packages: vec![],
@@ -1229,7 +1229,7 @@ mod init_tests {
 
     #[test]
     fn config_template_actually_parses_and_matches_the_defaults() {
-        // `linix config init` writes this file verbatim. A template that does not parse
+        // `shall config init` writes this file verbatim. A template that does not parse
         // hands every new user a broken config, and a template whose keys don't match the
         // struct silently documents settings that do nothing (as `cache_ttl` did).
         let cfg: crate::config::Config = toml::from_str(CONFIG_TEMPLATE)

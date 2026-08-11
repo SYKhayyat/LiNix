@@ -9,11 +9,11 @@
 //! **A rename is atomic against a concurrent reader and says nothing about power loss.** The
 //! directory entry can reach the disk before the bytes it points at do, which leaves a file of
 //! the right name and zero length. So a crash after a sync could leave an empty systemd unit
-//! while `registry.json` and the WAL — which went through `persist` — survived intact: LiNix's
+//! while `registry.json` and the WAL — which went through `persist` — survived intact: Shall's
 //! record of what it did, without the thing it did.
 //!
 //! This scan is the half a comment cannot do. The durability is one function now
-//! ([`linix::utils::file::durable_write`], private to the crate); what stays plural is the
+//! ([`shall::utils::file::durable_write`], private to the crate); what stays plural is the
 //! *preview policy*, deliberately, and this enumerates both so a third cannot appear unnoticed.
 
 use std::collections::BTreeSet;
@@ -29,7 +29,7 @@ use crate::ledger::Ledger;
 ///   repo: *print `would write …` and stop*.
 /// - `core/installed.rs` is the installed-listing cache, which is **correctly** neither durable
 ///   nor preview-aware: a torn cache file is a cache miss, an fsync per listing would be a disk
-///   barrier on the read path, and its temp name carries the pid because two `linix` runs
+///   barrier on the read path, and its temp name carries the pid because two `shall` runs
 ///   sharing one temp path is the torn listing the mechanism exists to prevent.
 const MAY_RENAME: &[(&str, &str)] = &[
     (

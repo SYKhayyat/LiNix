@@ -91,7 +91,7 @@ pub async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
             let names = loader.available();
             if names.is_empty() {
                 println!(
-                    "No modules yet. `linix module create <name>`, or `linix install` writes \
+                    "No modules yet. `shall module create <name>`, or `shall install` writes \
                      one for you."
                 );
             }
@@ -115,7 +115,7 @@ pub async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
                  # A list of what this module holds, one per line:\n\
                  #\n\
                  #   apt:curl\n\
-                 #   ripgrep            (no backend named — LiNix asks each one in\n\
+                 #   ripgrep            (no backend named — Shall asks each one in\n\
                  #                       `priority` order, then locks the answer)\n\
                  #   use base           (bring in another module)\n\
                  #   absent:apt:nano    (this must NOT exist)\n\
@@ -145,7 +145,7 @@ pub async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
 
             // Honour the configured value (F1); the pool raises a literal 0 to 1s, which
             // reqwest would otherwise read as an instant-fail timeout rather than "no timeout".
-            let client = crate::core::http::api("linix-module", app.config.network_timeout_secs)?;
+            let client = crate::core::http::api("shall-module", app.config.network_timeout_secs)?;
             info!("Fetching module from {}", url);
             let resp = client.get(&url).send().await?;
             if !resp.status().is_success() {
@@ -154,7 +154,7 @@ pub async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
             let body = resp.text().await?;
             if module_registry::looks_like_html(&body) {
                 anyhow::bail!(
-                    "response from {} looks like an HTML page, not a LiNix module — check the source",
+                    "response from {} looks like an HTML page, not a Shall module — check the source",
                     url
                 );
             }
@@ -300,14 +300,14 @@ pub async fn handle_service(app: &App, cmd: &ServiceCommand) -> Result<()> {
 pub async fn handle_hooks(app: &App, cmd: &HooksCommand) -> Result<()> {
     use crate::app::pm_hooks;
 
-    // Path to this very binary, so a hook can call back into `linix`.
-    let linix_bin = std::env::current_exe()
+    // Path to this very binary, so a hook can call back into `shall`.
+    let shall_bin = std::env::current_exe()
         .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| "linix".to_string());
+        .unwrap_or_else(|_| "shall".to_string());
 
     match cmd {
         HooksCommand::Install { managers } => {
-            let specs = pm_hooks::hook_specs(&linix_bin);
+            let specs = pm_hooks::hook_specs(&shall_bin);
             let mut wrote = 0usize;
             for spec in &specs {
                 if !managers.is_empty() && !managers.iter().any(|m| m == spec.manager) {
@@ -359,12 +359,12 @@ pub async fn handle_hooks(app: &App, cmd: &HooksCommand) -> Result<()> {
                 );
             } else {
                 println!(
-                    "\nInstalled {wrote} hook file(s). Manual installs now record into LiNix."
+                    "\nInstalled {wrote} hook file(s). Manual installs now record into Shall."
                 );
             }
         }
         HooksCommand::Uninstall { managers } => {
-            let specs = pm_hooks::hook_specs(&linix_bin);
+            let specs = pm_hooks::hook_specs(&shall_bin);
             let mut removed = 0usize;
             for spec in &specs {
                 if !managers.is_empty() && !managers.iter().any(|m| m == spec.manager) {
@@ -383,7 +383,7 @@ pub async fn handle_hooks(app: &App, cmd: &HooksCommand) -> Result<()> {
             println!("Removed {removed} hook file(s).");
         }
         HooksCommand::Status => {
-            let specs = pm_hooks::hook_specs(&linix_bin);
+            let specs = pm_hooks::hook_specs(&shall_bin);
             println!("{:<10} {:<9} {:<9} PATH", "MANAGER", "PRESENT", "HOOKED");
             for spec in &specs {
                 let present = app.registry.get(spec.manager).is_some();
@@ -398,7 +398,7 @@ pub async fn handle_hooks(app: &App, cmd: &HooksCommand) -> Result<()> {
             }
         }
         HooksCommand::ShellInit { shell } => {
-            print!("{}", pm_hooks::shell_wrappers(&linix_bin, shell));
+            print!("{}", pm_hooks::shell_wrappers(&shall_bin, shell));
         }
     }
     Ok(())
@@ -468,13 +468,13 @@ pub async fn handle_hook_record(
         record_hooked_target(app, manager, op, target).await?;
     }
     app.state.lock().await.save()?;
-    app.git_autocommit("linix: record hooked package change")
+    app.git_autocommit("shall: record hooked package change")
         .await;
     Ok(())
 }
 
 pub async fn handle_hook_reconcile(app: &App, manager: &str) -> Result<()> {
-    // Additive reconcile: record packages the manager reports installed that LiNix isn't yet
+    // Additive reconcile: record packages the manager reports installed that Shall isn't yet
     // tracking. We never auto-remove here — a missing package could be a transient query
     // hiccup, and destructive action from a background hook would be a nasty surprise.
     let Some(backend) = app.registry.get(manager) else {
@@ -488,7 +488,7 @@ pub async fn handle_hook_reconcile(app: &App, manager: &str) -> Result<()> {
         return Ok(());
     };
     // Adopting nothing is the safe direction when a listing fails — this records what a
-    // manager installed behind LiNix's back, and inventing entries would be worse. But a hook
+    // manager installed behind Shall's back, and inventing entries would be worse. But a hook
     // that silently records nothing looks exactly like a hook with nothing to record, and this
     // one runs unattended, where nobody is watching for the difference.
     let installed = match queryable.list_installed().await {
@@ -524,7 +524,7 @@ pub async fn handle_hook_reconcile(app: &App, manager: &str) -> Result<()> {
             "hook-reconcile: adopted {} new {}-installed package(s).",
             newly, manager
         );
-        app.git_autocommit("linix: reconcile hooked manager").await;
+        app.git_autocommit("shall: reconcile hooked manager").await;
     }
     Ok(())
 }
@@ -551,7 +551,7 @@ pub async fn handle_hook_observe(
     if learn && app.registry.get(&manager).is_none() {
         info!(
             "Auto-learn: observed unknown manager '{}'. Consider onboarding it with a TOML \
-             definition so LiNix knows its full command set.",
+             definition so Shall knows its full command set.",
             manager
         );
     }
@@ -562,13 +562,13 @@ pub async fn handle_hook_observe(
     }
     if !targets.is_empty() {
         app.state.lock().await.save()?;
-        app.git_autocommit("linix: observed manual package change")
+        app.git_autocommit("shall: observed manual package change")
             .await;
     }
     Ok(())
 }
 
-/// `linix schedule` — a shortcut for editing the `schedules` file, then converging.
+/// `shall schedule` — a shortcut for editing the `schedules` file, then converging.
 ///
 /// The file is the state (II.6: being in the file means it's on), so `add` and `remove` write
 /// it and `sync` provisions what changed. They do not talk to the OS scheduler directly: a
@@ -666,7 +666,7 @@ pub async fn handle_profile(app: &App, cmd: &ProfileCommand) -> Result<()> {
             let names = pm.list_profiles().await?;
             let active = pm.active_profiles().await?;
             if names.is_empty() {
-                println!("No profiles defined. Create one with `linix profile create <name>`.");
+                println!("No profiles defined. Create one with `shall profile create <name>`.");
             }
             for n in &names {
                 let mark = if active.iter().any(|a| a == n) {
@@ -685,7 +685,7 @@ pub async fn handle_profile(app: &App, cmd: &ProfileCommand) -> Result<()> {
             if packages.is_empty() {
                 println!(
                     "`{}` declares no packages. A profile is `use <module>` lines and package \
-                     lines; `linix module list` shows what there is to use.",
+                     lines; `shall module list` shows what there is to use.",
                     name
                 );
             }

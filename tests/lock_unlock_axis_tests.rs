@@ -36,10 +36,10 @@ impl Fresh {
     }
 
     fn run(&self, args: &[&str]) -> (String, i32) {
-        let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+        let out = Command::new(env!("CARGO_BIN_EXE_shall"))
             .args(args)
-            .env("LINIX_CONFIG_DIR", self.dir.join("config"))
-            .env("LINIX_DATA_DIR", self.dir.join("data"))
+            .env("SHALL_CONFIG_DIR", self.dir.join("config"))
+            .env("SHALL_DATA_DIR", self.dir.join("data"))
             .stdin(std::process::Stdio::null())
             .output()
             .expect("the binary should run");
@@ -69,12 +69,12 @@ impl Fresh {
         .unwrap();
         // The bare-name lock is per host, so its filename is asked for rather than guessed.
         std::fs::write(
-            linix::core::BareLock::path_in(&self.locks()),
+            shall::core::BareLock::path_in(&self.locks()),
             "[resolved]\nripgrep = \"cargo\"\njq = \"apt\"\n",
         )
         .unwrap();
         std::fs::write(
-            linix::core::hook_lock::HookLedger::path_in(&self.locks()),
+            shall::core::hook_lock::HookLedger::path_in(&self.locks()),
             "[approvals]\n\"after_install:nginx\" = \"aaa\"\n\"adapters:backends.toml\" = \"bbb\"\n",
         )
         .unwrap();
@@ -85,16 +85,16 @@ impl Fresh {
     }
 
     fn backends(&self) -> String {
-        std::fs::read_to_string(linix::core::BareLock::path_in(&self.locks())).unwrap_or_default()
+        std::fs::read_to_string(shall::core::BareLock::path_in(&self.locks())).unwrap_or_default()
     }
 
     fn scripts(&self) -> String {
-        std::fs::read_to_string(linix::core::hook_lock::HookLedger::path_in(&self.locks()))
+        std::fs::read_to_string(shall::core::hook_lock::HookLedger::path_in(&self.locks()))
             .unwrap_or_default()
     }
 }
 
-/// The bug, in one assertion. `linix unlock ripgrep` was the obvious undo for `linix lock`; it
+/// The bug, in one assertion. `shall unlock ripgrep` was the obvious undo for `shall lock`; it
 /// forgot a backend resolution, and the next sync would have uninstalled the cargo copy. A name
 /// where the axis goes is now refused, loudly, with the three axes named.
 #[test]
@@ -293,7 +293,7 @@ fn a_scope_accepts_the_whole_key_too() {
 fn a_name_that_matches_nothing_changes_nothing_and_says_so() {
     let fresh = Fresh::new("axis-scope-miss");
     let before = fresh.versions();
-    let (out, code) = fresh.run(&["unlock", "versions", "linix-never-pinned-zzz"]);
+    let (out, code) = fresh.run(&["unlock", "versions", "shall-never-pinned-zzz"]);
     assert_eq!(code, 0, "a miss is not an error:\n{out}");
     assert!(
         out.contains("nothing unpinned"),

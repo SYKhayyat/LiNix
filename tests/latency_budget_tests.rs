@@ -1,7 +1,7 @@
 //! How long a command is allowed to take.
 //!
-//! Nothing measured latency, which is how a 98-second `linix info cargo:ripgrep` shipped —
-//! answering "not found" the whole time, while `linix search ripgrep` in the same tree found
+//! Nothing measured latency, which is how a 98-second `shall info cargo:ripgrep` shipped —
+//! answering "not found" the whole time, while `shall search ripgrep` in the same tree found
 //! it. The cause was that the `cargo:` qualifier was ignored and every backend on the machine
 //! was asked for a package literally named `cargo:ripgrep`.
 //!
@@ -24,10 +24,10 @@ fn fresh(name: &str) -> std::path::PathBuf {
 
 fn run_timed(dir: &Path, args: &[&str]) -> (Duration, i32) {
     let start = Instant::now();
-    let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+    let out = Command::new(env!("CARGO_BIN_EXE_shall"))
         .args(args)
-        .env("LINIX_CONFIG_DIR", dir.join("config"))
-        .env("LINIX_DATA_DIR", dir.join("data"))
+        .env("SHALL_CONFIG_DIR", dir.join("config"))
+        .env("SHALL_DATA_DIR", dir.join("data"))
         .stdin(std::process::Stdio::null())
         .output()
         .expect("the binary should run");
@@ -55,7 +55,7 @@ fn a_qualified_info_stays_under_its_ceiling() {
     let (elapsed, _) = run_timed(&dir, &["info", "cargo:ripgrep"]);
     assert!(
         elapsed < Duration::from_secs(5),
-        "`linix info cargo:ripgrep` took {elapsed:?}. It names the manager to ask; taking this \
+        "`shall info cargo:ripgrep` took {elapsed:?}. It names the manager to ask; taking this \
          long means it asked all of them, which is exactly how E14's 98 seconds happened."
     );
 }
@@ -77,7 +77,7 @@ fn commands_that_only_read_the_config_are_immediate() {
         let (elapsed, _) = run_timed(&dir, &args);
         assert!(
             elapsed < Duration::from_secs(5),
-            "`linix {}` took {elapsed:?} and reads nothing but the config directory",
+            "`shall {}` took {elapsed:?} and reads nothing but the config directory",
             args.join(" ")
         );
     }
@@ -86,14 +86,14 @@ fn commands_that_only_read_the_config_are_immediate() {
 /// The property the budget above cannot pin: a qualified `info` asks the manager it was told
 /// to ask, and no other.
 ///
-/// Counted, not timed. `linix info cargo:ripgrep` used to hand the whole string — colon and
+/// Counted, not timed. `shall info cargo:ripgrep` used to hand the whole string — colon and
 /// all — to every backend on the machine, which is why it was slow *and* why it always
 /// answered "not found": no manager has a package whose name contains a colon.
 #[tokio::test]
 async fn a_qualified_info_consults_only_the_named_backend() {
     use dashmap::DashMap;
-    use linix::core::executor::MockExecutor;
-    use linix::core::CommandExecutor;
+    use shall::core::executor::MockExecutor;
+    use shall::core::CommandExecutor;
     use std::sync::Arc;
 
     let dir = fresh("info-one-backend");
@@ -113,13 +113,13 @@ go
 
     // `sandboxed` so the registry, journal and snapshots land in the temp dir too — the
     // fixture helper that exists because forgetting `data_root` wrote into real user state.
-    let config = linix::config::Config::sandboxed(&config_dir);
+    let config = shall::config::Config::sandboxed(&config_dir);
 
     let vfs = Arc::new(DashMap::new());
     let mock = Arc::new(MockExecutor::new(vfs.clone()));
     let exec =
         CommandExecutor::with_layer(true, false, mock.clone(), vfs, Arc::new(DashMap::new()));
-    let app = linix::app::App::new_with_executor_and_state_path(
+    let app = shall::app::App::new_with_executor_and_state_path(
         config,
         exec,
         Some(dir.join("data").join("state.json")),
@@ -170,10 +170,10 @@ go
 // ---------------------------------------------------------------------------------------
 
 /// Every config-only command against its class budget — the class the two ceilings above did
-/// not cover, and the one whose cost is LiNix's alone.
+/// not cover, and the one whose cost is Shall's alone.
 #[test]
 fn every_config_only_command_stays_inside_its_class_budget() {
-    use linix::core::latency::Class;
+    use shall::core::latency::Class;
     let budget = Class::ConfigOnly.budget().expect("config-only carries one");
     let dir = fresh("latency-class-config");
     let (_, code) = run_timed(&dir, &["init"]);
@@ -191,11 +191,11 @@ fn every_config_only_command_stays_inside_its_class_budget() {
         // The control: a command that failed did not do the work, so its clock says nothing.
         assert!(
             code == 0 || code == 2,
-            "`linix {}` exited {code}, so its timing measures nothing",
+            "`shall {}` exited {code}, so its timing measures nothing",
             args.join(" ")
         );
         if elapsed > budget {
-            over.push(format!("`linix {}` took {elapsed:?}", args.join(" ")));
+            over.push(format!("`shall {}` took {elapsed:?}", args.join(" ")));
         }
     }
 
@@ -212,7 +212,7 @@ fn every_config_only_command_stays_inside_its_class_budget() {
 /// two harness exemption lists after being renamed away because nothing validated the list.
 #[test]
 fn every_subcommand_the_class_table_names_still_exists() {
-    let help = Command::new(env!("CARGO_BIN_EXE_linix"))
+    let help = Command::new(env!("CARGO_BIN_EXE_shall"))
         .arg("--help")
         .output()
         .expect("the binary should run");
@@ -261,7 +261,7 @@ fn every_subcommand_the_class_table_names_still_exists() {
 /// cannot pin without measuring the runner's mood instead of the program.
 #[test]
 fn the_class_of_a_command_is_read_off_its_own_variant() {
-    use linix::core::latency::{subcommand_name, Class};
+    use shall::core::latency::{subcommand_name, Class};
 
     // clap kebab-cases the variant; this reverses exactly that, so there is no second list of
     // sixty-six names to drift.
@@ -284,7 +284,7 @@ fn the_class_of_a_command_is_read_off_its_own_variant() {
         "a host with forty managers is slow because it has forty managers"
     );
     assert_eq!(
-        Class::of("linix-command-that-does-not-exist"),
+        Class::of("shall-command-that-does-not-exist"),
         Class::Mutating,
         "a name the table does not know must fall to the class with NO budget, never to one \
          with a tight one — an unknown command is one nobody measured"
@@ -309,30 +309,30 @@ fn the_class_of_a_command_is_read_off_its_own_variant() {
 #[test]
 fn the_fan_out_commands_still_fan_out() {
     let dir = fresh("latency-shape");
-    let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+    let out = Command::new(env!("CARGO_BIN_EXE_shall"))
         .args(["init"])
-        .env("LINIX_CONFIG_DIR", dir.join("config"))
-        .env("LINIX_DATA_DIR", dir.join("data"))
+        .env("SHALL_CONFIG_DIR", dir.join("config"))
+        .env("SHALL_DATA_DIR", dir.join("data"))
         .stdin(std::process::Stdio::null())
         .output()
         .expect("the binary should run");
     assert!(out.status.success(), "init failed");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+    let out = Command::new(env!("CARGO_BIN_EXE_shall"))
         .args(["--timings", "list"])
-        .env("LINIX_CONFIG_DIR", dir.join("config"))
-        .env("LINIX_DATA_DIR", dir.join("data"))
+        .env("SHALL_CONFIG_DIR", dir.join("config"))
+        .env("SHALL_DATA_DIR", dir.join("data"))
         .stdin(std::process::Stdio::null())
         .output()
         .expect("the binary should run");
-    // The breakdown goes to stderr on purpose — `linix eval --timings | jq` must still get
+    // The breakdown goes to stderr on purpose — `shall eval --timings | jq` must still get
     // JSON — so that is where it is read from.
     let report = String::from_utf8_lossy(&out.stderr).into_owned();
     let line = report
         .lines()
         .find(|l| l.starts_with("Timings:"))
         .unwrap_or_else(|| {
-            panic!("`linix --timings list` printed no `Timings:` line; the instrument this gate reads is gone:\n{report}")
+            panic!("`shall --timings list` printed no `Timings:` line; the instrument this gate reads is gone:\n{report}")
         });
 
     // `Timings: 3.75s wall · 23 child command(s) summing to 23.67s · 6.3x overlap · 2 wave(s)`
@@ -366,21 +366,21 @@ fn the_fan_out_commands_still_fan_out() {
     // wrote `>= 2.0` and `<= 2` in both places, taken from one host, and ubuntu-latest reported
     // 2.0x over 16 children with 3 waves — inside neither. Two copies of a guessed constant is
     // two places to be wrong; asking the type is one.
-    let shape = linix::core::latency::Class::of("list")
+    let shape = shall::core::latency::Class::of("list")
         .shape()
         .expect("`list` asks every manager, so it carries a shape budget");
     let ceiling = shape.wave_ceiling(children);
 
     assert!(
         overlap >= shape.min_overlap,
-        "`linix list` asked {children} managers and overlapped them only {overlap:.1}x, under \
+        "`shall list` asked {children} managers and overlapped them only {overlap:.1}x, under \
          the {:.1}x floor — close to asking them one at a time. The seconds a fan-out costs \
          belong to the host; the scheduling does not.\n  {line}",
         shape.min_overlap
     );
     assert!(
         waves <= ceiling,
-        "`linix list` went quiet {} time(s) mid-run ({waves} waves over {children} children, \
+        "`shall list` went quiet {} time(s) mid-run ({waves} waves over {children} children, \
          ceiling {ceiling}). A serial run has one wave per child, and this is close enough to it \
          to be a fan-out that stopped fanning out.\n  {line}",
         waves.saturating_sub(1)

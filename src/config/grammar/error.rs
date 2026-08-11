@@ -18,7 +18,7 @@ impl Origin {
         }
     }
 
-    /// For input that never came from a file (a `linix install` argument).
+    /// For input that never came from a file (a `shall install` argument).
     pub fn argument() -> Self {
         Self {
             file: PathBuf::from("<argument>"),
@@ -92,7 +92,7 @@ impl fmt::Display for GrammarError {
     /// refusal quotes the line it refused and the line is untrusted text. W38 gave the character
     /// validator this rule and left the grammar's own refusals with the raw bytes: a module saved
     /// by Notepad begins with a byte-order mark, and the refusal then reads
-    /// `` `cargo` is not a backend LiNix uses — add `cargo` to your priority file ``, naming two
+    /// `` `cargo` is not a backend Shall uses — add `cargo` to your priority file ``, naming two
     /// strings that look identical and are not.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use crate::core::validator::printable;

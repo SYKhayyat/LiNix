@@ -1,4 +1,4 @@
-//! The grammar of a LiNix file (SPEC II.2).
+//! The grammar of a Shall file (SPEC II.2).
 //!
 //! One parser. Eight parsed `backend:name` before this, six of them without checking that
 //! the prefix named a real backend — so every prefix added here (`absent:`, `repo:`,
@@ -25,16 +25,16 @@ use std::path::Path;
 /// A package manager may report something that is not a declarable name: `winget list`
 /// answers for Add/Remove-Programs entries with pseudo-IDs like
 /// `ARP\Machine\X64\Android Studio`, and a package name is one word (II.2). Anything that
-/// turns a manager's answer into a declaration — or decides whether LiNix could ever have
+/// turns a manager's answer into a declaration — or decides whether Shall could ever have
 /// been asked to keep one — has to agree on that, so they all ask here.
 ///
 /// Round-tripped rather than parsed: `winget:ARP\Machine\X64\Android Studio` *parses*, as a
 /// set expression, and only reading it back as the package it came from catches that.
 ///
 /// **`None` is a name with no backend written beside it** — `jq`, as a user types it into
-/// `linix protected`, and as the grammar accepts it on a line that lets `priority` decide the
+/// `shall protected`, and as the grammar accepts it on a line that lets `priority` decide the
 /// manager. It is not the same question as `""`, which builds the line `:jq` and is refused by
-/// every grammar there has ever been: asking it that way told `linix protected` that `jq`,
+/// every grammar there has ever been: asking it that way told `shall protected` that `jq`,
 /// `sudo` and every other bare name was undeclarable, so the guard's declarability test fired
 /// before a single rule was read and the answer to *which rule protects this* was a sentence
 /// about package lines.

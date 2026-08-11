@@ -2,7 +2,7 @@
 //!
 //! Answering "is `jq` installed?" by listing every package the manager has is what nearly every
 //! backend in this tree does — `info` is `list_installed()` plus a `find` in eighteen of them —
-//! and the callers ask it once per *declared* package. Measured on Windows, `linix check drift`
+//! and the callers ask it once per *declared* package. Measured on Windows, `shall check drift`
 //! cost ~247 ms more for every additional declaration, on a command whose whole job is to
 //! compare two lists it could have fetched once. On Ubuntu the same shape produced exactly
 //! `declared + 1` `dpkg-query` invocations.
@@ -16,7 +16,7 @@
 //! the next test's, in a suite where a hundred `App`s live in one process.
 //!
 //! **And optionally per machine, across runs** (`installed_cache_secs`, off by default). Asking
-//! once per run is the whole win while a run lasts; the next `linix list` still pays ~3.2 s to
+//! once per run is the whole win while a run lasts; the next `shall list` still pays ~3.2 s to
 //! ask 24 managers the same question about a machine nothing has touched. The disk layer sits
 //! behind this same seam, so a backend cannot tell the difference and no caller had to change.
 
@@ -70,7 +70,7 @@ impl InstalledListings {
     /// - `plan --out` freezes that same mistake into a file `apply` runs later.
     ///
     /// An allowlist rather than a list of the unsafe ones, because the next command added to
-    /// LiNix should have to say it is a reader — not discover it was assumed to be one.
+    /// Shall should have to say it is a reader — not discover it was assumed to be one.
     pub fn cache_may_answer(subcommand: &str) -> bool {
         matches!(
             subcommand,
@@ -146,7 +146,7 @@ impl InstalledListings {
             // machine is a list of things to remove.
             //
             // The temp name carries the pid, because the rename is only atomic per writer:
-            // two `linix` runs sharing one temp path write into each other's file and rename
+            // two `shall` runs sharing one temp path write into each other's file and rename
             // the interleaving, which is the torn listing this exists to prevent, arrived at
             // by the mechanism meant to prevent it. A prompt hook and a terminal are two runs.
             let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
@@ -158,8 +158,8 @@ impl InstalledListings {
 
     /// Drop every listing this machine has on disk.
     ///
-    /// Public because a mutation is not the only thing that invalidates one: `linix clean-cache`
-    /// exists for the case where something outside LiNix changed the machine and the user knows
+    /// Public because a mutation is not the only thing that invalidates one: `shall clean-cache`
+    /// exists for the case where something outside Shall changed the machine and the user knows
     /// it before the TTL does.
     pub fn forget_on_disk() -> std::io::Result<usize> {
         let dir = Self::cache_dir();
@@ -333,13 +333,13 @@ mod tests {
         );
     }
 
-    /// The disk layer's tests share one `LINIX_DATA_DIR`, so they run as one test rather than
+    /// The disk layer's tests share one `SHALL_DATA_DIR`, so they run as one test rather than
     /// racing each other over the same directory.
     #[tokio::test]
     async fn a_listing_survives_a_run_only_when_asked_for_and_only_until_it_is_stale() {
-        let dir = std::env::temp_dir().join(format!("linix-cache-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("shall-cache-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::env::set_var("LINIX_DATA_DIR", &dir);
+        std::env::set_var("SHALL_DATA_DIR", &dir);
 
         // Off by default: a second "run" asks the manager again.
         let calls = AtomicUsize::new(0);
@@ -428,7 +428,7 @@ mod tests {
             .unwrap();
         assert_eq!(got.len(), 1, "a corrupt cache file must read as a miss");
 
-        std::env::remove_var("LINIX_DATA_DIR");
+        std::env::remove_var("SHALL_DATA_DIR");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

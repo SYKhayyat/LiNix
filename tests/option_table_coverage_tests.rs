@@ -10,7 +10,7 @@
 //! its table. This is the other half: that the table is *reached*, and that the refusal names
 //! the kind the user actually wrote. A kind wired to the wrong table still compiles.
 
-use linix::config::grammar::statement::{keys_for_kind, OptionKind};
+use shall::config::grammar::statement::{keys_for_kind, OptionKind};
 
 /// Nine kinds, and the enum's own list is what drives this — a kind added to `OptionKind`
 /// without a case here fails the count below rather than being quietly untested.

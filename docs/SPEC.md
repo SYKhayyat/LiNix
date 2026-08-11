@@ -1,4 +1,4 @@
-# LiNix v7 — the declarative model
+# Shall v7 — the declarative model
 
 **This file is the way in. It holds the instructions and the map; the specification itself is
 in [`spec/`](spec/), one file per part.** It was 9,308 lines in one file until 2026-07-23, at
@@ -100,7 +100,7 @@ not for agents to read.
 
 ## PROMPT — read this first, then follow it
 
-You are implementing LiNix v7 on `main` — the sole branch — at `C:\Users\Administrator\Videos\Nexus\linix`.
+You are implementing Shall v7 on `main` — the sole branch — at `C:\Users\Administrator\Videos\Nexus\shall`.
 This document is your specification. It was produced by a long design conversation with the
 owner; **every rule in it was argued for and chosen, and Part V records why.**
 
@@ -252,7 +252,7 @@ review — including one whose entire purpose was hunting false claims in this f
 "every removal path calls it", checked it against the seven paths the sentence names, and passed
 it every time. The eighth path was never named, so it was never checked, and it was uninstalling
 software. It was found in the first twenty minutes of a session that did nothing but *start the
-binary*, because `cargo test` could not overwrite a `.exe` a hung LiNix was holding.
+binary*, because `cargo test` could not overwrite a `.exe` a hung Shall was holding.
 
 Three consequences, and they are rules, not observations:
 

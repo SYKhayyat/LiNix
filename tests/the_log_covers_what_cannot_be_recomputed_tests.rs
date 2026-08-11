@@ -19,9 +19,9 @@
 //! uses the only witness that can tell the difference: **the script reads the journal while it
 //! is running.** An entry written after the interpreter returns would leave it nothing to find.
 
-use linix::core::hook_lock::{exec_id, hash_script, HookLedger};
-use linix::core::journal::{ActionStatus, JournalAction, JournalEntry};
-use linix::core::LockFile;
+use shall::core::hook_lock::{exec_id, hash_script, HookLedger};
+use shall::core::journal::{ActionStatus, JournalAction, JournalEntry};
+use shall::core::LockFile;
 use std::path::{Path, PathBuf};
 
 use crate::harness::Fixture;
@@ -34,7 +34,7 @@ impl Fixture {
     /// Declare one `exec:` line, write the script it names, and approve it — II.12 refuses an
     /// unapproved script, and this test is about what happens when one runs.
     fn declare_exec(&self, body: &str) -> String {
-        let name = format!("setup{}", linix::model::script::SCRIPT_SUFFIX);
+        let name = format!("setup{}", shall::model::script::SCRIPT_SUFFIX);
         std::fs::write(self.cfg().join(&name), body).unwrap();
         let rel = format!("./{}", name);
         std::fs::write(

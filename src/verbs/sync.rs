@@ -27,7 +27,7 @@ pub struct Reconcile {
 ///
 /// **Two numbers, because one could not tell the two silences apart.** A pass returning `0` used
 /// to mean "the machine already matches", and its caller printed exactly that; it also meant
-/// "there was a removal and LiNix declined it", which is the opposite claim about the same
+/// "there was a removal and Shall declined it", which is the opposite claim about the same
 /// machine (AU1).
 pub struct Reconciled {
     /// Package and resource changes actually carried out.
@@ -76,7 +76,7 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
     // on that predicate is what left an orphaned package orphaned through every subsequent
     // sync. `heal` returns at once when there is nothing of either kind.
     //
-    // `heal` fails when it could not close an entry, and `linix heal` exits non-zero for it.
+    // `heal` fails when it could not close an entry, and `shall heal` exits non-zero for it.
     // Here it must not: one package whose recovery cannot complete would block every other
     // package on the machine from converging, and the entry stays recorded as interrupted
     // either way, so the next run tries it again.
@@ -301,7 +301,7 @@ pub async fn apply_non_package_phases(
     // which deliberately runs on both. A dry run reaches here without the engine having run, so
     // the ledger holds no packages and no installs — the total this gate could compute is a
     // fraction of the one the real run computes, and a preview that measures a smaller number
-    // says *yes* where the run says *no*. `linix plan` previews the ceilings properly, over one
+    // says *yes* where the run says *no*. `shall plan` previews the ceilings properly, over one
     // ledger in the engine's own order (`guard::preview_refusals`); a half-answer here would be
     // the second implementation of that, and the wrong one.
     if !app.config.dry_run {
@@ -349,7 +349,7 @@ pub async fn apply_non_package_phases(
     Ok(resources.place.len() + undone)
 }
 
-/// `linix rebuild` — remove and reinstall what is declared, one backend at a time (X.1, K1).
+/// `shall rebuild` — remove and reinstall what is declared, one backend at a time (X.1, K1).
 pub async fn handle_rebuild(
     app: &App,
     packages: &[String],
@@ -386,7 +386,7 @@ pub async fn handle_rebuild(
             warn!(
                 "rebuild with no scope rebuilds EVERY declared package on this machine — it \
                  removes software in order to put it back. Proceeding with `--all`.\n  \
-                 Narrow it with `linix rebuild <pkg>` or `linix rebuild --backend <name>` if \
+                 Narrow it with `shall rebuild <pkg>` or `shall rebuild --backend <name>` if \
                  that is not what you meant."
             );
             Scope::All
@@ -532,7 +532,7 @@ pub async fn handle_rebuild(
                     "rebuild of `{}` failed while reinstalling: {}\n\n\
                      These packages were removed and are NOT back:\n    {}\n\n\
                      There was no snapshot to roll back to. Re-run \
-                     `linix rebuild --backend {}` once the cause is fixed.\n\
+                     `shall rebuild --backend {}` once the cause is fixed.\n\
                      Remaining backends were not started.",
                     batch.backend,
                     e,
@@ -564,7 +564,7 @@ pub async fn handle_rebuild(
             anyhow::bail!(
                 "rebuild of `{}` failed while reinstalling: {}\n\n\
                  Rolled back to snapshot {} — the machine is as it was before the rebuild \
-                 started.\nRe-run `linix rebuild --backend {}` once the cause is fixed.",
+                 started.\nRe-run `shall rebuild --backend {}` once the cause is fixed.",
                 batch.backend,
                 e,
                 snap.id,
@@ -658,7 +658,7 @@ pub async fn manifest_signature(dir: &std::path::Path) -> Vec<(String, u64, i64)
 ///
 /// **The data lock is taken here, per tick, and released before the sleep** (`LockScope::
 /// Deferred`). `watch` is the GitOps deployment: the documented use is to leave it running. It
-/// was a whole-run writer, so for as long as the daemon was up, every writing LiNix command on
+/// was a whole-run writer, so for as long as the daemon was up, every writing Shall command on
 /// that machine — `install`, `sync`, and the `hook-reconcile` a hand-typed `apt install` fires —
 /// waited 120 seconds and then failed. A user following the documentation disabled their own
 /// CLI. The tick is the mutating action; the sleep between ticks is not.
@@ -689,7 +689,7 @@ pub async fn handle_watch(
 ) -> Result<()> {
     let interval = interval.max(1);
     println!(
-        "linix watch: reconciling {} every {}s{}{}. Ctrl-C to stop.",
+        "shall watch: reconciling {} every {}s{}{}. Ctrl-C to stop.",
         app.config.config_root().display(),
         interval,
         if pull { " (git pull each tick)" } else { "" },
@@ -762,13 +762,13 @@ pub async fn handle_watch(
 /// share one decision surface — this replaces the old parallel `policy.toml` gate (II.17).
 /// Every `[guard]` install/change rule this desired state violates.
 ///
-/// **Split out so `linix policy` can preview exactly what `sync` will enforce.**
+/// **Split out so `shall policy` can preview exactly what `sync` will enforce.**
 /// `verbs/setup.rs:637` used to re-implement this — the same `inspect_desired` call, the same
 /// `require_snapshot` check, and **no `deny_vulnerable`** — and then printed a footnote at `:646`
-/// admitting the gap: *"(deny_vulnerable is also enforced at sync time via `linix check
+/// admitting the gap: *"(deny_vulnerable is also enforced at sync time via `shall check
 /// security`.)"*
 ///
-/// So `linix policy` could report **compliant** for a config `sync` would refuse. That is not an
+/// So `shall policy` could report **compliant** for a config `sync` would refuse. That is not an
 /// argument for deleting a preview; it is an argument that the preview was not calling the thing
 /// it previews. One implementation, two callers, and the footnote deletes itself.
 pub async fn policy_violations(
@@ -828,7 +828,7 @@ pub fn print_flight_plan(app: &App, changes: &crate::app::sync::planner::SyncCha
     }
     let report = changes.generate_report();
     // The skips print even when there is nothing else to print, and that is the whole point:
-    // an empty plan over a machine holding a package LiNix declined to remove is the run that
+    // an empty plan over a machine holding a package Shall declined to remove is the run that
     // said `already up to date` about a wedge (AU1).
     if report.install.is_empty() && report.remove.is_empty() {
         print_skipped(&report.skipped);
@@ -896,7 +896,7 @@ pub fn print_skipped(skipped: &[crate::app::sync::planner::Skipped]) {
         println!("  … and {} more", skipped.len() - MAX_LISTED_SKIPS);
     }
     println!(
-        "  Declare them to keep them, or run `linix protected <name>` to see what decides this."
+        "  Declare them to keep them, or run `shall protected <name>` to see what decides this."
     );
 }
 

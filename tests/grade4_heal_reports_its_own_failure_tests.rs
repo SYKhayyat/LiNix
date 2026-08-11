@@ -6,8 +6,8 @@
 //!
 //!     ERROR could not recover npm:… — Some(CommandFailed { message: "…404…",
 //!     retry: Permanent, absent_name: true }). The system may be in a partial state for this
-//!     package; re-run `linix sync`.
-//!      WARN 1 operation(s) could NOT be recovered: npm:… . Re-run `linix sync`.
+//!     package; re-run `shall sync`.
+//!      WARN 1 operation(s) could NOT be recovered: npm:… . Re-run `shall sync`.
 //!     heal: reconciled locks/versions.json (1 entries)
 //!     heal: refreshed backend metadata
 //!     heal rc=0
@@ -16,17 +16,17 @@
 //! the recovery, fails, and **leaves the entry `InProgress`** rather than closing it. That is
 //! the answer a "mark everything done" implementation gets wrong.
 //!
-//!   1. rc=0 after "1 operation(s) could NOT be recovered". `linix heal && echo ok` printed ok.
+//!   1. rc=0 after "1 operation(s) could NOT be recovered". `shall heal && echo ok` printed ok.
 //!   2. `{:?}` on an `Option<Error>` printed at the user — `retry: Permanent`,
 //!      `absent_name: true`, internal field names and all.
 //!   3. The advice contradicted the struct it had just printed: `absent_name: true` means the
-//!      name does not exist, and it said "re-run `linix sync`".
+//!      name does not exist, and it said "re-run `shall sync`".
 //!
 //! **The fixture is `cargo uninstall` of a crate this machine does not have.** The grader
 //! recorded that it could not automate this, because a planted `Install` entry needs a network
 //! round-trip and a hand-written one omitting `options` lands in the corrupt-WAL branch instead
 //! of the recovery branch. A planted **Remove** parses (the dry-run gate already relies on
-//! that), and `cargo` is on every runner that builds LiNix, so its recovery fails locally,
+//! that), and `cargo` is on every runner that builds Shall, so its recovery fails locally,
 //! deterministically, and with no network at all.
 //!
 //! `github:` was tried first and does **not** work: removing an artifact the lock has never
@@ -37,14 +37,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The package `heal` will try, and fail, to remove.
-const ABSENT: &str = "linix-probe-not-installed-zzz";
+const ABSENT: &str = "shall-probe-not-installed-zzz";
 
 fn run(dir: &Path, args: &[&str]) -> (String, i32) {
-    let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+    let out = Command::new(env!("CARGO_BIN_EXE_shall"))
         .args(args)
         .current_dir(dir)
-        .env("LINIX_CONFIG_DIR", dir.join("config"))
-        .env("LINIX_DATA_DIR", dir.join("data"))
+        .env("SHALL_CONFIG_DIR", dir.join("config"))
+        .env("SHALL_DATA_DIR", dir.join("data"))
         .env("NO_COLOR", "1")
         .stdin(std::process::Stdio::null())
         .output()
@@ -101,12 +101,12 @@ fn heal_that_could_not_recover(tag: &str) -> Option<(String, i32)> {
     // This planted entry is recovered by shelling out to `cargo`, and cargo takes a lock on its
     // package cache. Under `cargo test` — which holds that lock — the child answers `Blocking
     // waiting for file lock on crate metadata` and fails on the lock rather than on the absent
-    // crate, so what LiNix classified is a different failure from the one under test. Measured:
+    // crate, so what Shall classified is a different failure from the one under test. Measured:
     // this target failed inside a full `cargo test --no-fail-fast` run and passed alone, on the
     // same tree, twice.
     //
     // Named and skipped rather than asserted-around: the assertions below are about the advice
-    // LiNix gives for a PERMANENT failure, and a lock wait is not one. It cannot hide the
+    // Shall gives for a PERMANENT failure, and a lock wait is not one. It cannot hide the
     // defect — the skip fires only on cargo's own lock sentence.
     if out.contains("waiting for file lock") {
         eprintln!(
@@ -128,7 +128,7 @@ fn heal_does_not_exit_zero_after_failing_to_recover() {
     assert_ne!(
         code, 0,
         "`heal` said it could not recover an operation and then exited 0, so \
-         `linix heal && echo ok` prints ok. U21 gave this program an exit vocabulary and the \
+         `shall heal && echo ok` prints ok. U21 gave this program an exit vocabulary and the \
          recovery path was the last one not using it.\n\n{out}"
     );
 }
@@ -215,7 +215,7 @@ fn the_advice_follows_the_classification() {
 
     assert!(
         line.contains("will fail the same way") || line.contains("does not exist"),
-        "a permanent failure was advised as though another attempt might help. LiNix classified \
+        "a permanent failure was advised as though another attempt might help. Shall classified \
          it and then did not consult the classification — which is R-3's defect in a third \
          place.\n\n{line}"
     );

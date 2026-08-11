@@ -28,7 +28,7 @@ impl ModuleName {
     /// For names fixed in the source. Panics on an invalid one, which is a bug in this crate,
     /// not a user error.
     pub fn literal(name: &'static str) -> Self {
-        Self::new(name).expect("a module name written into LiNix must satisfy II.5")
+        Self::new(name).expect("a module name written into Shall must satisfy II.5")
     }
 
     pub fn as_str(&self) -> &str {
@@ -45,11 +45,11 @@ impl std::fmt::Display for ModuleName {
 /// Where everything lives (SPEC II.1).
 ///
 /// Two roots, and the split is load-bearing. **Your repo** holds what you wrote and is a
-/// git repo. **LiNix's data** holds what LiNix worked out, never goes in git, and never
-/// goes in a folder LiNix scans.
+/// git repo. **Shall's data** holds what Shall worked out, never goes in git, and never
+/// goes in a folder Shall scans.
 ///
 /// Keeping them apart is the fix for the shape of Monday's bug: `registry.json` (what
-/// LiNix owns) lived somewhere `-g` could not move while the wish list moved, so ownership
+/// Shall owns) lived somewhere `-g` could not move while the wish list moved, so ownership
 /// and intent disagreed and everything owned-but-unwished read as drift (V.1). They can no
 /// longer be pointed at each other because they are no longer the same kind of thing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,12 +59,12 @@ pub struct Layout {
 }
 
 impl Layout {
-    /// `$LINIX_CONFIG_DIR` / `$LINIX_DATA_DIR`, else the platform dirs.
+    /// `$SHALL_CONFIG_DIR` / `$SHALL_DATA_DIR`, else the platform dirs.
     pub fn discover() -> Self {
-        let config_root = std::env::var_os("LINIX_CONFIG_DIR")
+        let config_root = std::env::var_os("SHALL_CONFIG_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(crate::utils::safe_config_dir);
-        let data_root = std::env::var_os("LINIX_DATA_DIR")
+        let data_root = std::env::var_os("SHALL_DATA_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(crate::utils::safe_data_dir);
         Self {
@@ -101,7 +101,7 @@ impl Layout {
         self.config_root.join("active")
     }
 
-    /// Which backends, in order. Listed = available to LiNix; not listed = LiNix does not
+    /// Which backends, in order. Listed = available to Shall; not listed = Shall does not
     /// use it at all (V.15).
     pub fn priority_file(&self) -> PathBuf {
         self.config_root.join("priority")
@@ -112,7 +112,7 @@ impl Layout {
         self.config_root.join("groups")
     }
 
-    /// When LiNix runs itself. Being in the file means it is on — no active-list (V.28).
+    /// When Shall runs itself. Being in the file means it is on — no active-list (V.28).
     pub fn schedules_file(&self) -> PathBuf {
         self.config_root.join("schedules")
     }
@@ -122,7 +122,7 @@ impl Layout {
         self.config_root.join("vars")
     }
 
-    /// What you have taught LiNix: managers it does not ship, settings stores it has no
+    /// What you have taught Shall: managers it does not ship, settings stores it has no
     /// adapter for, and how to obtain a manager that is missing (U10, ruled 2026-07-24).
     ///
     /// One folder, **in the repo** — a definition that cannot travel makes every line that uses
@@ -148,12 +148,12 @@ impl Layout {
         self.adapters_dir().join(format!("{surface}.toml"))
     }
 
-    /// `[[backend]]` — how to drive a package manager LiNix does not ship (XIII.2).
+    /// `[[backend]]` — how to drive a package manager Shall does not ship (XIII.2).
     pub fn adapter_backends_file(&self) -> PathBuf {
         self.adapter_file("backends")
     }
 
-    /// `[[firewall]]` — how to drive a firewall LiNix does not ship (N3).
+    /// `[[firewall]]` — how to drive a firewall Shall does not ship (N3).
     pub fn adapter_firewall_file(&self) -> PathBuf {
         self.adapter_file("firewall")
     }
@@ -169,12 +169,12 @@ impl Layout {
     }
 
     /// `[[prereq]]` — the setup a manager needs before it can install anything (Q10/Q11/Q13).
-    /// LiNix ships rows for the three that were measured; this is where a user adds a fourth.
+    /// Shall ships rows for the three that were measured; this is where a user adds a fourth.
     pub fn adapter_prereq_file(&self) -> PathBuf {
         self.adapter_file("prereq")
     }
 
-    /// `[[init]]` — how to drive an init system LiNix does not ship a built-in for (U36).
+    /// `[[init]]` — how to drive an init system Shall does not ship a built-in for (U36).
     pub fn adapter_init_file(&self) -> PathBuf {
         self.adapter_file("init")
     }
@@ -185,7 +185,7 @@ impl Layout {
         self.adapter_file("snapshot")
     }
 
-    /// `[[secret]]` — how to decrypt with a provider LiNix does not ship (U38). A row that does
+    /// `[[secret]]` — how to decrypt with a provider Shall does not ship (U38). A row that does
     /// not promise the plaintext reaches stdout only is refused, never trusted with a secret.
     pub fn adapter_secret_file(&self) -> PathBuf {
         self.adapter_file("secret")
@@ -205,7 +205,7 @@ impl Layout {
         self.config_root.join(crate::config::PREFERENCES_FILE_NAME)
     }
 
-    /// What LiNix currently owns. **Never in git. Never in a folder LiNix scans.**
+    /// What Shall currently owns. **Never in git. Never in a folder Shall scans.**
     pub fn registry_file(&self) -> PathBuf {
         self.data_root.join("registry.json")
     }
@@ -250,8 +250,8 @@ mod tests {
     }
 
     #[test]
-    fn linix_data_is_never_inside_your_repo() {
-        // II.1. The registry is what LiNix OWNS; the modules are what you WANT. When those
+    fn shall_data_is_never_inside_your_repo() {
+        // II.1. The registry is what Shall OWNS; the modules are what you WANT. When those
         // two can be pointed at each other, owned-but-unwished reads as drift and drift
         // gets removed — which is Monday's bug (V.1).
         let l = layout();

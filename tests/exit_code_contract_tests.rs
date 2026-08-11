@@ -8,7 +8,7 @@
 //! machine (Q3, II.8, V.92).
 //!
 //! These run the built binary rather than a parser, because the defect was that clap exits
-//! before LiNix's own mapping runs — a test against the mapping would have passed throughout.
+//! before Shall's own mapping runs — a test against the mapping would have passed throughout.
 
 use std::process::Command;
 
@@ -17,12 +17,12 @@ fn exit_code(args: &[&str]) -> i32 {
 }
 
 fn exit_code_in(dir: &str, args: &[&str]) -> i32 {
-    let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+    let out = Command::new(env!("CARGO_BIN_EXE_shall"))
         .args(args)
         // A missing config must not turn a usage error into a different failure, and a real
         // one must not let the machine's state decide the code.
-        .env("LINIX_CONFIG_DIR", format!("{dir}/config"))
-        .env("LINIX_DATA_DIR", format!("{dir}/data"))
+        .env("SHALL_CONFIG_DIR", format!("{dir}/config"))
+        .env("SHALL_DATA_DIR", format!("{dir}/data"))
         // Piped, so `is_terminal` is false and the non-interactive refusals are reachable.
         .stdin(std::process::Stdio::null())
         .output()
@@ -56,10 +56,10 @@ fn a_usage_error_is_a_failure_and_never_a_finding() {
         assert_ne!(
             code,
             2,
-            "`linix {}` exits 2, which the published table means as `the machine has drifted`",
+            "`shall {}` exits 2, which the published table means as `the machine has drifted`",
             args.join(" ")
         );
-        assert_eq!(code, 1, "`linix {}` should exit 1 (failed)", args.join(" "));
+        assert_eq!(code, 1, "`shall {}` should exit 1 (failed)", args.join(" "));
     }
 }
 
@@ -72,7 +72,7 @@ fn asking_for_help_or_version_still_succeeds() {
     assert_eq!(exit_code(&["sync", "--help"]), 0);
 }
 
-/// Exit 3 exists so a script that retries on failure does not retry a decision. LiNix worked
+/// Exit 3 exists so a script that retries on failure does not retry a decision. Shall worked
 /// correctly and declined on purpose in both of these, and both returned 1 — indistinguishable
 /// from a crash. Neither harness could see it: they assert refusals with `nok`, which takes any
 /// non-zero code and therefore cannot tell 1 from 3.

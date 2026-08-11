@@ -1,12 +1,12 @@
-# LiNix integration image — openSUSE Tumbleweed (zypper). Build context = repo root.
-#   docker build -f docker/integration/Dockerfile.opensuse -t linix-it-opensuse .
-#   docker run --rm linix-it-opensuse          # defaults to: zypper jq
+# Shall integration image — openSUSE Tumbleweed (zypper). Build context = repo root.
+#   docker build -f docker/integration/Dockerfile.opensuse -t shall-it-opensuse .
+#   docker run --rm shall-it-opensuse          # defaults to: zypper jq
 #
 # `zypper` was registered, argv-tested against a mock, and had never been run against the real
 # program in any harness — it was in neither the canary table nor the reason table of either
 # sweep, which is the state Q4 calls a release blocker. This image is the whole fix.
 FROM opensuse/tumbleweed:latest
-ENV LINIX_IT_IMAGE=opensuse
+ENV SHALL_IT_IMAGE=opensuse
 # `--no-recommends`: Tumbleweed's recommends pull a desktop stack into a build image.
 RUN zypper --non-interactive --gpg-auto-import-keys refresh \
     && zypper --non-interactive install --no-recommends \
@@ -32,6 +32,6 @@ ENV PATH="/root/.local/bin:/root/.bun/bin:/root/.cargo/bin:${PATH}"
 RUN zypper --non-interactive --gpg-auto-import-keys refresh
 WORKDIR /src
 COPY . /src
-RUN cargo build --release && cp target/release/linix /usr/local/bin/linix && chmod 0755 /usr/local/bin/linix
+RUN cargo build --release && cp target/release/shall /usr/local/bin/shall && chmod 0755 /usr/local/bin/shall
 ENTRYPOINT ["sh", "/src/docker/integration/run-in-container.sh"]
 CMD ["zypper", "jq"]

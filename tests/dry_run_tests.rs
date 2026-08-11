@@ -29,10 +29,10 @@ impl Fresh {
     }
 
     fn run(&self, args: &[&str]) -> (String, i32) {
-        let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+        let out = Command::new(env!("CARGO_BIN_EXE_shall"))
             .args(args)
-            .env("LINIX_CONFIG_DIR", self.dir.join("config"))
-            .env("LINIX_DATA_DIR", self.dir.join("data"))
+            .env("SHALL_CONFIG_DIR", self.dir.join("config"))
+            .env("SHALL_DATA_DIR", self.dir.join("data"))
             .stdin(std::process::Stdio::null())
             .output()
             .expect("the binary should run");
@@ -115,7 +115,7 @@ fn a_previewed_schedule_add_schedules_nothing() {
         "--cron",
         "0 3 * * *",
         "--run",
-        "linix sync",
+        "shall sync",
     ]);
     assert_eq!(code, 0, "preview failed:\n{out}");
     assert_eq!(
@@ -134,7 +134,7 @@ fn a_previewed_schedule_add_schedules_nothing() {
         "--cron",
         "0 3 * * *",
         "--run",
-        "linix sync",
+        "shall sync",
     ]);
     assert!(
         fresh.config("schedules").exists(),
@@ -144,7 +144,7 @@ fn a_previewed_schedule_add_schedules_nothing() {
 
 /// The reported case, end to end: a preview of `uninstall` leaves the declaration alone.
 ///
-/// The line is written by a real `linix install` rather than by hand — a hand-written module
+/// The line is written by a real `shall install` rather than by hand — a hand-written module
 /// no active profile reaches is a setup where `undeclare` finds no files and the assertion
 /// passes without ever reaching the code it is about.
 #[test]
@@ -185,7 +185,7 @@ fn a_previewed_uninstall_undeclares_nothing() {
 }
 
 /// `unmanage` dropped the declaration *and* rewrote the registry during a preview — the same
-/// bug one file over, and the one that also persists LiNix's own state.
+/// bug one file over, and the one that also persists Shall's own state.
 #[test]
 fn a_previewed_unmanage_forgets_nothing() {
     let fresh = Fresh::new("dry-run-unmanage");

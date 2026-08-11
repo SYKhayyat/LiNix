@@ -6,8 +6,8 @@
 //! than refused hangs or repeats; and a global lock where a per-backend one belongs makes every
 //! sync run one manager at a time while every assertion still passes.
 
-use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
-use linix::core::{GraphAction, PackageSpec, StateRegistry, Transaction};
+use shall::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
+use shall::core::{GraphAction, PackageSpec, StateRegistry, Transaction};
 use petgraph::stable_graph::StableDiGraph;
 use std::collections::HashMap;
 
@@ -125,7 +125,7 @@ async fn a_cycle_is_refused_by_name_rather_than_planned() {
         plan_result.is_err(),
         "Planner allowed a circular dependency loop."
     );
-    if let Err(linix::core::Error::Transaction(msg)) = plan_result {
+    if let Err(shall::core::Error::Transaction(msg)) = plan_result {
         // V.45: names the cycle rather than just reporting one exists.
         assert!(msg.contains("cycle"), "should say it is a cycle: {}", msg);
     }

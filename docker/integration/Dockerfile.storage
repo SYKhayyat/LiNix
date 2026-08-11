@@ -1,6 +1,6 @@
-# LiNix integration image — the storage effectors (btrfs, lvm, zfs). Build context = repo root.
-#   docker build -f docker/integration/Dockerfile.storage -t linix-it-storage .
-#   docker run --rm --privileged linix-it-storage apt jq
+# Shall integration image — the storage effectors (btrfs, lvm, zfs). Build context = repo root.
+#   docker build -f docker/integration/Dockerfile.storage -t shall-it-storage .
+#   docker run --rm --privileged shall-it-storage apt jq
 #
 # **This image must be run `--privileged`.** It is the only one that is, and the reason is that
 # `btrfs`, `lvm` and `zfs` are the three backends that operate on block devices: they cannot be
@@ -13,8 +13,8 @@
 # outside the container is reachable. Privileged is still privileged: the kernel is the host's.
 # Authorised by the owner on 2026-07-30 (Q17).
 FROM ubuntu:24.04
-ENV LINIX_IT_IMAGE=storage
-ENV LINIX_IT_STORAGE=1
+ENV SHALL_IT_IMAGE=storage
+ENV SHALL_IT_STORAGE=1
 ENV DEBIAN_FRONTEND=noninteractive
 # `sudo`/`util-linux`/`passwd`: the fixture 16f needs to drive the privileged path. See the same
 # line in Dockerfile.ubuntu for why it is a fixture and not a convenience.
@@ -34,15 +34,15 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 # and /dev is a tmpfs rather than a devtmpfs — so `lvcreate` builds the volume, goes to zero the
 # first bytes of it, finds no device node and aborts:
 #
-#     /dev/linixvg/canary: not found: device not cleared
+#     /dev/shallvg/canary: not found: device not cleared
 #     Aborting. Failed to wipe start of new LV.
 #
 # **This was already meant to be handled and was not.** The previous version `sed`-ed the three
 # keys in `/etc/lvm/lvm.conf` from `= 1` to `= 0` — but Ubuntu ships them *commented out*, so the
 # sed matched nothing, and the `grep` that was supposed to prove it worked matched the comments
 # and passed. A build-time check that cannot fail is worse than none: it is why `lvm:` failed its
-# first real lifecycle for a reason that had nothing to do with LiNix (measured 2026-07-31 — a
-# hand-run `lvcreate` fails identically, and with these settings LiNix's own argv succeeds).
+# first real lifecycle for a reason that had nothing to do with Shall (measured 2026-07-31 — a
+# hand-run `lvcreate` fails identically, and with these settings Shall's own argv succeeds).
 #
 # `lvmlocal.conf` is read after `lvm.conf` and is the documented place for host overrides, so
 # these cannot be silently outvoted by the distribution's file.
@@ -55,6 +55,6 @@ RUN printf 'activation {\n\tudev_sync = 0\n\tudev_rules = 0\n\tverify_udev_opera
 RUN apt-get update
 WORKDIR /src
 COPY . /src
-RUN cargo build --release && cp target/release/linix /usr/local/bin/linix && chmod 0755 /usr/local/bin/linix
+RUN cargo build --release && cp target/release/shall /usr/local/bin/shall && chmod 0755 /usr/local/bin/shall
 ENTRYPOINT ["sh", "/src/docker/integration/run-in-container.sh"]
 CMD ["apt", "jq"]

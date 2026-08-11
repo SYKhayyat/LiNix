@@ -12,9 +12,9 @@
 //! it, and so did one whose rollup summed the wrong field.
 
 use chrono::Utc;
-use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
-use linix::app::MetricsCollector;
-use linix::core::{PackageSpec, StateRegistry, Validator};
+use shall::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
+use shall::app::MetricsCollector;
+use shall::core::{PackageSpec, StateRegistry, Validator};
 use std::collections::HashMap;
 use tokio::fs;
 
@@ -142,7 +142,7 @@ async fn every_field_the_summary_reads_survives_the_round_trip() {
     );
 
     // The rollup the summary prints, over the operations actually collected.
-    let rollup = linix::app::metrics::backend_rollup(&ops);
+    let rollup = shall::app::metrics::backend_rollup(&ops);
     let apt = rollup
         .iter()
         .find(|(b, ..)| b == "apt")
@@ -157,8 +157,8 @@ async fn every_field_the_summary_reads_survives_the_round_trip() {
     );
 
     // And it still renders, in both narrations — the original test's only real assertion.
-    metrics.print_summary(linix::app::metrics::Narration::Change);
-    metrics.print_summary(linix::app::metrics::Narration::Rebuild);
+    metrics.print_summary(shall::app::metrics::Narration::Change);
+    metrics.print_summary(shall::app::metrics::Narration::Rebuild);
 }
 
 /// A template whose source has moved on is planned as a change; one that matches is not.
@@ -175,7 +175,7 @@ async fn a_template_whose_source_moved_on_is_planned_as_a_change() {
         .await
         .unwrap();
 
-    let mut options = linix::config::grammar::Options::default();
+    let mut options = shall::config::grammar::Options::default();
     options.set("target", target_path.to_string_lossy().to_string());
     options.set("template", "true".to_string());
 

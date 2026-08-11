@@ -145,9 +145,9 @@ pub async fn upgrade_targeted(
     // package overrides its hold (with a warning) — naming it is a clear intent to upgrade.
     let explicit = !packages.is_empty();
 
-    // **Both sources, asked once.** The ledger `linix hold` writes and the `@hold=true` lines
+    // **Both sources, asked once.** The ledger `shall hold` writes and the `@hold=true` lines
     // the manifest declares. This command read only the first, so a package the user froze
-    // declaratively was upgraded by every `linix upgrade` — and the first fix taught two of this
+    // declaratively was upgraded by every `shall upgrade` — and the first fix taught two of this
     // file's readers about the declaration and left a third, `remediate`, building its own
     // closure over the ledger where nothing grepping for `is_held` would find it.
     let holds = app.holds().await;
@@ -191,7 +191,7 @@ pub async fn upgrade_targeted(
         }
         if holds.contains(&b, &n) {
             // Which command releases it, asked of the hold rather than assumed: telling
-            // somebody to run `linix unhold` against a manifest line sends them to a command
+            // somebody to run `shall unhold` against a manifest line sends them to a command
             // that will report nothing to do.
             let release = holds.release(&b, &n);
             if explicit {
@@ -297,7 +297,7 @@ pub async fn upgrade_security(app: &App, except: &[String], out: Output) -> Resu
         if !held_keys.is_empty() {
             eprintln!(
                 "warning: {} vulnerable package(s) are HELD and were NOT upgraded: {}. \
-                 `linix unhold <pkg>` then re-run to remediate.",
+                 `shall unhold <pkg>` then re-run to remediate.",
                 held_keys.len(),
                 {
                     let mut v: Vec<_> = held_keys.iter().cloned().collect();
@@ -360,7 +360,7 @@ pub async fn upgrade_security(app: &App, except: &[String], out: Output) -> Resu
     perform_maintenance(app).await
 }
 
-/// `linix upgrade` — move packages forward, then record where they landed.
+/// `shall upgrade` — move packages forward, then record where they landed.
 ///
 /// The recording is not decoration. A pin that nobody updates fights the upgrade that just ran:
 /// `sync` reads the recorded version back as `@version=`, finds the installed one no longer
@@ -412,7 +412,7 @@ async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
             );
         }
         // Native batch upgrades (`apt upgrade`, `brew upgrade`, …) run inside each manager and
-        // can't be told to skip individual packages, so LiNix holds aren't enforced here. Be
+        // can't be told to skip individual packages, so Shall holds aren't enforced here. Be
         // honest about it rather than pretend the hold was respected.
         // Both sources again. This counted the ledger, so somebody whose holds were all
         // declared got no warning at all — and their holds were exactly as unenforced.
@@ -420,7 +420,7 @@ async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
         if held_count > 0 {
             eprintln!(
                 "note: {} package hold(s) are NOT enforced by the native whole-system upgrade. \
-                 Use `linix upgrade --backend <b>` or per-package upgrades to honor holds.",
+                 Use `shall upgrade --backend <b>` or per-package upgrades to honor holds.",
                 held_count
             );
         }

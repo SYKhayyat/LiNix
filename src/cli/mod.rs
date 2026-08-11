@@ -33,7 +33,7 @@ pub use args::{
 
 use clap::Command;
 
-/// Generates shell completion scripts for the LiNix CLI.
+/// Generates shell completion scripts for the Shall CLI.
 ///
 /// Supported Shells:
 /// - Bash
@@ -43,12 +43,12 @@ use clap::Command;
 /// - Elvish
 /// - NuShell
 ///
-/// Usage: `linix completions <shell>`
+/// Usage: `shall completions <shell>`
 pub fn generate_completions(shell: args::Shell, cmd: &mut Command) {
     let mut out = std::io::stdout();
     match shell.builtin() {
-        Some(builtin) => clap_complete::generate(builtin, cmd, "linix", &mut out),
+        Some(builtin) => clap_complete::generate(builtin, cmd, "shall", &mut out),
         // NuShell's generator lives in its own crate but plugs into the same API.
-        None => clap_complete::generate(clap_complete_nushell::Nushell, cmd, "linix", &mut out),
+        None => clap_complete::generate(clap_complete_nushell::Nushell, cmd, "shall", &mut out),
     }
 }

@@ -1,16 +1,16 @@
 //! Every door that answers "where is the repo" refuses a relative path (AU2).
 //!
-//! `linix --config-dir ./sandbox init` read `preferences.toml` from the sandbox and `modules/`
+//! `shall --config-dir ./sandbox init` read `preferences.toml` from the sandbox and `modules/`
 //! from the real repo — because `main.rs` honours the raw flag while `Config::config_root()`
 //! discards any path that is not absolute and falls back to `safe_config_dir()`, which re-reads
-//! `$LINIX_CONFIG_DIR`. So the documented precedence inverted (the flag lost to the environment
+//! `$SHALL_CONFIG_DIR`. So the documented precedence inverted (the flag lost to the environment
 //! variable it "outranks") and nothing said a word.
 //!
-//! `linix path --set ./cfg` had refused a relative path since it was written, with a message
+//! `shall path --set ./cfg` had refused a relative path since it was written, with a message
 //! that explains exactly why one is wrong. **Three of the four doors did not.** This asserts all
 //! four, so the next one that opens is one this file already covers.
 
-use linix::config::settings::{resolve_root, Settings};
+use shall::config::settings::{resolve_root, Settings};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -47,7 +47,7 @@ fn the_flag_refuses_a_relative_path() {
 
 #[test]
 fn the_flag_accepts_an_absolute_path() {
-    let root = absolute("srv/linix");
+    let root = absolute("srv/shall");
     let resolved = resolve_root(Some(&root), &Settings::default()).expect("absolute is fine");
     assert_eq!(resolved.path, root);
 }
@@ -55,7 +55,7 @@ fn the_flag_accepts_an_absolute_path() {
 #[test]
 fn the_settings_file_refuses_a_relative_path() {
     let dir = tempfile::TempDir::new().unwrap();
-    let file = dir.path().join("linix.settings.toml");
+    let file = dir.path().join("shall.settings.toml");
     std::fs::write(&file, "config_root = \"./sandbox\"\n").unwrap();
     let err = Settings::load_from(&file).expect_err("a relative stored root was accepted");
     assert!(err.to_string().contains("absolute"), "{}", err);
@@ -67,24 +67,24 @@ fn the_settings_file_refuses_a_relative_path() {
 fn the_environment_variable_refuses_a_relative_path_and_the_stored_one_still_wins_when_it_is_absent(
 ) {
     let stored = Settings {
-        config_root: Some(absolute("stored/linix")),
+        config_root: Some(absolute("stored/shall")),
     };
 
-    std::env::set_var("LINIX_CONFIG_DIR", "./sandbox");
-    let err = resolve_root(None, &stored).expect_err("a relative $LINIX_CONFIG_DIR was accepted");
+    std::env::set_var("SHALL_CONFIG_DIR", "./sandbox");
+    let err = resolve_root(None, &stored).expect_err("a relative $SHALL_CONFIG_DIR was accepted");
     let msg = err.to_string();
     assert!(msg.contains("absolute"), "{}", msg);
     assert!(
-        msg.contains("LINIX_CONFIG_DIR"),
+        msg.contains("SHALL_CONFIG_DIR"),
         "the refusal must name the door it came through, got: {}",
         msg
     );
 
     // Control: the same call with the variable gone must succeed, or the assertion above
     // would pass for a resolver that refuses everything.
-    std::env::remove_var("LINIX_CONFIG_DIR");
+    std::env::remove_var("SHALL_CONFIG_DIR");
     let resolved = resolve_root(None, &stored).expect("an absolute stored root is fine");
-    assert_eq!(resolved.path, absolute("stored/linix"));
+    assert_eq!(resolved.path, absolute("stored/shall"));
 }
 
 /// The end of AU2's reproduction, through the real binary: the flag must not be silently
@@ -92,11 +92,11 @@ fn the_environment_variable_refuses_a_relative_path_and_the_stored_one_still_win
 #[test]
 fn the_binary_refuses_rather_than_scaffolding_somewhere_else() {
     let dir = tempfile::TempDir::new().unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+    let out = Command::new(env!("CARGO_BIN_EXE_shall"))
         .args(["--config-dir", "./sandbox", "init"])
         .current_dir(dir.path())
-        .env("LINIX_DATA_DIR", dir.path().join("data"))
-        .env_remove("LINIX_CONFIG_DIR")
+        .env("SHALL_DATA_DIR", dir.path().join("data"))
+        .env_remove("SHALL_CONFIG_DIR")
         .stdin(std::process::Stdio::null())
         .output()
         .expect("the binary should run");
@@ -129,11 +129,11 @@ fn the_binary_refuses_rather_than_scaffolding_somewhere_else() {
 #[test]
 fn the_data_dir_flag_refuses_a_relative_path() {
     let dir = tempfile::TempDir::new().unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+    let out = Command::new(env!("CARGO_BIN_EXE_shall"))
         .args(["--data-dir", "./state", "path"])
         .current_dir(dir.path())
-        .env_remove("LINIX_CONFIG_DIR")
-        .env_remove("LINIX_DATA_DIR")
+        .env_remove("SHALL_CONFIG_DIR")
+        .env_remove("SHALL_DATA_DIR")
         .stdin(std::process::Stdio::null())
         .output()
         .expect("the binary should run");
@@ -160,7 +160,7 @@ fn the_data_dir_flag_refuses_a_relative_path() {
 /// new door refuses a relative path.
 #[test]
 fn every_source_of_the_root_is_accounted_for() {
-    use linix::config::settings::RootSource;
+    use shall::config::settings::RootSource;
 
     for source in [
         RootSource::Flag,
@@ -182,7 +182,7 @@ fn every_source_of_the_root_is_accounted_for() {
                     resolve_root(None, &Settings::default())
                         .map(|r| r.path.is_absolute())
                         .unwrap_or(false)
-                        || std::env::var_os("LINIX_CONFIG_DIR").is_some(),
+                        || std::env::var_os("SHALL_CONFIG_DIR").is_some(),
                     "the built-in default is not an absolute path"
                 );
                 "this test"

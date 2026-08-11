@@ -41,7 +41,7 @@ pub struct App {
 }
 
 impl App {
-    /// `state_path` overrides where LiNix's own data lives. `None` means the real data
+    /// `state_path` overrides where Shall's own data lives. `None` means the real data
     /// dir; a test passes a temp path so it never touches — or accumulates in — the
     /// user's.
     pub async fn new_with_executor_and_state_path(
@@ -53,7 +53,7 @@ impl App {
 
         let hooks = Arc::new(LuaHooks::new(&config)?);
 
-        // The journal lives beside the registry: both are LiNix's record of what it did,
+        // The journal lives beside the registry: both are Shall's record of what it did,
         // so isolating one and not the other left the WAL pointing at real user data.
         let journal_dir = state_path
             .as_ref()
@@ -62,7 +62,7 @@ impl App {
 
         // Overlapped, because none of these four needs any of the others. Startup was a
         // straight line of independent I/O — the backend registrations, a state-file read, the
-        // snapshot provider probe, the WAL open — run for `linix list` as much as for `linix
+        // snapshot provider probe, the WAL open — run for `shall list` as much as for `shall
         // sync`. The state load and the WAL open are file reads; the snapshot probe asks the
         // machine what it can snapshot with; the registry builds ~48 backends.
         //
@@ -453,7 +453,7 @@ impl App {
     /// One construction, for the reason the resolver below is one construction: `@hold=true` was
     /// read by nothing at all, and the first fix taught two of the four readers about it. The
     /// other two did not contain the string anybody grepped for — one built its own closure over
-    /// `StateRegistry::held`, and `linix hold` with no arguments listed the ledger and reported
+    /// `StateRegistry::held`, and `shall hold` with no arguments listed the ledger and reported
     /// `No packages are held.` over a manifest holding three.
     ///
     /// A model that will not resolve is the ledger alone and a warning, never a failure: neither
@@ -466,7 +466,7 @@ impl App {
             Err(e) => {
                 warn!(
                     "the manifest could not be resolved ({e}), so `@hold=true` lines are not \
-                     being honoured on this run; `linix hold` entries still are."
+                     being honoured on this run; `shall hold` entries still are."
                 );
                 None
             }
@@ -497,7 +497,7 @@ impl App {
     /// Q9 ruled that every verb taking a backend name refuses an unknown one, and listed the
     /// four that take it as a `--backend` flag — "checked from the code rather than from the one
     /// that was reported". The `backend:name` *spec* form was not in that enumeration, so the
-    /// ruling was applied to half its surface: `linix hold nosuchbackend:foo` recorded a hold
+    /// ruling was applied to half its surface: `shall hold nosuchbackend:foo` recorded a hold
     /// against a manager that does not exist and answered `Held 1 package(s).` at exit 0.
     ///
     /// A real backend that cannot run here is a different answer and stays exit 0 — Q9 clause 3,
@@ -633,9 +633,9 @@ impl App {
         };
         match self.registry.get(name) {
             None => Err(Error::Config(format!(
-                "`{}` is not a backend LiNix uses\n  \
+                "`{}` is not a backend Shall uses\n  \
                  add `{}` to your `priority` file, or check the spelling. Not listed means \
-                 LiNix does not use it at all.",
+                 Shall does not use it at all.",
                 name, name
             ))),
             Some(b) => {
@@ -643,8 +643,8 @@ impl App {
                     Ok(true)
                 } else {
                     tracing::warn!(
-                        "`{}` is a manager LiNix knows, but it is not installed on this \
-                         machine — so there is nothing for it to report. `linix check health` \
+                        "`{}` is a manager Shall knows, but it is not installed on this \
+                         machine — so there is nothing for it to report. `shall check health` \
                          says which managers are ready here.",
                         name
                     );
@@ -675,7 +675,7 @@ impl App {
             .query_backends_concurrently(backends, |q| async move { q.list_installed().await })
             .await;
 
-        // `unwrap_or_default()` stood here, and it is how `linix list --backend winget` printed
+        // `unwrap_or_default()` stood here, and it is how `shall list --backend winget` printed
         // nothing and exited 0 on a machine with 280 winget packages on it: the manager fell
         // over, its rows became an empty vector, and the empty vector became the answer.
         // Measured 1 run in 16 under concurrent cold start. A listing missing a manager is a
@@ -696,7 +696,7 @@ impl App {
             if backend_filter.is_some() {
                 let (name, e) = unlisted.remove(0);
                 return Err(Error::command_failed(format!(
-                    "`{name}` could not be listed, so LiNix cannot tell you what it has: {e}"
+                    "`{name}` could not be listed, so Shall cannot tell you what it has: {e}"
                 )));
             }
             // Listing everything: one unwell manager must not take the other twenty-three
@@ -713,10 +713,10 @@ impl App {
 
     pub async fn get_info(&self, package_name: &str) -> Result<Option<Package>> {
         // An explicit `backend:name` narrows the question to one manager. This used to hand
-        // the raw string to every backend, so `linix info cargo:ripgrep` asked each of them
+        // the raw string to every backend, so `shall info cargo:ripgrep` asked each of them
         // for a package literally named "cargo:ripgrep" — a name none of them has. That is
         // both the wrong question and the slow one: every manager was probed, and the answer
-        // was always "not found", while `linix search ripgrep` in the same tree found it.
+        // was always "not found", while `shall search ripgrep` in the same tree found it.
         //
         // Split by the one parser (`resolve_spec`, which goes through the grammar), never by
         // `split_once(':')` here — a second place that decides what a prefix means is the bug
@@ -801,7 +801,7 @@ impl App {
             // of them is knowable.
             if let Some(e) = resolve_failed {
                 return Err(Error::command_failed(format!(
-                    "LiNix could not work out what `{package_name}` refers to, so it cannot \
+                    "Shall could not work out what `{package_name}` refers to, so it cannot \
                      tell you whether `{backend}` has it: {e}"
                 )));
             }
@@ -811,7 +811,7 @@ impl App {
         // A bare name: *which* manager has it installed is a fact about this machine, and
         // `priority` order is not that fact. The resolver picks by priority, so `info hexyl`
         // asked `choco` (first in `priority`, and it carries the name), choco had nothing
-        // installed, and LiNix reported a package the user has under `cargo` as absent — while
+        // installed, and Shall reported a package the user has under `cargo` as absent — while
         // `list` reported it present. Two read commands must never contradict each other about
         // the machine.
         //
@@ -850,7 +850,7 @@ impl App {
         // an installed package as absent. `.ok().flatten()` here did precisely that.
         if !unanswered.is_empty() {
             return Err(Error::command_failed(format!(
-                "no manager reported `{package_name}`, but {} could not be asked, so LiNix \
+                "no manager reported `{package_name}`, but {} could not be asked, so Shall \
                  cannot tell you it is absent:\n  {}",
                 if unanswered.len() == 1 {
                     "one of them".to_string()
@@ -863,7 +863,7 @@ impl App {
         Ok(None)
     }
 
-    /// Everything installed that LiNix does not manage — the dependency closure included.
+    /// Everything installed that Shall does not manage — the dependency closure included.
     ///
     /// **This is not `unmanaged` (II.8), which is "what `adopt` would adopt".** They are two
     /// questions with very different answers: on a stock Ubuntu this is ~476 packages and
@@ -991,7 +991,7 @@ impl App {
         out
     }
 
-    /// A [`GitManager`] scoped to the LiNix repo root (II.1), which holds `modules/`,
+    /// A [`GitManager`] scoped to the Shall repo root (II.1), which holds `modules/`,
     /// `profiles/`, `active`, `priority` and `locks/`.
     ///
     /// Safety: `config_root()` never resolves to the current working directory — an empty or
@@ -1002,7 +1002,7 @@ impl App {
     }
 
     /// Auto-commit manifest/config changes IF the config dir is already a git repo. This is
-    /// opt-in: users enable manifest version control by running `linix git init` once; until
+    /// opt-in: users enable manifest version control by running `shall git init` once; until
     /// then this is a silent no-op. Never fails a command — a git hiccup is logged, not fatal.
     pub async fn git_autocommit(&self, message: &str) {
         if self.config.dry_run {
@@ -1033,7 +1033,7 @@ impl App {
         // One retention engine: the same `RetentionPolicy` + `prune_with_policy` that `sync`
         // uses, which always keeps the most-recent snapshot (a floor the old
         // `prune_stale_snapshots` lacked — it could delete the last rollback point) and only
-        // ever reaps LiNix-owned snapshots.
+        // ever reaps Shall-owned snapshots.
         self.snapshot_manager
             .prune_with_policy(&policy, chrono::Utc::now(), is_dry_run)
             .await

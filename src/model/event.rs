@@ -1,7 +1,7 @@
-//! LiNix's own events, and the payload a hook on one receives (XIII.13, U15).
+//! Shall's own events, and the payload a hook on one receives (XIII.13, U15).
 //!
 //! Every integration request — notify me, push the repo, open a ticket — used to have to become
-//! a LiNix feature. An event with a script on it is the general answer, so these three are the
+//! a Shall feature. An event with a script on it is the general answer, so these three are the
 //! seam: `after_sync`, `on_drift`, `on_guard_refusal`.
 //!
 //! Pure. The enum, the payload, and the JSON. Finding the scripts and running them is
@@ -11,7 +11,7 @@ use serde::Serialize;
 
 /// The schema version of the JSON a hook reads on stdin.
 ///
-/// Versioned for U17's reason, one domain over: a hook is a program someone else wrote, LiNix
+/// Versioned for U17's reason, one domain over: a hook is a program someone else wrote, Shall
 /// cannot see it, and it will break if a field changes meaning under it.
 pub const PAYLOAD_SCHEMA: u32 = 1;
 
@@ -31,7 +31,7 @@ pub enum Event {
 }
 
 impl Event {
-    /// Every event, for the "unknown event" diagnostic and for `linix lock`'s sweep.
+    /// Every event, for the "unknown event" diagnostic and for `shall lock`'s sweep.
     pub const ALL: [Event; 3] = [Event::AfterSync, Event::OnDrift, Event::OnGuardRefusal];
 
     /// The name a user writes: the hook filename, and the `[hooks.<name>]` table key.

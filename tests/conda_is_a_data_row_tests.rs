@@ -16,9 +16,9 @@
 //! blank-value cases came with it, because a placeholder with a default is precisely the thing
 //! `resolve_env` used to do by hand and the two must not disagree.
 
-use linix::config::Config;
-use linix::core::executor::MockExecutor;
-use linix::core::{CommandExecutor, PackageSpec};
+use shall::config::Config;
+use shall::core::executor::MockExecutor;
+use shall::core::{CommandExecutor, PackageSpec};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -43,11 +43,11 @@ async fn conda_calls(cfg: Config) -> Vec<String> {
         vfs,
         Arc::new(dashmap::DashMap::new()),
     );
-    let hooks = Arc::new(linix::app::LuaHooks::new(&cfg).expect("hooks init"));
-    let reg = linix::backends::create_default_registry(exec, &cfg, hooks).await;
+    let hooks = Arc::new(shall::app::LuaHooks::new(&cfg).expect("hooks init"));
+    let reg = shall::backends::create_default_registry(exec, &cfg, hooks).await;
     let conda = reg.get("conda").expect("conda registers");
 
-    let mut options = linix::config::grammar::Options::default();
+    let mut options = shall::config::grammar::Options::default();
     options.set("version", "1.2.3".to_string());
     let inst = conda.as_installable().expect("conda installs");
     inst.install(
@@ -64,8 +64,8 @@ async fn conda_calls(cfg: Config) -> Vec<String> {
     inst.remove(
         &["numpy".to_string()],
         false,
-        linix::app::sync::guard::Reaped::for_reason(
-            linix::app::sync::guard::GuardScope::Remove,
+        shall::app::sync::guard::Reaped::for_reason(
+            shall::app::sync::guard::GuardScope::Remove,
             "a unit test of the effector itself, not of the guard",
         ),
     )
@@ -134,8 +134,8 @@ async fn the_manual_set_comes_from_the_history_export() {
         vfs,
         Arc::new(dashmap::DashMap::new()),
     );
-    let hooks = Arc::new(linix::app::LuaHooks::new(&cfg).expect("hooks init"));
-    let reg = linix::backends::create_default_registry(exec, &cfg, hooks).await;
+    let hooks = Arc::new(shall::app::LuaHooks::new(&cfg).expect("hooks init"));
+    let reg = shall::backends::create_default_registry(exec, &cfg, hooks).await;
     let conda = reg.get("conda").expect("conda registers");
     let q = conda.as_queryable().expect("conda queries");
 

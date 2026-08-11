@@ -2,7 +2,7 @@
 //!
 //! **Rows, not Rust** — K17's ruling, applied here because it was the reason 7o was scheduled
 //! after it: `ufw`, `firewalld` and Windows Defender are three commands for one idea, and a
-//! machine running a fourth should not wait for a LiNix release. The shipped three are rows in
+//! machine running a fourth should not wait for a Shall release. The shipped three are rows in
 //! `firewall_adapters.toml`, parsed by the loader a user's own row goes through, because an
 //! adapter mechanism the built-ins bypass is one nobody has tested.
 //!
@@ -118,7 +118,7 @@ impl AdapterRow for FirewallAdapter {
         self.os.as_deref()
     }
 
-    /// A firewall LiNix will drive. It must be able to open a port, close one, and say what is
+    /// A firewall Shall will drive. It must be able to open a port, close one, and say what is
     /// in force — a firewall it cannot read is one whose drift could never be seen, which is a
     /// `firewall:` line that reports converged over a perimeter nobody looked at.
     fn why_unusable(&self) -> Option<&'static str> {

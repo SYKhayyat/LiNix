@@ -5,7 +5,7 @@
 //! interesting part: nobody had drifted, because one person found the rules once and wrote them
 //! out six times. What that costs is not the ~170 duplicated lines. It is that a *new* ledger
 //! inherits the rules only if whoever writes it remembers to copy them — and
-//! `locks/versions.json` and `locks/hooks.toml` being left behind by `linix --dry-run lock` is
+//! `locks/versions.json` and `locks/hooks.toml` being left behind by `shall --dry-run lock` is
 //! what forgetting looks like.
 //!
 //! `core::ledger::LockFile` now carries the rules. This file holds them to it.
@@ -14,7 +14,7 @@
 //! Flipping it inside the library's unit-test binary would flip it for every test sharing that
 //! binary, and the ones it would break are the ones that write files.
 
-use linix::core::{
+use shall::core::{
     ArtifactLedger, BareLock, ExecLedger, ExtrasLedger, HookLedger, LockFile, RegexLock,
 };
 use std::path::{Path, PathBuf};
@@ -25,7 +25,7 @@ use tempfile::TempDir;
 /// The list is written out because there is no way to enumerate implementors of a trait at
 /// runtime — which is exactly why `no_ledger_hand_rolls_its_own_carrier` below reads the source
 /// instead of trusting this list to be complete.
-type SaveTo = fn(&Path) -> linix::core::Result<()>;
+type SaveTo = fn(&Path) -> shall::core::Result<()>;
 type LoadFrom = fn(&Path) -> bool;
 
 fn family() -> Vec<(&'static str, SaveTo, LoadFrom)> {
@@ -98,7 +98,7 @@ fn no_ledger_writes_during_a_dry_run() {
         );
     }
 
-    linix::core::dry_run::set(true);
+    shall::core::dry_run::set(true);
     let mut leaked: Vec<String> = Vec::new();
     for (name, save, _) in family() {
         let path = tmp.path().join("preview").join(format!("{name}.toml"));
@@ -107,13 +107,13 @@ fn no_ledger_writes_during_a_dry_run() {
             leaked.push(name.to_string());
         }
     }
-    linix::core::dry_run::set(false);
+    shall::core::dry_run::set(false);
 
     assert!(
         leaked.is_empty(),
         "these ledgers wrote during a dry run: {leaked:?}\n\n\
          A preview that leaves a pin or an approval behind changes what the next real run does. \
-         `linix --dry-run lock` used to write locks/versions.json and locks/hooks.toml."
+         `shall --dry-run lock` used to write locks/versions.json and locks/hooks.toml."
     );
 }
 

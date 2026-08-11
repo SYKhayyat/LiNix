@@ -1,9 +1,9 @@
 //! `Y7a`, ruled 2026-08-03: a running service is adopted as a live line. Everything below was
 //! found by running the command on a real Windows box, and none of it by a unit test.
 //!
-//!     $ linix adopt
+//!     $ shall adopt
 //!     Adopted 460 declaration(s).
-//!     $ linix check config
+//!     $ shall check config
 //!     Error: …/modules/adopted.txt:147: `$SQLEXPRESS` is not defined
 //!
 //! `MSSQL$SQLEXPRESS` is a real service, and `$` is a variable reference (IX.3) resolved *after*
@@ -13,7 +13,7 @@
 //!
 //! And with that fixed:
 //!
-//!     $ linix plan
+//!     $ shall plan
 //!     - it removes 154 packages, over the limit of 20
 //!     - service:AppMgmt would be removed (…)
 //!
@@ -29,11 +29,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn run(dir: &Path, args: &[&str]) -> (String, i32) {
-    let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+    let out = Command::new(env!("CARGO_BIN_EXE_shall"))
         .args(args)
         .current_dir(dir)
-        .env("LINIX_CONFIG_DIR", dir.join("config"))
-        .env("LINIX_DATA_DIR", dir.join("data"))
+        .env("SHALL_CONFIG_DIR", dir.join("config"))
+        .env("SHALL_DATA_DIR", dir.join("data"))
         .stdin(std::process::Stdio::null())
         .output()
         .expect("the binary should run");
@@ -116,7 +116,7 @@ fn an_adopted_service_is_a_live_line_carrying_the_state_it_was_found_in() {
         }
     }
 
-    // The manifest LiNix wrote is one LiNix can read. Parsing is not enough — `$` passes the
+    // The manifest Shall wrote is one Shall can read. Parsing is not enough — `$` passes the
     // parser and fails the resolver, which is where the real defect lived.
     let (cfg, code) = run(&root, &["check", "config"]);
     assert_eq!(

@@ -1,4 +1,4 @@
-//! Every command LiNix names, in text a person reads or a machine runs, is a command LiNix has.
+//! Every command Shall names, in text a person reads or a machine runs, is a command Shall has.
 //!
 //! Eight review rounds named "a check that cannot fail" as this repository's signature defect,
 //! and the mechanism behind it has never been written down. It is this: **the gate is drawn
@@ -10,23 +10,23 @@
 //! reason it exists. That gate works. It is drawn around `args.rs`. Meanwhile, with no top-level
 //! `status`, `doctor`, `undo` or `audit` verb in the program:
 //!
-//! - `app/fleet.rs` asked every host for `linix status --json`, so `linix fleet` could not
+//! - `app/fleet.rs` asked every host for `shall status --json`, so `shall fleet` could not
 //!   return "in sync" for a correctly-installed machine — the command it ran did not exist.
 //! - `scripts/install.sh` and `install.ps1` ran `doctor` to vouch for the binary they had just
 //!   built, and signed off by recommending `status`. The first thing a new user runs.
-//! - `verbs/cleanup.rs` printed `Undo with 'linix undo <id>'` after `purge-undeclared`, the most
+//! - `verbs/cleanup.rs` printed `Undo with 'shall undo <id>'` after `purge-undeclared`, the most
 //!   destructive command in the program.
 //! - `cli/args.rs` itself — inside the file `help_map_tests.rs` gates — documented `--security`
-//!   as upgrading what `linix audit` reports.
+//!   as upgrading what `shall audit` reports.
 //!
 //! One fact, six copies, one gate around one copy. Fixing those six strings is not the answer;
 //! a seventh will be written next week. So this gate is drawn around the property instead:
 //!
-//! > **A lowercase `linix` at command position names a live path through the clap surface.**
+//! > **A lowercase `shall` at command position names a live path through the clap surface.**
 //!
 //! ## The convention this depends on, and enforces
 //!
-//! Prose calls the product `LiNix`. A lowercase `linix` that begins a line or follows a quote,
+//! Prose calls the product `Shall`. A lowercase `shall` that begins a line or follows a quote,
 //! a backtick or a shell operator is an *invocation*, and is checked. That distinction is what
 //! lets the scan be exact instead of maintaining a list of English words to ignore — a list
 //! which would be one more artifact-shaped exemption, and would rot the same way.
@@ -59,19 +59,19 @@
 //!
 //! The register is `target-state.md` II.17 *Deleted*, read as data rather than restated here —
 //! the same reason `grammar_table_matches_the_spec_tests.rs` reads `KEYWORDS` through the
-//! parser's accessors. A record keeps its freedom: the register may write `linix doctor` as often
+//! parser's accessors. A record keeps its freedom: the register may write `shall doctor` as often
 //! as it likes, because II.17 says `doctor` is gone. What it may no longer do is name a command
 //! that is neither live nor recorded as dead — which is what a stale instruction looks like.
 //!
 //! `docs/attic/` is out. It holds one file, and its first line tells the reader not to read it;
 //! a gate reading it anyway would be the only thing in the tree that does.
 //!
-//! Also not covered: an argv built from `Command::new(env!("CARGO_BIN_EXE_linix"))`, which is
+//! Also not covered: an argv built from `Command::new(env!("CARGO_BIN_EXE_shall"))`, which is
 //! argument-vector shaped rather than text shaped. Those run in the suite, so clap answers them
 //! directly with "unrecognized subcommand" — a wrong name there fails loudly on its own.
 
 use clap::CommandFactory;
-use linix::cli::args::Cli;
+use shall::cli::args::Cli;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -88,7 +88,7 @@ struct Surface {
 
 impl Surface {
     /// Read a command's subcommands, recursively, indexing each under its name *and* each of its
-    /// aliases — `linix tui` is `linix history`, and a gate that did not know that would report
+    /// aliases — `shall tui` is `shall history`, and a gate that did not know that would report
     /// the alias as an invention.
     fn read(cmd: &clap::Command) -> Self {
         let mut node = Surface::default();
@@ -105,7 +105,7 @@ impl Surface {
         let mut root = Surface::read(&Cli::command());
         // clap injects `help` when it builds the command, which is after the derive this reads.
         // It takes any command name as its argument, so it gets the root's own children: a typo
-        // in `linix help sync` is the same defect as a typo in `linix sync`.
+        // in `shall help sync` is the same defect as a typo in `shall sync`.
         let below = root.clone();
         root.children.entry("help".to_string()).or_insert(below);
         root
@@ -126,12 +126,12 @@ fn is_bare_word(w: &str) -> bool {
 /// subcommand and was not.
 ///
 /// The walk stops as soon as it reaches a command with no subcommands of its own: from there on
-/// the words are positional arguments (`linix check drift`, `linix adopt service`,
-/// `linix lock scripts`), and a gate that kept walking would report every argument as a typo.
+/// the words are positional arguments (`shall check drift`, `shall adopt service`,
+/// `shall lock scripts`), and a gate that kept walking would report every argument as a typo.
 fn first_unknown(root: &Surface, words: &[String]) -> Option<String> {
     let mut node = root;
     for w in words {
-        // A global flag may sit before the subcommand (`linix --dry-run sync`), and a
+        // A global flag may sit before the subcommand (`shall --dry-run sync`), and a
         // subcommand's own flags sit before its sub-subcommand.
         if w.starts_with('-') {
             continue;
@@ -154,7 +154,7 @@ fn first_unknown(root: &Surface, words: &[String]) -> Option<String> {
 // The scan: finding invocations in text.
 // ---------------------------------------------------------------------------------------------
 
-/// A `linix …` invocation found in the tree, with enough of itself to be recognised in the
+/// A `shall …` invocation found in the tree, with enough of itself to be recognised in the
 /// failure message.
 #[derive(Debug)]
 struct Invocation {
@@ -165,15 +165,15 @@ struct Invocation {
 }
 
 /// Shell and PowerShell spellings of "the path to the binary". `install.sh` runs
-/// `"$LINIX" doctor`, which is an invocation and reads nothing like one.
-const BINARY_VARS: &[&str] = &["${LINIX}", "$LINIX_BIN", "$LINIX", "$linix"];
+/// `"$SHALL" doctor`, which is an invocation and reads nothing like one.
+const BINARY_VARS: &[&str] = &["${SHALL}", "$SHALL_BIN", "$SHALL", "$shall"];
 
-/// Is a lowercase `linix` here being invoked, rather than being talked about?
+/// Is a lowercase `shall` here being invoked, rather than being talked about?
 ///
-/// Talked about, it follows a word — *the* linix binary, *this* linix speaks schema 2. Invoked,
+/// Talked about, it follows a word — *the* shall binary, *this* shall speaks schema 2. Invoked,
 /// it opens a line or follows a delimiter or a shell operator. A line that carries only comment
-/// or list decoration before the token (`//   linix why …`, `#   linix unmanage …`,
-/// `- linix sync`) is still a line that begins with the invocation.
+/// or list decoration before the token (`//   shall why …`, `#   shall unmanage …`,
+/// `- shall sync`) is still a line that begins with the invocation.
 fn at_command_position(before: &str) -> bool {
     let trimmed = before.trim_end();
     match trimmed.chars().last() {
@@ -219,8 +219,8 @@ fn invocations_in_line(line: &str) -> Vec<(Vec<String>, String)> {
     let mut at = 0usize;
 
     while at < line.len() {
-        // Whichever comes first: a bare `linix`, or one of the variables holding its path.
-        let bare = line[at..].find("linix").map(|i| (at + i, "linix"));
+        // Whichever comes first: a bare `shall`, or one of the variables holding its path.
+        let bare = line[at..].find("shall").map(|i| (at + i, "shall"));
         let var = BINARY_VARS
             .iter()
             .filter_map(|v| line[at..].find(v).map(|i| (at + i, *v)))
@@ -236,21 +236,21 @@ fn invocations_in_line(line: &str) -> Vec<(Vec<String>, String)> {
         let after = start + token.len();
         at = after;
 
-        // `linix` inside a longer word (`linix-plan.json`, `LINIX_BIN`) is not an invocation, and
-        // neither is `linix:` — the config repo's own name in a path.
+        // `shall` inside a longer word (`shall-plan.json`, `SHALL_BIN`) is not an invocation, and
+        // neither is `shall:` — the config repo's own name in a path.
         let next = line[after..].chars().next();
         if next.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
             continue;
         }
-        if token == "linix" && !at_command_position(&line[..start]) {
+        if token == "shall" && !at_command_position(&line[..start]) {
             continue;
         }
 
-        // A *variable* reference may be quoted or braced (`"$LINIX" adopt`), and that closing
-        // punctuation belongs to the reference rather than to the first word. A bare `linix`
-        // gets no such courtesy: in `A "linix" shim would overwrite …` the closing quote is
+        // A *variable* reference may be quoted or braced (`"$SHALL" adopt`), and that closing
+        // punctuation belongs to the reference rather than to the first word. A bare `shall`
+        // gets no such courtesy: in `A "shall" shim would overwrite …` the closing quote is
         // what says the name is being quoted, not run.
-        let rest = if token == "linix" {
+        let rest = if token == "shall" {
             &line[after..]
         } else {
             line[after..].trim_start_matches(['"', '\'', '}'])
@@ -293,7 +293,7 @@ fn covered_files() -> Vec<PathBuf> {
             } else {
                 let ext = p.extension().and_then(|e| e.to_str()).unwrap_or_default();
                 let name = p.file_name().and_then(|n| n.to_str()).unwrap_or_default();
-                // Dockerfiles carry no extension and carry `RUN linix …`.
+                // Dockerfiles carry no extension and carry `RUN shall …`.
                 if EXTENSIONS.contains(&ext) || name.starts_with("Dockerfile") {
                     out.push(p);
                 }
@@ -404,7 +404,7 @@ const NOT_AN_INVOCATION: &[(&str, &str)] = &[
     (
         "refresh",
         "a verb proposed and declined — \"a named composition of existing verbs: \
-         `linix refresh` = `sync`, then `upgrade`\". Never built, so never deleted; II.17 records \
+         `shall refresh` = `sync`, then `upgrade`\". Never built, so never deleted; II.17 records \
          what was removed, not what was turned down. The proposal document it came from was cut \
          with the rest of the record corpus (`Y21`); the register's U-series entries are where \
          the decision now lives",
@@ -433,9 +433,9 @@ const RECORDED_AS_ABSENT: &[(&str, usize, &str)] = &[];
 const PART_II_LOOKS_WRONG: &[(&str, &str, &str)] = &[(
     "shim",
     "docs/spec/target-state.md:2217",
-    "II.16's own table records `linix shim jq --source cargo:jq` becoming the line \
+    "II.16's own table records `shall shim jq --source cargo:jq` becoming the line \
          `shim:jq@source=cargo:jq` — so the command was deleted, and II.17's register does not \
-         say so. The gap has a live cost: `bugs.md:76` still carries \"`linix shim --source` is \
+         say so. The gap has a live cost: `bugs.md:76` still carries \"`shall shim --source` is \
          required, documented, and thrown away. **(verified)**\" as an open bug against a command \
          that does not exist, which is F4's failure a second time",
 )];
@@ -444,7 +444,7 @@ fn scan() -> Vec<Invocation> {
     scan_files(covered_files())
 }
 
-/// Every `linix …` invocation in `docs/`, outside the archive.
+/// Every `shall …` invocation in `docs/`, outside the archive.
 fn scan_documentation() -> Vec<Invocation> {
     scan_files(documentation_files())
 }
@@ -514,7 +514,7 @@ fn every_command_this_repo_names_is_a_command_this_repo_has() {
         "{} invocation(s) name a command the program does not have:\n\n{}\n\n\
          Each of these is a string a user is told to type or a machine is about to run. \
          Rename it to the live command, or — if the sentence is prose about the product rather \
-         than an invocation — write the product's name as `LiNix`, which is what tells this gate \
+         than an invocation — write the product's name as `Shall`, which is what tells this gate \
          the two apart.",
         problems.len(),
         problems.join("\n\n")
@@ -582,7 +582,7 @@ fn a_dead_command_named_in_the_docs_is_a_command_the_spec_says_is_dead() {
          was deleted, `target-state.md` II.17 is the register and it is missing an entry — the \
          record stays as written and II.17 gains a line. If the command is live under another \
          name, the sentence is a stale instruction and should name the live verb. If the line is \
-         prose about the product rather than an invocation, write `LiNix`, which is what tells \
+         prose about the product rather than an invocation, write `Shall`, which is what tells \
          this gate the two apart.",
         problems.len(),
         problems.join("\n\n")
@@ -858,92 +858,92 @@ fn the_scan_can_see_what_it_is_looking_for() {
     // Every shape the six real defects were written in. These are the literal lines, as they
     // stood before this gate existed.
     assert_eq!(
-        unknown(r#"                match ssh_capture(&host, "linix status --json").await {"#),
+        unknown(r#"                match ssh_capture(&host, "shall status --json").await {"#),
         ["status"],
         "the string `fleet` sent to every host"
     );
     assert_eq!(
-        unknown(r#""$LINIX" doctor || true"#),
+        unknown(r#""$SHALL" doctor || true"#),
         ["doctor"],
         "the health check that vouches for a freshly installed binary"
     );
     assert_eq!(
-        unknown(r#"say "done. Try \`linix status\` or \`linix doctor\`.""#),
+        unknown(r#"say "done. Try \`shall status\` or \`shall doctor\`.""#),
         ["status", "doctor"],
         "both halves of one sentence"
     );
     assert_eq!(
-        unknown(r#"& $linix doctor"#),
+        unknown(r#"& $shall doctor"#),
         ["doctor"],
         "the PowerShell spelling of the same call"
     );
     assert_eq!(
-        unknown(r#"        println!("Undo with `linix undo {}`.", id);"#),
+        unknown(r#"        println!("Undo with `shall undo {}`.", id);"#),
         ["undo"],
         "what `purge-undeclared` told the user to run"
     );
     assert_eq!(
-        unknown(r#"    /// Upgrade only packages that `linix audit` reports as vulnerable"#),
+        unknown(r#"    /// Upgrade only packages that `shall audit` reports as vulnerable"#),
         ["audit"],
         "a dead command inside the very file `help_map_tests.rs` gates"
     );
     assert_eq!(
-        unknown(r#"                 linix status        see every destination first\n  \"#),
+        unknown(r#"                 shall status        see every destination first\n  \"#),
         ["status"],
         "a line of a multi-line refusal message, which no closing delimiter precedes"
     );
     assert_eq!(
-        unknown("linix undo               # interactive snapshot gallery"),
+        unknown("shall undo               # interactive snapshot gallery"),
         ["undo"],
         "a line in one of readme.md's fenced blocks"
     );
 
     // Depth: a wrong word in a nested path is the same defect one level down.
-    assert_eq!(unknown("`linix git stauts`"), ["stauts"]);
-    assert_eq!(unknown("`linix snapshot delete`"), ["delete"]);
+    assert_eq!(unknown("`shall git stauts`"), ["stauts"]);
+    assert_eq!(unknown("`shall snapshot delete`"), ["delete"]);
 
     // And the controls, without which every assertion above would hold for a scan that
     // reports everything.
-    assert!(unknown("`linix check drift`").is_empty(), "a live section");
-    assert!(unknown("`linix git status`").is_empty(), "a live sub-verb");
-    assert!(unknown("`linix tui`").is_empty(), "an alias clap declares");
-    assert!(unknown("`linix help sync`").is_empty(), "clap's own verb");
+    assert!(unknown("`shall check drift`").is_empty(), "a live section");
+    assert!(unknown("`shall git status`").is_empty(), "a live sub-verb");
+    assert!(unknown("`shall tui`").is_empty(), "an alias clap declares");
+    assert!(unknown("`shall help sync`").is_empty(), "clap's own verb");
     assert!(
-        unknown("`linix adopt service`").is_empty(),
+        unknown("`shall adopt service`").is_empty(),
         "a positional argument that happens to share a verb's name"
     );
     assert!(
-        unknown("`linix lock scripts` approves every hook").is_empty(),
+        unknown("`shall lock scripts` approves every hook").is_empty(),
         "a value enum, followed by prose inside the same backticks"
     );
     assert!(
-        unknown("`linix upgrade --profile dev`").is_empty(),
+        unknown("`shall upgrade --profile dev`").is_empty(),
         "a flag's value"
     );
     assert!(
-        unknown("`linix --dry-run sync`").is_empty(),
+        unknown("`shall --dry-run sync`").is_empty(),
         "a global flag before the subcommand"
     );
     assert!(
-        unknown("`linix <command> --allow-mass-removal`").is_empty(),
+        unknown("`shall <command> --allow-mass-removal`").is_empty(),
         "a placeholder, which cannot be resolved and must not be guessed at"
     );
     assert!(
-        unknown("cd $(linix path)").is_empty(),
+        unknown("cd $(shall path)").is_empty(),
         "a command substitution"
     );
 
-    // Prose, which is the whole reason the product is spelled `LiNix` in a sentence.
-    assert!(unknown("Every hook actually invokes the linix binary.").is_empty());
-    assert!(unknown("on startup linix reads the name it was called by").is_empty());
-    assert!(unknown("this linix speaks schema 2").is_empty());
-    assert!(unknown("Rebuilding linix from {repo} via cargo").is_empty());
+    // Prose, which is the whole reason the product is spelled `Shall` in a sentence.
+    assert!(unknown("Every hook actually invokes the shall binary.").is_empty());
+    assert!(unknown("on startup shall reads the name it was called by").is_empty());
+    assert!(unknown("this shall speaks schema 2").is_empty());
+    assert!(unknown("Rebuilding shall from {repo} via cargo").is_empty());
     assert!(
-        unknown("the linix-plan.json written by an earlier run").is_empty(),
-        "`linix` inside a longer word"
+        unknown("the shall-plan.json written by an earlier run").is_empty(),
+        "`shall` inside a longer word"
     );
     assert!(
-        unknown(r#"A "linix" shim would overwrite linix itself with itself"#).is_empty(),
+        unknown(r#"A "shall" shim would overwrite shall itself with itself"#).is_empty(),
         "a quoted *name*, closed by the quote that opened it"
     );
 
@@ -993,7 +993,7 @@ fn the_surface_is_the_program() {
     );
     assert!(
         surface.children["git"].children.contains_key("status"),
-        "nested subcommands must be read, or `linix git status` would look like `linix status`"
+        "nested subcommands must be read, or `shall git status` would look like `shall status`"
     );
     assert!(
         surface.children["check"].children.is_empty(),

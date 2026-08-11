@@ -1,6 +1,6 @@
 //! Which packages are frozen against an upgrade — from **both** places that can say so.
 //!
-//! A hold has two sources and only one of them was ever read. `linix hold` writes a ledger into
+//! A hold has two sources and only one of them was ever read. `shall hold` writes a ledger into
 //! `data/registry.json`; `@hold=true` on a manifest line is a declaration. The option is in
 //! `PACKAGE_OPTION_KEYS`, `validate_package` refuses it beside `@version` as a contradiction, and
 //! II.2 documents it — and until 2026-08-11 no code in the tree read it, so a declared hold
@@ -10,7 +10,7 @@
 //! one size smaller.** There were four, not two: `upgrade --security` built its own closure over
 //! `StateRegistry::held` so it did not even contain the string `is_held`; the "holds are not
 //! enforced by a native whole-system upgrade" warning counted the ledger and would have said
-//! nothing to somebody whose holds were all declared; and `linix hold` with no arguments — the
+//! nothing to somebody whose holds were all declared; and `shall hold` with no arguments — the
 //! command whose entire job is *tell me what is held* — answered `No packages are held.` over a
 //! manifest that held three. That last one is a `list` disagreeing with the machine, which is the
 //! defect this repository grades itself against.
@@ -24,7 +24,7 @@ use std::collections::{BTreeSet, HashMap};
 
 /// Every package frozen against an upgrade, and which source froze it.
 pub struct Holds {
-    /// `linix hold` entries, verbatim: `backend:name`, or a bare `name` that matches under any
+    /// `shall hold` entries, verbatim: `backend:name`, or a bare `name` that matches under any
     /// backend. Matching stays here rather than being normalised, because the bare form is a
     /// deliberate feature of the ledger and normalising it would need a backend to guess at.
     ledger: Vec<String>,
@@ -73,7 +73,7 @@ impl Holds {
     }
 
     /// Whether this one was frozen by a declaration rather than by the ledger — the two are
-    /// released differently, and telling somebody to run `linix unhold` against a manifest line
+    /// released differently, and telling somebody to run `shall unhold` against a manifest line
     /// sends them to a command that will report nothing to do.
     pub fn is_declared(&self, backend: &str, name: &str) -> bool {
         self.declared
@@ -86,7 +86,7 @@ impl Holds {
         if self.is_declared(backend, name) {
             "remove `@hold` from the line"
         } else {
-            "`linix unhold`"
+            "`shall unhold`"
         }
     }
 
@@ -107,7 +107,7 @@ impl Holds {
         let mut out: Vec<String> = self
             .ledger
             .iter()
-            .map(|k| format!("{:<40} (linix hold)", k))
+            .map(|k| format!("{:<40} (shall hold)", k))
             .collect();
         out.extend(
             self.declared.iter().map(|(b, n, from)| {
@@ -168,7 +168,7 @@ mod tests {
         let d = desired(vec![spec("npm", "typescript", true)]);
         let holds = Holds::new(&state, Some(&d));
 
-        assert_eq!(holds.release("cargo", "ripgrep"), "`linix unhold`");
+        assert_eq!(holds.release("cargo", "ripgrep"), "`shall unhold`");
         assert_eq!(
             holds.release("npm", "typescript"),
             "remove `@hold` from the line"

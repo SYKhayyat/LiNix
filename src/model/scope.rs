@@ -1,6 +1,6 @@
-//! `@scope=user` / `@scope=system` — is LiNix acting for you, or for the machine? (U19)
+//! `@scope=user` / `@scope=system` — is Shall acting for you, or for the machine? (U19)
 //!
-//! Ruled 2026-07-24. LiNix used to act, implicitly, as whoever typed the command. The Linux
+//! Ruled 2026-07-24. Shall used to act, implicitly, as whoever typed the command. The Linux
 //! backends mostly agree with that by accident; the Windows registry cannot, because `HKCU`
 //! and `HKLM` are a choice with no default that is right for both. So the question is asked on
 //! the three statements where it can vary — `setting:`, `link:`, `shim:` — and **defaults to

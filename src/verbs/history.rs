@@ -15,7 +15,7 @@ pub async fn handle_snapshot(app: &App, cmd: &SnapshotCommand) -> Result<()> {
                     println!(
                         "No snapshot provider on this machine (btrfs, ZFS, Timeshift or Windows \
                          System Restore) — nothing can be listed, and `sync` proceeds without a \
-                         restore point. `linix check` says what is available here."
+                         restore point. `shall check` says what is available here."
                     );
                 }
             }
@@ -33,7 +33,7 @@ pub async fn handle_snapshot(app: &App, cmd: &SnapshotCommand) -> Result<()> {
     Ok(())
 }
 
-/// `linix rollback <ref>` — the one rollback (owner decision, Phase 4): check out the manifests
+/// `shall rollback <ref>` — the one rollback (owner decision, Phase 4): check out the manifests
 /// at a past git commit, then `sync` the machine to match. There is no separate generation
 /// history — git IS the history (II.1), so a rollback is "point the manifests at then, converge
 /// now". Whole-config by nature: git checkout is all-or-nothing, which is why the old
@@ -42,7 +42,7 @@ pub async fn handle_rollback(app: &App, reference: &str) -> Result<()> {
     let git = app.git_manager();
     if !git.is_repo() {
         anyhow::bail!(
-            "Rollback needs manifest history. Run `linix git init` once to start version-\
+            "Rollback needs manifest history. Run `shall git init` once to start version-\
              controlling your config; after that every sync commits, and you can roll back to \
              any commit."
         );
@@ -87,14 +87,14 @@ pub async fn handle_rollback(app: &App, reference: &str) -> Result<()> {
     handle_sync(app, SyncMode::default(), Output::Human).await
 }
 
-/// `linix diff <from> [to]` — what changed between two commits, in packages (Phase 4). The
+/// `shall diff <from> [to]` — what changed between two commits, in packages (Phase 4). The
 /// manifests are package declarations, so a diff of the manifest files IS the package-level
 /// change; git already records it. Omitting `to` compares `from` against your working tree.
 pub async fn handle_diff(app: &App, from: &str, to: Option<&str>) -> Result<()> {
     let git = app.git_manager();
     if !git.is_repo() {
         anyhow::bail!(
-            "`diff` compares commits of your manifest history, which is git. Run `linix git \
+            "`diff` compares commits of your manifest history, which is git. Run `shall git \
              init` once to start version-controlling your config."
         );
     }
@@ -132,10 +132,10 @@ pub async fn handle_git(app: &App, cmd: &GitCommand) -> Result<()> {
             // Without this commit there is no HEAD, so `diff` and `rollback` answer with
             // git's "unknown revision" until some later command happens to commit. History
             // has to be usable from the moment it is switched on.
-            let first = git.commit_all("linix: config at the time history was enabled")?;
+            let first = git.commit_all("shall: config at the time history was enabled")?;
             println!(
                 "Initialized manifest version control at {}.\n\
-                 LiNix will now auto-commit config/manifest changes after each command.",
+                 Shall will now auto-commit config/manifest changes after each command.",
                 git.root().display()
             );
             match first {
@@ -145,7 +145,7 @@ pub async fn handle_git(app: &App, cmd: &GitCommand) -> Result<()> {
         }
         GitCommand::Status => {
             if !git.is_repo() {
-                println!("Not a git repo yet. Run `linix git init` to enable manifest history.");
+                println!("Not a git repo yet. Run `shall git init` to enable manifest history.");
                 return Ok(());
             }
             let status = git.status_porcelain()?;
@@ -157,7 +157,7 @@ pub async fn handle_git(app: &App, cmd: &GitCommand) -> Result<()> {
         }
         GitCommand::Log { limit } => {
             if !git.is_repo() {
-                println!("Not a git repo yet. Run `linix git init` first.");
+                println!("Not a git repo yet. Run `shall git init` first.");
                 return Ok(());
             }
             let commits = git.log(*limit)?;
@@ -190,11 +190,11 @@ pub async fn handle_git(app: &App, cmd: &GitCommand) -> Result<()> {
         }
         GitCommand::Checkout { reference } => {
             if !git.is_repo() {
-                anyhow::bail!("Not a git repo. Run `linix git init` first.");
+                anyhow::bail!("Not a git repo. Run `shall git init` first.");
             }
             git.checkout_files(reference)?;
             println!(
-                "Manifests restored to {}. Installed packages are unchanged — run `linix sync` \
+                "Manifests restored to {}. Installed packages are unchanged — run `shall sync` \
                  to converge the system to these manifests.",
                 reference
             );
@@ -207,7 +207,7 @@ pub async fn handle_shell(app: &App, packages: &[String]) -> Result<()> {
     app.shell().enter(packages).await.map_err(|e| e.into())
 }
 
-/// `linix run --packages X -- cmd arg…`
+/// `shall run --packages X -- cmd arg…`
 ///
 /// **One rule, both spellings.** The first positional may still carry a whole command line, which
 /// is what the quoted form (`-- "jq -r .name"`) has always meant; everything after it is an
@@ -224,7 +224,7 @@ pub async fn handle_run(
     parts.extend(trailing.iter().cloned());
     let Some((bin, args)) = parts.split_first() else {
         return Err(
-            crate::core::Error::Validation("`linix run` needs a command to run".into()).into(),
+            crate::core::Error::Validation("`shall run` needs a command to run".into()).into(),
         );
     };
     app.runner()
@@ -234,7 +234,7 @@ pub async fn handle_run(
 }
 
 pub async fn handle_adopt(app: &App, backends: Vec<String>, enabled_only: bool) -> Result<()> {
-    // A name that reaches no backend is refused rather than silently adopting nothing: `linix
+    // A name that reaches no backend is refused rather than silently adopting nothing: `shall
     // adopt srvice` answering "Adopted 0 declaration(s)" is byte-identical to a correct name
     // with nothing to take, so a typo cannot be told from a no-op (Q9).
     //
@@ -263,16 +263,16 @@ pub async fn handle_snapshot_restore(app: &App) -> Result<()> {
 pub async fn handle_history(app: &App) -> Result<()> {
     use crate::app::ui::{CommitView, HistoryAction, HistoryBrowser};
 
-    // A TUI needs a terminal to draw on. Without this, a piped or scheduled `linix history`
+    // A TUI needs a terminal to draw on. Without this, a piped or scheduled `shall history`
     // reached `enable_raw_mode` and failed with an OS error about a console handle — the same
     // hole `sync` and `rollback` already close, on the one command that is only ever a TUI.
     {
         use std::io::IsTerminal;
         if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
             return Err(crate::core::Error::Refused(
-                "`linix history` is an interactive browser and needs a terminal. \
-                 For the same timeline without one, use `linix git log`; to go back, \
-                 `linix rollback <ref> --yes`."
+                "`shall history` is an interactive browser and needs a terminal. \
+                 For the same timeline without one, use `shall git log`; to go back, \
+                 `shall rollback <ref> --yes`."
                     .to_string(),
             )
             .into());
@@ -282,7 +282,7 @@ pub async fn handle_history(app: &App) -> Result<()> {
     let git = app.git_manager();
     if !git.is_repo() {
         println!(
-            "The history browses your manifest history, which is git. Run `linix git init` \
+            "The history browses your manifest history, which is git. Run `shall git init` \
              once; after that every `sync` commits, and the history shows the timeline."
         );
         return Ok(());
@@ -306,7 +306,7 @@ pub async fn handle_history(app: &App) -> Result<()> {
         .collect();
 
     if commits.is_empty() {
-        println!("No commits yet. Run `linix sync` (it commits after each successful change).");
+        println!("No commits yet. Run `shall sync` (it commits after each successful change).");
         return Ok(());
     }
 
@@ -316,7 +316,7 @@ pub async fn handle_history(app: &App) -> Result<()> {
         HistoryAction::Rollback { reference } => {
             // **`history` is `LockScope::Deferred` and this is where the deferral ends.** The
             // browser is a TUI a person reads for as long as they like, so locking the whole
-            // command would stop every other LiNix on the machine for the length of a reading
+            // command would stop every other Shall on the machine for the length of a reading
             // session — the `edit`-blocks-on-$EDITOR problem AU6 records. But this arm reaches
             // `handle_rollback` → `handle_sync`: the entire install/remove path, `state.save()`
             // and all. The same function through `Commands::Rollback` is locked; through this
@@ -426,7 +426,7 @@ pub async fn handle_bundle(app: &App, out: &str, artifacts: bool, archive: bool)
         if report.git_history_included {
             "included (config.bundle) — `git clone` it to roll back to any past commit"
         } else {
-            "NOT included — the config is not a git repo (or has no commits); run `linix git init`"
+            "NOT included — the config is not a git repo (or has no commits); run `shall git init`"
         }
     );
     println!(
@@ -500,16 +500,16 @@ pub async fn handle_restore(app: &App, dir: &str, force: bool) -> Result<()> {
     if report.git_history_present {
         println!(
             "  manifest history: `config.bundle` is in {} — `git clone` it there to keep the \
-             history, or `linix sync --locked` to reproduce the current state.",
+             history, or `shall sync --locked` to reproduce the current state.",
             bundle_dir.display()
         );
     }
-    println!("Run `linix sync --locked` to reproduce the exact package set.");
+    println!("Run `shall sync --locked` to reproduce the exact package set.");
     Ok(())
 }
 
 pub async fn handle_why(app: &App, package: &str, out: Output) -> Result<()> {
-    // Q9: `why nosuchbackend:foo` reported it "not under LiNix management" at exit 0 — true of
+    // Q9: `why nosuchbackend:foo` reported it "not under Shall management" at exit 0 — true of
     // the string and useless, because the manager is the part that does not exist.
     app.require_known_spec_backends(std::slice::from_ref(&package.to_string()))
         .await?;

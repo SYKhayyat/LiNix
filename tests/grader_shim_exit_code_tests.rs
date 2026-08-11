@@ -3,7 +3,7 @@
 //! `windows_effective_command` asks `which::which` for the manager and wraps whatever comes
 //! back. `which` honours `PATHEXT`, and the Windows default `PATHEXT` does not list `.PS1`.
 //! Where a manager ships both shims — scoop ships `scoop.cmd` and `scoop.ps1` side by side —
-//! `which` therefore returns the `.cmd`, LiNix takes the `cmd /C` branch, and `cmd /C` does
+//! `which` therefore returns the `.cmd`, Shall takes the `cmd /C` branch, and `cmd /C` does
 //! not propagate the child's exit code.
 //!
 //! Measured on this host, same failing command down each branch:
@@ -12,14 +12,14 @@
 //!     powershell -Command "$o = (scoop install '...' | Out-String); ...; exit $LASTEXITCODE"
 //!                                                                  -> exit 1
 //!
-//! So the branch LiNix uses reports success for a failed install, and the branch that reports
+//! So the branch Shall uses reports success for a failed install, and the branch that reports
 //! it correctly is already written, twenty lines above, and unreachable on a default box.
 //! Every scoop verdict then rests on `ExitPolicy` string-matching stdout, which is one
 //! upstream wording change away from silence.
 
-/// Which interpreter LiNix would really launch this manager through.
+/// Which interpreter Shall would really launch this manager through.
 fn branch_for(mgr: &str) -> String {
-    let (prog, argv) = linix::core::executor::effective_command(mgr, &["--version".to_string()]);
+    let (prog, argv) = shall::core::executor::effective_command(mgr, &["--version".to_string()]);
     format!("{} {}", prog, argv.join(" "))
 }
 
@@ -49,16 +49,16 @@ fn a_manager_with_both_shims_is_launched_through_the_one_that_keeps_the_exit_cod
     let launch = branch_for("scoop");
 
     // **Measured, not inferred.** This assertion used to read `which::which("scoop")`'s file
-    // extension — which is the resolver's answer, not LiNix's launch, and the defect was never
+    // extension — which is the resolver's answer, not Shall's launch, and the defect was never
     // in the resolver. `which` still returns `scoop.cmd` after the fix, because `PATHEXT` still
-    // has no `.PS1`; what changed is that LiNix no longer launches what `which` handed it. A
+    // has no `.PS1`; what changed is that Shall no longer launches what `which` handed it. A
     // check on the extension would therefore have stayed red over a working program, which is
     // the mirror image of the checks this file exists to replace.
     //
-    // So: run a command that genuinely fails, the way LiNix runs it, and require the failure
+    // So: run a command that genuinely fails, the way Shall runs it, and require the failure
     // to survive. `scoop info <name>` is read-only and changes nothing on the machine.
-    let probe: Vec<String> = ["info".to_string(), "linix-no-such-pkg-zzz".to_string()].into();
-    let (prog, argv) = linix::core::executor::effective_command("scoop", &probe);
+    let probe: Vec<String> = ["info".to_string(), "shall-no-such-pkg-zzz".to_string()].into();
+    let (prog, argv) = shall::core::executor::effective_command("scoop", &probe);
     let code = std::process::Command::new(&prog)
         .args(&argv)
         .output()
@@ -70,7 +70,7 @@ fn a_manager_with_both_shims_is_launched_through_the_one_that_keeps_the_exit_cod
     assert_ne!(
         code,
         0,
-        "LiNix launches scoop as `{launch}` and a command that fails came back 0.\n\
+        "Shall launches scoop as `{launch}` and a command that fails came back 0.\n\
          which::which resolved {} (PATHEXT has no .PS1), and `cmd /C` does not propagate the\n\
          child's exit code — measured on this host, a failing `scoop install` exits 0 through\n\
          that branch and 1 through the `.ps1` branch windows_shim_wrap already implements.\n\
@@ -83,7 +83,7 @@ fn a_manager_with_both_shims_is_launched_through_the_one_that_keeps_the_exit_cod
     // And the control for the assertion above: a command that succeeds must still say so, or
     // "non-zero" would be satisfied by a launch that is simply broken.
     let ok_probe: Vec<String> = ["--version".to_string()].into();
-    let (prog, argv) = linix::core::executor::effective_command("scoop", &ok_probe);
+    let (prog, argv) = shall::core::executor::effective_command("scoop", &ok_probe);
     let ok_code = std::process::Command::new(&prog)
         .args(&argv)
         .output()
@@ -104,18 +104,18 @@ fn a_manager_with_both_shims_is_launched_through_the_one_that_keeps_the_exit_cod
 /// Measured, not inferred from the extension. `cmd /C` propagates the errorlevel of the
 /// script's last command perfectly well — `npm.cmd` ends in the node invocation and returns 1
 /// exactly as its `.ps1` does, so calling every `.cmd` lossy would be a finding manufactured
-/// out of a file suffix. The defect is only where the shim LiNix picks reports 0 for a failure
+/// out of a file suffix. The defect is only where the shim Shall picks reports 0 for a failure
 /// AND a shim that reports it correctly is sitting beside it.
 #[test]
 fn no_manager_loses_a_failure_that_its_sibling_shim_would_have_reported() {
     // A read-only query for a name that cannot exist: it fails on every one of these tools and
     // changes nothing on the machine.
     const PROBES: &[(&str, &[&str])] = &[
-        ("scoop", &["info", "linix-no-such-pkg-zzz"]),
-        ("npm", &["view", "linix-no-such-pkg-zzz"]),
-        ("yarn", &["info", "linix-no-such-pkg-zzz"]),
-        ("gem", &["specification", "linix-no-such-pkg-zzz"]),
-        ("pipx", &["runpip", "linix-no-such-pkg-zzz", "--version"]),
+        ("scoop", &["info", "shall-no-such-pkg-zzz"]),
+        ("npm", &["view", "shall-no-such-pkg-zzz"]),
+        ("yarn", &["info", "shall-no-such-pkg-zzz"]),
+        ("gem", &["specification", "shall-no-such-pkg-zzz"]),
+        ("pipx", &["runpip", "shall-no-such-pkg-zzz", "--version"]),
     ];
 
     let run = |prog: &str, argv: &[String]| -> Option<i32> {
@@ -138,8 +138,8 @@ fn no_manager_loses_a_failure_that_its_sibling_shim_would_have_reported() {
         }
         let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
 
-        // What LiNix really launches.
-        let (prog, argv) = linix::core::executor::effective_command(mgr, &owned);
+        // What Shall really launches.
+        let (prog, argv) = shall::core::executor::effective_command(mgr, &owned);
         let Some(theirs) = run(&prog, &argv) else {
             continue;
         };
@@ -165,7 +165,7 @@ fn no_manager_loses_a_failure_that_its_sibling_shim_would_have_reported() {
 
         if theirs == 0 && via_ps1 != 0 {
             losing.push(format!(
-                "{mgr}: LiNix launches `{prog} {}` and gets exit {theirs} for a command that \
+                "{mgr}: Shall launches `{prog} {}` and gets exit {theirs} for a command that \
                  fails; the .ps1 shim at {} reports {via_ps1}",
                 argv.join(" "),
                 ps1.display()
@@ -174,7 +174,7 @@ fn no_manager_loses_a_failure_that_its_sibling_shim_would_have_reported() {
     }
     assert!(
         losing.is_empty(),
-        "these managers report a failure as success through the shim LiNix chose, while the \
+        "these managers report a failure as success through the shim Shall chose, while the \
          .ps1 sibling reports it correctly:\n  {}",
         losing.join("\n  ")
     );

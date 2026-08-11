@@ -1,13 +1,13 @@
-# LiNix integration image — Void Linux (xbps). Build context = repo root.
-#   docker build -f docker/integration/Dockerfile.void -t linix-it-void .
-#   docker run --rm linix-it-void              # defaults to: xbps jq
+# Shall integration image — Void Linux (xbps). Build context = repo root.
+#   docker build -f docker/integration/Dockerfile.void -t shall-it-void .
+#   docker run --rm shall-it-void              # defaults to: xbps jq
 #
 # Same reason as the openSUSE image: `xbps` was registered and had never been run against the
 # real program anywhere. Void ships Rust in its own repository, so this image does not need
-# rustup — which also means the toolchain it builds LiNix with is the distro's, one more thing
+# rustup — which also means the toolchain it builds Shall with is the distro's, one more thing
 # the other images do not cover.
 FROM ghcr.io/void-linux/void-linux:latest-full-x86_64
-ENV LINIX_IT_IMAGE=void
+ENV SHALL_IT_IMAGE=void
 # xbps insists on updating itself before anything else; without this first line the second
 # `xbps-install` aborts with "xbps needs to be updated" and the image build fails in a way that
 # reads like a network problem.
@@ -43,6 +43,6 @@ ENV PATH="/root/.local/share/pnpm/bin:/root/.local/bin:/root/.bun/bin:/root/.car
 RUN xbps-install -S
 WORKDIR /src
 COPY . /src
-RUN cargo build --release && cp target/release/linix /usr/local/bin/linix && chmod 0755 /usr/local/bin/linix
+RUN cargo build --release && cp target/release/shall /usr/local/bin/shall && chmod 0755 /usr/local/bin/shall
 ENTRYPOINT ["sh", "/src/docker/integration/run-in-container.sh"]
 CMD ["xbps", "jq"]

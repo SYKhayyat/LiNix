@@ -1,13 +1,13 @@
 #!/bin/sh
 # ============================================================================
-# LiNix v7 integration harness — runs INSIDE a disposable container as root.
+# Shall v7 integration harness — runs INSIDE a disposable container as root.
 #
 #   Usage: run-in-container.sh <native-backend> [package]
 #   e.g.   run-in-container.sh apt jq
 #
-# Driven entirely through the real `linix` binary against the distro's native
+# Driven entirely through the real `shall` binary against the distro's native
 # package manager AND against every other package manager the image ships.
-# Isolation is by env var (LINIX_CONFIG_DIR / LINIX_DATA_DIR), so LiNix's own
+# Isolation is by env var (SHALL_CONFIG_DIR / SHALL_DATA_DIR), so Shall's own
 # state is a throwaway; real system packages ARE installed and removed (that is
 # the point — it is a disposable container).
 #
@@ -23,7 +23,7 @@ set -u
 
 BACKEND="${1:?usage: run-in-container.sh <backend> [package]}"
 PKG="${2:-jq}"
-LINIX="${LINIX:-linix}"
+SHALL="${SHALL:-shall}"
 TO="timeout 300"
 # A source-building manager (cargo, opam, nimble, spack, go) compiles the canary
 # from scratch; 300s is a build that has barely started. 900s is long enough for a
@@ -31,11 +31,11 @@ TO="timeout 300"
 # and a run that hits it says so by name rather than blaming the network.
 TO_LONG="timeout 900"
 
-# --- Isolation: LiNix's config + data are throwaway; the II.1 repo lives here.
-export LINIX_CONFIG_DIR="/tmp/linix-it-config"
-export LINIX_DATA_DIR="/tmp/linix-it-state"
-rm -rf "$LINIX_CONFIG_DIR" "$LINIX_DATA_DIR"
-mkdir -p "$LINIX_CONFIG_DIR" "$LINIX_DATA_DIR"
+# --- Isolation: Shall's config + data are throwaway; the II.1 repo lives here.
+export SHALL_CONFIG_DIR="/tmp/shall-it-config"
+export SHALL_DATA_DIR="/tmp/shall-it-state"
+rm -rf "$SHALL_CONFIG_DIR" "$SHALL_DATA_DIR"
+mkdir -p "$SHALL_CONFIG_DIR" "$SHALL_DATA_DIR"
 
 # **A wait budget equal to the caller's whole timeout leaves nothing for the work.**
 # `manager_lock_wait_secs` defaults to 300 — sized for a person's `dnf upgrade`, with no outer
@@ -43,21 +43,21 @@ mkdir -p "$LINIX_CONFIG_DIR" "$LINIX_DATA_DIR"
 # hits the harness's own limit at the exact second the wait would have expired, and is killed
 # mid-transaction with nothing installed: measured on fedora as `crash/midway: the cleanup
 # uninstall left 3 of pv dos2unix ncdu still on PATH`, a sentence about a cleanup that never got
-# to run. Every crash section here kills LiNix on purpose and so manufactures exactly this
+# to run. Every crash section here kills Shall on purpose and so manufactures exactly this
 # orphan, over and over.
 #
 # Thirty seconds: long enough that the wait is genuinely exercised (the checks that watch for
-# `linix: waiting for` still see it), short enough to leave the command nine tenths of its
+# `shall: waiting for` still see it), short enough to leave the command nine tenths of its
 # clock. The product's default is not the thing under test here; that it waits at all, and says
 # so, is.
-cat > "$LINIX_CONFIG_DIR/preferences.toml" <<'PREFS'
+cat > "$SHALL_CONFIG_DIR/preferences.toml" <<'PREFS'
 manager_lock_wait_secs = 30
 PREFS
 
 # --- The coverage ledger. Files, not variables: `grep_ok` runs its command in a
 # pipeline, and a pipeline is a subshell whose variable writes die with it — so a
 # ledger kept in a variable would silently forget every command greped for.
-LEDGER=/tmp/linix-it-ledger
+LEDGER=/tmp/shall-it-ledger
 rm -rf "$LEDGER"; mkdir -p "$LEDGER"
 : > "$LEDGER/cmd-real"; : > "$LEDGER/cmd-help"
 : > "$LEDGER/be-life"; : > "$LEDGER/be-life-partial"; : > "$LEDGER/be-life-unmeasured"; : > "$LEDGER/be-smoke"
@@ -83,10 +83,10 @@ record_argv() {
     echo "$_sub" >> "$LEDGER/cmd-real"
 }
 
-lx()      { record_argv "$@"; $TO "$LINIX" "$@"; }
-lx_slow() { record_argv "$@"; $TO_LONG "$LINIX" "$@"; }
+lx()      { record_argv "$@"; $TO "$SHALL" "$@"; }
+lx_slow() { record_argv "$@"; $TO_LONG "$SHALL" "$@"; }
 
-# LiNix commits as you (II.13) and injects no identity of its own, so git needs
+# Shall commits as you (II.13) and injects no identity of its own, so git needs
 # to know who that is. A bare container has no identity and every commit fails.
 # An identity for the `git init` section, as environment rather than as `git config --global`.
 #
@@ -94,14 +94,14 @@ lx_slow() { record_argv "$@"; $TO_LONG "$LINIX" "$@"; }
 # not only run there: `scripts/harness-mutation-test.sh` executes it on the host to measure
 # whether its checks can fail, and both release scripts now do that — so on 2026-07-28 this
 # pair silently replaced a developer's real git identity, and thirteen commits went out
-# authored `LiNix Integration <integration@linix.invalid>` instead of by their author.
+# authored `Shall Integration <integration@shall.invalid>` instead of by their author.
 #
 # `GIT_AUTHOR_*`/`GIT_COMMITTER_*` are per-process: they cover this run and touch nothing the
 # user owns. And they are set only when git has no identity, so a machine that has one keeps
 # it — what the harness exercises is then what its owner actually runs.
 if ! git config user.email >/dev/null 2>&1; then
-    export GIT_AUTHOR_NAME="LiNix Integration" GIT_AUTHOR_EMAIL="integration@linix.invalid"
-    export GIT_COMMITTER_NAME="LiNix Integration" GIT_COMMITTER_EMAIL="integration@linix.invalid"
+    export GIT_AUTHOR_NAME="Shall Integration" GIT_AUTHOR_EMAIL="integration@shall.invalid"
+    export GIT_COMMITTER_NAME="Shall Integration" GIT_COMMITTER_EMAIL="integration@shall.invalid"
 fi
 
 PASS=0
@@ -171,7 +171,7 @@ answers() {
 never_ran() { [ "$1" = 127 ] || [ "$1" = 126 ] || [ "$1" = 124 ]; }
 # Refuse to audit a set that collapsed. A set-containment audit over an EMPTY set passes
 # without examining anything: the `for` runs zero times, the "untouched" string stays empty,
-# and the check reports full coverage. Measured under a do-nothing `linix` stub, the audit
+# and the check reports full coverage. Measured under a do-nothing `shall` stub, the audit
 # printed "0 in --help ... 0 registered" and PASSed both of its meta-checks.
 #
 # The floor detects collapse, not coverage. A real registry is 48 backends on Windows and 56
@@ -192,14 +192,14 @@ nok() {
         excerpt; return 1
     elif [ "$rc" = 3 ]; then
         FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES\n    - $desc (rc=3: a deliberate refusal where a failure was expected)"
-        echo "  FAIL  $desc (rc=3: LiNix refused on purpose; if that is the outcome under test, assert it with refuses_with_3)"
+        echo "  FAIL  $desc (rc=3: Shall refused on purpose; if that is the outcome under test, assert it with refuses_with_3)"
         return 1
     else
         PASS=$((PASS + 1)); echo "  PASS  $desc (failed, as it must)"; return 0
     fi
 }
 
-# The other half of `nok`, and the reason it is a separate word: LiNix has a dedicated exit code
+# The other half of `nok`, and the reason it is a separate word: Shall has a dedicated exit code
 # for declining on purpose (`Exit::Refused` = 3, U21) and `nok` could not tell it from a crash.
 # Measured by the round-6 grader against a stub that answers `--version` and fails everything
 # else: SIXTEEN of seventeen surviving checks were refusal checks, every one of them scored
@@ -208,7 +208,7 @@ nok() {
 # `nok`, plus the sentence. A negative check that asserts only "non-zero" cannot tell the
 # product refusing your input from the binary being broken — measured: a stub that fails
 # everything left twelve of these passing (G-8). The pattern is the manager-independent half
-# of LiNix's own message, so this stays true wherever the sweep runs.
+# of Shall's own message, so this stays true wherever the sweep runs.
 nok_saying() { # description pattern command...
     desc="$1"; pat="$2"; shift 2
     "$@" >/tmp/it.out 2>&1; rc=$?
@@ -267,25 +267,25 @@ soft() { SOFTC=$((SOFTC + 1)); echo "  soft  $1"; }
 # A failure recorded directly, when the thing that failed was not a single command call.
 hard() { FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES
     - $1"; echo "  FAIL  $1"; }
-# A refusal is its own outcome. LiNix worked correctly and declined on purpose (exit 3), and
+# A refusal is its own outcome. Shall worked correctly and declined on purpose (exit 3), and
 # scoring that as a failure — or as "ecosystem variance" — says the opposite of what happened.
-refused() { PASS=$((PASS + 1)); echo "  PASS  $1 (LiNix refused, on purpose)"; }
+refused() { PASS=$((PASS + 1)); echo "  PASS  $1 (Shall refused, on purpose)"; }
 
 # Why an install failed — a question, not an assumption (E5).
 #
 # Both harnesses used to soften ANY install failure into a claim about the network, and skip
 # that backend's whole remaining lifecycle. In one observed run it fired four times and not
-# once was it the network: one was LiNix correctly refusing, two were real argv defects
+# once was it the network: one was Shall correctly refusing, two were real argv defects
 # (`helm`, `luarocks`). Coverage disappeared exactly where the product was broken, and the run
 # still reported success.
 #
 # Sets CLASS to one of:
-#   refused    LiNix declined on purpose (exit 3, U21). Its own outcome, not a failure.
+#   refused    Shall declined on purpose (exit 3, U21). Its own outcome, not a failure.
 #   timeout    the build ran out of clock (124). The harness's limit, not a verdict.
 #   transient  failed once, succeeded on retry. The caller CONTINUES the lifecycle — skipping
 #              it is how list, PATH, remove and gone-from-list went unrun for every backend
 #              whose install was flaky.
-#   exhausted  LiNix classed the failure passing and it did not pass in this window — a rate
+#   exhausted  Shall classed the failure passing and it did not pass in this window — a rate
 #              limit with 20 minutes left on it. SOFT, and recorded as a lifecycle this run
 #              could not measure, which is not the same fact as a lifecycle that got worse.
 #   defect     failed permanently, or failed twice with nothing classifying it. Hard.
@@ -294,7 +294,7 @@ refused() { PASS=$((PASS + 1)); echo "  PASS  $1 (LiNix refused, on purpose)"; }
 # scripts/harness-logic-test.sh so the two cannot drift into disagreeing about a verdict.
 #
 # TRANSIENCE IS READ, NOT RE-DERIVED (R-3). It is a claim that a second attempt could differ,
-# and LiNix already answers it — `Retryability`, from the backend's own exit policy. Until
+# and Shall already answers it — `Retryability`, from the backend's own exit policy. Until
 # 2026-07-30 nothing downstream could see that answer, so this function re-derived it by
 # RETRYING THE INSTALL IMMEDIATELY. That proxy is wrong for exactly the failures the
 # classification gets right: a GitHub rate limit with 1236 seconds left on the window cannot
@@ -302,7 +302,7 @@ refused() { PASS=$((PASS + 1)); echo "  PASS  $1 (LiNix refused, on purpose)"; }
 # real-lifecycle ratchet fell 8 -> 7 and went red behind it. Two red jobs over an answer the
 # program had already computed.
 #
-# So `linix-failure-class:` is read, and the retry is kept only where it still adds evidence:
+# So `shall-failure-class:` is read, and the retry is kept only where it still adds evidence:
 #
 #   permanent  -> a defect now. Retrying a 404 to confirm it is still a 404 costs a minute and
 #                 tells nobody anything.
@@ -328,7 +328,7 @@ classify_install() { # be  install-spec  rc  logfile  [cleanup]
         excerpt "$_ci_log" 3
         CLASS=refused; return 0
     fi
-    _ci_class="$(sed -n 's/^linix-failure-class: //p' "$_ci_log" | tail -1)"
+    _ci_class="$(sed -n 's/^shall-failure-class: //p' "$_ci_log" | tail -1)"
     if [ -z "$_ci_class" ]; then
         hard "$_ci_be: install of $_ci_spec failed and printed no failure class (rc=$_ci_rc)"
         excerpt "$_ci_log" 6
@@ -387,7 +387,7 @@ path_of() { sh -c 'command -v "$1" 2>/dev/null' _ "$1" || true; }
 
 # The directory an install NAMED as the home of what it just put there, or "" if it named none.
 #
-# LiNix's answer to a bin directory that is not on PATH is a warning naming the directory and
+# Shall's answer to a bin directory that is not on PATH is a warning naming the directory and
 # the line that would add it (E6c/W4). That sentence is the product's promise, so it is what
 # the checks below read. Matched against the backend that printed it, so one sync that warns
 # about two managers cannot hand one manager's directory to the other.
@@ -479,15 +479,15 @@ assert_binary_reachable() { # backend binary install-log prior-resolution
 }
 
 echo "=============================================================="
-echo " LiNix v7 harness — backend=$BACKEND package=$PKG"
+echo " Shall v7 harness — backend=$BACKEND package=$PKG"
 echo "=============================================================="
 
 # A missing binary is not a failing run, it is an unrun one — and it does not
 # look like one. `nok` reads "command not found" as the refusal it was hoping
-# for, and `grep_ok` for /linix/ matches the words "failed to run command
-# 'linix'", so an image with no binary reported nine passes. Stop here instead.
-if ! $LINIX --version >/dev/null 2>&1; then
-    echo "FATAL: not runnable in this image — nothing below was tested. Looked for '$LINIX'"
+# for, and `grep_ok` for /shall/ matches the words "failed to run command
+# 'shall'", so an image with no binary reported nine passes. Stop here instead.
+if ! $SHALL --version >/dev/null 2>&1; then
+    echo "FATAL: not runnable in this image — nothing below was tested. Looked for '$SHALL'"
     echo "       The image must put the built binary on PATH (see the Dockerfiles)."
     exit 1
 fi
@@ -495,9 +495,9 @@ fi
 # --- 1. Bootstrap the II.1 repo -------------------------------------------
 echo "[1] Bootstrap"
 ok "init scaffolds the repo" lx init
-ok "priority file exists" test -f "$LINIX_CONFIG_DIR/priority"
-grep_ok "priority names this backend" "$BACKEND" cat "$LINIX_CONFIG_DIR/priority"
-ok "active file exists" test -f "$LINIX_CONFIG_DIR/active"
+ok "priority file exists" test -f "$SHALL_CONFIG_DIR/priority"
+grep_ok "priority names this backend" "$BACKEND" cat "$SHALL_CONFIG_DIR/priority"
+ok "active file exists" test -f "$SHALL_CONFIG_DIR/active"
 
 # --- 2. Discovery (read-only) ---------------------------------------------
 echo "[2] Discovery / read-only verbs"
@@ -507,7 +507,7 @@ ok "plan (no changes yet)" lx plan --dry-run
 answers "check parses the model" lx check
 ok "check absent lists nothing" lx check absent
 ok "protected lists guarded packages" lx protected
-grep_ok "protected includes a system essential" "linix\|libc\|systemd\|kernel\|bash" lx protected
+grep_ok "protected includes a system essential" "shall\|libc\|systemd\|kernel\|bash" lx protected
 
 # --- 3. Dry-run is preview-only -------------------------------------------
 echo "[3] Dry-run safety"
@@ -523,7 +523,7 @@ nok "dry-run did NOT actually install $PKG" binary_present "$BACKEND" "$PKG" /tm
 # the machine is nearly all managed, so "delete everything unmanaged" is a small
 # removal and the ratio it exists to catch never fires.
 echo "[4] purge-undeclared, before adopt (the state that makes it a test)"
-refuses_with_3 "purge-undeclared is refused on a machine LiNix has not adopted" lx -y purge-undeclared
+refuses_with_3 "purge-undeclared is refused on a machine Shall has not adopted" lx -y purge-undeclared
 # WHICH rule refused matters: a `nok` that accepts any non-zero exit accepts a panic
 # and an unknown flag just as happily. Before adopt the ratio rule is the one that
 # fires, and it says so by name.
@@ -555,28 +555,28 @@ ok "second sync is a no-op (exit 0)" lx -y sync
 
 # --- 7. Negative path ------------------------------------------------------
 echo "[7] Negative path"
-nok "installing a nonexistent package fails" lx -y install "linix-no-such-pkg-zzz"
+nok "installing a nonexistent package fails" lx -y install "shall-no-such-pkg-zzz"
 # The failure must not be left in the manifest. Every later command parses the
 # model, so one unresolvable line wedges the config until someone hand-edits it.
 ok "a failed install leaves the model parseable" lx check drift
 # This asserts the PRODUCT withdrew the line. It used to `grep -v` the name out first and
 # then assert it was absent, which tested its own `grep -v` and printed PASS on every run
-# while the product did the opposite. If this goes red, LiNix stopped withdrawing an
+# while the product did the opposite. If this goes red, Shall stopped withdrawing an
 # unresolvable name — do not put the scrub back.
 #
 # The name here is deliberately unqualified: nothing claims it, so it is `Unresolvable` and
 # withdrawing it is the behaviour both harnesses have always agreed on. The qualified form
 # (`<backend>:<typo>`, which resolves and then fails to install) is a different question and
 # is asserted in the host harness.
-IMPERATIVE="$LINIX_CONFIG_DIR/modules/imperative.txt"
+IMPERATIVE="$SHALL_CONFIG_DIR/modules/imperative.txt"
 if [ -f "$IMPERATIVE" ]; then
     nok "the unresolvable name is out of the manifest" \
-        grep -q "linix-no-such-pkg-zzz" "$IMPERATIVE"
+        grep -q "shall-no-such-pkg-zzz" "$IMPERATIVE"
 fi
 
 # --- 8. Adopt (Part IV proof) ---------------------------------------------
 echo "[8] Adopt"
-ADOPTED_FILE="$LINIX_CONFIG_DIR/modules/adopted.txt"
+ADOPTED_FILE="$SHALL_CONFIG_DIR/modules/adopted.txt"
 nok "nothing is adopted before adopt runs" test -s "$ADOPTED_FILE"
 ok "adopt takes manual packages" lx -y adopt
 # Part IV: adopt takes the MANUAL set, not the whole dependency closure, and
@@ -640,7 +640,7 @@ echo "[9] The guard"
 # verb refuses or no-ops depends on whether it was declared, and an earlier
 # form asserted an exit code so convoluted that a correct refusal failed it.
 #
-# The victim comes from LiNix's OWN protected list, intersected with what this image actually
+# The victim comes from Shall's OWN protected list, intersected with what this image actually
 # has installed. It was hardcoded to `bash` until 2026-07-30, and Void Linux ships no bash at
 # all — so on the first Void run this check asserted the survival of a package that had never
 # been there and printed `FAIL bash survives an uninstall attempt`, which reads exactly like
@@ -649,7 +649,7 @@ _installed_names() { lx list --backend "$BACKEND" 2>/dev/null | awk '{print $2}'
 GUARD_VICTIM=""
 _have="$(_installed_names)"
 # A protected name is matched against the manager's own spelling AND its last path component,
-# because Portage names a package `app-shells/bash` while `linix protected` says `bash`. Without
+# because Portage names a package `app-shells/bash` while `shall protected` says `bash`. Without
 # that the intersection on gentoo is empty however much bash is installed, the guard proof
 # examines nothing, and `uninstall` — which on a SMOKE_ONLY image is executed ONLY by the guard
 # victim — is reported as never run. Two failures, one missing slash. Measured on CI 30680916682.
@@ -664,14 +664,14 @@ if [ -z "$GUARD_VICTIM" ]; then
     FAILC=$((FAILC + 1))
     FAILED_NAMES="$FAILED_NAMES
     - guard: no protected package is installed on this image, so the guard proof examined nothing"
-    echo "  FAIL  not one of LiNix's protected packages is installed here, so nothing could be"
+    echo "  FAIL  not one of Shall's protected packages is installed here, so nothing could be"
     echo "        protected and this check proved nothing. Add one to the image, or widen"
     echo "        default_protected_packages so it names something this distro ships."
 else
-    echo "        guard victim: $GUARD_VICTIM (from \`linix protected\`, and installed here)"
+    echo "        guard victim: $GUARD_VICTIM (from \`shall protected\`, and installed here)"
     lx -y uninstall "$GUARD_VICTIM" >/dev/null 2>&1 || true
     ok "$GUARD_VICTIM survives an uninstall attempt" \
-        sh -c "$LINIX list --backend '$BACKEND' 2>/dev/null | awk '{print \$2}' | grep -qx '$GUARD_VICTIM'"
+        sh -c "$SHALL list --backend '$BACKEND' 2>/dev/null | awk '{print \$2}' | grep -qx '$GUARD_VICTIM'"
 fi
 # Post-adopt the ratio no longer fires, so the bare command must still not be a
 # silent mass-delete — the refusal is asserted in both states, for different reasons.
@@ -715,11 +715,11 @@ if [ -n "$SMOKE" ]; then
     ok "git log runs on an empty history" lx git log --limit 10
 else
 ok "an install after git init succeeds" lx -y install "$PKG"
-ok "the install left a commit behind" git -C "$LINIX_CONFIG_DIR" rev-parse HEAD
+ok "the install left a commit behind" git -C "$SHALL_CONFIG_DIR" rev-parse HEAD
 # Subjects are deliberately generic (II.13 puts the detail in the diff), so the
-# package name is not in the log — match the subject prefix LiNix actually writes.
-grep_ok "git log shows a linix commit" "linix:" lx git log --limit 10
-ok "git commit records the current state on demand" lx git commit -m "linix: harness checkpoint"
+# package name is not in the log — match the subject prefix Shall actually writes.
+grep_ok "git log shows a shall commit" "shall:" lx git log --limit 10
+ok "git commit records the current state on demand" lx git commit -m "shall: harness checkpoint"
 ok "diff against a commit runs" lx diff HEAD
 ok "rollback to HEAD is accepted" lx -y rollback HEAD
 fi
@@ -727,9 +727,9 @@ fi
 
 # --- 12. rebuild asserts, and writes no commit (K14) ----------------------
 echo "[12] rebuild"
-# Git is asked directly, not `linix git log`: a rebuild that committed by some
+# Git is asked directly, not `shall git log`: a rebuild that committed by some
 # other route would still move HEAD, and only git can say so.
-commits() { git -C "$LINIX_CONFIG_DIR" rev-list --count HEAD 2>/dev/null || echo 0; }
+commits() { git -C "$SHALL_CONFIG_DIR" rev-list --count HEAD 2>/dev/null || echo 0; }
 # K2 (ruled 2026-07-24): a bare `rebuild` no longer REFUSES — it WARNS loudly and rebuilds
 # `--all`. Checked with `--dry-run` so the harness does not actually churn every manual package
 # on the image to prove a claim about the default scope. The warning is the safeguard the old
@@ -761,7 +761,7 @@ if [ -n "$SMOKE" ]; then
     # here to inspect. The grammar below is checked anyway: it is pure parsing.
     skip_smoke "the per-host lock file, and unlock (no sync recorded an answer)"
 else
-LOCKFILE=$(ls "$LINIX_CONFIG_DIR"/locks/bare.*.toml 2>/dev/null | head -1)
+LOCKFILE=$(ls "$SHALL_CONFIG_DIR"/locks/bare.*.toml 2>/dev/null | head -1)
 echo "        lock file: ${LOCKFILE:-<none>}"
 # Per-host: the answer is about this machine, so the filename has to be too, or
 # two machines sharing a config overwrite each other on every sync.
@@ -769,11 +769,11 @@ ok "the lock is named for this host" test -n "$LOCKFILE"
 grep_ok "an unpinned name froze to $BACKEND" "\"$BACKEND\"" cat "$LOCKFILE"
 
 # A lock written by another machine is not an answer about this one.
-printf '[resolved]\n%s = "linix-no-such-backend"\n' "$PKG" \
-    > "$LINIX_CONFIG_DIR/locks/bare.some-other-box.toml"
+printf '[resolved]\n%s = "shall-no-such-backend"\n' "$PKG" \
+    > "$SHALL_CONFIG_DIR/locks/bare.some-other-box.toml"
 ok "sync ignores another host's lock file" lx -y sync
-ok "and leaves it alone" test -f "$LINIX_CONFIG_DIR/locks/bare.some-other-box.toml"
-rm -f "$LINIX_CONFIG_DIR/locks/bare.some-other-box.toml"
+ok "and leaves it alone" test -f "$SHALL_CONFIG_DIR/locks/bare.some-other-box.toml"
+rm -f "$SHALL_CONFIG_DIR/locks/bare.some-other-box.toml"
 fi
 
 # The chain grammar. `list` is the priority file; a comma separates candidates.
@@ -781,7 +781,7 @@ ok  "a chain is legal"            lx --dry-run install "$BACKEND,cargo:$PKG"
 ok  "a chain may end in list"     lx --dry-run install "$BACKEND,list:$PKG"
 ok  "list alone is legal"         lx --dry-run install "list:$PKG"
 nok_saying "an empty slot is refused" "has an empty backend"    lx --dry-run install "$BACKEND,,cargo:$PKG"
-nok_saying "an unknown link is refused" "is not a backend LiNix uses"  lx --dry-run install "$BACKEND,nope:$PKG"
+nok_saying "an unknown link is refused" "is not a backend Shall uses"  lx --dry-run install "$BACKEND,nope:$PKG"
 nok_saying "list must come last" "must come last"         lx --dry-run install "list,$BACKEND:$PKG"
 nok_saying "a name repeated is refused" "is named twice"  lx --dry-run install "$BACKEND,$BACKEND:$PKG"
 nok_saying "a pattern cannot span one" "must match in exactly one backend"   lx --dry-run install "$BACKEND,cargo:re:^$PKG"
@@ -798,7 +798,7 @@ grep_ok "unlock backends --list names the frozen package" "$PKG" lx unlock backe
 ok "unlock backends forgets one name" lx unlock backends "$PKG"
 nok "the entry is really gone" grep -q "$PKG" "$LOCKFILE"
 fi
-ok "unlocking a name that was never frozen is not an error" lx unlock backends linix-never-frozen-zzz
+ok "unlocking a name that was never frozen is not an error" lx unlock backends shall-never-frozen-zzz
 
 # --- 13b. A manager that could not answer is not one that said no (V.7c) --
 echo "[13b] Silence is not a no"
@@ -820,7 +820,7 @@ exec "$REAL_CARGO" "\$@"
 EOSHIM
     chmod +x /tmp/silent-bin/cargo
 
-    SILENT_CFG=/tmp/linix-it-silent
+    SILENT_CFG=/tmp/shall-it-silent
     rm -rf "$SILENT_CFG"; mkdir -p "$SILENT_CFG/modules" "$SILENT_CFG/profiles"
     printf 'cargo\n%s\n' "$BACKEND" > "$SILENT_CFG/priority"
     printf 'Work\n' > "$SILENT_CFG/active"
@@ -828,8 +828,8 @@ EOSHIM
     printf '%s\n' "$PKG" > "$SILENT_CFG/modules/base.txt"
 
     silent_lx() {
-        env PATH="/tmp/silent-bin:$PATH" LINIX_CONFIG_DIR="$SILENT_CFG" \
-            LINIX_DATA_DIR=/tmp/linix-it-silent-state $TO "$LINIX" "$@"
+        env PATH="/tmp/silent-bin:$PATH" SHALL_CONFIG_DIR="$SILENT_CFG" \
+            SHALL_DATA_DIR=/tmp/shall-it-silent-state $TO "$SHALL" "$@"
     }
     if [ -n "$SMOKE" ]; then
         skip_smoke "the sync past a silent manager, and the lock it must not write"
@@ -843,7 +843,7 @@ EOSHIM
     # Pure resolution: the plan says which manager went quiet without installing.
     grep_ok "and says which manager could not answer" "could not answer" \
         silent_lx --dry-run plan
-    rm -rf /tmp/silent-bin "$SILENT_CFG" /tmp/linix-it-silent-state
+    rm -rf /tmp/silent-bin "$SILENT_CFG" /tmp/shall-it-silent-state
 fi
 
 # ==========================================================================
@@ -854,33 +854,33 @@ fi
 # code does. `btrfs:PATH` runs `btrfs subvolume create`, `lvm:VG/LV` runs `lvcreate`, and both
 # have an ordinary install → list → remove cycle that needs nothing but a real device.
 #
-# Inert unless the image asked for it (`LINIX_IT_STORAGE`), because it needs `--privileged` and
+# Inert unless the image asked for it (`SHALL_IT_STORAGE`), because it needs `--privileged` and
 # nothing else here is. The devices are loopback files made in the container and destroyed with
 # it. Owner-authorised 2026-07-30 (Q17).
 #
 # Every step is checked: a failure leaves the backend without a canary and PRINTS why, rather
 # than leaving a half-made volume for the lifecycle to trip over in a way that reads like a
-# LiNix defect.
+# Shall defect.
 STORAGE_BTRFS=""
 STORAGE_LVM=""
 STORAGE_ZFS=""
 
 setup_storage_devices() {
-    [ -n "${LINIX_IT_STORAGE:-}" ] || return 0
+    [ -n "${SHALL_IT_STORAGE:-}" ] || return 0
     [ -z "$SMOKE" ] || { skip_smoke "loopback devices for the storage effectors"; return 0; }
     echo "[13c] Loopback devices for the storage effectors"
 
     if ! command -v mkfs.btrfs >/dev/null 2>&1; then
         soft "btrfs: no mkfs.btrfs in this image, so there is no filesystem to make a subvolume in"
     elif ! modprobe btrfs >/dev/null 2>&1 && ! grep -qw btrfs /proc/filesystems; then
-        soft "btrfs: this kernel has no btrfs — a container borrows the HOST's kernel, so that is a fact about the machine and not about LiNix"
+        soft "btrfs: this kernel has no btrfs — a container borrows the HOST's kernel, so that is a fact about the machine and not about Shall"
     else
-        rm -f /var/tmp/linix-btrfs.img
-        truncate -s 512M /var/tmp/linix-btrfs.img
-        mkdir -p /mnt/linix-btrfs
-        if mkfs.btrfs -q -f /var/tmp/linix-btrfs.img >/dev/null 2>&1 \
-           && mount -o loop /var/tmp/linix-btrfs.img /mnt/linix-btrfs >/dev/null 2>&1; then
-            STORAGE_BTRFS=/mnt/linix-btrfs
+        rm -f /var/tmp/shall-btrfs.img
+        truncate -s 512M /var/tmp/shall-btrfs.img
+        mkdir -p /mnt/shall-btrfs
+        if mkfs.btrfs -q -f /var/tmp/shall-btrfs.img >/dev/null 2>&1 \
+           && mount -o loop /var/tmp/shall-btrfs.img /mnt/shall-btrfs >/dev/null 2>&1; then
+            STORAGE_BTRFS=/mnt/shall-btrfs
             PASS=$((PASS + 1)); echo "  PASS  btrfs: a real filesystem is mounted at $STORAGE_BTRFS"
         else
             soft "btrfs: mkfs or mount failed in this container, so the lifecycle has nowhere to run"
@@ -892,35 +892,35 @@ setup_storage_devices() {
     elif ! modprobe dm_mod >/dev/null 2>&1 && [ ! -e /dev/mapper/control ]; then
         soft "lvm: this kernel has no device-mapper — again a fact about the machine"
     else
-        rm -f /var/tmp/linix-lvm.img
-        truncate -s 512M /var/tmp/linix-lvm.img
+        rm -f /var/tmp/shall-lvm.img
+        truncate -s 512M /var/tmp/shall-lvm.img
         # Three commands, three separate reasons, and they used to share one message: "could not
         # build a volume group on a loopback device here" is a sentence you cannot act on. It
         # said the same thing whether the kernel had no free loop device, LVM's filter rejected
         # the one it got, or the group name was already taken — and on 2026-07-31 that cost an
         # hour chasing a leak that did not exist, because the message named nothing.
         _why=""
-        _loop="$(losetup -f --show /var/tmp/linix-lvm.img 2>&1)"
+        _loop="$(losetup -f --show /var/tmp/shall-lvm.img 2>&1)"
         if [ ! -b "$_loop" ]; then
             _why="losetup: $_loop"
         elif ! _out="$(pvcreate -f -y "$_loop" 2>&1)"; then
             _why="pvcreate on $_loop: $(echo "$_out" | tr '\n' ' ')"
-        elif ! _out="$(vgcreate linixvg "$_loop" 2>&1)"; then
-            _why="vgcreate linixvg on $_loop: $(echo "$_out" | tr '\n' ' ')"
+        elif ! _out="$(vgcreate shallvg "$_loop" 2>&1)"; then
+            _why="vgcreate shallvg on $_loop: $(echo "$_out" | tr '\n' ' ')"
         fi
         if [ -z "$_why" ]; then
             # A volume group is not enough, and assuming it was cost a whole run: `lvcreate`
             # needs a device node to zero the new volume through, and in a container with no
             # udev and a tmpfs /dev there is nobody to make one. It aborts with "device not
-            # cleared" — a fact about the machine that reads exactly like a LiNix defect in the
-            # lifecycle below. So the probe is a real volume, made and destroyed with LiNix's
+            # cleared" — a fact about the machine that reads exactly like a Shall defect in the
+            # lifecycle below. So the probe is a real volume, made and destroyed with Shall's
             # own argv, and its failure is reported as the environment's (Q17).
-            if _probe="$(lvcreate -n linixprobe -L 8M linixvg 2>&1)"; then
-                lvremove -y linixvg/linixprobe >/dev/null 2>&1
-                STORAGE_LVM=linixvg
+            if _probe="$(lvcreate -n shallprobe -L 8M shallvg 2>&1)"; then
+                lvremove -y shallvg/shallprobe >/dev/null 2>&1
+                STORAGE_LVM=shallvg
                 PASS=$((PASS + 1)); echo "  PASS  lvm: volume group $STORAGE_LVM exists on $_loop and can hold a volume"
             else
-                soft "lvm: the volume group exists and \`lvcreate\` cannot make a volume in it, which is this container and not LiNix — $(echo "$_probe" | tr '\n' ' ')"
+                soft "lvm: the volume group exists and \`lvcreate\` cannot make a volume in it, which is this container and not Shall — $(echo "$_probe" | tr '\n' ' ')"
             fi
         else
             soft "lvm: could not build a volume group on a loopback device here — $_why"
@@ -935,10 +935,10 @@ setup_storage_devices() {
     elif ! modprobe zfs >/dev/null 2>&1; then
         soft "zfs: this kernel has no ZFS module — it is out-of-tree and the WSL2 kernel ships without it. This is the release blocker Q4 counts, not an exemption."
     else
-        rm -f /var/tmp/linix-zfs.img
-        truncate -s 512M /var/tmp/linix-zfs.img
-        if zpool create -f linixpool /var/tmp/linix-zfs.img >/dev/null 2>&1; then
-            STORAGE_ZFS=linixpool
+        rm -f /var/tmp/shall-zfs.img
+        truncate -s 512M /var/tmp/shall-zfs.img
+        if zpool create -f shallpool /var/tmp/shall-zfs.img >/dev/null 2>&1; then
+            STORAGE_ZFS=shallpool
             PASS=$((PASS + 1)); echo "  PASS  zfs: pool $STORAGE_ZFS is imported"
         else
             soft "zfs: the module is loaded and zpool create still failed"
@@ -951,7 +951,7 @@ teardown_storage_devices() {
     [ -n "$STORAGE_LVM" ] && vgremove -f "$STORAGE_LVM" >/dev/null 2>&1
     [ -n "$STORAGE_BTRFS" ] && umount "$STORAGE_BTRFS" >/dev/null 2>&1
     losetup -D >/dev/null 2>&1
-    rm -f /var/tmp/linix-btrfs.img /var/tmp/linix-lvm.img /var/tmp/linix-zfs.img
+    rm -f /var/tmp/shall-btrfs.img /var/tmp/shall-lvm.img /var/tmp/shall-zfs.img
     return 0
 }
 
@@ -965,7 +965,7 @@ teardown_storage_devices() {
 # output — which is the one thing that never drifts, while drift is where every
 # real bug in Part VII came from.
 #
-# Install failure is SOFT (a registry outage is not a LiNix bug); everything
+# Install failure is SOFT (a registry outage is not a Shall bug); everything
 # after a successful install is HARD. That split is what caught the pixi
 # `global remove` vs `global uninstall` bug a dry-run plan could never see.
 setup_storage_devices
@@ -1084,7 +1084,7 @@ canary() {
         # The list-token is EMPTY, which means `list` must say the same string `install` was
         # given. That is the assertion, and it is the whole point: `btrfs subvolume list`
         # reports a path relative to the filesystem root, so until 2026-07-30 a subvolume
-        # installed as /mnt/linix-btrfs/canary came back as /canary and `sync` re-created it
+        # installed as /mnt/shall-btrfs/canary came back as /canary and `sync` re-created it
         # every run. A token of `/canary` would pass either way — it is a substring of the full
         # path — so the weaker form could not tell the fix from the bug.
         #
@@ -1094,16 +1094,16 @@ canary() {
         # deliberately NOT under $STORAGE_BTRFS — a second path to the same subvolume is what
         # `list` has to collapse, and mounting it inside the filesystem it lives on would not
         # produce one.
-        btrfs)    [ -n "$STORAGE_BTRFS" ] && echo "$STORAGE_BTRFS/canary||full||@quota=100M,mount=/mnt/linix-btrfs-canary" ;;
+        btrfs)    [ -n "$STORAGE_BTRFS" ] && echo "$STORAGE_BTRFS/canary||full||@quota=100M,mount=/mnt/shall-btrfs-canary" ;;
         # `@size=` is not optional: `lvm:` refuses without one, by name, and the option rides
         # in the install-only field because `lvremove` takes the volume and not the size.
         lvm)      [ -n "$STORAGE_LVM" ] && echo "$STORAGE_LVM/canary||full||@size=64M" ;;
-        zfs)      [ -n "$STORAGE_ZFS" ] && echo "$STORAGE_ZFS/canary||full||@quota=100M,mount=/mnt/linix-zfs-canary" ;;
+        zfs)      [ -n "$STORAGE_ZFS" ] && echo "$STORAGE_ZFS/canary||full||@quota=100M,mount=/mnt/shall-zfs-canary" ;;
         # An AppImage is installed by URL, so the "name" is the URL — and that is the whole
         # reason this row was empty for months. Pinned to a tag rather than `continuous`: a
         # moving artifact makes a red run mean two things at once.
         #
-        # No binary check. LiNix symlinks the downloaded file under a name derived from the URL,
+        # No binary check. Shall symlinks the downloaded file under a name derived from the URL,
         # and asserting a name this table guessed would be asserting the guess. `list` is the
         # presence proof, as it is for `mise` and `helm`.
         appimage) echo "https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-x86_64.AppImage||full|appimagetool" ;;
@@ -1152,7 +1152,7 @@ no_lifecycle_reason() {
         # it is DETECTED there and printed there. Silence here means either a canary exists or
         # 13b already said why not, and an unexplained skip is impossible in both directions.
         btrfs|lvm|zfs)
-            [ -n "${LINIX_IT_STORAGE:-}" ] \
+            [ -n "${SHALL_IT_STORAGE:-}" ] \
                 || echo "needs a real block device, which only the \`storage\` image (--privileged) provides — plan-smoked here" ;;
         web)      echo "installs from a pasted URL; no stable public canary — smoked in 15" ;;
         appimage) echo "needs FUSE, which a plain container does not have — smoked in 15" ;;
@@ -1204,7 +1204,7 @@ no_lifecycle_reason() {
 # leftover actually happens — so a manager that cleans up properly still has to.
 removal_leaves_binary() {
     case "$1" in
-        bun) echo "bun's own \`remove -g\` drops the package and keeps its launcher (reproduced against bun directly, with no LiNix involved)" ;;
+        bun) echo "bun's own \`remove -g\` drops the package and keeps its launcher (reproduced against bun directly, with no Shall involved)" ;;
         *)   echo "" ;;
     esac
 }
@@ -1249,13 +1249,13 @@ assert_binary_gone() {
 
 READY_LIST=$(lx check health 2>/dev/null | grep '^\[READY\]' | awk '{print $2}' | sort)
 
-# And the backends LiNix reports as degraded ONLY because a setup step it offers to run has not
+# And the backends Shall reports as degraded ONLY because a setup step it offers to run has not
 # been run (Q10/Q11/Q13). They belong in the lifecycle for the same reason they are degraded:
 # `lx -y install` performs that setup, so leaving them out tests the offer nowhere — which is
 # what happened the first night the health check shipped, when `mix` dropped from a real
 # lifecycle to a plan-smoke and the run still said PASS.
 #
-# The sentence is LiNix's own (`src/verbs/check.rs`); if it changes, this must change with it,
+# The sentence is Shall's own (`src/verbs/check.rs`); if it changes, this must change with it,
 # which is why it is one grep in one place rather than a pattern in each check.
 SETUP_LIST=$(lx check health 2>/dev/null \
     | grep 'before it can install anything' \
@@ -1287,8 +1287,8 @@ list_cannot_show() {
 # which is the state a failed removal leaves behind, and it fails identically on every
 # sync after that.
 undeclare_canary() {
-    $TO "$LINIX" unmanage "$1" >/dev/null 2>&1 || true
-    _imp="$LINIX_CONFIG_DIR/modules/imperative.txt"
+    $TO "$SHALL" unmanage "$1" >/dev/null 2>&1 || true
+    _imp="$SHALL_CONFIG_DIR/modules/imperative.txt"
     [ -f "$_imp" ] || return 0
     grep -v -F "$1" "$_imp" > "$_imp.tmp" 2>/dev/null
     mv "$_imp.tmp" "$_imp"
@@ -1308,7 +1308,7 @@ lifecycle() {
     echo "    -- $be:$cpkg"
     # V.15: an explicit `be:name` is refused unless `be` is listed. init writes the
     # READY set, but a manager that came up after init would not be there.
-    grep -qx "$be" "$LINIX_CONFIG_DIR/priority" 2>/dev/null || echo "$be" >> "$LINIX_CONFIG_DIR/priority"
+    grep -qx "$be" "$SHALL_CONFIG_DIR/priority" 2>/dev/null || echo "$be" >> "$SHALL_CONFIG_DIR/priority"
 
     # Read before the install, because the removal check below is a comparison against
     # it: a name another manager already owns must not be scored as this one's leftover.
@@ -1330,7 +1330,7 @@ lifecycle() {
     echo "$be" >> "$LEDGER/be-life"
 
     # Everything below is HARD: the install worked, so the manager answered, and a
-    # parser or argv fault from here on is a LiNix bug and nothing else.
+    # parser or argv fault from here on is a Shall bug and nothing else.
     _nolist="$(list_cannot_show "$be")"
     if [ -n "$_nolist" ]; then
         soft "$be: list does not show $ctok — $_nolist"
@@ -1352,7 +1352,7 @@ lifecycle() {
 
     ok "$be: uninstall $cpkg" lx_slow -y uninstall "$be:$cpkg"
     [ -n "$_nolist" ] || nok "$be: $ctok is gone from list" sh -c \
-        "$LINIX list --backend '$be' 2>/dev/null | grep -q '$ctok'"
+        "$SHALL list --backend '$be' 2>/dev/null | grep -q '$ctok'"
     [ -n "$cbin" ] && assert_binary_gone "$be" "$cbin" "$_prepath" /tmp/life.out
     # A successful uninstall already removed the line; this covers the run where it
     # reported success and did not, which is the whole point of asserting the rest.
@@ -1409,7 +1409,7 @@ storage_resize_lifecycle() {
         lvremove -y "$_vol" >/dev/null 2>&1
     }
 
-    grep -qx lvm "$LINIX_CONFIG_DIR/priority" 2>/dev/null || echo lvm >> "$LINIX_CONFIG_DIR/priority"
+    grep -qx lvm "$SHALL_CONFIG_DIR/priority" 2>/dev/null || echo lvm >> "$SHALL_CONFIG_DIR/priority"
 
     if ! lx_slow -y install "lvm:$_vol@size=64M" >/tmp/resize.out 2>&1; then
         soft "lvm: could not create the resize canary — $(tr '\n' ' ' < /tmp/resize.out)"
@@ -1419,7 +1419,7 @@ storage_resize_lifecycle() {
 
     # A raw volume has nothing for `--resizefs` to carry, and growing one is *meant* to fail —
     # so the canary gets a filesystem, and a machine that cannot give it one says so rather than
-    # scoring the image's gap as a LiNix defect.
+    # scoring the image's gap as a Shall defect.
     if ! mkfs.ext4 -q -F "$_dev" >/dev/null 2>&1; then
         soft "lvm: no ext4 on the resize canary (mkfs.ext4 failed or is absent), so --resizefs has no filesystem and the grow below would fail for the image's reason"
         _cleanup_resizer
@@ -1430,7 +1430,7 @@ storage_resize_lifecycle() {
     # the path Q19 is about: `install` names a spec and hands it to the backend, so it would prove
     # the resize argv and skip the half that was actually broken — the planner deciding that a
     # declaration whose volume already exists under its name still needs work.
-    _mod="$LINIX_CONFIG_DIR/modules/imperative.txt"
+    _mod="$SHALL_CONFIG_DIR/modules/imperative.txt"
     if ! grep -q "lvm:$_vol" "$_mod" 2>/dev/null; then
         soft "lvm: the resize canary is not declared in $_mod, so the edit-then-sync path cannot be driven here"
         _cleanup_resizer
@@ -1535,7 +1535,7 @@ ALL_BACKENDS=$(lx check health --json 2>/dev/null \
 echo "        registered backends: $(echo $ALL_BACKENDS | wc -w)"
 ok "check health --json enumerates the registry" test -n "$ALL_BACKENDS"
 
-SMOKE_CFG=/tmp/linix-it-smoke
+SMOKE_CFG=/tmp/shall-it-smoke
 rm -rf "$SMOKE_CFG"; mkdir -p "$SMOKE_CFG/modules" "$SMOKE_CFG/profiles"
 printf 'Work\n' > "$SMOKE_CFG/active"
 printf 'use base\n' > "$SMOKE_CFG/profiles/Work"
@@ -1545,8 +1545,8 @@ for b in $ALL_BACKENDS; do echo "$b" >> "$SMOKE_CFG/priority"; done
 
 smoke_lx() {
     record_argv "$@"
-    env LINIX_CONFIG_DIR="$SMOKE_CFG" LINIX_DATA_DIR=/tmp/linix-it-smoke-state \
-        $TO "$LINIX" "$@"
+    env SHALL_CONFIG_DIR="$SMOKE_CFG" SHALL_DATA_DIR=/tmp/shall-it-smoke-state \
+        $TO "$SHALL" "$@"
 }
 
 # smoke_pkg <backend> — a name whose grammar that backend accepts.
@@ -1578,7 +1578,7 @@ for be in $ALL_BACKENDS; do
             : > "$SMOKE_CFG/modules/base.txt"
             echo "$be" >> "$LEDGER/be-smoke"; continue ;;
         link)
-            printf 'link:/etc/hostname @target=/tmp/linix-it-hostname\n' > "$SMOKE_CFG/modules/base.txt"
+            printf 'link:/etc/hostname @target=/tmp/shall-it-hostname\n' > "$SMOKE_CFG/modules/base.txt"
             answers "link: a link statement parses" smoke_lx check
             ok "link: and reaches a plan" smoke_lx --dry-run sync
             : > "$SMOKE_CFG/modules/base.txt"
@@ -1614,10 +1614,10 @@ done
 echo "[16] Command surface, executed"
 
 ok "vars resolves this machine's variables" lx vars
-# `eval` is the one output that will acquire consumers LiNix cannot see, so the
+# `eval` is the one output that will acquire consumers Shall cannot see, so the
 # thing asserted is the contract: a top-level schema version, and valid JSON.
 grep_ok "eval prints a versioned document" '"schema"' lx eval
-ok "eval emits valid JSON" sh -c "$LINIX eval | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null || $LINIX eval | head -1 | grep -q '{'"
+ok "eval emits valid JSON" sh -c "$SHALL eval | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null || $SHALL eval | head -1 | grep -q '{'"
 # `repl` (U34) is the read side of the resolver — a REPL that reads stdin until EOF. A piped
 # session drives the loop (`:help`, `:vars`) and exits on EOF, proving it runs headless; it goes
 # through `lx` so the coverage check below counts it as really executed, not merely `--help`'d.
@@ -1631,7 +1631,7 @@ fi
 # and the one a developer's own machine (which has docker) can never exercise.
 refuses_with_3 "try refuses when there is no container runtime" lx try
 grep_ok "try's refusal names what is missing" "podman" lx try
-ok "check unmanaged lists what LiNix does not manage" lx check unmanaged
+ok "check unmanaged lists what Shall does not manage" lx check unmanaged
 ok "path prints the config repo" lx path
 ok "path --explain says which source won" lx path --explain
 ok "config show prints the active configuration" lx config show
@@ -1648,23 +1648,23 @@ grep_ok "adapters refuses a name that is not a surface, and lists the real ones"
 # **The failure a plugin system has that a built-in does not**: a file that is present,
 # approved, valid TOML and read by nobody, because the array key is `backends` and the reader
 # wants `backend`. Every other signal says fine. `rows in force` is the only one that does not.
-mkdir -p "$LINIX_CONFIG_DIR/adapters"
-printf '[[backends]]\nname = "mymgr"\n' > "$LINIX_CONFIG_DIR/adapters/backends.toml"
+mkdir -p "$SHALL_CONFIG_DIR/adapters"
+printf '[[backends]]\nname = "mymgr"\n' > "$SHALL_CONFIG_DIR/adapters/backends.toml"
 grep_ok "an adapter file nobody approved is reported unapproved" "unapproved" lx adapters backends
 lx lock >/dev/null 2>&1
 grep_ok "a table nobody opens is 'no rows', not 'in use'" "no rows" lx adapters backends
-printf '[[backend]]\nname = "mymgr"\ninstall = "true --"\n' > "$LINIX_CONFIG_DIR/adapters/backends.toml"
+printf '[[backend]]\nname = "mymgr"\ninstall = "true --"\n' > "$SHALL_CONFIG_DIR/adapters/backends.toml"
 lx lock >/dev/null 2>&1
 grep_ok "a row of the right kind is in force" "in use" lx adapters backends
 # Malformed degrades rather than refusing (owner ruling, 2026-08-10), and `check adapters` is
 # where that fact is an exit code instead of a warning nobody re-reads.
-printf 'this is not toml at all\n' > "$LINIX_CONFIG_DIR/adapters/backends.toml"
+printf 'this is not toml at all\n' > "$SHALL_CONFIG_DIR/adapters/backends.toml"
 # Approved first, and that ordering is the point: `standing_of` asks II.12 before it asks the
 # parser, so an unapproved file reads `unapproved` whatever is inside it. Without this line the
 # check below tests the approval ledger and calls it a parse result.
 lx lock >/dev/null 2>&1
 grep_ok "an unreadable adapter file is reported malformed" "malformed" lx adapters backends
-# The ruling: `sync` degrades rather than refusing. Asserted on the words LiNix prints, not on
+# The ruling: `sync` degrades rather than refusing. Asserted on the words Shall prints, not on
 # exit 0 — a check that only wants exit 0 is a check a do-nothing binary passes, which is what
 # the mutation gate exists to say. The exit code half is `a_malformed_adapter_does_not_refuse_a_
 # sync` in the Rust suite, where it is a real assertion rather than a survivor.
@@ -1673,14 +1673,14 @@ grep_ok "a malformed adapter warns, naming the file, and the sync goes on" "is n
 # the report, because a `nok` cannot tell a refusal from a crash — which is the second thing the
 # mutation gate measures, and it was right about these two as well.
 grep_ok "check adapters names a file that is not in force" "not in force" lx check adapters
-rm -f "$LINIX_CONFIG_DIR/adapters/backends.toml"
+rm -f "$SHALL_CONFIG_DIR/adapters/backends.toml"
 grep_ok "check adapters is clean once the file is gone" "extended nothing" lx check adapters
 # `add` vendors a source's modules. A local path with a module is the network-free case; it
 # copies the module in and reports it.
-mkdir -p /tmp/linix-share/modules
-printf 'apt:jq\n' > /tmp/linix-share/modules/shared.txt
-ok "add vendors a module from a local source" lx add /tmp/linix-share
-ok "add brought the module file in" test -f "$LINIX_CONFIG_DIR/modules/shared.txt"
+mkdir -p /tmp/shall-share/modules
+printf 'apt:jq\n' > /tmp/shall-share/modules/shared.txt
+ok "add vendors a module from a local source" lx add /tmp/shall-share
+ok "add brought the module file in" test -f "$SHALL_CONFIG_DIR/modules/shared.txt"
 nok "add refuses a source that does not exist" lx add /no/such/source/here
 ok "sbom emits a bill of materials" lx sbom
 ok "completions bash generates a script" lx completions bash
@@ -1694,7 +1694,7 @@ ok "module show reads it back" lx module show harness-module
 ok "snapshot list" lx snapshot list
 ok "schedule list" lx schedule list
 ok "service list" lx service list
-# Not every manager can enumerate its repositories (apt has no listing command LiNix
+# Not every manager can enumerate its repositories (apt has no listing command Shall
 # drives). Either it lists, or it says the backend cannot — an unexplained non-zero is
 # still a failure.
 if lx repo list >/tmp/it.out 2>&1; then
@@ -1716,7 +1716,7 @@ ok "hooks shell-init prints the wrapper functions" lx hooks shell-init bash
 # What W36 actually ruled is the thing worth asserting: heal NAMES what it could not recover and
 # does not exit 0 while saying so. Both outcomes are legitimate here; a heal that says nothing
 # and exits non-zero, or one that names a failure and exits 0, is not.
-# Through `lx`, not `$TO "$LINIX"`: the wrapper is what records a subcommand as EXECUTED,
+# Through `lx`, not `$TO "$SHALL"`: the wrapper is what records a subcommand as EXECUTED,
 # and the first version of this check called the binary directly — so the coverage audit
 # reported `heal` as only ever --help'd, which is precisely the claim this sweep exists
 # to refuse. Measured: `FAIL every subcommand is executed — only --help'd: heal`.
@@ -1759,7 +1759,7 @@ if lx check security >/tmp/it.out 2>&1; then
 else
     soft "check security ran but could not reach the OSV.dev database"
 fi
-ok "export writes native manifests" lx export --out /tmp/linix-it-export
+ok "export writes native manifests" lx export --out /tmp/shall-it-export
 # The package is PINNED to this image's native manager. An unpinned `jq` resolved to
 # `cargo:jq` on an image that had cargo and no jq — a library crate that installs no
 # program — so the check failed on the resolver's answer, not on `run`.
@@ -1770,13 +1770,13 @@ else
 fi
 
 # plan → apply: the frozen plan is the one that gets applied.
-ok "plan freezes a reviewable file" lx plan --out /tmp/linix-it-plan.json
-ok "the plan file exists" test -f /tmp/linix-it-plan.json
-ok "apply reads a saved plan" lx --dry-run apply /tmp/linix-it-plan.json
+ok "plan freezes a reviewable file" lx plan --out /tmp/shall-it-plan.json
+ok "the plan file exists" test -f /tmp/shall-it-plan.json
+ok "apply reads a saved plan" lx --dry-run apply /tmp/shall-it-plan.json
 
 # `edit` shells out to $VISUAL/$EDITOR; `true` is an editor that exits 0.
 record_argv edit priority
-ok "edit opens a file in \$EDITOR" env EDITOR=true VISUAL=true $TO "$LINIX" edit priority
+ok "edit opens a file in \$EDITOR" env EDITOR=true VISUAL=true $TO "$SHALL" edit priority
 
 # reset deletes the registry. The command is exercised through the refusal it owes
 # a machine that still has a config repo — running it for real would end the run.
@@ -1788,29 +1788,29 @@ ok "self-upgrade --check reports the version and source" lx self-upgrade --check
 
 # --- 16b. bundle → restore, the round trip (V.59) -------------------------
 echo "[16b] bundle → restore"
-rm -rf /tmp/linix-it-bundle /tmp/linix-it-restored
-ok "bundle packs the config" lx bundle --out /tmp/linix-it-bundle
-ok "the bundle directory exists" test -d /tmp/linix-it-bundle
-mkdir -p /tmp/linix-it-restored
+rm -rf /tmp/shall-it-bundle /tmp/shall-it-restored
+ok "bundle packs the config" lx bundle --out /tmp/shall-it-bundle
+ok "the bundle directory exists" test -d /tmp/shall-it-bundle
+mkdir -p /tmp/shall-it-restored
 ok "restore into a clean config directory" \
-    env LINIX_CONFIG_DIR=/tmp/linix-it-restored LINIX_DATA_DIR=/tmp/linix-it-restored-state \
-        $TO "$LINIX" restore /tmp/linix-it-bundle
-record_argv restore /tmp/linix-it-bundle
+    env SHALL_CONFIG_DIR=/tmp/shall-it-restored SHALL_DATA_DIR=/tmp/shall-it-restored-state \
+        $TO "$SHALL" restore /tmp/shall-it-bundle
+record_argv restore /tmp/shall-it-bundle
 answers "the restored model parses" \
-    env LINIX_CONFIG_DIR=/tmp/linix-it-restored LINIX_DATA_DIR=/tmp/linix-it-restored-state \
-        $TO "$LINIX" check
+    env SHALL_CONFIG_DIR=/tmp/shall-it-restored SHALL_DATA_DIR=/tmp/shall-it-restored-state \
+        $TO "$SHALL" check
 refuses_with_3 "restore refuses a config directory that is not empty" \
-    env LINIX_CONFIG_DIR=/tmp/linix-it-restored LINIX_DATA_DIR=/tmp/linix-it-restored-state \
-        $TO "$LINIX" restore /tmp/linix-it-bundle
+    env SHALL_CONFIG_DIR=/tmp/shall-it-restored SHALL_DATA_DIR=/tmp/shall-it-restored-state \
+        $TO "$SHALL" restore /tmp/shall-it-bundle
 ok "and --force overrides it" \
-    env LINIX_CONFIG_DIR=/tmp/linix-it-restored LINIX_DATA_DIR=/tmp/linix-it-restored-state \
-        $TO "$LINIX" restore /tmp/linix-it-bundle --force
+    env SHALL_CONFIG_DIR=/tmp/shall-it-restored SHALL_DATA_DIR=/tmp/shall-it-restored-state \
+        $TO "$SHALL" restore /tmp/shall-it-bundle --force
 
 # --- 16c. `--help` for the whole surface ----------------------------------
 # Kept, but demoted: it catches a subcommand whose clap wiring is broken, and the
 # audit below does not accept it as coverage.
 echo "[16c] --help across the surface"
-HELP_CMDS=$($LINIX --help 2>&1 | sed -n '/^Commands:/,/^Options:/p' \
+HELP_CMDS=$($SHALL --help 2>&1 | sed -n '/^Commands:/,/^Options:/p' \
     | sed -n 's/^  \([a-z][a-z-]*\) .*/\1/p' | grep -v '^help$' | sort -u)
 for c in $HELP_CMDS; do
     ok "\`$c --help\` exists" lx "$c" --help
@@ -1819,18 +1819,18 @@ done
 # ==========================================================================
 # 16d. A REAL CRASH IN THE MIDDLE OF A TRANSACTION (GRADER §5)
 # ==========================================================================
-# The journal is a write-ahead log and nothing had ever killed LiNix while one was open.
+# The journal is a write-ahead log and nothing had ever killed Shall while one was open.
 # `heal` was driven only over a journal left by an ORDINARY run — the one state a WAL is not
 # for — and the 2026-08-04 grade named it directly: *"the WAL's entire reason to exist,
 # untested under a real crash."*
 #
-# `kill -9`, never `-15`: a SIGTERM runs whatever LiNix does on the way out, which is the
+# `kill -9`, never `-15`: a SIGTERM runs whatever Shall does on the way out, which is the
 # graceful path and is what every other check here already exercises. Only SIGKILL leaves the
 # state this section is about — an entry on disk that says a package is being installed and a
 # process that will never come back to say how it went.
 echo "[16d] SIGKILL mid-transaction, then heal"
 
-JOURNAL="$LINIX_DATA_DIR/journal.jsonl"
+JOURNAL="$SHALL_DATA_DIR/journal.jsonl"
 
 # How many operations are still OPEN — and the emphasis is the whole point.
 #
@@ -1897,12 +1897,12 @@ crash_undeclare() {
         mv "$IMPERATIVE.tmp" "$IMPERATIVE"
     done
 }
-# The machine, asked directly. Never `linix list` — that is the program on trial.
+# The machine, asked directly. Never `shall list` — that is the program on trial.
 crash_installed() { _n=0; for _p in $CRASH_PKGS; do on_path "$_p" && _n=$((_n + 1)); done; echo "$_n"; }
 crash_missing()   { _m=""; for _p in $CRASH_PKGS; do on_path "$_p" || _m="$_m $_p"; done; echo "$_m"; }
 # UNINSTALL FIRST, undeclare second — and the order is not cosmetic.
 #
-# `linix uninstall` refuses a package no active file declares: *"nothing was uninstalled:
+# `shall uninstall` refuses a package no active file declares: *"nothing was uninstalled:
 # `apt:ncdu` is not declared in any active file."* That is the product being careful, and the
 # first version of this function took the line out first and then asked for the removal, so
 # every cleanup refused, three packages stayed installed, and the two crash iterations after it
@@ -1934,9 +1934,9 @@ crash_wipe() {
         {
             echo "--- uninstall $BACKEND:$_p"
             echo "    declared in imperative.txt: $(grep -cx "$BACKEND:$_p" "$IMPERATIVE" 2>/dev/null || echo 0)"
-            echo "    active modules: $(tr '\n' ' ' < "$LINIX_CONFIG_DIR/active" 2>/dev/null)"
+            echo "    active modules: $(tr '\n' ' ' < "$SHALL_CONFIG_DIR/active" 2>/dev/null)"
         } >> /tmp/crash-wipe.out
-        $TO "$LINIX" -y uninstall "$BACKEND:$_p" >> /tmp/crash-wipe.out 2>&1
+        $TO "$SHALL" -y uninstall "$BACKEND:$_p" >> /tmp/crash-wipe.out 2>&1
         echo "    rc=$? and $_p is now $(on_path "$_p" && echo 'STILL on PATH' || echo 'gone')" >> /tmp/crash-wipe.out
     done
     crash_undeclare
@@ -1962,12 +1962,12 @@ crash_run() {
     crash_declare
     record_argv sync
 
-    # No `timeout` wrapper. Killing the wrapper leaves LiNix running and this section would
+    # No `timeout` wrapper. Killing the wrapper leaves Shall running and this section would
     # then be measuring an orphan; the spin budget below is the bound instead.
     if [ -n "$_grp" ]; then
-        setsid $LINIX -y sync >"/tmp/crash-$_tag.out" 2>&1 &
+        setsid $SHALL -y sync >"/tmp/crash-$_tag.out" 2>&1 &
     else
-        $LINIX -y sync >"/tmp/crash-$_tag.out" 2>&1 &
+        $SHALL -y sync >"/tmp/crash-$_tag.out" 2>&1 &
     fi
     _pid=$!
 
@@ -2070,10 +2070,10 @@ crash_run() {
     _unowned=""
     for _p in $CRASH_PKGS; do
         on_path "$_p" || continue
-        lx why "$BACKEND:$_p" 2>&1 | grep -q "not under LiNix management" && _unowned="$_unowned $_p"
+        lx why "$BACKEND:$_p" 2>&1 | grep -q "not under Shall management" && _unowned="$_unowned $_p"
     done
     if [ -z "$_unowned" ]; then
-        PASS=$((PASS + 1)); echo "  PASS  crash/$_tag: every canary the crash left on the machine is under LiNix management"
+        PASS=$((PASS + 1)); echo "  PASS  crash/$_tag: every canary the crash left on the machine is under Shall management"
     else
         hard "crash/$_tag: the crash left$_unowned installed and under nobody's management, so the command for removing them will report success and take nothing away"
     fi
@@ -2109,13 +2109,13 @@ crash_run() {
             excerpt "/tmp/crash-idem-$_tag.out" 6
         fi
     elif [ -n "$_grp" ]; then
-        # The package manager itself was killed mid-write. LiNix cannot undo that, and the
+        # The package manager itself was killed mid-write. Shall cannot undo that, and the
         # contract here is smaller and still real: it must say what is wrong in words a person
         # can act on, and not with a panic. Silence and a stack trace are the two failures.
         if grep -qi "interrupt\|dpkg\|database\|lock\|run.*configure\|repair" "/tmp/crash-conv-$_tag.out"; then
-            PASS=$((PASS + 1)); echo "  PASS  crash/$_tag: the manager was left broken and LiNix named the manager's own state"
+            PASS=$((PASS + 1)); echo "  PASS  crash/$_tag: the manager was left broken and Shall named the manager's own state"
         elif grep -q "panicked at\|RUST_BACKTRACE" "/tmp/crash-conv-$_tag.out"; then
-            hard "crash/$_tag: killing the package manager mid-write made LiNix panic"
+            hard "crash/$_tag: killing the package manager mid-write made Shall panic"
             excerpt "/tmp/crash-conv-$_tag.out" 6
         else
             hard "crash/$_tag: the sync after a mid-write kill neither converged nor said why"
@@ -2148,7 +2148,7 @@ crash_run() {
     fi
 
     # The group kill leaves the PACKAGE MANAGER half-written, which is the whole point of it —
-    # and LiNix's own message says how to put that right (`dpkg was interrupted, you must
+    # and Shall's own message says how to put that right (`dpkg was interrupted, you must
     # manually run 'dpkg --configure -a'`). Following that sentence is itself the check: advice
     # that does not work is worse than no advice.
     #
@@ -2158,7 +2158,7 @@ crash_run() {
     # with them — a harness that breaks the machine on purpose owes it a repair.
     if [ -n "$_grp" ]; then
         if repair_manager && lx_slow -y sync >/tmp/crash-repair.out 2>&1; then
-            PASS=$((PASS + 1)); echo "  PASS  crash/$_tag: the repair LiNix named put the manager back, and the next sync worked"
+            PASS=$((PASS + 1)); echo "  PASS  crash/$_tag: the repair Shall named put the manager back, and the next sync worked"
         elif repair_manager; then
             hard "crash/$_tag: the manager's own repair ran and the sync after it still failed"
             excerpt /tmp/crash-repair.out 6
@@ -2181,8 +2181,8 @@ crash_run() {
         # two full runs to name.
         sed 's/^/        | /' /tmp/crash-wipe.out
         # **And WHO OWNS the ones left behind.** `already up to date` over an installed package
-        # has exactly two causes and the wipe log cannot tell them apart: LiNix believes the
-        # package is not installed, or LiNix believes it is not managed. `why` answers the second
+        # has exactly two causes and the wipe log cannot tell them apart: Shall believes the
+        # package is not installed, or Shall believes it is not managed. `why` answers the second
         # directly — the ownership record is what recovery is documented to have missed once
         # before (`sync/mod.rs`, the ledger note on the recovery path), and on the run that
         # produced this branch it was the first question anyone asked and the one fact the log
@@ -2190,7 +2190,7 @@ crash_run() {
         for _p in $CRASH_PKGS; do
             on_path "$_p" || continue
             echo "        ? why $BACKEND:$_p"
-            $TO "$LINIX" why "$BACKEND:$_p" 2>&1 | sed 's/^/        ? /' | head -6
+            $TO "$SHALL" why "$BACKEND:$_p" 2>&1 | sed 's/^/        ? /' | head -6
         done
     fi
 }
@@ -2221,7 +2221,7 @@ elif [ "$_baseline_total" -lt 1 ]; then
     # `too_few_to_audit` exists for. Sixteen sections of installs and removals have run above
     # this line, so an empty log means the binary under test never recorded an operation, and
     # "nothing is open" is then true of a program that did nothing at all. Measured: this was
-    # the one check in this round that survived a linix which fails everything.
+    # the one check in this round that survived a shall which fails everything.
     hard "journal: the write-ahead log has no entries at all after sixteen sections of installs and removals — nothing recorded an operation, so there is nothing to audit"
 elif [ "$_baseline_open" -eq 0 ]; then
     PASS=$((PASS + 1)); echo "  PASS  journal: an ordinary run left nothing open in the write-ahead log ($_baseline_total recorded, $(journal_incomplete) failed-and-retryable)"
@@ -2246,13 +2246,13 @@ if [ -z "$_ghost" ]; then
     soft "heal: no real install entry to build an unreachable one from, so the silent-skip branch was not driven"
 else
     printf '%s\n' "$_ghost" \
-        | sed -e 's/"id":"[^"]*"/"id":"linixnosuchmgr:ghost:00000000000000000000000000000001"/' \
-              -e 's/"backend":"[^"]*"/"backend":"linixnosuchmgr"/g' \
+        | sed -e 's/"id":"[^"]*"/"id":"shallnosuchmgr:ghost:00000000000000000000000000000001"/' \
+              -e 's/"backend":"[^"]*"/"backend":"shallnosuchmgr"/g' \
               -e 's/"name":"[^"]*"/"name":"ghost"/' \
               -e 's/"status":"[^"]*"/"status":"InProgress"/' \
         >> "$JOURNAL"
     _hout=$(lx heal 2>&1); _hrc=$?
-    if printf '%s' "$_hout" | grep -q "linixnosuchmgr"; then
+    if printf '%s' "$_hout" | grep -q "shallnosuchmgr"; then
         PASS=$((PASS + 1)); echo "  PASS  heal: an operation it cannot act on is named rather than skipped in silence"
     else
         hard "heal: an entry naming a manager this machine does not have was skipped without a word (rc=$_hrc)"
@@ -2261,11 +2261,11 @@ else
     if [ "$_hrc" -ne 0 ]; then
         PASS=$((PASS + 1)); echo "  PASS  heal: and it says so in the exit code rather than reporting success"
     else
-        hard "heal: an operation was left unresolved and heal exited 0 — \`linix heal && echo ok\` prints ok (W36's family)"
+        hard "heal: an operation was left unresolved and heal exited 0 — \`shall heal && echo ok\` prints ok (W36's family)"
     fi
     # Taken back out AFTER the assertions, never before one. The scrub that runs first and then
     # asserts absence is E2, and this harness deleted its last one for that reason.
-    grep -v linixnosuchmgr "$JOURNAL" > "$JOURNAL.tmp" 2>/dev/null
+    grep -v shallnosuchmgr "$JOURNAL" > "$JOURNAL.tmp" 2>/dev/null
     mv "$JOURNAL.tmp" "$JOURNAL"
 fi
 
@@ -2288,13 +2288,13 @@ else
         # And the one neither of those can reach: the log has CLOSED an operation, and the run
         # has not yet written down what it owns (`S87`).
         crash_run completed completed
-        # And the hostile one — the manager dies too, mid-write. `setsid` is what puts LiNix
+        # And the hostile one — the manager dies too, mid-write. `setsid` is what puts Shall
         # in a group of its own so the kill reaches the child; an image without it says so
         # rather than quietly running the gentler test twice.
         if on_path setsid; then
             crash_run groupkill 1 group
         else
-            soft "crash/groupkill: this image has no \`setsid\`, so LiNix cannot be put in a process group of its own and the package manager cannot be killed with it"
+            soft "crash/groupkill: this image has no \`setsid\`, so Shall cannot be put in a process group of its own and the package manager cannot be killed with it"
         fi
     else
         soft "crash/heal: the control sync did not install$CRASH_PKGS on this image, so the crash loop has no fixture — $(tr '\n' ' ' < /tmp/crash-control.out | tail -c 300)"
@@ -2308,7 +2308,7 @@ fi
 # `DataLock` is an OS lock on an open handle and `main.rs` waits 120s for it. Both facts were
 # asserted only by unit tests inside one process, which is the one place a file lock cannot
 # fail: `try_lock_exclusive` on a handle this process already holds is a different code path
-# from a second *process* arriving. Nothing had ever started two LiNixes.
+# from a second *process* arriving. Nothing had ever started two Shalles.
 #
 # The third check is the one with teeth. The lock is released by the kernel when the holder
 # dies, and the *stamp* beside it is written by a `Drop` that SIGKILL never runs — so after a
@@ -2316,8 +2316,8 @@ fi
 # file rather than off the lock would hang for two minutes on a corpse.
 echo "[16e] Two runs at once, and killing the lock holder"
 
-LOCKFILE="$LINIX_DATA_DIR/linix.lock"
-LOCKOWNER="$LINIX_DATA_DIR/linix.lock.owner"
+LOCKFILE="$SHALL_DATA_DIR/shall.lock"
+LOCKOWNER="$SHALL_DATA_DIR/shall.lock.owner"
 
 # The elapsed-time oracle. `date +%s` is whole seconds everywhere, including busybox.
 since() { echo $(( $(date +%s) - $1 )); }
@@ -2330,13 +2330,13 @@ elif ! on_path flock; then
     soft "two-writers: this image has no \`flock\`, so a second writer cannot be held against a lock this harness controls"
 else
     # --- (a) a second writer waits, and says who it is waiting for -----------
-    # `flock` takes the same OS lock on the same file LiNix does, so the holder is this
-    # harness rather than a second LiNix whose lifetime is a guess.
+    # `flock` takes the same OS lock on the same file Shall does, so the holder is this
+    # harness rather than a second Shall whose lifetime is a guess.
     flock "$LOCKFILE" -c 'sleep 12' &
     _holder=$!
     sleep 1
     _t0=$(date +%s)
-    $TO "$LINIX" -y sync >/tmp/two-writers.out 2>&1
+    $TO "$SHALL" -y sync >/tmp/two-writers.out 2>&1
     _rc=$?
     _waited=$(since "$_t0")
     kill -9 "$_holder" 2>/dev/null; wait "$_holder" 2>/dev/null
@@ -2371,12 +2371,12 @@ else
         excerpt /tmp/two-writers.out 6
     fi
 
-    # --- (b) and (c) share one holder, and it is a REAL LiNix ----------------
+    # --- (b) and (c) share one holder, and it is a REAL Shall ----------------
     # The first draft of (c) held the lock with `flock … -c 'sleep 300'` and killed the `flock`
     # process. `sleep` is its CHILD and inherits the open descriptor, so the lock was still held
-    # by a live process — LiNix waited its whole 120s and said so, correctly, and the check
+    # by a live process — Shall waited its whole 120s and said so, correctly, and the check
     # scored the product for the harness's mistake. It is the same trap the release notes
-    # already record about killing a wrapper instead of the script. So the holder is LiNix
+    # already record about killing a wrapper instead of the script. So the holder is Shall
     # itself, which is also the only holder whose stamp is worth reading.
     #
     # The holder is given WORK, and is then killed the instant its stamp appears. A sync with
@@ -2387,7 +2387,7 @@ else
     # after it would fail for a reason that is not the one under test.
     rm -f "$LOCKOWNER"
     crash_declare
-    $LINIX -y sync >/tmp/lock-holder.out 2>&1 &
+    $SHALL -y sync >/tmp/lock-holder.out 2>&1 &
     _holder=$!
     _spins=0
     while [ "$_spins" -lt 600 ] && [ ! -s "$LOCKOWNER" ]; do
@@ -2400,7 +2400,7 @@ else
         kill -9 "$_holder" 2>/dev/null; wait "$_holder" 2>/dev/null
     else
         _stamp="$(cat "$LOCKOWNER")"
-        # It names the command and the pid, not "another linix". A wait with no name is
+        # It names the command and the pid, not "another shall". A wait with no name is
         # indistinguishable from a hang, which is the whole reason the stamp file exists.
         if printf '%s' "$_stamp" | grep -q "pid $_holder"; then
             PASS=$((PASS + 1)); echo "  PASS  lock: the holder published its own command and pid — $_stamp"
@@ -2409,7 +2409,7 @@ else
         fi
 
         # --- (c) SIGKILL the holder ------------------------------------------
-        # `Drop` never runs, so `linix.lock.owner` outlives the process that wrote it. The lock
+        # `Drop` never runs, so `shall.lock.owner` outlives the process that wrote it. The lock
         # itself is an OS lock on an open handle and the kernel drops it — so if anything ever
         # decided to wait by reading that FILE, this is where it costs two minutes.
         kill -9 "$_holder" 2>/dev/null; wait "$_holder" 2>/dev/null
@@ -2419,16 +2419,16 @@ else
             soft "lock: the stamp was already gone after the kill, so the corpse case below is weaker than intended"
         fi
 
-        # **The subject here is LiNix's own lock, so the package manager's is cleared first.**
+        # **The subject here is Shall's own lock, so the package manager's is cleared first.**
         # Killing a holder mid-sync also orphans the `pacman` it had started, which keeps its own
         # `db.lck` and then leaves it behind — so the sync below failed on *that* lock and this
-        # check reported it as a LiNix lock that was not released. A check that can fail for a
+        # check reported it as a Shall lock that was not released. A check that can fail for a
         # reason unrelated to its own sentence proves nothing when it passes either. `heal` is
         # the command whose job that repair is (II.50), and it is untimed: what is being measured
         # is the sync, and specifically that it does not wait 120s on a corpse.
-        $TO "$LINIX" -y heal >/tmp/lock-corpse-heal.out 2>&1 || true
+        $TO "$SHALL" -y heal >/tmp/lock-corpse-heal.out 2>&1 || true
         _t0=$(date +%s)
-        $TO "$LINIX" -y sync >/tmp/lock-corpse.out 2>&1
+        $TO "$SHALL" -y sync >/tmp/lock-corpse.out 2>&1
         _rc=$?
         _took=$(since "$_t0")
         # **What must not happen is a wait on the DATA DIRECTORY**, and that is what is
@@ -2437,7 +2437,7 @@ else
         # to finish (II.51), announcing it as it goes. On opensuse that was 62 seconds of
         # correct behaviour, and a bare `>= 30` reported it as "the stale stamp file was
         # believed over the lock" — a sentence about a mechanism that had not run. The wait
-        # LiNix is forbidden from making here is the one on its own lock, and it says which
+        # Shall is forbidden from making here is the one on its own lock, and it says which
         # wait it is making.
         #
         # **The exit code is asked LAST, and under its own name.** It used to be asked first,
@@ -2465,7 +2465,7 @@ else
             excerpt /tmp/lock-corpse.out 6
         else
             _why=""
-            grep -q "linix: waiting for" /tmp/lock-corpse.out 2>/dev/null && _why=" (it waited for the package manager the killed run had started, and said so)"
+            grep -q "shall: waiting for" /tmp/lock-corpse.out 2>/dev/null && _why=" (it waited for the package manager the killed run had started, and said so)"
             PASS=$((PASS + 1)); echo "  PASS  lock: a killed holder's lock died with it — the next run took ${_took}s, took the lock and released it${_why}"
         fi
         # The other question, asked separately because it is a different question.
@@ -2486,16 +2486,16 @@ fi
 # never executed anywhere. It is on every mutation of every system manager.
 #
 # It cannot be tested through a pipe. `ChildStdin::Interactive` exists so that sudo can ask
-# for a password on the terminal LiNix was started from; with no terminal there is nothing to
+# for a password on the terminal Shall was started from; with no terminal there is nothing to
 # ask, and the check would be measuring the absence of the thing it is for. So this section
-# makes a user with a password, and drives LiNix on a pty.
+# makes a user with a password, and drives Shall on a pty.
 echo "[16f] sudo with a real password, on a pty"
 
-SUDO_USER_NAME=linixsudo
-SUDO_PW=linix-harness-pw
-SUDO_CFG=/tmp/linix-sudo-config
-SUDO_STATE=/tmp/linix-sudo-state
-SUDO_DRIVER=/tmp/linix-sudo-drive.sh
+SUDO_USER_NAME=shallsudo
+SUDO_PW=shall-harness-pw
+SUDO_CFG=/tmp/shall-sudo-config
+SUDO_STATE=/tmp/shall-sudo-state
+SUDO_DRIVER=/tmp/shall-sudo-drive.sh
 
 # Every one of these is DETECTED. An image without `sudo`, without a way to set a password, or
 # without a pty tool is a fact about the image, and Q17's rule is that an exemption has to be
@@ -2507,21 +2507,21 @@ sudo_blocker() {
     # scripts, to measure whether its checks can fail. That pair once silently replaced a
     # developer's git identity and thirteen commits went out under it. A sudoer is worse.
     #
-    # `LINIX_IT_IMAGE` is set by every integration Dockerfile and by nothing else, and
+    # `SHALL_IT_IMAGE` is set by every integration Dockerfile and by nothing else, and
     # `the_review_apparatus_is_rust_tests` asserts each image declares it — so it is the one marker
     # that means "this machine is disposable" and cannot drift without a red gate.
-    [ -n "${LINIX_IT_IMAGE:-}" ] \
-        || { echo "this is not a disposable image (no LINIX_IT_IMAGE), and these checks add a user and a sudoers file"; return 0; }
+    [ -n "${SHALL_IT_IMAGE:-}" ] \
+        || { echo "this is not a disposable image (no SHALL_IT_IMAGE), and these checks add a user and a sudoers file"; return 0; }
     on_path sudo      || { echo "this image has no \`sudo\`"; return 0; }
     on_path chpasswd  || { echo "this image cannot set a password (no \`chpasswd\`)"; return 0; }
-    on_path script    || { echo "this image has no \`script\`, so LiNix cannot be given a terminal"; return 0; }
+    on_path script    || { echo "this image has no \`script\`, so Shall cannot be given a terminal"; return 0; }
     on_path useradd || on_path adduser || { echo "this image cannot create a user"; return 0; }
     echo ""
 }
 
 # `-e` — exit with the CHILD's status — is util-linux's and busybox's `script` does not have
 # it. Every assertion below reads an exit code, and without `-e` that code is `script`'s own:
-# the checks would all pass on an image where LiNix failed every time. So it is a blocker and
+# the checks would all pass on an image where Shall failed every time. So it is a blocker and
 # not a fallback, asked of the binary rather than guessed from the distro.
 SCRIPT_FLAGS=""
 script -qec true /dev/null >/dev/null 2>&1 && SCRIPT_FLAGS="-qec"
@@ -2530,21 +2530,21 @@ script -qec true /dev/null >/dev/null 2>&1 && SCRIPT_FLAGS="-qec"
 # inside `su -c "…"` is three levels of quoting over a command that itself contains quotes,
 # and the failure mode is not an error — it is a shell that runs something subtly different
 # and a check that passes for the wrong reason.
-write_sudo_driver() { # $1 = the linix argv, as one string
+write_sudo_driver() { # $1 = the shall argv, as one string
     cat > "$SUDO_DRIVER" <<EOF
 #!/bin/sh
-export LINIX_CONFIG_DIR="$SUDO_CFG"
-export LINIX_DATA_DIR="$SUDO_STATE"
+export SHALL_CONFIG_DIR="$SUDO_CFG"
+export SHALL_DATA_DIR="$SUDO_STATE"
 export HOME="/home/$SUDO_USER_NAME"
-script $SCRIPT_FLAGS "$LINIX $1" /dev/null
+script $SCRIPT_FLAGS "$SHALL $1" /dev/null
 EOF
     chmod 0755 "$SUDO_DRIVER"
 }
 
-# Runs LiNix as the unprivileged user, on a pty, with $1 typed at whatever asks. `$2` is what
+# Runs Shall as the unprivileged user, on a pty, with $1 typed at whatever asks. `$2` is what
 # gets typed; an empty string means the terminal is there and nobody types anything, which is
 # the case that separates "asked and got no answer" from "never asked".
-run_as_sudoer() { # linix-argv  password-to-type  outfile
+run_as_sudoer() { # shall-argv  password-to-type  outfile
     write_sudo_driver "$1"
     if [ -n "$2" ]; then
         printf '%s\n' "$2" | su "$SUDO_USER_NAME" -c "$SUDO_DRIVER" >"$3" 2>&1
@@ -2559,7 +2559,7 @@ if [ -n "$SMOKE" ]; then
 elif [ -n "$SUDO_WHY" ]; then
     soft "sudo: not driven here — $SUDO_WHY"
 elif [ -z "$SCRIPT_FLAGS" ]; then
-    soft "sudo: this image's \`script\` has no -e, so it reports its own exit status rather than LiNix's and every check below would pass regardless of what LiNix did"
+    soft "sudo: this image's \`script\` has no -e, so it reports its own exit status rather than Shall's and every check below would pass regardless of what Shall did"
 else
     userdel -r "$SUDO_USER_NAME" >/dev/null 2>&1 || true
     if on_path useradd; then
@@ -2574,44 +2574,44 @@ else
     # passwordless sudoer would make every check below pass without a password ever being
     # typed, which is the whole subject.
     mkdir -p /etc/sudoers.d
-    printf '%s ALL=(ALL) ALL\n' "$SUDO_USER_NAME" > /etc/sudoers.d/linix-harness
-    chmod 0440 /etc/sudoers.d/linix-harness
+    printf '%s ALL=(ALL) ALL\n' "$SUDO_USER_NAME" > /etc/sudoers.d/shall-harness
+    chmod 0440 /etc/sudoers.d/shall-harness
 
     rm -rf "$SUDO_CFG" "$SUDO_STATE"
     mkdir -p "$SUDO_CFG" "$SUDO_STATE"
     # **The bound under test is set here, small, rather than left at its default.**
     #
-    # Checks (3) and (4) below ask whether LiNix bounds the wait for a password nobody is going
+    # Checks (3) and (4) below ask whether Shall bounds the wait for a password nobody is going
     # to type. The default bound is 120s, so with it in force the correct behaviour takes 120
     # seconds — and the assertions, written when the answer was the 900s command-idle timeout,
     # read `>= 120` and called the bound firing exactly on time a wedge. Four minutes of nightly
     # spent proving a constant.
     #
     # Setting it to 5 tests the mechanism instead of the default's value: sudo asks, nobody
-    # answers, and LiNix has to give up in about five seconds. A run that takes 30 is not
+    # answers, and Shall has to give up in about five seconds. A run that takes 30 is not
     # honouring the setting, which is the defect either way and is now the thing being measured.
     printf 'sudo_password_timeout_secs = 5\n' > "$SUDO_CFG/preferences.toml"
     chown -R "$SUDO_USER_NAME" "$SUDO_CFG" "$SUDO_STATE" 2>/dev/null || true
 
     # Prove the fixture before trusting any result from it. A user who cannot sudo at all, or
-    # whose password does not work, would make "LiNix failed" and "the image is wrong"
+    # whose password does not work, would make "Shall failed" and "the image is wrong"
     # indistinguishable — and the first reading is the flattering one.
-    cat > /tmp/linix-sudo-probe.sh <<EOF
+    cat > /tmp/shall-sudo-probe.sh <<EOF
 #!/bin/sh
 sudo -k
 script $SCRIPT_FLAGS "sudo id -u" /dev/null
 EOF
-    chmod 0755 /tmp/linix-sudo-probe.sh
+    chmod 0755 /tmp/shall-sudo-probe.sh
     # `tr -d '\r'`: a pty terminates lines with CRLF, so an exact match against `0` fails on
     # output that is correct. That is the shape of bug that makes a fixture look broken.
-    if printf '%s\n' "$SUDO_PW" | su "$SUDO_USER_NAME" -c /tmp/linix-sudo-probe.sh 2>&1 | tr -d '\r' | grep -qx 0; then
-        # NOT counted as a pass. It is a statement about `sudo` and this image, with no LiNix in
+    if printf '%s\n' "$SUDO_PW" | su "$SUDO_USER_NAME" -c /tmp/shall-sudo-probe.sh 2>&1 | tr -d '\r' | grep -qx 0; then
+        # NOT counted as a pass. It is a statement about `sudo` and this image, with no Shall in
         # it at all — so it survives a do-nothing binary by construction, and a precondition
         # that spends coverage budget is a check pretending to be one.
         echo "        fixture ok: $SUDO_USER_NAME reaches uid 0 by typing a password"
         SUDO_READY=1
     else
-        soft "sudo: the unprivileged user could not sudo even outside LiNix, so this image cannot answer the question"
+        soft "sudo: the unprivileged user could not sudo even outside Shall, so this image cannot answer the question"
         SUDO_READY=""
     fi
 
@@ -2651,7 +2651,7 @@ EOF
         if [ "$_rc" -eq 0 ]; then
             hard "sudo: a wrong password produced a successful privileged command"
         elif [ "$_took" -ge 30 ]; then
-            hard "sudo: a wrong password left LiNix waiting ${_took}s against a \`sudo_password_timeout_secs\` of 5 — the bound is not being honoured"
+            hard "sudo: a wrong password left Shall waiting ${_took}s against a \`sudo_password_timeout_secs\` of 5 — the bound is not being honoured"
         elif grep -qi "sorry, try again\|incorrect password\|authentication fail\|sudo" /tmp/sudo-wrong.out; then
             PASS=$((PASS + 1)); echo "  PASS  sudo: a wrong password fails in ${_took}s and says which program refused"
         else
@@ -2670,7 +2670,7 @@ EOF
         # The output has to name the program that asked. Without that clause "it failed" is
         # true of a binary that fails at everything, and this passed against one.
         if [ "$_took" -ge 30 ]; then
-            hard "sudo: a terminal with nobody at it wedged LiNix for ${_took}s against a \`sudo_password_timeout_secs\` of 5 — the bound is not being honoured"
+            hard "sudo: a terminal with nobody at it wedged Shall for ${_took}s against a \`sudo_password_timeout_secs\` of 5 — the bound is not being honoured"
         elif [ "$_rc" -ne 0 ] && grep -qi "password\|sudo" /tmp/sudo-silent.out; then
             PASS=$((PASS + 1)); echo "  PASS  sudo: an unanswered prompt is a bounded failure (${_took}s) that names sudo, not a wedge"
         elif [ "$_rc" -ne 0 ]; then
@@ -2681,12 +2681,12 @@ EOF
         fi
 
         # --- (5) one run, one password ----------------------------------------
-        # WITHIN a single LiNix run, not across two. The first version of this check ran
+        # WITHIN a single Shall run, not across two. The first version of this check ran
         # `update` twice and expected the second not to ask — and sudo asked, correctly: its
         # timestamp is per-tty (`tty_tickets`, on by default) and each drive here gets a fresh
-        # pty. That check was measuring sudo's own design and calling it a LiNix defect.
+        # pty. That check was measuring sudo's own design and calling it a Shall defect.
         #
-        # What LiNix owes is that ONE command which escalates more than once asks at most once.
+        # What Shall owes is that ONE command which escalates more than once asks at most once.
         # A sync carrying both an install and a removal runs the manager twice, so the count of
         # prompts in one transcript is the measurement.
         #
@@ -2813,7 +2813,7 @@ EOF
         fi
     fi
 
-    rm -f /etc/sudoers.d/linix-harness
+    rm -f /etc/sudoers.d/shall-harness
     userdel -r "$SUDO_USER_NAME" >/dev/null 2>&1 || true
 fi
 
@@ -2842,7 +2842,7 @@ elif ! command -v mkfs.ext4 >/dev/null 2>&1; then
     soft "restore: no mkfs.ext4 here, so the origin volume has no filesystem to put a marker file in"
 else
     LVM_ORIGIN=restoreorigin
-    LVM_MNT=/mnt/linix-restore
+    LVM_MNT=/mnt/shall-restore
     lvremove -y "$STORAGE_LVM/$LVM_ORIGIN" >/dev/null 2>&1
     mkdir -p "$LVM_MNT"
     if ! lvcreate -y -n "$LVM_ORIGIN" -L 128M "$STORAGE_LVM" >/tmp/restore-setup.out 2>&1 \
@@ -2854,18 +2854,18 @@ fi
 
 if [ -n "$LVM_ORIGIN" ]; then
     # The provider, as a row in the user's own adapters file. `restores_running_system` is the
-    # one value U27 ruled can never be inferred — LiNix will not run a "restore" for a provider
+    # one value U27 ruled can never be inferred — Shall will not run a "restore" for a provider
     # that did not say it can finish one — so this line is the whole capability.
-    mkdir -p "$LINIX_CONFIG_DIR/adapters"
-    cat > "$LINIX_CONFIG_DIR/adapters/snapshot.toml" <<EOSNAP
+    mkdir -p "$SHALL_CONFIG_DIR/adapters"
+    cat > "$SHALL_CONFIG_DIR/adapters/snapshot.toml" <<EOSNAP
 [[snapshot]]
 name = "lvm"
 detect = "lvcreate"
 source = "$STORAGE_LVM/$LVM_ORIGIN"
-id_template = "linix_{label}_{ts}"
+id_template = "shall_{label}_{ts}"
 create = ["lvcreate", "-y", "-s", "-n", "{id}", "-L", "64M", "{source}"]
 list = ["lvs", "--noheadings", "-o", "lv_name", "$STORAGE_LVM"]
-list_pattern = "(linix_\\\\S+)"
+list_pattern = "(shall_\\\\S+)"
 delete = ["lvremove", "-y", "$STORAGE_LVM/{id}"]
 restore = ["lvconvert", "--merge", "-y", "$STORAGE_LVM/{id}"]
 restores_running_system = true
@@ -2882,18 +2882,18 @@ EOSNAP
 
     # --- (a) a snapshot is taken, for real, by an ordinary mutating sync -------
     # Not by a test hook: `auto_snapshot` runs before every mutating sync, so this is the same
-    # code path a user's `linix sync` takes. The canaries are declared to give it work — a sync
+    # code path a user's `shall sync` takes. The canaries are declared to give it work — a sync
     # with nothing to do has nothing to snapshot before.
     crash_declare
     lx_slow -y sync >/tmp/restore-sync.out 2>&1
-    _snaps="$(lvs --noheadings -o lv_name "$STORAGE_LVM" 2>/dev/null | tr -d ' ' | grep '^linix_' | head -1)"
+    _snaps="$(lvs --noheadings -o lv_name "$STORAGE_LVM" 2>/dev/null | tr -d ' ' | grep '^shall_' | head -1)"
     if [ -n "$_snaps" ]; then
         PASS=$((PASS + 1)); echo "  PASS  restore: a mutating sync took a real LVM snapshot — $_snaps"
-        grep_ok "restore: snapshot list reports it" "linix_" lx snapshot list
+        grep_ok "restore: snapshot list reports it" "shall_" lx snapshot list
 
         # --- (b) the control: no terminal, no gallery -------------------------
         # Choosing from a gallery needs somewhere to choose, and the refusal must say so and
-        # name the commands that do the same job without asking. Exit 3, because LiNix declined
+        # name the commands that do the same job without asking. Exit 3, because Shall declined
         # on purpose rather than broke.
         #
         # It runs HERE and not before the snapshot exists: with an empty gallery the command
@@ -2916,14 +2916,14 @@ EOSNAP
         # row was refused before the confirmation, whatever its row declared. Typing a word that
         # is not RESTORE is the safe half of the same drive: it must reach the prompt and then
         # do nothing.
-        cat > /tmp/linix-restore-drive.sh <<EOF
+        cat > /tmp/shall-restore-drive.sh <<EOF
 #!/bin/sh
-export LINIX_CONFIG_DIR="$LINIX_CONFIG_DIR"
-export LINIX_DATA_DIR="$LINIX_DATA_DIR"
-printf '\\nno\\n' | script $SCRIPT_FLAGS "$LINIX snapshot restore" /dev/null
+export SHALL_CONFIG_DIR="$SHALL_CONFIG_DIR"
+export SHALL_DATA_DIR="$SHALL_DATA_DIR"
+printf '\\nno\\n' | script $SCRIPT_FLAGS "$SHALL snapshot restore" /dev/null
 EOF
-        chmod 0755 /tmp/linix-restore-drive.sh
-        sh /tmp/linix-restore-drive.sh >/tmp/restore-abort.out 2>&1
+        chmod 0755 /tmp/shall-restore-drive.sh
+        sh /tmp/shall-restore-drive.sh >/tmp/restore-abort.out 2>&1
         if grep -q "Unsupported snapshot backend" /tmp/restore-abort.out; then
             hard "restore: the gallery still refuses a provider for its name — the row declares a live restore and the command does not read the row"
             excerpt /tmp/restore-abort.out 6
@@ -2934,8 +2934,8 @@ EOF
             excerpt /tmp/restore-abort.out 8
         fi
         # And it did nothing. A confirmation that acts on the wrong answer is worse than one
-        # that never asked, so this is asked of LVM and not of LiNix's output.
-        if lvs --noheadings -o lv_name "$STORAGE_LVM" 2>/dev/null | tr -d ' ' | grep -q '^linix_'; then
+        # that never asked, so this is asked of LVM and not of Shall's output.
+        if lvs --noheadings -o lv_name "$STORAGE_LVM" 2>/dev/null | tr -d ' ' | grep -q '^shall_'; then
             PASS=$((PASS + 1)); echo "  PASS  restore: answering anything but RESTORE left the snapshot alone"
         else
             hard "restore: the snapshot was consumed by a confirmation that was answered 'no'"
@@ -2949,14 +2949,14 @@ EOF
         echo "this file was written after the snapshot" > "$_marker_after"
         sync; umount "$LVM_MNT" >/dev/null 2>&1
 
-        cat > /tmp/linix-restore-drive.sh <<EOF
+        cat > /tmp/shall-restore-drive.sh <<EOF
 #!/bin/sh
-export LINIX_CONFIG_DIR="$LINIX_CONFIG_DIR"
-export LINIX_DATA_DIR="$LINIX_DATA_DIR"
-printf '\\nRESTORE\\n' | script $SCRIPT_FLAGS "$LINIX snapshot restore" /dev/null
+export SHALL_CONFIG_DIR="$SHALL_CONFIG_DIR"
+export SHALL_DATA_DIR="$SHALL_DATA_DIR"
+printf '\\nRESTORE\\n' | script $SCRIPT_FLAGS "$SHALL snapshot restore" /dev/null
 EOF
-        chmod 0755 /tmp/linix-restore-drive.sh
-        sh /tmp/linix-restore-drive.sh >/tmp/restore-do.out 2>&1
+        chmod 0755 /tmp/shall-restore-drive.sh
+        sh /tmp/shall-restore-drive.sh >/tmp/restore-do.out 2>&1
 
         # An LVM merge of an unmounted origin happens immediately; a mounted one is deferred to
         # the next activation, which is why the origin is unmounted above.
@@ -2980,7 +2980,7 @@ EOF
 
     umount "$LVM_MNT" >/dev/null 2>&1
     lvremove -y "$STORAGE_LVM/$LVM_ORIGIN" >/dev/null 2>&1
-    rm -f "$LINIX_CONFIG_DIR/adapters/snapshot.toml"
+    rm -f "$SHALL_CONFIG_DIR/adapters/snapshot.toml"
     crash_wipe
 fi
 
@@ -3004,8 +3004,8 @@ echo "[17] Coverage audit"
 # on some architectures, and turning that into a red run would teach people to delete the line
 # rather than fix the install — which is how the exemption lists got long in the first place.
 # What it must never do again is stay invisible.
-if [ -f /etc/linix-image-managers ]; then
-    _absent="$(awk '$2 == "ABSENT" {printf "%s ", $1}' /etc/linix-image-managers)"
+if [ -f /etc/shall-image-managers ]; then
+    _absent="$(awk '$2 == "ABSENT" {printf "%s ", $1}' /etc/shall-image-managers)"
     if [ -n "$_absent" ]; then
         soft "the image tried to install these and they are not here: $_absent"
         echo "        a manager that failed to install is MISSING, not impossible — read the"
@@ -3083,10 +3083,10 @@ NO_PATH_N=$(echo $NO_PATH | wc -w)
 # is the one that can check it — so it does, and across the matrix every row is verified exactly
 # once. Without this the table would excuse `zypper` from the gap on the strength of an image
 # that might never have been built.
-if [ -z "$SMOKE" ] && [ -n "${LINIX_IT_IMAGE:-}" ]; then
+if [ -z "$SMOKE" ] && [ -n "${SHALL_IT_IMAGE:-}" ]; then
     for be in $ALL_BACKENDS; do
         case ",$(primary_manager_image "$be" | tr -d ' ')," in
-            *",$LINIX_IT_IMAGE,"*) ;;
+            *",$SHALL_IT_IMAGE,"*) ;;
             *) continue ;;
         esac
         if grep -qx "$be" "$LEDGER/be-life" "$LEDGER/be-life-partial" \
@@ -3096,7 +3096,7 @@ if [ -z "$SMOKE" ] && [ -n "${LINIX_IT_IMAGE:-}" ]; then
         else
             FAILC=$((FAILC + 1))
             FAILED_NAMES="$FAILED_NAMES
-    - coverage: primary_manager_image says $be is lifecycled on the $LINIX_IT_IMAGE image, and this run of it never touched $be"
+    - coverage: primary_manager_image says $be is lifecycled on the $SHALL_IT_IMAGE image, and this run of it never touched $be"
             echo "  FAIL  $be is excused from the lifecycle gap because this image lifecycles it,"
             echo "        and this image did not. Either section 5 skipped it or the table is wrong."
         fi
@@ -3140,13 +3140,13 @@ fi
 # done before? The floor lives in `scripts/lifecycle-floor.txt` beside the reasoning.
 LIFECYCLES=$(grep -c . "$LEDGER/be-life.u")
 # Backends whose lifecycle this run could not MEASURE, because the install failed for a reason
-# LiNix itself classified as passing and a retry did not clear (a rate-limit window, a held
+# Shall itself classified as passing and a retry did not clear (a rate-limit window, a held
 # lock). That is not the same fact as "this host did fewer lifecycles", and the ratchet must not
 # confuse them: a GitHub rate limit on the macOS leg dropped the count 8 -> 7 and turned this
 # gate red, and the obvious repair — lowering the floor to 7 — would have ratcheted a
 # platform's coverage down permanently over a window that had already moved (R-3).
 #
-# Excused only for a class LiNix computed, and only BY NAME, printed below. A backend that
+# Excused only for a class Shall computed, and only BY NAME, printed below. A backend that
 # genuinely broke is classed `permanent` or `unknown`, is scored a defect, and is not in here —
 # so a real collapse still fails this check.
 sort -u "$LEDGER/be-life-unmeasured" > "$LEDGER/be-life-unmeasured.u" 2>/dev/null || : > "$LEDGER/be-life-unmeasured.u"
@@ -3163,11 +3163,11 @@ esac
 # Which image this is, not which distro it was built on. `/etc/os-release` answers `ubuntu` for
 # both the ubuntu image (7 real lifecycles) and the `tools` image (25) — `tools` IS Ubuntu — so
 # keying on it filed two incomparable runs under one record, and whichever wrote it last made
-# the other permanently wrong. Each Dockerfile declares its own `LINIX_IT_IMAGE`; os-release
+# the other permanently wrong. Each Dockerfile declares its own `SHALL_IT_IMAGE`; os-release
 # remains the fallback for an image that has not.
 HOST_FLAVOUR=""
-if [ -n "${LINIX_IT_IMAGE:-}" ]; then
-    HOST_FLAVOUR="-$LINIX_IT_IMAGE"
+if [ -n "${SHALL_IT_IMAGE:-}" ]; then
+    HOST_FLAVOUR="-$SHALL_IT_IMAGE"
 elif [ -r /etc/os-release ]; then
     HOST_FLAVOUR="-$(. /etc/os-release 2>/dev/null; echo "${ID:-}")"
 fi
@@ -3201,7 +3201,7 @@ elif [ -f "$FLOOR_FILE" ]; then
         soft "real-lifecycle ratchet: $LIFECYCLES of $FLOOR on $HOST_CLASS, and $UNMEASURED backend(s) could not be measured this run"
         echo "        unmeasurable: $(tr '
 ' ' ' < "$LEDGER/be-life-unmeasured.u")"
-        echo "        Each failed a real install for a reason LiNix classed as passing, and did"
+        echo "        Each failed a real install for a reason Shall classed as passing, and did"
         echo "        not clear on a retry — a rate-limit window, a held lock. The floor is NOT"
         echo "        lowered for these: the next run on a clear window measures them again."
     else

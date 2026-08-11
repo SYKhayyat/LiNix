@@ -18,7 +18,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
-/// The package lines in a project-local `linix.txt`.
+/// The package lines in a project-local `shall.txt`.
 ///
 /// The comment rule is the grammar's, not a fourth hand-rolled one: a `#` opens a comment at
 /// the start of a line or after whitespace, so `brew:jq  # my favourite` declares `brew:jq`
@@ -155,7 +155,7 @@ impl EphemeralShell {
             if let Err(e) = state_guard.save() {
                 warn!(
                     "could not persist session teardown ({}); the on-disk state \
-                     still marks a session active, which the next `linix shell` will clear \
+                     still marks a session active, which the next `shall shell` will clear \
                      when it starts a new one.",
                     e
                 );
@@ -176,7 +176,7 @@ impl EphemeralShell {
         let mut internal_path = String::from("/usr/local/bin:/usr/bin:/bin");
 
         for (path, name) in store_paths {
-            let target = format!("/opt/linix/packages/{}", name);
+            let target = format!("/opt/shall/packages/{}", name);
             mounts.push((path.clone(), target.clone()));
             internal_path = format!("{}:{}/bin", internal_path, target);
         }
@@ -197,8 +197,8 @@ impl EphemeralShell {
             let mut bwrap = Sandbox::wrap(&shell_owned, &[], &sandbox_cfg, &settings_clone)?;
             bwrap
                 .env("PATH", internal_path)
-                .env("LINIX_EPHEMERAL_SHELL", "1")
-                .env("LINIX_SESSION_ID", session_owned);
+                .env("SHALL_EPHEMERAL_SHELL", "1")
+                .env("SHALL_SESSION_ID", session_owned);
             let mut handle = bwrap
                 .spawn()
                 .map_err(|e| Error::command_failed(format!("Sandbox error: {}", e)))?;
@@ -241,14 +241,14 @@ impl EphemeralShell {
         let mut child = tokio::process::Command::new(shell);
         child
             .env("PATH", new_path_env)
-            .env("LINIX_EPHEMERAL_SHELL", "1")
-            .env("LINIX_SESSION_ID", session_id)
+            .env("SHALL_EPHEMERAL_SHELL", "1")
+            .env("SHALL_SESSION_ID", session_id)
             .stdin(std::process::Stdio::inherit())
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit());
 
         // The terminal-handoff door: the person is *in* this shell, so it is inherited and
-        // unbounded — but owned, because a shell left holding the terminal after LiNix has gone
+        // unbounded — but owned, because a shell left holding the terminal after Shall has gone
         // is a session nobody can account for.
         let _ = crate::core::executor::supervised_status(child, "the ephemeral shell").await?;
         Ok(())
@@ -298,7 +298,7 @@ impl EphemeralShell {
         //
         // `JustThese`, because `transient_desired` holds the shell's requests and nothing else.
         // Planned as a whole-machine converge it made every other managed package on the box a
-        // removal — `linix shell ripgrep` proposing to uninstall the machine — with `max_removals`
+        // removal — `shall shell ripgrep` proposing to uninstall the machine — with `max_removals`
         // the only thing in the way, and a ceiling is not a rule.
         let changes = {
             let state_guard = self.state.lock().await;
@@ -407,9 +407,9 @@ impl EphemeralShell {
     }
 
     pub async fn auto_shell(&self) -> Result<()> {
-        let local_config = Path::new("linix.txt");
+        let local_config = Path::new("shall.txt");
         if tokio::fs::try_exists(local_config).await.unwrap_or(false) {
-            debug!("using project-local linix.txt");
+            debug!("using project-local shall.txt");
             let content = tokio::fs::read_to_string(local_config).await?;
             let pkgs = manifest_lines(&content);
             if !pkgs.is_empty() {

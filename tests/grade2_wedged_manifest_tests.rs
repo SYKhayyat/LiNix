@@ -1,7 +1,7 @@
 //! GRADER round 3, 2026-07-29 — RED. E1's family. A name a backend can never install is taken
 //! back out of the manifest for two backends and left in for three, and the three wedge `sync`.
 //!
-//! E1 was the headline blocker of `READINESS-2026-07-27.md`: `linix install <typo>` left a line
+//! E1 was the headline blocker of `READINESS-2026-07-27.md`: `shall install <typo>` left a line
 //! nothing could satisfy in `modules/imperative.txt`, and every later command failed on it.
 //! Round 1 closed it and I confirmed the closure on scoop. It was fixed at the instance.
 //!
@@ -9,29 +9,29 @@
 //!
 //! | declaration                        | exit | line taken back out? |
 //! |------------------------------------|------|----------------------|
-//! | `scoop:linix-no-such-pkg-zzz`      |  1   | **yes**              |
-//! | `cargo:linix-no-such-crate-zzz`    |  1   | **yes**              |
-//! | `npm:linix-no-such-pkg-zzz-9`      |  1   | no                   |
-//! | `github:linix-zzz-nope/nope`       |  1   | no                   |
+//! | `scoop:shall-no-such-pkg-zzz`      |  1   | **yes**              |
+//! | `cargo:shall-no-such-crate-zzz`    |  1   | **yes**              |
+//! | `npm:shall-no-such-pkg-zzz-9`      |  1   | no                   |
+//! | `github:shall-zzz-nope/nope`       |  1   | no                   |
 //! | `luarocks:luafilesystem` (no Lua 5.5 rock here) | 1 | no        |
 //!
 //! `withdraw_what_can_never_succeed` (`src/verbs/packages.rs:153`) recognises exactly two
 //! shapes: `Error::Unresolvable`, and `Error::CommandFailed { retry: Permanent }` **whose
 //! message quotes the package name**. github raises neither — its own words are `Package
-//! 'linix-zzz-nope/nope: the repo has no published release' was not found in the target
-//! repository` — so the line stays. luarocks is the sharper case: LiNix retried four times,
+//! 'shall-zzz-nope/nope: the repo has no published release' was not found in the target
+//! repository` — so the line stays. luarocks is the sharper case: Shall retried four times,
 //! compared the output, and printed *"a further retry will not help — this is not the transient
 //! failure its output looks like"*, and still kept the line.
 //!
 //! The consequence is E1 verbatim. After the github line:
 //!
-//!     $ linix sync -y
-//!     Error: Package 'linix-zzz-nope/nope: the repo has no published release' was not found …
+//!     $ shall sync -y
+//!     Error: Package 'shall-zzz-nope/nope: the repo has no published release' was not found …
 //!     rc=1                                    … and identically, forever
 //!
 //! And the sentence the user is given is the one the code's own comment forbids:
 //!
-//!     WARN `github:linix-zzz-nope/nope` is still declared in …/imperative.txt, so `sync` will
+//!     WARN `github:shall-zzz-nope/nope` is still declared in …/imperative.txt, so `sync` will
 //!          try it again.
 //!
 //! `packages.rs` says, of a kept line: *"it must not be described as a transient failure.
@@ -78,7 +78,7 @@ fn a_name_no_backend_can_install_is_never_left_in_the_manifest() {
     let control = probe(
         "grade2-wedge-control",
         "cargo",
-        "cargo:linix-no-such-crate-zzz",
+        "cargo:shall-no-such-crate-zzz",
     );
     let Some((cout, cmanifest, ccode)) = control else {
         panic!(
@@ -88,14 +88,14 @@ fn a_name_no_backend_can_install_is_never_left_in_the_manifest() {
     };
     assert_eq!(ccode, 1, "the control's install did not fail:\n{cout}");
     assert!(
-        !cmanifest.contains("linix-no-such-crate-zzz"),
+        !cmanifest.contains("shall-no-such-crate-zzz"),
         "the control failed — `cargo` no longer withdraws an impossible name, so this test \
          cannot tell an incomplete mechanism from a missing one:\n{cout}"
     );
 
     let cases = [
-        ("npm", "npm:linix-no-such-pkg-zzz-9"),
-        ("github", "github:linix-zzz-nope/nope"),
+        ("npm", "npm:shall-no-such-pkg-zzz-9"),
+        ("github", "github:shall-zzz-nope/nope"),
     ];
 
     let mut wedged: Vec<String> = Vec::new();
@@ -109,7 +109,7 @@ fn a_name_no_backend_can_install_is_never_left_in_the_manifest() {
             continue;
         };
         // A rate limit is the one failure that makes this measurement meaningless, and it is
-        // not hypothetical: the macOS runner hit one (`does not reset for 999s`) and LiNix
+        // not hypothetical: the macOS runner hit one (`does not reset for 999s`) and Shall
         // correctly kept the line, because a window that moves IS a passing failure and W35
         // exists to say so. The premise here — "this failure is permanent" — is false in that
         // environment, so the case is skipped and NAMED rather than asserted around.
@@ -160,13 +160,13 @@ fn a_name_no_backend_can_install_is_never_left_in_the_manifest() {
 /// The second half: what the user is told about the line that stayed.
 ///
 /// **This test's case was changed by the builder, on the instruction its own control carried.**
-/// It was written against `github:linix-zzz-nope/nope`, asserting the line was kept and then
+/// It was written against `github:shall-zzz-nope/nope`, asserting the line was kept and then
 /// that the kept line was mis-described — and its control said, in as many words, "that would
 /// mean the first test in this file is fixed and this one needs a new case". It is. github
 /// withdraws now, so there is no kept line there to describe, and the two tests in this file
 /// asked for opposite things about one declaration.
 ///
-/// The invariant is unchanged and is the one that matters: **a line LiNix keeps on purpose is
+/// The invariant is unchanged and is the one that matters: **a line Shall keeps on purpose is
 /// never described as something `sync` will retry.** What changed is the case it is asked
 /// about — a refusal, which is the situation where keeping the line is the *design* (the line
 /// is the thing the user edits) and where the forbidden sentence would therefore be a promise
@@ -206,13 +206,13 @@ fn a_kept_line_is_not_described_as_something_sync_will_retry() {
         assert!(
             !out.contains("`sync` will try it again"),
             "`{decl}` ({label}) is refused for what the line says, so re-running `sync` \
-             unchanged refuses identically — and LiNix tells the user `sync` will try it \
+             unchanged refuses identically — and Shall tells the user `sync` will try it \
              again. `src/verbs/packages.rs` writes the rule itself: a kept line must not be \
              described as a transient failure, because that promises a retry which fails \
              identically forever.\n{out}"
         );
         assert!(
-            out.contains("linix unmanage"),
+            out.contains("shall unmanage"),
             "a kept line must name the way out of it — a wedge with an exit is not a \
              wedge:\n{out}"
         );

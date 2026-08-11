@@ -289,7 +289,7 @@ curl.x86_64                        8.18.0-8.fc44    updates
         assert!(!parse_dnf_outdated(DNF).iter().any(|p| p.name == "Upgrades"));
     }
 
-    /// Header shape verbatim from `zypper list-updates` in a `linix-it-opensuse` container.
+    /// Header shape verbatim from `zypper list-updates` in a `shall-it-opensuse` container.
     const ZYPPER: &str = "\
 S  | Repository                 | Name               | Current Version | Available Version | Arch
 ---+----------------------------+--------------------+-----------------+-------------------+-------

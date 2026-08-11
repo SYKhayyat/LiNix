@@ -17,9 +17,9 @@ For the question below, you have 20 seconds to make a selection.
  Do you want to continue?([Y]es/[N]o): 
 Timeout or your choice of '' is not a valid selection.
 Installing the following packages:
-linix-no-such-package-xyz
+shall-no-such-package-xyz
 By installing, you accept licenses for the packages.
-linix-no-such-package-xyz not installed. The package was not found with the source(s) listed.
+shall-no-such-package-xyz not installed. The package was not found with the source(s) listed.
  Source(s): 'https://community.chocolatey.org/api/v2/'
  NOTE: When you specify explicit sources, it overrides default sources.
 If the package version is a prerelease and you didn't specify `--pre`,
@@ -31,7 +31,7 @@ Chocolatey installed 0/1 packages. 1 packages failed.
  See the log for details (C:\ProgramData\chocolatey\logs\chocolatey.log).
 
 Failures
- - linix-no-such-package-xyz - linix-no-such-package-xyz not installed. The package was not found with the source(s) listed.
+ - shall-no-such-package-xyz - shall-no-such-package-xyz not installed. The package was not found with the source(s) listed.
  Source(s): 'https://community.chocolatey.org/api/v2/'
  NOTE: When you specify explicit sources, it overrides default sources.
 If the package version is a prerelease and you didn't specify `--pre`,

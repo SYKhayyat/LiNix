@@ -21,7 +21,7 @@ struct WebState {
     etag: Option<String>,
     last_modified: Option<String>,
     /// The system manager that owns this resource (D5), when the URL pointed at a `.deb`/`.rpm`
-    /// that was handed to `dpkg`/`rpm`. `None` is the ordinary web resource LiNix unpacked or put
+    /// that was handed to `dpkg`/`rpm`. `None` is the ordinary web resource Shall unpacked or put
     /// on PATH itself; when set, removal and dedup route through this manager.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     installed_by: Option<String>,
@@ -129,7 +129,7 @@ impl Installable for WebInstallable {
             let allow_http = crate::core::download::allows_http(spec);
             crate::core::download::check_scheme(&spec.name, allow_http, &spec.name)?;
             crate::core::download::check_checksum_declared(spec)?;
-            let client = crate::core::download::client(allow_http, "linix-manager")?;
+            let client = crate::core::download::client(allow_http, "shall-manager")?;
 
             let head_res = client.head(&spec.name).send().await.map_err(Error::from)?;
             let remote_etag = head_res
@@ -219,7 +219,7 @@ impl Installable for WebInstallable {
                         spec.name.clone(),
                         WebState {
                             url: spec.name.clone(),
-                            // No local tree LiNix owns: the manager placed the files.
+                            // No local tree Shall owns: the manager placed the files.
                             local_path: String::new(),
                             bin_link: None,
                             etag: remote_etag,
@@ -490,7 +490,7 @@ mod tests {
     fn handed_to(installer: &str, package: &str, url: &str) -> WebState {
         WebState {
             url: url.to_string(),
-            // A handoff owns no tree of LiNix's — the manager placed the files.
+            // A handoff owns no tree of Shall's — the manager placed the files.
             local_path: String::new(),
             bin_link: None,
             etag: None,
@@ -520,8 +520,8 @@ mod tests {
         CommandExecutor::as_launched(cmd, &args, true)
     }
 
-    /// D5: a `.deb` LiNix handed to `dpkg` is removed **through `dpkg`**, by the package name
-    /// read out of the file at install time — not by the URL, and not by deleting a tree LiNix
+    /// D5: a `.deb` Shall handed to `dpkg` is removed **through `dpkg`**, by the package name
+    /// read out of the file at install time — not by the URL, and not by deleting a tree Shall
     /// does not own.
     #[tokio::test]
     async fn a_resource_a_system_manager_owns_is_removed_through_that_manager() {
@@ -578,7 +578,7 @@ mod tests {
     /// **The invariant that matters most here, and the one nothing was checking.**
     ///
     /// When the system manager refuses, the files are still on disk and still on PATH. Dropping
-    /// the record anyway would make the resource drift *no sync can see*: LiNix would have
+    /// the record anyway would make the resource drift *no sync can see*: Shall would have
     /// forgotten it, so nothing would ever try again and nothing would report it. The record
     /// goes back, and the call returns an error naming what is still installed.
     #[tokio::test]
@@ -606,7 +606,7 @@ mod tests {
         );
     }
 
-    /// A recorded installer LiNix has no removal argv for is an error, not a silent skip. The
+    /// A recorded installer Shall has no removal argv for is an error, not a silent skip. The
     /// same shape as the failing-manager case, reached without running anything: `remove_argv`
     /// refuses first.
     #[tokio::test]

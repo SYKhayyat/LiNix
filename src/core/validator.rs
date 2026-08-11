@@ -13,7 +13,7 @@ static PACKAGE_NAME_REGEX: Lazy<Regex> =
 ///
 /// `winget list` reports 185 of 278 names on a stock box as `ARP\Machine\X64\...` or
 /// `MSIX\...`, and the ARP rows for MSI installers are GUIDs in braces. Those are the
-/// identifiers `winget install` and `winget uninstall` take, so they are the names LiNix has to
+/// identifiers `winget install` and `winget uninstall` take, so they are the names Shall has to
 /// be able to carry (V.113).
 ///
 /// **The space is here for the same reason the backslash is.** `ARP\Machine\X64\Mozilla Firefox`
@@ -47,7 +47,7 @@ static SHELL_INJECTION_REGEX_WINDOWS_ID: Lazy<Regex> =
 static SHELL_INJECTION_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"[;&|><`$\(\)\[\]\{\}\*\?\!\\]").unwrap());
 
-/// Sensitive system paths that LiNix is prohibited from accessing.
+/// Sensitive system paths that Shall is prohibited from accessing.
 static FORBIDDEN_PATHS: &[&str] = &[
     "/etc/shadow",
     "/etc/sudoers",
@@ -263,7 +263,7 @@ mod tests {
     fn path_oriented_backends_allow_absolute_paths_but_never_traversal() {
         // `link` legitimately names a filesystem path — an absolute path is allowed.
         assert!(Validator::validate_package_name_for("/home/me/.vimrc", "link").is_ok());
-        assert!(Validator::validate_package_name_for("/tmp/linix-link-src", "link").is_ok());
+        assert!(Validator::validate_package_name_for("/tmp/shall-link-src", "link").is_ok());
         // …but `..` traversal is STILL blocked, for every backend including path-oriented ones.
         assert!(Validator::validate_package_name_for("/home/../etc/shadow", "link").is_err());
         assert!(Validator::validate_package_name_for("../secrets", "link").is_err());
@@ -277,7 +277,7 @@ mod tests {
     /// and no declaration of it could be written:
     ///
     /// ```text
-    /// $ linix -y install btrfs:/mnt/data/vol
+    /// $ shall -y install btrfs:/mnt/data/vol
     /// Error: Validation error: Path traversal detected in name: /mnt/data/vol
     /// ```
     ///
@@ -291,7 +291,7 @@ mod tests {
     fn a_backend_whose_name_is_a_path_may_say_so_and_the_others_may_not() {
         for good in [
             "/mnt/data/vol",
-            "/mnt/linix-btrfs/canary",
+            "/mnt/shall-btrfs/canary",
             "/.snapshots/root",
         ] {
             assert!(

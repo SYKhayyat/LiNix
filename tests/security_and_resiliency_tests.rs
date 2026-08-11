@@ -1,9 +1,9 @@
 // tests/security_and_resiliency_tests.rs
 
-use linix::app::sync::guard::{GuardScope, Reaped};
-use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
-use linix::core::executor::DryRunOutput;
-use linix::core::{Error, GraphAction, Transaction, TransactionConfig, Validator};
+use shall::app::sync::guard::{GuardScope, Reaped};
+use shall::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
+use shall::core::executor::DryRunOutput;
+use shall::core::{Error, GraphAction, Transaction, TransactionConfig, Validator};
 use std::collections::HashMap;
 
 use crate::mock_providers::{create_dummy_spec, TestKernel};
@@ -65,7 +65,7 @@ fn test_validator_permits_safe_modern_names() {
     let safe_names = vec![
         "@scoped/package",
         "my-tool_v1.0.5",
-        "github.com/linix/manager",
+        "github.com/shall/manager",
         "google-cloud-sdk",
         "dotnet-runtime-6.0",
     ];
@@ -391,7 +391,7 @@ async fn a_manager_that_cannot_answer_stops_the_plan_rather_than_installing_ever
         Err(Error::command_failed("brew is wedged")),
     );
 
-    let mut desired: HashMap<String, Vec<linix::core::PackageSpec>> = HashMap::new();
+    let mut desired: HashMap<String, Vec<shall::core::PackageSpec>> = HashMap::new();
     desired.insert(
         "brew".to_string(),
         vec![create_dummy_spec("pkg-a", "brew", None)],
@@ -424,7 +424,7 @@ async fn a_manager_that_cannot_answer_stops_the_plan_rather_than_installing_ever
 #[tokio::test]
 async fn test_resolver_malformed_input_resiliency() {
     let kernel = TestKernel::new().await;
-    let resolver = linix::app::sync::resolver::StateResolver::new(
+    let resolver = shall::app::sync::resolver::StateResolver::new(
         &kernel.app.config,
         kernel.app.registry.clone(),
         false,
@@ -487,7 +487,7 @@ fn impatient() -> TransactionConfig {
 /// How many times a single-node transaction actually asked the manager to install.
 async fn attempts_for(
     kernel: &TestKernel,
-    answer: linix::core::Result<std::process::Output>,
+    answer: shall::core::Result<std::process::Output>,
 ) -> usize {
     kernel
         .mock_executor

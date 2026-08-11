@@ -253,7 +253,7 @@ pub fn select(request: &Request<'_>, assets: &[Asset]) -> Result<Selection, NoMa
 ///
 /// - **A `@formats=` the user wrote wins outright.** They named a preference; the asset highest
 ///   in it is the answer, and specificity only breaks a tie *within* one format.
-/// - **A detected order yields to the machine.** The default order is LiNix's guess about file
+/// - **A detected order yields to the machine.** The default order is Shall's guess about file
 ///   *type*, and an asset naming your exact os and arch is a stronger guess than one naming
 ///   neither — so specificity leads, and format order breaks ties within one specificity. This
 ///   is what stops jq's source `jq-1.8.2.tar.gz` beating `jq-linux-amd64` on a Linux box.
@@ -286,7 +286,7 @@ fn sort_by_preference(candidates: &mut [Candidate], user_specified: bool) {
 /// loudly, so it takes the strict reading and a file that claims nothing is not an executable.
 ///
 /// **`@asset=` overrides it**, because naming the file *is* the claim: a project shipping one
-/// bare `mytool` for one platform is installed by naming it, not by LiNix guessing.
+/// bare `mytool` for one platform is installed by naming it, not by Shall guessing.
 pub(super) fn classify_format(
     name: &str,
     platform: &Platform,
@@ -325,7 +325,7 @@ fn has_extension(name: &str) -> bool {
 /// The three places the answer can live, in the order they win: an explicit `@asset=` pattern
 /// on the line, then a `@formats=` the user wrote, then the built-in default order detected from
 /// the host. Naming which one won is the whole of D14 — when `github:x/y` installs a `.tar.gz`
-/// on a machine the user expected a `.deb`, this says whether their line or LiNix's default
+/// on a machine the user expected a `.deb`, this says whether their line or Shall's default
 /// decided it.
 pub fn selection_reason(has_asset_pattern: bool, formats_user_specified: bool) -> &'static str {
     if has_asset_pattern {

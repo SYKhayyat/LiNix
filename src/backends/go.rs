@@ -1,4 +1,4 @@
-// The Go toolchain as a LiNix backend. Go is a poor fit for the generic CLI-config model:
+// The Go toolchain as a Shall backend. Go is a poor fit for the generic CLI-config model:
 // `go install pkg@version` installs a binary, but there is no `go uninstall`, no command
 // that lists globally-installed binaries with their module paths, and no CLI search
 // (pkg.go.dev is web-only). So this is a dedicated backend:

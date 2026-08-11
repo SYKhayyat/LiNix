@@ -39,7 +39,7 @@ impl FlatpakBackendCore {
     /// driven: it needs a session bus, so the container matrix names it as argv-tested-only. An
     /// argv test proves a command line was constructed, not that the tool accepts it. What found
     /// it was `argv_drift_tests`, which asks the real flatpak on the tools image whether it
-    /// documents the flags LiNix passes, and got back
+    /// documents the flags Shall passes, and got back
     ///
     /// ```text
     /// `flatpak  --system` — the tool says: error: unknown option --system
@@ -111,7 +111,7 @@ pub const FLATPAK_DEFAULT_SCOPE: Scope = Scope::System;
 ///
 /// **A second row for an application erases its branch.** flatpak installs branches side by side
 /// and the listing has no column saying which one is current — `--columns=help` offers none, and
-/// the binary carries no such word. An app on two branches is therefore a branch LiNix cannot
+/// the binary carries no such word. An app on two branches is therefore a branch Shall cannot
 /// read, and D13's rule is that an unreadable value is left alone: guessing one of the two would
 /// schedule a switch on every sync for ever.
 fn parse_flatpak_list(output: &str) -> ParseResult {
@@ -229,7 +229,7 @@ fn install_ref(spec: &PackageSpec) -> String {
     }
 }
 
-/// `--or-update`, because a ref that is already there is not an error to LiNix.
+/// `--or-update`, because a ref that is already there is not an error to Shall.
 ///
 /// `flatpak install` answers `Error: <ref> already installed` and exits non-zero. Every other
 /// path here can hand it a ref it already has — a `@channel` whose drift is repaired by the
@@ -598,7 +598,7 @@ mod tests {
     /// hands it a ref it may already have, so without `--or-update` the repair fails the
     /// transaction over a machine that was already in the declared state.
     #[test]
-    fn an_already_installed_ref_is_not_an_error_to_linix() {
+    fn an_already_installed_ref_is_not_an_error_to_shall() {
         let argv = install_argv(&["--user"], &[spec_with("org.gimp.GIMP", &[])]);
         assert!(
             argv.contains(&"--or-update".to_string()),

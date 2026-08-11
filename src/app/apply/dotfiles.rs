@@ -84,8 +84,8 @@ impl Dotfiles<'_> {
                 "refusing to place {} file(s) outside your home directory without \
                  confirmation in a non-interactive shell.\n\n\
                  What to do:\n  \
-                 linix check         see every destination first\n  \
-                 linix sync --yes    place them",
+                 shall check         see every destination first\n  \
+                 shall sync --yes    place them",
                 targets.len()
             )),
         )?;
@@ -103,12 +103,12 @@ impl Dotfiles<'_> {
         use crate::core::extras_lock::{ExtraKey, ExtrasLedger};
         use crate::core::LockFile;
 
-        // What LiNix has recorded placing. Asked once for every tree, because it is the
+        // What Shall has recorded placing. Asked once for every tree, because it is the
         // *record* of ownership — `is_symlink` is only a guess at it, and the `link:` backend
         // already learned that guess is wrong in the one direction that matters: where the
-        // deploy falls back to a copy (Windows, cross-drive), a file LiNix placed itself is
+        // deploy falls back to a copy (Windows, cross-drive), a file Shall placed itself is
         // not a symlink. Under `is_symlink` alone the next sync called its own copy a
-        // destination LiNix did not create and refused to touch the tree at all.
+        // destination Shall did not create and refused to touch the tree at all.
         let placed = ExtrasLedger::load(&ExtrasLedger::path_in(
             &self.config.config_root().join("locks"),
         ))?;
@@ -180,7 +180,7 @@ impl Dotfiles<'_> {
     /// documents — this module's own header, `core/extras_lock.rs`, `spec/history.md` and
     /// `spec/plan.md`'s 7n, marked DONE — said the ledger row existed. None did. The tree got
     /// its own placement loop instead, and so got none of what a hand-written `link:` has: no
-    /// `<dest>.linix-backup` before it replaced a file the user wrote (T6), no ledger row, and
+    /// `<dest>.shall-backup` before it replaced a file the user wrote (T6), no ledger row, and
     /// therefore no teardown, no restore, and no removal guard. Deleting a file from a tree
     /// left a dangling symlink on the machine for ever, under a summary reading
     /// `already up to date`.
@@ -239,8 +239,8 @@ impl Dotfiles<'_> {
     /// **The files go through the `link:` backend, not through a loop of this module's own.**
     /// `--replace-existing` waives the refusal to overwrite; it has never meant "and throw the
     /// original away", and a private `remove_file` here meant it did. The backend is where T6's
-    /// `<dest>.linix-backup` lives, where the content-equality short-circuit lives (so a settled
-    /// tree does no work and cannot end up backing up LiNix's own file), and where Windows'
+    /// `<dest>.shall-backup` lives, where the content-equality short-circuit lives (so a settled
+    /// tree does no work and cannot end up backing up Shall's own file), and where Windows'
     /// cross-drive copy fallback lives. The tree had none of the three.
     pub async fn apply(&self, state: &crate::model::DesiredState) -> Result<()> {
         let trees = self.plan(state)?;
@@ -254,7 +254,7 @@ impl Dotfiles<'_> {
             .collect();
         if !colliding.is_empty() && !self.config.replace_existing {
             let mut msg = format!(
-                "{} destination(s) already hold a file LiNix did not put there:\n",
+                "{} destination(s) already hold a file Shall did not put there:\n",
                 colliding.len()
             );
             for dest in &colliding {
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn only_a_new_link_outside_home_is_asked_about() {
         #[cfg(windows)]
-        let system = r"C:\ProgramData\linix\hosts";
+        let system = r"C:\ProgramData\shall\hosts";
         #[cfg(not(windows))]
         let system = "/etc/cron.d/backup";
 
@@ -371,9 +371,9 @@ mod tests {
     #[test]
     fn a_trees_files_outside_home_are_asked_about_too() {
         #[cfg(windows)]
-        let root = std::path::PathBuf::from(r"C:\ProgramData\linix");
+        let root = std::path::PathBuf::from(r"C:\ProgramData\shall");
         #[cfg(not(windows))]
-        let root = std::path::PathBuf::from("/etc/linix");
+        let root = std::path::PathBuf::from("/etc/shall");
 
         // What `links_of` produces for a tree: one synthesised `link:` per placed file.
         let expanded = Dotfiles::links_of(&[Tree {

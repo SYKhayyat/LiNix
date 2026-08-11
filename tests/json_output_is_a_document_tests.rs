@@ -1,6 +1,6 @@
 //! `--json` puts a document on stdout and nothing else — including on the paths nobody previews.
 //!
-//! `linix fleet` reads a remote `linix check --json` over SSH, so the whole command rests on
+//! `shall fleet` reads a remote `shall check --json` over SSH, so the whole command rests on
 //! that output being parseable by a machine that is not standing there to read around a stray
 //! sentence. Both of the verbs below broke that promise, and both broke it on the branch a
 //! *healthy* machine takes:
@@ -159,7 +159,7 @@ fn check_json_carries_its_numbers_beside_its_sentences() {
 /// Both defects above were written under a `!json` guard: the negation reads as "not
 /// machine-readable", not as "there is a person here", and an early return written in the first
 /// dialect happily jumped over the document. `--json` is now converted to
-/// [`linix::core::Output`] once, in `main`'s dispatch, and every handler below it takes the
+/// [`shall::core::Output`] once, in `main`'s dispatch, and every handler below it takes the
 /// decision rather than the flag.
 ///
 /// A source scan and not a behavioural test because the property is *absence* — the twenty-first

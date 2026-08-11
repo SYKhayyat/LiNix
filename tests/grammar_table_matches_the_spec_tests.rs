@@ -21,7 +21,7 @@
 //! documented; a word in the docs and not the code is a promise the parser does not keep, and
 //! that one sends a reader to write a line that will be refused.
 
-use linix::config::grammar::KeywordRole;
+use shall::config::grammar::KeywordRole;
 use std::collections::BTreeSet;
 
 use crate::ledger::Ledger;
@@ -161,7 +161,7 @@ fn every_reserved_word_is_documented_with_its_role() {
     let documented: BTreeSet<(String, KeywordRole)> =
         documented_words_by_role().into_iter().collect();
     let in_code: BTreeSet<(String, KeywordRole)> =
-        linix::config::grammar::statement::reserved_words()
+        shall::config::grammar::statement::reserved_words()
             .into_iter()
             .map(|(w, r)| (w.to_string(), r))
             .collect();
@@ -196,7 +196,7 @@ fn every_reserved_word_is_documented_with_its_role() {
 #[test]
 fn every_statement_prefix_has_a_row_in_the_statements_table() {
     let documented = documented_statement_prefixes();
-    let in_code: BTreeSet<String> = linix::config::grammar::statement::reserved_words()
+    let in_code: BTreeSet<String> = shall::config::grammar::statement::reserved_words()
         .into_iter()
         .filter(|(_, r)| *r == KeywordRole::Prefix)
         .map(|(w, _)| w.to_string())

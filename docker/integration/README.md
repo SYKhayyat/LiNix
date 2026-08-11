@@ -1,8 +1,8 @@
-# LiNix integration harness (real package managers)
+# Shall integration harness (real package managers)
 
 The unit/integration test suite in `tests/` is **hermetic** — it mocks command execution,
 so it proves the *logic* but never touches a real package manager. This harness fills that
-gap: it runs the real `linix` binary against **real** apt / dnf / pacman / apk / emerge (and,
+gap: it runs the real `shall` binary against **real** apt / dnf / pacman / apk / emerge (and,
 on the host, scoop / winget / brew), doing a full **install → list → verify → remove →
 verify** cycle in disposable containers. This is where real-world bugs live (output-format
 drift, shim quirks, exit-code edges).
@@ -23,7 +23,7 @@ a plain `run.sh` covers the four native distros **and** the expansion backends �
 command needed. `gentoo` stays opt-in because it pulls a large base image.
 
 Each distro has a Dockerfile that installs a Rust toolchain (via that distro's own package
-manager — which also warms its package DB), builds `linix`, and runs
+manager — which also warms its package DB), builds `shall`, and runs
 `run-in-container.sh <backend> <package>`. A non-zero exit means that backend's real
 install/remove path failed.
 
@@ -52,7 +52,7 @@ says by name what it did not exercise.
 
 **Real-by-default (§14).** Everything that can physically run in the image gets a REAL
 lifecycle, even when it compiles from source. Install failure is **soft** (a registry outage
-is not a LiNix bug); **everything after a successful install is HARD** — that split is what
+is not a Shall bug); **everything after a successful install is HARD** — that split is what
 caught the pixi `global remove` vs `global uninstall` bug a dry-run plan could never see. A
 READY backend that cannot run a lifecycle here is named with its reason
 (`no_lifecycle_reason`), and an unexplained skip is impossible: a READY backend with no
@@ -134,7 +134,7 @@ lifecycle here, and what remains is *detected* rather than assumed —
 
 - `choco` is skipped only when the shell is **not elevated**, because Chocolatey writes to
   `C:\ProgramData`. Re-run from an elevated shell and it gets a full lifecycle.
-- `psresource` is skipped only when the host has **no PSResourceGet cmdlets**, which LiNix's own
+- `psresource` is skipped only when the host has **no PSResourceGet cmdlets**, which Shall's own
   health check prints the command to fix.
 
 That distinction is the point. An assumed skip is a check nobody ever revisits; a detected one

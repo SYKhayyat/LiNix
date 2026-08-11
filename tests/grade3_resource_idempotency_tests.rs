@@ -1,21 +1,21 @@
 //! GRADER round 4, 2026-07-30 — RED. `sync` re-places every declared resource on every run, and
-//! the second run backs up the file LiNix itself placed.
+//! the second run backs up the file Shall itself placed.
 //!
 //! Round 3's N-2 put the extras family into `check` and `plan`. Both now read the machine: with
 //! three `link:` lines placed, `check` says *the machine matches your files* and `plan` says
 //! *0 resource(s) to place*. The apply loop does not consult either. Measured, same fixture,
 //! three consecutive runs:
 //!
-//!     $ linix sync -y      # nothing placed yet
+//!     $ shall sync -y      # nothing placed yet
 //!      WARN Link: Cross-drive fallback to COPY for …/src/s1   (×3)
 //!     $ ls dest/           s1 s2 s3
 //!
-//!     $ linix sync -y      # everything already in place
+//!     $ shall sync -y      # everything already in place
 //!      WARN Link: Cross-drive fallback to COPY for …/src/s1   (×3)
 //!     already up to date
-//!     $ ls dest/           s1 s1.linix-backup s2 s2.linix-backup s3 s3.linix-backup
+//!     $ ls dest/           s1 s1.shall-backup s2 s2.shall-backup s3 s3.shall-backup
 //!
-//! The `.linix-backup` files are backups of LiNix's own copies, created in the user's directory,
+//! The `.shall-backup` files are backups of Shall's own copies, created in the user's directory,
 //! by a run that reported `already up to date`. A user's genuine pre-existing file is backed up
 //! once and then never overwritten, which is the one thing that goes right here.
 //!
@@ -80,7 +80,7 @@ impl Fixture {
 }
 
 #[test]
-fn a_second_sync_leaves_no_backup_of_linixs_own_file() {
+fn a_second_sync_leaves_no_backup_of_shalls_own_file() {
     let f = setup("grade3-resource-idempotency");
 
     let (first, code) = f.run(&["sync", "-y"]);

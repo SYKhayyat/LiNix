@@ -28,7 +28,7 @@ impl VscodeBackendCore {
                 // Inside the rate limiter's retry closure, so a retried request used to build a
                 // whole new client — and with it a whole new TLS handshake to the marketplace.
                 let client = crate::core::http::api(
-                    "linix-manager",
+                    "shall-manager",
                     crate::backends::node_registry::http_timeout().as_secs(),
                 )?;
 
@@ -204,7 +204,7 @@ impl Queryable for VscodeQueryable {
     ///
     /// It used to POST to `marketplace.visualstudio.com` and answer `Some` for anything that
     /// *exists* there, carrying the marketplace's *latest* version. Three consequences, all
-    /// silent: `linix install vscode:x` reported success and installed nothing, a `@version=`
+    /// silent: `shall install vscode:x` reported success and installed nothing, a `@version=`
     /// pin re-installed for ever the moment upstream published a newer build, and every plan
     /// made one rate-limited HTTPS POST per declared extension. Same bug as `mise:`, whose
     /// obituary is at `mise.rs:183`.
@@ -344,7 +344,7 @@ mod tests {
 
     /// `info` asked `marketplace.visualstudio.com` and returned `Some` for anything that
     /// *exists* there, at the marketplace's *latest* version. Three silent consequences:
-    /// `linix install vscode:x` reported success and installed nothing, a `@version=` pin
+    /// `shall install vscode:x` reported success and installed nothing, a `@version=` pin
     /// re-installed for ever the moment upstream published, and every plan made one
     /// rate-limited HTTPS POST per declared extension.
     ///

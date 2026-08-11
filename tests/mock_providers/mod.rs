@@ -12,12 +12,12 @@
 use async_trait::async_trait;
 use chrono::{Duration as ChronoDuration, Utc};
 use dashmap::DashMap;
-use linix::app::scheduler::TaskProvisioner;
-use linix::app::App;
-use linix::config::config::ScheduleConfig;
-use linix::config::Config;
-use linix::core::executor::MockExecutor;
-use linix::core::{
+use shall::app::scheduler::TaskProvisioner;
+use shall::app::App;
+use shall::config::config::ScheduleConfig;
+use shall::config::Config;
+use shall::core::executor::MockExecutor;
+use shall::core::{
     CommandExecutor, Error, PackageSpec, Result, Snapshot, SnapshotProvider, StateRegistry,
 };
 use std::collections::HashMap;
@@ -36,7 +36,7 @@ pub struct TestKernel {
     lock_map: Arc<DashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
-/// LiNix no longer injects a commit identity (a signed commit must not be authored by a name
+/// Shall no longer injects a commit identity (a signed commit must not be authored by a name
 /// nobody owns), so a fixture that commits fails on any host without a global `user.email` —
 /// which is every CI runner (S33). The absent config paths keep the developer's own
 /// `~/.gitconfig` out too: a host that signs every commit would fail these at `git commit`.
@@ -47,12 +47,12 @@ fn hermetic_git_env() {
     static HERMETIC: std::sync::Once = std::sync::Once::new();
     HERMETIC.call_once(|| {
         for (k, v) in [
-            ("GIT_AUTHOR_NAME", "linix-tests"),
+            ("GIT_AUTHOR_NAME", "shall-tests"),
             ("GIT_AUTHOR_EMAIL", "test@example.invalid"),
-            ("GIT_COMMITTER_NAME", "linix-tests"),
+            ("GIT_COMMITTER_NAME", "shall-tests"),
             ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
-            ("GIT_CONFIG_GLOBAL", "linix-tests-absent-gitconfig"),
-            ("GIT_CONFIG_SYSTEM", "linix-tests-absent-gitconfig"),
+            ("GIT_CONFIG_GLOBAL", "shall-tests-absent-gitconfig"),
+            ("GIT_CONFIG_SYSTEM", "shall-tests-absent-gitconfig"),
         ] {
             std::env::set_var(k, v);
         }
@@ -66,7 +66,7 @@ impl TestKernel {
         hermetic_git_env();
 
         let tmp = tempfile::Builder::new()
-            .prefix("linix_hermetic_")
+            .prefix("shall_hermetic_")
             .tempdir()
             .expect("Failed to create test sandbox directory.");
 
@@ -82,7 +82,7 @@ impl TestKernel {
 
         // The II.1 layout, because the resolver now reads a repo rather than a folder of
         // manifests. `priority` says which package managers this machine uses: without it
-        // LiNix refuses to guess, so a fixture without one is a fixture that cannot resolve
+        // Shall refuses to guess, so a fixture without one is a fixture that cannot resolve
         // anything. These are the three the mock executor pretends to have.
         std::fs::write(tmp.path().join("priority"), "apt\nbrew\ncargo\n")
             .expect("Failed to write test `priority`.");
@@ -91,7 +91,7 @@ impl TestKernel {
         std::fs::create_dir_all(tmp.path().join("profiles"))
             .expect("Failed to create test `profiles/`.");
         // A profile has to be active or there is nowhere for a line to go: a module no
-        // profile reaches is one LiNix never reads, so writing to one is refused rather
+        // profile reaches is one Shall never reads, so writing to one is refused rather
         // than done silently. A fixture with nothing active is a fixture that cannot
         // install. Tests that care about a specific profile overwrite these two files.
         std::fs::write(tmp.path().join("profiles/Main"), "")
@@ -227,7 +227,7 @@ impl SnapshotProvider for MockSnapshotProvider {
     async fn is_available(&self) -> bool {
         true
     }
-    async fn create(&self, label: linix::core::snapshot::SnapshotLabel) -> Result<Snapshot> {
+    async fn create(&self, label: shall::core::snapshot::SnapshotLabel) -> Result<Snapshot> {
         let s = Snapshot {
             id: format!("snap_{}", Utc::now().timestamp()),
             timestamp: Utc::now().to_rfc3339(),
@@ -253,8 +253,8 @@ impl SnapshotProvider for MockSnapshotProvider {
             )))
         }
     }
-    fn restore_capability(&self) -> linix::core::snapshot::RestoreCapability {
-        linix::core::snapshot::RestoreCapability::Live
+    fn restore_capability(&self) -> shall::core::snapshot::RestoreCapability {
+        shall::core::snapshot::RestoreCapability::Live
     }
     async fn restore(&self, _id: &str) -> Result<()> {
         Ok(())
@@ -287,7 +287,7 @@ impl TaskProvisioner for MockTaskProvisioner {
         &self,
         _executor: &CommandExecutor,
         config: &ScheduleConfig,
-        _linix_path: &Path,
+        _shall_path: &Path,
     ) -> Result<()> {
         let mut map = self.active_tasks.lock().await;
         map.insert(config.name.clone(), config.clone());
@@ -306,7 +306,7 @@ impl TaskProvisioner for MockTaskProvisioner {
 
 #[allow(dead_code)]
 pub fn create_dummy_spec(name: &str, backend: &str, source: Option<&str>) -> PackageSpec {
-    let mut options = linix::config::grammar::Options::default();
+    let mut options = shall::config::grammar::Options::default();
     if let Some(src) = source {
         options.set("__source", src);
     }

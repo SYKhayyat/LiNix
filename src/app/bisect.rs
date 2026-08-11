@@ -125,7 +125,7 @@ pub async fn bisect(app: &App, test: &str, assume_yes: bool) -> Result<()> {
         None => warn!(
             "Bisect: the snapshot provider took no snapshot of the current state, so this \
              machine will be left on whichever snapshot the search ends at. Restore it yourself \
-             with `linix rollback` when you are done."
+             with `shall rollback` when you are done."
         ),
     }
 

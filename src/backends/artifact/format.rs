@@ -87,7 +87,7 @@ impl Format {
     }
 
     /// Whether this format installs itself into a system package database rather than being
-    /// unpacked by LiNix. These are the artifacts a second package manager can then upgrade.
+    /// unpacked by Shall. These are the artifacts a second package manager can then upgrade.
     pub fn is_system_package(self) -> bool {
         matches!(
             self,
@@ -95,7 +95,7 @@ impl Format {
         )
     }
 
-    /// Whether LiNix must unpack this before anything is executable.
+    /// Whether Shall must unpack this before anything is executable.
     pub fn is_archive(self) -> bool {
         matches!(self, Format::Tarball | Format::Zip)
     }
@@ -214,7 +214,7 @@ impl std::error::Error for UnknownFormat {}
 /// `user_specified` records whether this order came from a `@formats=` the user wrote or was
 /// detected from the machine. It changes the tie-break, and only the tie-break (D2): a written
 /// order is an instruction and wins outright, while a detected one yields to an asset that
-/// names the exact machine — because a detected default is LiNix's guess about file *type*, and
+/// names the exact machine — because a detected default is Shall's guess about file *type*, and
 /// a file naming your os and arch is a better-evidenced guess than one naming neither.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FormatOrder {
@@ -271,7 +271,7 @@ impl FormatOrder {
 
     /// The version of the built-in default order (D11).
     ///
-    /// The default is *detected*, not configured, so a LiNix upgrade that changes it would
+    /// The default is *detected*, not configured, so a Shall upgrade that changes it would
     /// silently install a different artifact on a machine with no `@formats=` line — a `tarball`
     /// today, a `deb` after the upgrade. This constant is the promise that such a move is
     /// visible: **bump it whenever `detected_default` changes what it returns for any host**, and

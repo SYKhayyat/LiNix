@@ -1,6 +1,6 @@
 //! One writer at a time on the data directory (II.8).
 //!
-//! LiNix is not the only thing that starts LiNix: the package-manager hooks it installs
+//! Shall is not the only thing that starts Shall: the package-manager hooks it installs
 //! (`DPkg::Post-Invoke` and its siblings) spawn a reconcile on every ordinary `apt install`,
 //! typed by someone who has never heard of this tool. `registry.json`, the journal and the
 //! `locks/` ledgers are written whole, and two whole writes are last-one-wins — the entry
@@ -48,8 +48,8 @@ impl DataLock {
     /// the holder — the lock file carries the pid and the command that took it.
     pub fn acquire(data_dir: &Path, command: &str, timeout: Duration) -> Result<Self> {
         crate::utils::file::ensure_dir(data_dir)?;
-        let path = data_dir.join("linix.lock");
-        let owner_path = data_dir.join("linix.lock.owner");
+        let path = data_dir.join("shall.lock");
+        let owner_path = data_dir.join("shall.lock.owner");
 
         let file = OpenOptions::new()
             .read(true)
@@ -61,7 +61,7 @@ impl DataLock {
 
         if file.try_lock_exclusive().is_err() {
             eprintln!(
-                "linix: waiting for the data directory — held by {}",
+                "shall: waiting for the data directory — held by {}",
                 Self::holder(&owner_path)
             );
             let deadline = Instant::now() + timeout;
@@ -70,13 +70,13 @@ impl DataLock {
                     break;
                 }
                 if Instant::now() >= deadline {
-                    // S27: the old text ended "remove linix.lock if nothing is running", and
+                    // S27: the old text ended "remove shall.lock if nothing is running", and
                     // that advice is never right. The lock is an OS lock on an open handle,
                     // released when the holding process exits — so a lock that is still
                     // contended after the wait proves a live holder, and deleting the file
                     // takes the lock away from it rather than from a corpse.
                     return Err(Error::Other(format!(
-                        "the LiNix data directory is locked by {}, and still was after {}s.\n  \
+                        "the Shall data directory is locked by {}, and still was after {}s.\n  \
                          {} is where state lives, and two writers make a removal out of a race.\n  \
                          The lock is held by a running process, not by the file: {} exists\n  \
                          between runs and deleting it would take the lock from a live writer.\n  \
@@ -91,7 +91,7 @@ impl DataLock {
             }
         }
 
-        let stamp = format!("linix {} (pid {})", command, std::process::id());
+        let stamp = format!("shall {} (pid {})", command, std::process::id());
         let _ = std::fs::write(&owner_path, stamp);
         Ok(Self { file, owner_path })
     }
@@ -117,7 +117,7 @@ impl DataLock {
     fn holder(owner_path: &Path) -> String {
         match std::fs::read_to_string(owner_path) {
             Ok(s) if !s.trim().is_empty() => s.trim().to_string(),
-            _ => "another linix".to_string(),
+            _ => "another shall".to_string(),
         }
     }
 }
@@ -137,7 +137,7 @@ mod tests {
 
     fn tmp(name: &str) -> PathBuf {
         let d =
-            std::env::temp_dir().join(format!("linix-datalock-{}-{}", name, std::process::id()));
+            std::env::temp_dir().join(format!("shall-datalock-{}-{}", name, std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         d
     }
@@ -156,7 +156,7 @@ mod tests {
     fn the_lock_file_names_its_holder() {
         let dir = tmp("holder");
         let _held = DataLock::acquire(&dir, "sync", Duration::from_secs(1)).unwrap();
-        let stamp = DataLock::holder(&dir.join("linix.lock.owner"));
+        let stamp = DataLock::holder(&dir.join("shall.lock.owner"));
         assert!(stamp.contains("sync"), "{}", stamp);
         assert!(
             stamp.contains(&std::process::id().to_string()),
@@ -172,7 +172,7 @@ mod tests {
 
         // A second *process* is what the lock is for; within one process the advisory lock
         // is not re-entrant on a separate handle either, which is what this asserts.
-        let path = dir.join("linix.lock");
+        let path = dir.join("shall.lock");
         let other = File::open(&path).unwrap();
         assert!(
             other.try_lock_exclusive().is_err(),

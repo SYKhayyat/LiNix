@@ -3,7 +3,7 @@
 #
 # Four chances to see a wedged sweep were spent killing the process and losing
 # what it was waiting on. This captures that, unattended: the full process
-# table, the descendant tree of every `linix`, a measured CPU delta so "idle"
+# table, the descendant tree of every `shall`, a measured CPU delta so "idle"
 # is a number rather than an impression, and each thread's wait reason.
 #
 # ASCII only, deliberately: a .ps1 written from bash with a non-ASCII byte in
@@ -20,11 +20,11 @@ param(
 
 $ErrorActionPreference = "Continue"
 
-# Managers LiNix drives, plus the shells it drives them through. A child that
-# outlives its parent gets reparented and leaves the linix tree, so these are
+# Managers Shall drives, plus the shells it drives them through. A child that
+# outlives its parent gets reparented and leaves the shall tree, so these are
 # collected by name as well as by descent.
 $WATCH = @(
-    "linix", "scoop", "winget", "choco", "chocolatey", "powershell", "pwsh",
+    "shall", "scoop", "winget", "choco", "chocolatey", "powershell", "pwsh",
     "cmd", "conhost", "msiexec", "git", "bash", "sh", "node", "python",
     "curl", "wget", "tar", "7z", "openconsole", "WindowsPackageManagerServer"
 )
@@ -105,16 +105,16 @@ if ($Note -ne "") { Emit ("note: " + $Note) }
 Emit ("cpu sample window: " + $SampleGapMs + "ms")
 Emit "=============================================================="
 
-$roots = @($second | Where-Object { $_.Name -eq "linix.exe" } | ForEach-Object { [int]$_.ProcessId })
+$roots = @($second | Where-Object { $_.Name -eq "shall.exe" } | ForEach-Object { [int]$_.ProcessId })
 
 if ($roots.Count -eq 0) {
     Emit ""
-    Emit "NO linix.exe IS RUNNING."
-    Emit "Whatever the sweep is waiting on, it is not a LiNix process. The"
+    Emit "NO shall.exe IS RUNNING."
+    Emit "Whatever the sweep is waiting on, it is not a Shall process. The"
     Emit "watched-name table below is the whole of the evidence this run gets."
 } else {
     Emit ""
-    Emit ("LiNix processes: " + $roots.Count)
+    Emit ("Shall processes: " + $roots.Count)
 }
 
 # --- The child list. The one thing four earlier opportunities threw away. ---
@@ -122,7 +122,7 @@ foreach ($r in $roots) {
     $tree = Get-Descendants $r
     Emit ""
     Emit "--------------------------------------------------------------"
-    Emit ("LINIX PID " + $r + "   (tree of " + $tree.Count + " process(es))")
+    Emit ("SHALL PID " + $r + "   (tree of " + $tree.Count + " process(es))")
     Emit "--------------------------------------------------------------"
     foreach ($id in $tree) {
         $p = $byId[$id]

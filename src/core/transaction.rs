@@ -541,7 +541,7 @@ impl Transaction {
     }
 
     /// A node nobody attempted, reported as itself. Not a success and not a failure of its own:
-    /// the reason names the node that stopped it, because "jq failed" about a package LiNix
+    /// the reason names the node that stopped it, because "jq failed" about a package Shall
     /// never ran a command for is the attribution problem this engine is meant to be free of.
     fn skipped_result(action: &GraphAction, idx: NodeIndex, blocked_by: &str) -> TaskResult {
         let (backend_name, package_name) = match action {
@@ -565,7 +565,7 @@ impl Transaction {
         }
     }
 
-    /// The most packages LiNix will put on one manager command line.
+    /// The most packages Shall will put on one manager command line.
     ///
     /// A bound on argv, not on ambition: `cmd.exe` caps a command line at 8191 characters and
     /// every manager has some limit. A hundred names is far below any of them and far above
@@ -1234,7 +1234,7 @@ impl Transaction {
                         // delete it. Say so instead.
                         Prior::Unknown => {
                             warn!(
-                                "rollback will not remove {}:{}: LiNix could not tell whether \
+                                "rollback will not remove {}:{}: Shall could not tell whether \
                                  it was already installed before this run, and removing what \
                                  you may have had is not something you asked for.",
                                 spec.backend, spec.name
@@ -1265,7 +1265,7 @@ impl Transaction {
                         info!(
                             "rollback is leaving {}:{} removed — nothing declares it, so putting \
                              it back would only give the next sync the same work to do again. \
-                             `linix history` and the pre-sync snapshot are how it comes back.",
+                             `shall history` and the pre-sync snapshot are how it comes back.",
                             backend, name
                         );
                         continue;
@@ -1336,7 +1336,7 @@ fn lock_wait_verdict(
         crate::app::stale_lock::Held::Live(who) => LockWait::Hopeless(Error::CommandFailed {
             message: format!(
                 "`{backend}` cannot run: {who} holds the manager's lock, and \
-                 `manager_lock_wait_secs` is 0, so LiNix did not wait for it. Raise that setting \
+                 `manager_lock_wait_secs` is 0, so Shall did not wait for it. Raise that setting \
                  or run this again once the other manager has finished."
             ),
             retry: Retryability::Exhausted,
@@ -1346,7 +1346,7 @@ fn lock_wait_verdict(
             message: format!(
                 "`{backend}` cannot run: {} is on disk and nothing holds it — a run of this \
                  manager was killed and left its lock behind. Waiting will not clear it. \
-                 `linix heal` removes exactly this, after proving again that no manager is \
+                 `shall heal` removes exactly this, after proving again that no manager is \
                  running.",
                 path.display()
             ),
@@ -1372,7 +1372,7 @@ async fn wait_for_manager_lock(
     cancel_token: &CancellationToken,
 ) -> std::result::Result<Duration, Error> {
     eprintln!(
-        "linix: waiting for {who} to finish — it holds the lock `{backend}` needs \
+        "shall: waiting for {who} to finish — it holds the lock `{backend}` needs \
          (up to {}s; `manager_lock_wait_secs` sets that)",
         wait.as_secs()
     );
@@ -1451,7 +1451,7 @@ fn falsify_transience(err: Error, attempts: u32) -> Error {
     }
 }
 
-/// **What LiNix does when another package manager holds the lock** — the three verdicts, each
+/// **What Shall does when another package manager holds the lock** — the three verdicts, each
 /// exercised without a second package manager to kill.
 ///
 /// The shipped behaviour was one verdict for all three: four retries over three and a half
@@ -1475,7 +1475,7 @@ mod manager_lock_tests {
                                (unable to lock database)";
 
     /// A live holder is a queue to join. Waiting is the only thing that helps, and it is what
-    /// LiNix already does for its own lock.
+    /// Shall already does for its own lock.
     #[test]
     fn a_live_holder_is_waited_for() {
         let verdict = lock_wait_verdict(
@@ -1504,7 +1504,7 @@ mod manager_lock_tests {
             panic!("waiting on a lock nothing holds never ends: {verdict:?}");
         };
         let said = err.to_string();
-        assert!(said.contains("linix heal"), "{said}");
+        assert!(said.contains("shall heal"), "{said}");
         assert!(said.contains("db.lck"), "the file has to be named: {said}");
         assert_eq!(err.retryability(), Retryability::Exhausted);
     }

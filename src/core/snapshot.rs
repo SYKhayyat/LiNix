@@ -23,24 +23,24 @@ impl Snapshot {
             .ok()
     }
 
-    /// Recover a snapshot's creation time from the timestamp LiNix embeds in the id it
+    /// Recover a snapshot's creation time from the timestamp Shall embeds in the id it
     /// generates (S2). `list()` cannot get this from btrfs/zfs — their creation-time flags and
-    /// output formats vary by version — but every id LiNix makes carries the time in a fixed
+    /// output formats vary by version — but every id Shall makes carries the time in a fixed
     /// shape:
     ///
-    /// - btrfs: `linix_pre_<label>_<YYYYMMDDHHMMSS>`
-    /// - zfs:   `<dataset>@linix_<YYYYMMDD_HHMMSS>`
+    /// - btrfs: `shall_pre_<label>_<YYYYMMDDHHMMSS>`
+    /// - zfs:   `<dataset>@shall_<YYYYMMDD_HHMMSS>`
     ///
     /// The digits are local wall-clock (that is how `create()` formats them), so they are read
-    /// back as local time. Returns `None` for an id in neither shape — e.g. a snapshot LiNix
+    /// back as local time. Returns `None` for an id in neither shape — e.g. a snapshot Shall
     /// did not create — so the caller can fall back rather than trust a wrong time.
     ///
     /// This is the fix for the bug where `list()` stamped every snapshot with `Utc::now()`, so
     /// each read as zero seconds old and age-based retention (`max_age_days`, `keep_days`) could
     /// never fire — a retention policy that silently keeps everything (P3).
     pub fn time_from_id(id: &str) -> Option<DateTime<Utc>> {
-        // zfs first: the part after the last `@linix_`, formatted `%Y%m%d_%H%M%S`.
-        if let Some(rest) = id.rsplit_once("@linix_") {
+        // zfs first: the part after the last `@shall_`, formatted `%Y%m%d_%H%M%S`.
+        if let Some(rest) = id.rsplit_once("@shall_") {
             if let Ok(naive) = NaiveDateTime::parse_from_str(rest.1.trim(), "%Y%m%d_%H%M%S") {
                 return local_naive_to_utc(naive);
             }
@@ -62,16 +62,16 @@ impl Snapshot {
         Self::time_from_id(id).map(|t| t.to_rfc3339())
     }
 
-    /// Whether LiNix created this snapshot — the ownership test retention uses so it never
+    /// Whether Shall created this snapshot — the ownership test retention uses so it never
     /// reclaims a restore point the user made by hand (S3).
     ///
-    /// The marker lands in different fields per provider: btrfs/zfs put `linix_` in the **id**
-    /// (`linix_pre_…`, `…@linix_…`), while Windows System Restore forces the id to a bare
-    /// `SequenceNumber` and carries `LiNix:` in the **description**. Checking only the id — the
-    /// old bug — meant nothing LiNix created on Windows was ever pruned. So check both, and do
-    /// it case-insensitively to catch `LiNix:` as well as `linix_`.
-    pub fn is_linix_owned(&self) -> bool {
-        let has_marker = |s: &str| s.to_lowercase().contains("linix");
+    /// The marker lands in different fields per provider: btrfs/zfs put `shall_` in the **id**
+    /// (`shall_pre_…`, `…@shall_…`), while Windows System Restore forces the id to a bare
+    /// `SequenceNumber` and carries `Shall:` in the **description**. Checking only the id — the
+    /// old bug — meant nothing Shall created on Windows was ever pruned. So check both, and do
+    /// it case-insensitively to catch `Shall:` as well as `shall_`.
+    pub fn is_shall_owned(&self) -> bool {
+        let has_marker = |s: &str| s.to_lowercase().contains("shall");
         has_marker(&self.id) || has_marker(&self.description)
     }
 }
@@ -86,7 +86,7 @@ fn local_naive_to_utc(naive: NaiveDateTime) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
-/// Why LiNix took a snapshot. There are exactly these four, and they are the only text that
+/// Why Shall took a snapshot. There are exactly these four, and they are the only text that
 /// reaches the Windows provider's PowerShell interpolation — a `&str` there would put a future
 /// `--label` flag one hop from an elevated shell (SEC5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,22 +219,22 @@ pub struct SnapshotProviderDef {
     pub restores_running_system: bool,
     /// A regex whose first capture group is a snapshot id on each `list` line. An optional
     /// second group, when present, is the snapshot's description — which is where Windows carries
-    /// the `LiNix:` ownership marker (btrfs/zfs carry it in the id instead).
+    /// the `Shall:` ownership marker (btrfs/zfs carry it in the id instead).
     pub list_pattern: String,
     /// The sentence shown when a create-only provider is asked to restore. A default is supplied
     /// when the row omits it, so the refusal is never blank.
     #[serde(default)]
     pub restore_how: Option<String>,
-    /// How LiNix builds the id it names a snapshot with, when it is LiNix that names it (btrfs,
+    /// How Shall builds the id it names a snapshot with, when it is Shall that names it (btrfs,
     /// zfs, lvm). Placeholders: `{label}`, `{source}`, `{ts}` (`%Y%m%d%H%M%S`, 14 contiguous
     /// digits so [`Snapshot::time_from_id`] can read the age back) and `{ts_}` (`%Y%m%d_%H%M%S`,
     /// the zfs shape). Absent and with no `create_id_pattern`, the id defaults to
-    /// `linix_<label>_<%Y%m%d_%H%M%S>`.
+    /// `shall_<label>_<%Y%m%d_%H%M%S>`.
     #[serde(default)]
     pub id_template: Option<String>,
     /// When the *tool* names the snapshot (timeshift, apfs), this regex reads the id back from
     /// the create command's stdout — its first capture group is the id. Mutually exclusive with
-    /// `id_template`: either LiNix names it or the tool does.
+    /// `id_template`: either Shall names it or the tool does.
     #[serde(default)]
     pub create_id_pattern: Option<String>,
     /// Whether `list` must run elevated (timeshift's `--list` needs root; btrfs/zfs do not).
@@ -269,7 +269,7 @@ impl AdapterRow for SnapshotProviderDef {
         self.os.as_deref()
     }
 
-    /// A row LiNix will drive, or why it will not. It must be able to create, list and delete;
+    /// A row Shall will drive, or why it will not. It must be able to create, list and delete;
     /// restore is the capability that is allowed to be absent, and its absence is the safe state.
     fn why_unusable(&self) -> Option<&'static str> {
         if self.detect.trim().is_empty() {
@@ -310,9 +310,9 @@ impl ConfigSnapshotProvider {
         )
     }
 
-    /// The id LiNix generates for a provider it names itself (btrfs/zfs/lvm). The `linix_` marker
+    /// The id Shall generates for a provider it names itself (btrfs/zfs/lvm). The `shall_` marker
     /// is what ownership (S3) and retention key on, so a config provider can never make a user's
-    /// own snapshots look like LiNix's.
+    /// own snapshots look like Shall's.
     fn generated_id(&self, label: SnapshotLabel) -> String {
         match &self.def.id_template {
             Some(t) => t
@@ -321,7 +321,7 @@ impl ConfigSnapshotProvider {
                 .replace("{ts_}", &Local::now().format("%Y%m%d_%H%M%S").to_string())
                 .replace("{source}", &self.def.source),
             None => format!(
-                "linix_{}_{}",
+                "shall_{}_{}",
                 label.as_str(),
                 Local::now().format("%Y%m%d_%H%M%S")
             ),
@@ -352,7 +352,7 @@ impl ConfigSnapshotProvider {
 
     async fn run_ps(&self, command: &str, elevated: bool) -> Result<String> {
         // `-NoProfile` because a user's PowerShell profile can add hundreds of milliseconds to
-        // seconds to every invocation, and none of it is work LiNix asked for; `-NonInteractive`
+        // seconds to every invocation, and none of it is work Shall asked for; `-NonInteractive`
         // because this output is captured, so a prompt here would be a question asked into a
         // pipe nobody is showing. `psresource.rs` and `executor.rs` have passed `-NoProfile`
         // all along — this was the third of three.
@@ -397,7 +397,7 @@ impl SnapshotProvider for ConfigSnapshotProvider {
 
     async fn create(&self, label: SnapshotLabel) -> Result<Snapshot> {
         let id = if self.def.powershell {
-            // Windows: the cmdlet does not return the SequenceNumber, so LiNix carries a synthetic
+            // Windows: the cmdlet does not return the SequenceNumber, so Shall carries a synthetic
             // marker id (list() reads the real ids). `label` is an enum, so no `'` reaches the
             // shell; there is no `{id}` in a create.
             let template = self.def.create.clone();
@@ -464,7 +464,7 @@ impl SnapshotProvider for ConfigSnapshotProvider {
             let Some(m) = caps.get(1) else { continue };
             let id = m.as_str().to_string();
             // Group 2, when the pattern captures it, is the description — where Windows keeps its
-            // `LiNix:` ownership marker. Otherwise the provider name stands in.
+            // `Shall:` ownership marker. Otherwise the provider name stands in.
             let description = caps
                 .get(2)
                 .map(|d| d.as_str().to_string())
@@ -570,10 +570,10 @@ fn config_snapshot_defs(config: &Config) -> Vec<SnapshotProviderDef> {
     }
 }
 
-/// The snapshot providers LiNix ships (U27, Option A). Compiled into the binary, so — unlike the
+/// The snapshot providers Shall ships (U27, Option A). Compiled into the binary, so — unlike the
 /// user's `adapters/snapshot.toml` — they are not read through the hook ledger: a first-party
 /// asset cannot be tampered with by a pulled config, and gating it would leave a fresh machine
-/// with no safety net until `linix lock` ran.
+/// with no safety net until `shall lock` ran.
 const BUILTIN_SNAPSHOT_DEFS: &str = include_str!("snapshot_builtins.toml");
 
 /// The auto-detected zfs root dataset, when `zfs_dataset` is not configured. Empty when zfs is
@@ -733,7 +733,7 @@ impl SnapshotManager {
         }
     }
 
-    /// Only ever deletes snapshots whose id contains "linix", so retention cannot reap a
+    /// Only ever deletes snapshots whose id contains "shall", so retention cannot reap a
     /// user's or another tool's snapshots. Inactive policy or no provider = no-op.
     pub async fn prune_with_policy(
         &self,
@@ -752,7 +752,7 @@ impl SnapshotManager {
             .list()
             .await?
             .into_iter()
-            .filter(|s| s.is_linix_owned())
+            .filter(|s| s.is_shall_owned())
             .collect();
         let items: Vec<crate::core::RetentionItem> = list
             .iter()
@@ -842,10 +842,10 @@ mod tests {
     // Build ids the way `create()` does, from a known local time, so a round-trip proves the
     // parse regardless of the test machine's timezone.
     fn btrfs_id(local: DateTime<Local>) -> String {
-        format!("linix_pre_pre_sync_{}", local.format("%Y%m%d%H%M%S"))
+        format!("shall_pre_pre_sync_{}", local.format("%Y%m%d%H%M%S"))
     }
     fn zfs_id(local: DateTime<Local>) -> String {
-        format!("tank/root@linix_{}", local.format("%Y%m%d_%H%M%S"))
+        format!("tank/root@shall_{}", local.format("%Y%m%d_%H%M%S"))
     }
 
     #[test]
@@ -875,12 +875,12 @@ mod tests {
 
     #[test]
     fn an_id_with_no_embedded_time_returns_none() {
-        // A snapshot LiNix did not create, or a malformed id: no guess, so the caller falls
+        // A snapshot Shall did not create, or a malformed id: no guess, so the caller falls
         // back rather than trusting a wrong time.
         assert!(Snapshot::time_from_id("some_manual_snapshot").is_none());
         assert!(Snapshot::time_from_id("tank/root@weekly-2026").is_none());
         // Right shape, non-numeric tail.
-        assert!(Snapshot::time_from_id("linix_pre_sync_notadate12").is_none());
+        assert!(Snapshot::time_from_id("shall_pre_sync_notadate12").is_none());
     }
 
     fn snap(id: &str, description: &str, backend: &str) -> Snapshot {
@@ -894,23 +894,23 @@ mod tests {
 
     #[test]
     fn ownership_is_recognized_across_every_provider() {
-        // S3: the marker lands in different fields per provider. All of these are LiNix's.
+        // S3: the marker lands in different fields per provider. All of these are Shall's.
         assert!(snap(
-            "linix_pre_pre_sync_20260717143022",
+            "shall_pre_pre_sync_20260717143022",
             "BTRFS System State",
             "btrfs"
         )
-        .is_linix_owned());
-        assert!(snap("tank/root@linix_20260717_143022", "ZFS Snapshot", "zfs").is_linix_owned());
+        .is_shall_owned());
+        assert!(snap("tank/root@shall_20260717_143022", "ZFS Snapshot", "zfs").is_shall_owned());
         // Windows: id is a bare sequence number, marker is in the description — the case the
         // old id-only filter missed entirely.
-        assert!(snap("12", "LiNix: pre_sync", "windows_restore").is_linix_owned());
+        assert!(snap("12", "Shall: pre_sync", "windows_restore").is_shall_owned());
     }
 
     #[test]
     fn a_user_made_snapshot_is_not_owned_and_is_left_alone() {
-        assert!(!snap("12", "Windows Update", "windows_restore").is_linix_owned());
-        assert!(!snap("tank/root@weekly", "manual weekly", "zfs").is_linix_owned());
+        assert!(!snap("12", "Windows Update", "windows_restore").is_shall_owned());
+        assert!(!snap("tank/root@weekly", "manual weekly", "zfs").is_shall_owned());
     }
 
     #[test]
@@ -988,11 +988,11 @@ mod tests {
             def: def("lvm"),
         };
         let err = p
-            .restore("linix_pre_sync_20260726_120000")
+            .restore("shall_pre_sync_20260726_120000")
             .await
             .unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("linix_pre_sync_20260726_120000"), "{}", msg);
+        assert!(msg.contains("shall_pre_sync_20260726_120000"), "{}", msg);
         assert!(msg.contains("cannot roll"), "{}", msg);
     }
 
@@ -1022,7 +1022,7 @@ list = ["lvs", "--noheadings", "-o", "lv_name"]
 delete = ["lvremove", "-y", "{id}"]
 restore = ["lvconvert", "--merge", "{id}"]
 restores_running_system = true
-list_pattern = '(linix_\S+)'
+list_pattern = '(shall_\S+)'
 "#;
         let file: SnapshotProviderFile = toml::from_str(toml).unwrap();
         assert_eq!(file.snapshot.len(), 1);

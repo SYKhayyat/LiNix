@@ -20,7 +20,7 @@
 //!     on this machine, and it documents `--verify`;
 //!   * `tests/fixtures/helm/plugin-install-help-v3.txt` — helm 3's, which does not.
 //!
-//! The property: LiNix asks the installed tool, so it builds a different argv against each.
+//! The property: Shall asks the installed tool, so it builds a different argv against each.
 
 use std::path::{Path, PathBuf};
 
@@ -80,19 +80,19 @@ fn the_unverified_flag_is_emitted_only_where_the_tool_takes_it() {
     fake_tool("helmfake3", "plugin-install-help-v3.txt");
     with_dir_on_path(&dir);
 
-    let v4 = linix::core::tool_help::accepts_flag("helmfake4", &chain, "--verify=false");
-    let v3 = linix::core::tool_help::accepts_flag("helmfake3", &chain, "--verify=false");
+    let v4 = shall::core::tool_help::accepts_flag("helmfake4", &chain, "--verify=false");
+    let v3 = shall::core::tool_help::accepts_flag("helmfake3", &chain, "--verify=false");
 
     assert_eq!(
         v4,
         Some(true),
-        "helm 4's own `plugin install --help` documents `--verify`, so LiNix must still use it \
+        "helm 4's own `plugin install --help` documents `--verify`, so Shall must still use it \
          — otherwise this fix would have removed E11's fix instead of conditioning it"
     );
     assert_eq!(
         v3,
         Some(false),
-        "helm 3's `plugin install --help` has no `--verify`, and LiNix passed it anyway: \
+        "helm 3's `plugin install --help` has no `--verify`, and Shall passed it anyway: \
          `Error: unknown flag: --verify`. The flag came from helm 4's error text on one \
          machine and was shipped to every machine."
     );
@@ -118,12 +118,12 @@ fn a_longer_flag_is_not_mistaken_for_the_one_being_asked_about() {
         "the fixture no longer contains the flag this test is about; re-capture it"
     );
     assert_eq!(
-        linix::core::tool_help::accepts_flag("helmfake3b", &chain, "--verify=false"),
+        shall::core::tool_help::accepts_flag("helmfake3b", &chain, "--verify=false"),
         Some(false),
         "`--kube-insecure-skip-tls-verify` was read as `--verify`"
     );
     assert_eq!(
-        linix::core::tool_help::accepts_flag("helmfake3b", &chain, "--kube-context"),
+        shall::core::tool_help::accepts_flag("helmfake3b", &chain, "--kube-context"),
         Some(true),
         "the control failed: a flag helm 3 really does document was not found, so the \
          assertion above would pass for a probe that always says no"

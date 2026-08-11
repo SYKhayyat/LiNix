@@ -6,7 +6,7 @@
 //! guard on one command is a guard on nothing." Both sentences were true when written. Neither
 //! was ever re-derived, and by 2026-07-28 the count was eleven sites and nine guards — the
 //! `link:`/`service:`/`setting:`/`shim:`/`schedule:`/`repo:` teardown in `app/apply/extras.rs`
-//! and the `linix repo remove` verb in `verbs/declare.rs` both deleted without asking.
+//! and the `shall repo remove` verb in `verbs/declare.rs` both deleted without asking.
 //!
 //! A sentence that quantifies over paths is only as good as the last time someone counted the
 //! paths. This test does the counting on every run.

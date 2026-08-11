@@ -10,14 +10,14 @@
 
 use crate::mock_providers::TestKernel;
 
-use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope, Scope};
-use linix::app::sync::resolver::StateResolver;
-use linix::core::executor::DryRunOutput;
-use linix::core::PackageSpec;
+use shall::app::sync::planner::{ChangePlanner, HostBackends, PlanScope, Scope};
+use shall::app::sync::resolver::StateResolver;
+use shall::core::executor::DryRunOutput;
+use shall::core::PackageSpec;
 
 /// Build a PackageSpec with a pinned version option.
 fn pinned_spec(backend: &str, name: &str, version: &str) -> PackageSpec {
-    let mut options = linix::config::grammar::Options::default();
+    let mut options = shall::config::grammar::Options::default();
     options.set("version", version.to_string());
     PackageSpec {
         name: name.into(),
@@ -209,7 +209,7 @@ async fn repo_manager_dispatches_add_command() {
     );
 }
 
-/// `unmanaged` reports installed packages not under LiNix management (and excludes
+/// `unmanaged` reports installed packages not under Shall management (and excludes
 /// managed ones).
 #[tokio::test]
 async fn installed_but_undeclared_lists_the_dependency_closure_too() {
@@ -329,7 +329,7 @@ async fn floating_version_is_not_pinned() {
 // `retarget` (`teleport`), which rewrites a line to a backend the same way.
 // ---------------------------------------------------------------------------
 
-/// The fixture's `priority` is apt/brew/cargo, so `npm` is a backend LiNix does not use.
+/// The fixture's `priority` is apt/brew/cargo, so `npm` is a backend Shall does not use.
 #[tokio::test]
 async fn declaring_an_unlisted_backend_writes_nothing() {
     let kernel = TestKernel::new().await;
@@ -337,7 +337,7 @@ async fn declaring_an_unlisted_backend_writes_nothing() {
 
     let err = kernel
         .app
-        .declare("npm:cowsay", None, linix::model::Landing::Imperative)
+        .declare("npm:cowsay", None, shall::model::Landing::Imperative)
         .await
         .expect_err("a backend not in `priority` must be refused");
     assert!(
@@ -364,10 +364,10 @@ async fn no_landing_can_write_an_unlisted_backend() {
     let root = kernel.app.config.config_root();
 
     for (line, landing) in [
-        ("npm:cowsay", linix::model::Landing::Imperative),
-        ("absent:npm:cowsay", linix::model::Landing::Imperative),
-        ("npm:cowsay", linix::model::Landing::Hooks),
-        ("npm:cowsay", linix::model::Landing::Adopted),
+        ("npm:cowsay", shall::model::Landing::Imperative),
+        ("absent:npm:cowsay", shall::model::Landing::Imperative),
+        ("npm:cowsay", shall::model::Landing::Hooks),
+        ("npm:cowsay", shall::model::Landing::Adopted),
     ] {
         assert!(
             kernel.app.declare(line, None, landing).await.is_err(),
@@ -398,7 +398,7 @@ async fn declaring_a_listed_backend_still_writes() {
 
     kernel
         .app
-        .declare("cargo:ripgrep", None, linix::model::Landing::Imperative)
+        .declare("cargo:ripgrep", None, shall::model::Landing::Imperative)
         .await
         .expect("cargo is in `priority`, so the line belongs in a file");
 
@@ -415,7 +415,7 @@ async fn a_bare_name_is_not_rejected_before_the_write() {
     let kernel = TestKernel::new().await;
     kernel
         .app
-        .declare("ripgrep", None, linix::model::Landing::Imperative)
+        .declare("ripgrep", None, shall::model::Landing::Imperative)
         .await
         .expect("a bare name has no backend to refuse");
 }

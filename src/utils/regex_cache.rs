@@ -62,8 +62,8 @@ mod tests {
 
     #[test]
     fn the_same_pattern_is_compiled_once() {
-        let a = compiled(r"^linix-cache-test-(\d+)$").unwrap();
-        let b = compiled(r"^linix-cache-test-(\d+)$").unwrap();
+        let a = compiled(r"^shall-cache-test-(\d+)$").unwrap();
+        let b = compiled(r"^shall-cache-test-(\d+)$").unwrap();
         assert!(
             Arc::ptr_eq(&a, &b),
             "the second ask built a second automaton"
@@ -98,7 +98,7 @@ mod bound_tests {
     #[test]
     fn the_cache_stops_growing() {
         for i in 0..(CAPACITY + 50) {
-            let _ = compiled(&format!(r"^linix-bound-test-{i}-(\d+)$"));
+            let _ = compiled(&format!(r"^shall-bound-test-{i}-(\d+)$"));
         }
         assert!(
             CACHE.len() <= CAPACITY,
@@ -109,8 +109,8 @@ mod bound_tests {
         );
         // And it is still a cache afterwards: the ceiling must not turn it into a no-op, which
         // would trade a slow leak for recompiling on every line of every listing.
-        let a = compiled(r"^linix-bound-still-caching-(\d+)$").unwrap();
-        let b = compiled(r"^linix-bound-still-caching-(\d+)$").unwrap();
+        let a = compiled(r"^shall-bound-still-caching-(\d+)$").unwrap();
+        let b = compiled(r"^shall-bound-still-caching-(\d+)$").unwrap();
         assert!(
             Arc::ptr_eq(&a, &b),
             "past the ceiling the cache stopped caching"

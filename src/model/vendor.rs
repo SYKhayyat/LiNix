@@ -1,4 +1,4 @@
-//! `linix add` — vendoring someone else's modules into your repo (XIII.14, U14).
+//! `shall add` — vendoring someone else's modules into your repo (XIII.14, U14).
 //!
 //! `use` takes a name, never a URL (target-state): consuming a stranger's module is a **fetch
 //! step** that puts files on disk, and then you `use` them by name like everything else. This
@@ -8,7 +8,7 @@
 //! thing between you and a stranger's code. It is a real defence and a weak one (nobody reads a
 //! whole diff), so it is not the *only* defence: anything the vendored files can execute — an
 //! `exec:` verb, an `adapters/*.toml` backend definition — arrives **unapproved**, and II.12's
-//! ledger holds it until `linix lock`. Refuse-by-default, one deliberate act to permit, is the
+//! ledger holds it until `shall lock`. Refuse-by-default, one deliberate act to permit, is the
 //! pattern the guard's `--allow-mass-removal`, dotfiles' `--replace-existing` and `@allow_http`
 //! all already follow. `--trust` vendors and locks in one step, for a source you already trust.
 //!
@@ -87,7 +87,7 @@ impl Source {
     }
 }
 
-/// The kinds of file `linix add` will copy out of a fetched source.
+/// The kinds of file `shall add` will copy out of a fetched source.
 ///
 /// **A closed list, deliberately.** A shared repo is a config repo, and only some of it is
 /// yours to take: the reusable lists (`modules/`) and the definitions they may lean on
@@ -119,7 +119,7 @@ impl Vendored {
         }
     }
 
-    /// Whether files of this kind arrive as executable code, held by II.12 until `linix lock`.
+    /// Whether files of this kind arrive as executable code, held by II.12 until `shall lock`.
     pub fn is_code(self) -> bool {
         matches!(self, Vendored::Adapter | Vendored::Script)
     }

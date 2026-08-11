@@ -106,7 +106,7 @@ for f in "$REG" "$MAP"; do
     # "160 ANSWERED, 2 PARKED, 1 BUILT NEVER RULED, 1 OPEN", omitted DEFERRED and HALF RULED,
     # and so advertised 164 of 166 while each figure they printed was correct. A breakdown is
     # a claim about the whole register, and this is the half of it that says so.
-    SUMS="${TMPDIR:-/tmp}/linix-decision-sums.$$"
+    SUMS="${TMPDIR:-/tmp}/shall-decision-sums.$$"
     awk -v total="$TOTAL" '
     {
         n = 0; sum = 0; rest = $0

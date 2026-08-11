@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info, instrument, trace, warn};
 
-/// Adoption: bringing packages that are already installed under LiNix's management.
+/// Adoption: bringing packages that are already installed under Shall's management.
 ///
 /// The Adopter asks every backend which packages a person chose to install, and writes
 /// the answer out as a manifest. Two properties matter more than anything else here:
@@ -83,7 +83,7 @@ pub fn print_left_alone(skipped: &[Skipped]) {
 pub struct Discovery {
     /// Unmanaged, user-chosen, and not protected: these get adopted.
     pub adopt: Vec<Package>,
-    /// Discovered, but LiNix leaves them alone. Reported, never adopted.
+    /// Discovered, but Shall leaves them alone. Reported, never adopted.
     pub skipped: Vec<Skipped>,
     /// Backend name -> how its manual set was determined, for the manifest header.
     pub sources: BTreeMap<String, String>,
@@ -94,7 +94,7 @@ pub struct Discovery {
 
 /// What this `adopt` was asked for.
 ///
-/// A bare `linix adopt` takes the backends that answer [`Queryable::adopted_unasked`], which is
+/// A bare `shall adopt` takes the backends that answer [`Queryable::adopted_unasked`], which is
 /// all of them except the ones where being on the machine is not evidence anybody chose it.
 /// Naming a backend takes that one and only that one, opt-out included.
 #[derive(Debug, Clone, Default)]
@@ -154,7 +154,7 @@ impl Adopter {
         futures::stream::iter(backends.iter().cloned())
             .map(|backend| async move {
                 let queryable = backend.as_queryable()?;
-                // Named on the command line beats the default, in both directions: `linix adopt
+                // Named on the command line beats the default, in both directions: `shall adopt
                 // service` takes a backend a bare run leaves alone, and naming any backend at
                 // all means the others are not this run's business.
                 if !scope.backends.is_empty() {
@@ -163,7 +163,7 @@ impl Adopter {
                     }
                 } else if !queryable.adopted_unasked() {
                     info!(
-                        "not adopting `{}` unless asked: {} — run `linix adopt {}` to take them.",
+                        "not adopting `{}` unless asked: {} — run `shall adopt {}` to take them.",
                         backend.name(),
                         queryable.manual_source(),
                         backend.name(),
@@ -262,7 +262,7 @@ impl Adopter {
                 found.skipped_backends.push((
                     backend.name().to_string(),
                     format!(
-                        "{} — `linix adopt {}` takes them",
+                        "{} — `shall adopt {}` takes them",
                         q.manual_source(),
                         backend.name()
                     ),
@@ -348,7 +348,7 @@ impl Adopter {
                 // the machines least able to spare it. The note is for a person either way.
                 eprintln!(
                     "Note: your modules did not resolve ({e}), so packages you have already\n\
-                     declared may be listed below. Run `linix check config`."
+                     declared may be listed below. Run `shall check config`."
                 );
                 return HashMap::new();
             }
@@ -482,7 +482,7 @@ impl Adopter {
                 manifest_path.display()
             );
             println!("Nothing was written and nothing is managed. Run without `--dry-run` to");
-            println!("record them, and read the manifest before the next `linix sync`.");
+            println!("record them, and read the manifest before the next `shall sync`.");
             return Ok(());
         }
 
@@ -496,7 +496,7 @@ impl Adopter {
         println!("Deleting a line UNDOES it on the next sync: a package is uninstalled,");
         println!("a service is stopped and disabled.");
         println!(
-            "To stop managing a package without uninstalling: linix unmanage <backend>:<name>"
+            "To stop managing a package without uninstalling: shall unmanage <backend>:<name>"
         );
 
         Ok(())
@@ -509,7 +509,7 @@ impl Adopter {
     /// A manager may report something that is not a declarable name: `winget list` answers
     /// for Add/Remove-Programs entries with pseudo-IDs like `ARP\Machine\X64\Android Studio`,
     /// and a package name is one word (II.2). Written out, that line is a parse error in the
-    /// file LiNix just generated — and since every later command parses the model, adopting
+    /// file Shall just generated — and since every later command parses the model, adopting
     /// wedged the whole config until someone hand-edited it.
     ///
     /// Asked through `statement::parse`, not a second copy of the naming rule: whatever the
@@ -585,10 +585,10 @@ impl Adopter {
 
         out.push_str(&format!(
             "\
-# LiNix adoption manifest — generated {}
+# Shall adoption manifest — generated {}
 #
 # WHAT THIS IS
-#   LiNix asked every package manager on this machine which packages you chose to
+#   Shall asked every package manager on this machine which packages you chose to
 #   install, as opposed to packages that were pulled in automatically to satisfy
 #   something else. Their answers are below.
 #
@@ -604,14 +604,14 @@ impl Adopter {
 #   can run the command yourself and disagree.
 #
 # WHAT HAPPENS NEXT
-#   LiNix now manages everything on an uncommented line below.
+#   Shall now manages everything on an uncommented line below.
 #   Deleting a line UNDOES it on the next sync: a package is UNINSTALLED, and a
 #   service is STOPPED AND DISABLED.
 #   Except where the guard refuses. A package you protected, or one the OS itself
-#   calls essential, is declared here so LiNix keeps it — deleting its line stops
-#   LiNix keeping it, and the guard still refuses to remove it.
+#   calls essential, is declared here so Shall keeps it — deleting its line stops
+#   Shall keeping it, and the guard still refuses to remove it.
 #   To stop managing a package WITHOUT uninstalling it:
-#       linix unmanage <backend>:<name>
+#       shall unmanage <backend>:<name>
 #
 ",
             Local::now().format("%Y-%m-%d %H:%M:%S")
@@ -893,8 +893,8 @@ mod tests {
 
     #[tokio::test]
     async fn an_os_essential_package_is_adopted_like_any_other() {
-        // II.9, ruled 2026-08-05: adoption is a claim that LiNix keeps the thing, and the
-        // guard is what refuses to remove it. Commenting these lines out left LiNix with no
+        // II.9, ruled 2026-08-05: adoption is a claim that Shall keeps the thing, and the
+        // guard is what refuses to remove it. Commenting these lines out left Shall with no
         // opinion at all about the packages that matter most — nothing declared `bash`, so
         // nothing would put it back.
         let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
@@ -980,7 +980,7 @@ mod tests {
 
         assert!(text.contains("THIS IS AN ESTIMATE"), "{}", text);
         assert!(text.contains("UNINSTALLED"), "{}", text);
-        assert!(text.contains("linix unmanage"), "{}", text);
+        assert!(text.contains("shall unmanage"), "{}", text);
         // The source of the estimate, so a reader can reproduce it.
         assert!(text.contains("apt-mark showmanual"), "{}", text);
         // Every manual package is a live line — a PROTECTED one too, if it were listed:
@@ -993,7 +993,7 @@ mod tests {
     fn a_name_no_line_can_hold_is_reported_rather_than_written() {
         // `winget list` answers for Add/Remove-Programs entries with pseudo-IDs like
         // `ARP\Machine\X64\Android Studio`. Written into `modules/adopted.txt`, that is a
-        // parse error in a file LiNix generated — and since every later command parses the
+        // parse error in a file Shall generated — and since every later command parses the
         // model, one such name wedged the whole config until it was hand-edited. Found by
         // the live Windows sweep, where `rollback` died on adopted.txt:69.
 

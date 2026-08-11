@@ -11,10 +11,10 @@
 //!
 //! What a fixture is worth is bounded and worth stating: it pins the shape a tool prints *today*
 //! on the platform it was captured from. It cannot see a format change upstream. That is what
-//! `argv_drift_tests` is for, and between them the question "does LiNix still understand this
+//! `argv_drift_tests` is for, and between them the question "does Shall still understand this
 //! manager" has two halves rather than none.
 
-use linix::parsers::{ecosystem, language, windows};
+use shall::parsers::{ecosystem, language, windows};
 use std::path::Path;
 
 /// `scoop list` — a fixed-width table under an `Installed apps:` banner, with a header row and
@@ -43,7 +43,7 @@ fn scoop_list_reads_every_app_and_no_furniture() {
     );
 }
 
-/// `choco list -r` — `name|version` rows, the machine-readable form LiNix asks for precisely so
+/// `choco list -r` — `name|version` rows, the machine-readable form Shall asks for precisely so
 /// the banner and the `N packages found.` summary never appear (E17).
 #[test]
 fn choco_list_reads_the_machine_readable_rows() {
@@ -56,7 +56,7 @@ fn choco_list_reads_the_machine_readable_rows() {
     assert_eq!(rows, vec![("chocolatey", Some("2.7.3"))]);
 }
 
-/// `pipx list --json` — the form LiNix asks for. The human form prints three path sentences
+/// `pipx list --json` — the form Shall asks for. The human form prints three path sentences
 /// before the first package and the app names as `- pycowsay.exe` children.
 #[test]
 fn pipx_list_reads_its_json() {

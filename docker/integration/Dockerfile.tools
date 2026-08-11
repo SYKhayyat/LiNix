@@ -1,11 +1,11 @@
-# LiNix integration image — "tools": Ubuntu base (apt as the native backend) PLUS a broad set
+# Shall integration image — "tools": Ubuntu base (apt as the native backend) PLUS a broad set
 # of the ecosystem package managers, INITIALIZED so the harness runs a REAL install→list→remove
 # lifecycle against each — not just a dry-run plan. Composer, Go, opam, LuaRocks, Nimble, Cabal,
 # mix/Hex, Helm, krew, pixi, Spack, dotnet, pub(dart), conda, nix and flatpak all come up READY
 # with their indexes/switches/compilers prepared.
 #
-#   docker build -f docker/integration/Dockerfile.tools -t linix-it-tools .
-#   docker run --rm linix-it-tools                 # full REAL lifecycle (slow: source compiles)
+#   docker build -f docker/integration/Dockerfile.tools -t shall-it-tools .
+#   docker run --rm shall-it-tools                 # full REAL lifecycle (slow: source compiles)
 #
 # The REAL run compiles Rust/OCaml/Haskell/Nim/HPC packages from source and can take 20–40 min;
 # that is intentional (the release owner asked for real, not simulated, coverage).
@@ -13,7 +13,7 @@
 # unavailable at build time the image still builds and that backend is simply not READY and
 # auto-skipped (and the COVERAGE AUDIT records that honestly).
 FROM ubuntu:24.04
-ENV LINIX_IT_IMAGE=tools
+ENV SHALL_IT_IMAGE=tools
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
 
@@ -149,11 +149,11 @@ RUN apt-get update
 RUN for m in nix code flatpak stack cabal opam luarocks nimble spack conda pixi asdf mise \
              bun uv helm kubectl dart php composer emacs dotnet mix; do \
       if command -v "$m" >/dev/null 2>&1; then echo "$m present"; else echo "$m ABSENT"; fi; \
-    done > /etc/linix-image-managers \
-    && cat /etc/linix-image-managers
+    done > /etc/shall-image-managers \
+    && cat /etc/shall-image-managers
 
 WORKDIR /src
 COPY . /src
-RUN cargo build --release && cp target/release/linix /usr/local/bin/linix && chmod 0755 /usr/local/bin/linix
+RUN cargo build --release && cp target/release/shall /usr/local/bin/shall && chmod 0755 /usr/local/bin/shall
 ENTRYPOINT ["sh", "/src/docker/integration/run-in-container.sh"]
 CMD ["apt", "jq"]

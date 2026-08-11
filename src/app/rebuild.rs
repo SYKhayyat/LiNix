@@ -1,4 +1,4 @@
-//! `linix rebuild` — assert the declared set from scratch (X.1).
+//! `shall rebuild` — assert the declared set from scratch (X.1).
 //!
 //! Convergence is blind to state that is wrong while the difference is empty: a half-configured
 //! package, an interrupted extraction, a closure whose dependencies were removed by hand. In
@@ -22,7 +22,7 @@ pub enum Scope {
     All,
 }
 
-/// A `linix rebuild NAME` argument, after the one parser has had it.
+/// A `shall rebuild NAME` argument, after the one parser has had it.
 ///
 /// Split where the backend registry can be consulted rather than at the point of use: a
 /// `next_back()` on `:` turns `web:https://host/x.tar.gz` into `//host/x.tar.gz`, and never
@@ -116,7 +116,7 @@ pub fn order_backends(
 
 /// Which declared packages the scope selects, batched by backend and ordered.
 ///
-/// `declared` is the resolved desired state; `installed` answers whether LiNix currently
+/// `declared` is the resolved desired state; `installed` answers whether Shall currently
 /// manages that package. A declared package that is not installed is left to `sync` — putting
 /// it in a rebuild would mean removing something that is not there in order to install it,
 /// which is an install, and `sync` is the command for installs.

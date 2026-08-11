@@ -7,7 +7,7 @@
 //! answer.
 //!
 //! Two rules:
-//! - **T3:** a decrypt that does not complete times out, and LiNix names the token and the
+//! - **T3:** a decrypt that does not complete times out, and Shall names the token and the
 //!   identity file rather than passing the plugin's own prompt text through.
 //! - **T4:** an unattended `watch` tick does not even try a touch-required line — it skips it and
 //!   says so once, rather than blocking the whole reconcile.
@@ -28,7 +28,7 @@ use std::time::Duration;
 /// **This is the one surface where openness is not cheap, and its rule is the strictest.** A
 /// decrypt provider's output *is* a secret, so a provider is bound by the T-series plaintext
 /// rules: the plaintext must come out on **stdout** and nowhere else — never a file it writes,
-/// never a line it logs — so LiNix captures it in memory and restricts the destination before it
+/// never a line it logs — so Shall captures it in memory and restricts the destination before it
 /// is written (T5), never backs it up (T1), and never lets it reach the repo (T2). A provider
 /// that cannot promise stdout-only is **refused, not trusted** — and the promise is explicit:
 /// `stdout_only = true` must be in the block, or the provider does not load. The unsafe reading
@@ -48,7 +48,7 @@ pub struct SecretProvider {
     /// secret id); `{identity}` is the `@identity=` value if one was given. Plaintext on stdout.
     pub decrypt: Vec<String>,
     /// The T-series promise, and it is required to be `true`: the provider writes the plaintext
-    /// to stdout only. A block that omits it (default `false`) is refused — LiNix will not hand a
+    /// to stdout only. A block that omits it (default `false`) is refused — Shall will not hand a
     /// secret to a command that has not promised to keep it off disk and out of the logs.
     #[serde(default)]
     pub stdout_only: bool,
@@ -86,7 +86,7 @@ impl AdapterRow for SecretProvider {
         self.os.as_deref()
     }
 
-    /// A provider LiNix will trust with a secret, or why it will not.
+    /// A provider Shall will trust with a secret, or why it will not.
     fn why_unusable(&self) -> Option<&'static str> {
         if self.decrypt.iter().all(|a| a.trim().is_empty()) {
             return Some("it has no `decrypt` command");
@@ -94,7 +94,7 @@ impl AdapterRow for SecretProvider {
         if !self.stdout_only {
             return Some(
                 "it does not declare `stdout_only = true` — a secret provider must promise the \
-                 plaintext reaches stdout only (never a file, never a log), or LiNix will not \
+                 plaintext reaches stdout only (never a file, never a log), or Shall will not \
                  hand it a secret (T-series)",
             );
         }
@@ -113,7 +113,7 @@ pub fn providers(rows: Vec<SecretProvider>) -> Vec<SecretProvider> {
     adapter::merge(rows.into_iter().filter(|p| p.applies_here()))
 }
 
-/// How long a decrypt may run before LiNix concludes it is waiting on a prompt nobody will
+/// How long a decrypt may run before Shall concludes it is waiting on a prompt nobody will
 /// answer (T3). Generous — a real hardware touch is a few seconds, and a slow disk read of a
 /// software key is well under this — so the timeout only fires on a genuine hang.
 pub const DECRYPT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -142,7 +142,7 @@ pub fn plugin_of(identity_contents: &str) -> Option<String> {
 }
 
 /// T3: what a timed-out decrypt says. Names the token and the identity file, not the plugin's
-/// own text — a message LiNix owns and can be acted on.
+/// own text — a message Shall owns and can be acted on.
 pub fn token_timeout_message(source: &Path, identity: &Path, plugin: Option<&str>) -> String {
     let token = match plugin {
         Some(p) => format!("the `{}` hardware token", p),

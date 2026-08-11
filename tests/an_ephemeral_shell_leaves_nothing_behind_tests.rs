@@ -1,4 +1,4 @@
-//! **`linix shell` — packages live for the session and go when it ends.**
+//! **`shall shell` — packages live for the session and go when it ends.**
 //!
 //! The ephemeral shell is the one path that installs without declaring, so the only thing
 //! keeping it from being drift is that the teardown is exact: it removes what this session
@@ -6,8 +6,8 @@
 //! the purge that is scoped to one session, the manifest discovered from the working directory,
 //! and the mount point a session resolves to.
 
-use linix::core::executor::DryRunOutput;
-use linix::core::PackageSpec;
+use shall::core::executor::DryRunOutput;
+use shall::core::PackageSpec;
 use tokio::fs;
 
 use crate::mock_providers::TestKernel;
@@ -111,16 +111,16 @@ async fn a_purge_takes_this_sessions_packages_and_leaves_another_sessions() {
     );
 }
 
-/// What a project-local `linix.txt` declares.
+/// What a project-local `shall.txt` declares.
 ///
 /// This test used to write a file, read it back, and then split it with its own copy of
 /// `auto_shell`'s five lines — so it asserted on `str::lines` and would have passed against a
-/// LiNix that had no manifest discovery at all. It now drives the reader the shell uses.
+/// Shall that had no manifest discovery at all. It now drives the reader the shell uses.
 #[tokio::test]
 async fn a_session_finds_the_manifest_in_the_directory_it_started_in() {
     let kernel = TestKernel::new().await;
 
-    let manifest_path = kernel.tmp.path().join("linix.txt");
+    let manifest_path = kernel.tmp.path().join("shall.txt");
     fs::write(
         &manifest_path,
         "# Dev Stack\n\
@@ -133,7 +133,7 @@ async fn a_session_finds_the_manifest_in_the_directory_it_started_in() {
     .unwrap();
 
     let content = fs::read_to_string(&manifest_path).await.unwrap();
-    let pkgs = linix::app::shell::manifest_lines(&content);
+    let pkgs = shall::app::shell::manifest_lines(&content);
 
     assert_eq!(
         pkgs,

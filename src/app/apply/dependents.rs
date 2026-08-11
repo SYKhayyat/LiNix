@@ -29,7 +29,7 @@ impl Dependents<'_> {
     /// Idempotent, and **asked rather than assumed**: this doc line used to claim that
     /// re-writing an unchanged link was a no-op, and on Windows — where the deploy falls back
     /// to a copy — it was not. Every sync re-copied all three links in the fixture and the
-    /// second run left `.linix-backup` files beside them, backups of the copies LiNix itself
+    /// second run left `.shall-backup` files beside them, backups of the copies Shall itself
     /// had made, under a summary reading `already up to date`. `check` and `plan` reported
     /// the same machine as converged, because they asked the probe this loop did not.
     ///
@@ -52,7 +52,7 @@ impl Dependents<'_> {
             match stmt {
                 Statement::Shim(name, opts) => {
                     // U19: a shim lands in `~/.local/bin`, which is this account's PATH and
-                    // nobody else's. LiNix has no machine-wide shim directory yet, so a line
+                    // nobody else's. Shall has no machine-wide shim directory yet, so a line
                     // asking for one is refused by name rather than quietly deploying a
                     // per-user shim under a declaration that says every account (P7).
                     if crate::model::scope::Scope::resolve(
@@ -61,7 +61,7 @@ impl Dependents<'_> {
                     ) == crate::model::scope::Scope::System
                     {
                         return Err(Error::Validation(format!(
-                            "{}: `shim:{}` asks for scope=system, and LiNix deploys shims only                              into this account's `~/.local/bin`. A per-user shim under a line                              that says every account would be the wrong answer quietly, so                              this is refused. Drop `@scope=system`.",
+                            "{}: `shim:{}` asks for scope=system, and Shall deploys shims only                              into this account's `~/.local/bin`. A per-user shim under a line                              that says every account would be the wrong answer quietly, so                              this is refused. Drop `@scope=system`.",
                             origin, name
                         )));
                     }
@@ -115,7 +115,7 @@ impl Dependents<'_> {
     /// `let Some(inst) = b.as_installable() else { continue };` — a declared line, a registered
     /// backend, and nothing done, with no output at all. That is `Q40`'s failure again: silence
     /// standing in for success. It is a `Validation` error now, because a registry that hands
-    /// back a `setting` backend which cannot write a setting is a wiring bug in LiNix, not
+    /// back a `setting` backend which cannot write a setting is a wiring bug in Shall, not
     /// something the user can fix by editing their file.
     async fn apply_through_backend(
         &self,
@@ -138,7 +138,7 @@ impl Dependents<'_> {
         let Some(inst) = b.as_installable() else {
             return Err(Error::Validation(format!(
                 "{}: the `{}` backend is registered but cannot install, so `{}:{}` could not be \
-                 applied. This is a wiring fault in LiNix rather than a problem with your file.",
+                 applied. This is a wiring fault in Shall rather than a problem with your file.",
                 origin, keyword, keyword, name
             )));
         };

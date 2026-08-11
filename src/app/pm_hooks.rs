@@ -1,12 +1,12 @@
 // Package-manager INTERCEPTION — so `apt install`, `pacman -S`, `dnf install`, run by hand
-// or by a script, are automatically recorded into LiNix. "You don't have to use LiNix to use
-// LiNix": keep your muscle memory, and your declarative state still tracks reality.
+// or by a script, are automatically recorded into Shall. "You don't have to use Shall to use
+// Shall": keep your muscle memory, and your declarative state still tracks reality.
 //
 // This is distinct from `app::hooks` (Lua/Rhai lifecycle scripts). Two interception routes,
 // used together (the user picked "both"):
 //
 //   1. NATIVE hooks — a file dropped into the manager's own hook directory that runs
-//      `linix hook-record ...` after every transaction. Fires no matter how the manager
+//      `shall hook-record ...` after every transaction. Fires no matter how the manager
 //      was invoked. One generator per manager; we support as many as have a stable
 //      hook mechanism (pacman, apt/dpkg, dnf/dnf5, zypper, apk, xbps, portage, eopkg).
 //
@@ -43,7 +43,7 @@ impl HookOp {
     }
 }
 
-/// How an install target reached the system, which decides whether LiNix tracks it as
+/// How an install target reached the system, which decides whether Shall tracks it as
 /// declarative (repo installs go into the manifest) or protects it as imperative (a local
 /// `.deb`/`.rpm`/etc. file is not reproducible from a manifest, so it's pinned, never pruned).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,10 +67,10 @@ pub struct HookSpec {
     pub needs_root: bool,
 }
 
-/// The full set of native hook files LiNix knows how to install, parameterized by the path to
-/// the `linix` binary (so the hook can call back into it). Only managers with a stable,
+/// The full set of native hook files Shall knows how to install, parameterized by the path to
+/// the `shall` binary (so the hook can call back into it). Only managers with a stable,
 /// documented hook mechanism are represented.
-pub fn hook_specs(linix_bin: &str) -> Vec<HookSpec> {
+pub fn hook_specs(shall_bin: &str) -> Vec<HookSpec> {
     let mut specs = Vec::new();
 
     // pacman targets arrive on STDIN (hence NeedsTargets + xargs), not as arguments.
@@ -85,14 +85,14 @@ pub fn hook_specs(linix_bin: &str) -> Vec<HookSpec> {
             .join("\n");
         specs.push(HookSpec {
             manager: "pacman",
-            path: PathBuf::from(format!("/etc/pacman.d/hooks/linix-{}.hook", op.as_str())),
+            path: PathBuf::from(format!("/etc/pacman.d/hooks/shall-{}.hook", op.as_str())),
             content: format!(
-                "# Managed by LiNix — records manual pacman operations.\n\
+                "# Managed by Shall — records manual pacman operations.\n\
                  [Trigger]\n{triggers}\nType = Package\nTarget = *\n\n\
                  [Action]\n\
-                 Description = LiNix: recording {} into declarative state\n\
+                 Description = Shall: recording {} into declarative state\n\
                  When = PostTransaction\n\
-                 Exec = /bin/sh -c 'xargs -r {linix_bin} hook-record --manager pacman --op {}'\n\
+                 Exec = /bin/sh -c 'xargs -r {shall_bin} hook-record --manager pacman --op {}'\n\
                  NeedsTargets\n",
                 op.as_str(),
                 op.as_str(),
@@ -105,30 +105,30 @@ pub fn hook_specs(linix_bin: &str) -> Vec<HookSpec> {
     // diffing the installed set — it cannot record specific packages like pacman does.
     specs.push(HookSpec {
         manager: "apt",
-        path: PathBuf::from("/etc/apt/apt.conf.d/99linix"),
+        path: PathBuf::from("/etc/apt/apt.conf.d/99shall"),
         content: format!(
-            "// Managed by LiNix — reconciles declarative state after apt/dpkg transactions.\n\
-             DPkg::Post-Invoke {{ \"{linix_bin} hook-reconcile --manager apt || true\"; }};\n"
+            "// Managed by Shall — reconciles declarative state after apt/dpkg transactions.\n\
+             DPkg::Post-Invoke {{ \"{shall_bin} hook-reconcile --manager apt || true\"; }};\n"
         ),
         needs_root: true,
     });
 
     specs.push(HookSpec {
         manager: "dnf",
-        path: PathBuf::from("/etc/dnf/plugins/post-transaction-actions.d/linix.action"),
+        path: PathBuf::from("/etc/dnf/plugins/post-transaction-actions.d/shall.action"),
         content: format!(
-            "# Managed by LiNix — reconcile declarative state after any dnf transaction.\n\
-             *:any:{linix_bin} hook-reconcile --manager dnf\n"
+            "# Managed by Shall — reconcile declarative state after any dnf transaction.\n\
+             *:any:{shall_bin} hook-reconcile --manager dnf\n"
         ),
         needs_root: true,
     });
 
     specs.push(HookSpec {
         manager: "zypper",
-        path: PathBuf::from("/usr/lib/zypp/plugins/commit/linix"),
+        path: PathBuf::from("/usr/lib/zypp/plugins/commit/shall"),
         content: format!(
-            "#!/bin/sh\n# Managed by LiNix — zypper commit plugin.\n\
-             {linix_bin} hook-reconcile --manager zypper >/dev/null 2>&1 || true\n"
+            "#!/bin/sh\n# Managed by Shall — zypper commit plugin.\n\
+             {shall_bin} hook-reconcile --manager zypper >/dev/null 2>&1 || true\n"
         ),
         needs_root: true,
     });
@@ -136,40 +136,40 @@ pub fn hook_specs(linix_bin: &str) -> Vec<HookSpec> {
     // apk passes no targets to commit hooks, so this can only reconcile.
     specs.push(HookSpec {
         manager: "apk",
-        path: PathBuf::from("/etc/apk/commit_hooks.d/linix.sh"),
+        path: PathBuf::from("/etc/apk/commit_hooks.d/shall.sh"),
         content: format!(
-            "#!/bin/sh\n# Managed by LiNix — apk commit hook.\n\
-             {linix_bin} hook-reconcile --manager apk >/dev/null 2>&1 || true\n"
+            "#!/bin/sh\n# Managed by Shall — apk commit hook.\n\
+             {shall_bin} hook-reconcile --manager apk >/dev/null 2>&1 || true\n"
         ),
         needs_root: true,
     });
 
     specs.push(HookSpec {
         manager: "xbps",
-        path: PathBuf::from("/etc/xbps.d/linix-hook.sh"),
+        path: PathBuf::from("/etc/xbps.d/shall-hook.sh"),
         content: format!(
-            "#!/bin/sh\n# Managed by LiNix — xbps reconcile helper.\n\
-             {linix_bin} hook-reconcile --manager xbps >/dev/null 2>&1 || true\n"
+            "#!/bin/sh\n# Managed by Shall — xbps reconcile helper.\n\
+             {shall_bin} hook-reconcile --manager xbps >/dev/null 2>&1 || true\n"
         ),
         needs_root: true,
     });
 
     specs.push(HookSpec {
         manager: "portage",
-        path: PathBuf::from("/etc/portage/env/linix-record.sh"),
+        path: PathBuf::from("/etc/portage/env/shall-record.sh"),
         content: format!(
-            "#!/bin/sh\n# Managed by LiNix — portage post_pkg_postinst reconcile.\n\
-             post_pkg_postinst() {{ {linix_bin} hook-reconcile --manager portage >/dev/null 2>&1 || true; }}\n"
+            "#!/bin/sh\n# Managed by Shall — portage post_pkg_postinst reconcile.\n\
+             post_pkg_postinst() {{ {shall_bin} hook-reconcile --manager portage >/dev/null 2>&1 || true; }}\n"
         ),
         needs_root: true,
     });
 
     specs.push(HookSpec {
         manager: "eopkg",
-        path: PathBuf::from("/usr/libexec/linix-eopkg-hook.sh"),
+        path: PathBuf::from("/usr/libexec/shall-eopkg-hook.sh"),
         content: format!(
-            "#!/bin/sh\n# Managed by LiNix — eopkg reconcile helper.\n\
-             {linix_bin} hook-reconcile --manager eopkg >/dev/null 2>&1 || true\n"
+            "#!/bin/sh\n# Managed by Shall — eopkg reconcile helper.\n\
+             {shall_bin} hook-reconcile --manager eopkg >/dev/null 2>&1 || true\n"
         ),
         needs_root: true,
     });
@@ -180,7 +180,7 @@ pub fn hook_specs(linix_bin: &str) -> Vec<HookSpec> {
 /// The managers with a native hook available (names only), for help text and `hooks status`.
 pub fn hookable_manager_names() -> Vec<&'static str> {
     // Derive from the spec list so the two never drift.
-    let mut names: Vec<&'static str> = hook_specs("linix").iter().map(|s| s.manager).collect();
+    let mut names: Vec<&'static str> = hook_specs("shall").iter().map(|s| s.manager).collect();
     names.dedup();
     names
 }
@@ -330,7 +330,7 @@ pub fn diff_installed(before: &[String], after: &[String]) -> (Vec<String>, Vec<
 
 /// Generate shell functions that shadow the given managers so manual use is recorded, with an
 /// auto-learn fallback wrapper for any command. Supports bash/zsh (POSIX-ish) syntax.
-pub fn shell_wrappers(linix_bin: &str, shell: &str) -> String {
+pub fn shell_wrappers(shall_bin: &str, shell: &str) -> String {
     // Known managers we wrap directly (name -> real binary is the same name via `command`).
     let managers = [
         "apt",
@@ -344,22 +344,22 @@ pub fn shell_wrappers(linix_bin: &str, shell: &str) -> String {
     ];
     let mut out = String::new();
     out.push_str(&format!(
-        "# LiNix shell integration ({shell}). Source this from your rc file:\n\
-         #   eval \"$({linix_bin} hooks shell-init {shell})\"\n\n"
+        "# Shall shell integration ({shell}). Source this from your rc file:\n\
+         #   eval \"$({shall_bin} hooks shell-init {shell})\"\n\n"
     ));
     for m in managers {
-        // Each wrapper: run the real command; on success, let LiNix reconcile that manager.
+        // Each wrapper: run the real command; on success, let Shall reconcile that manager.
         out.push_str(&format!(
             "{m}() {{\n  command {m} \"$@\"; local rc=$?\n  \
-             if [ $rc -eq 0 ]; then {linix_bin} hook-observe --manager {m} -- {m} \"$@\" >/dev/null 2>&1 || true; fi\n  \
+             if [ $rc -eq 0 ]; then {shall_bin} hook-observe --manager {m} -- {m} \"$@\" >/dev/null 2>&1 || true; fi\n  \
              return $rc\n}}\n"
         ));
     }
     // A generic auto-learn helper the user can prefix onto ANY unknown manager:
-    //   linixlearn some-new-pm install foo
+    //   shalllearn some-new-pm install foo
     out.push_str(&format!(
-        "\n# Auto-learn any other manager: prefix its command with `linixlearn`.\n\
-         linixlearn() {{ {linix_bin} hook-observe --learn -- \"$@\"; }}\n"
+        "\n# Auto-learn any other manager: prefix its command with `shalllearn`.\n\
+         shalllearn() {{ {shall_bin} hook-observe --learn -- \"$@\"; }}\n"
     ));
     out
 }
@@ -374,22 +374,22 @@ mod tests {
 
     #[test]
     fn hook_specs_reference_the_binary_and_cover_many_managers() {
-        let specs = hook_specs("/usr/bin/linix");
+        let specs = hook_specs("/usr/bin/shall");
         let managers: Vec<&str> = specs.iter().map(|s| s.manager).collect();
         for expected in [
             "pacman", "apt", "dnf", "zypper", "apk", "xbps", "portage", "eopkg",
         ] {
             assert!(managers.contains(&expected), "missing hook for {expected}");
         }
-        // Every hook actually invokes the linix binary.
-        assert!(specs.iter().all(|s| s.content.contains("/usr/bin/linix")));
+        // Every hook actually invokes the shall binary.
+        assert!(specs.iter().all(|s| s.content.contains("/usr/bin/shall")));
         // pacman gets both an install and a remove hook.
         assert_eq!(specs.iter().filter(|s| s.manager == "pacman").count(), 2);
     }
 
     #[test]
     fn pacman_hook_passes_targets_and_sets_operation() {
-        let specs = hook_specs("linix");
+        let specs = hook_specs("shall");
         let install = specs
             .iter()
             .find(|s| s.manager == "pacman" && s.content.contains("--op install"))
@@ -495,11 +495,11 @@ mod tests {
 
     #[test]
     fn shell_wrappers_wrap_known_managers_and_add_learn_helper() {
-        let w = shell_wrappers("linix", "bash");
+        let w = shell_wrappers("shall", "bash");
         assert!(w.contains("apt()"));
         assert!(w.contains("pacman()"));
         assert!(w.contains("command apt \"$@\""));
-        assert!(w.contains("linixlearn()"));
+        assert!(w.contains("shalllearn()"));
         assert!(w.contains("hook-observe"));
     }
 

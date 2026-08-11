@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run an integration harness against a `linix` that does nothing and exits 0.
+# Run an integration harness against a `shall` that does nothing and exits 0.
 #
 # **Every check that still passes is a check that did not examine the thing it names.**
 # That is the whole idea: a harness cannot be trusted because it is green, only because its
@@ -84,7 +84,7 @@ FLOOR="${CAUGHT_FLOOR:-$DEFAULT_FLOOR}"
 # **The numbers below are the RUNNER's, not that box's**, and the first version of this gate was
 # red in CI for exactly that reason: the container harness leaves 12 survivors here and 14 on a
 # clean ubuntu runner, because two checks that fail locally have nothing to act on there
-# (`git log shows a linix commit`, `rebuild wrote no git commit`). A budget measured on one host
+# (`git log shows a shall commit`, `rebuild wrote no git commit`). A budget measured on one host
 # and enforced on another is a gate that fails for being wrong about the machine rather than
 # about the checks. The Windows harness goes the other way — 7 locally, 6 on the runner — so its
 # budget is the tighter of the two.
@@ -111,11 +111,11 @@ trap 'rm -rf "$WORK"' EXIT
 #
 # The first does nothing and reports success: every check that still passes examined nothing.
 # The second answers `--version` (so the harness does not bail at its own front door) and fails
-# everything else: every check that still passes cannot tell a working LiNix from a broken one
+# everything else: every check that still passes cannot tell a working Shall from a broken one
 # in the OTHER direction. The round-6 grader built the second by hand and found seventeen
 # survivors, SIXTEEN of them refusal checks scoring "correctly refused" against a binary that
 # was simply failing (G-8).
-STUB="$WORK/linix"
+STUB="$WORK/shall"
 cat > "$STUB" <<'STUBEOF'
 #!/bin/sh
 # Does nothing. Reports success. Answers every question with silence.
@@ -123,16 +123,16 @@ exit 0
 STUBEOF
 chmod +x "$STUB"
 
-FAILSTUB="$WORK/linix-fail"
+FAILSTUB="$WORK/shall-fail"
 cat > "$FAILSTUB" <<'FAILEOF'
 #!/bin/sh
 # Answers --version and fails everything else, with a plain failure and never a refusal.
 for a in "$@"; do
     case "$a" in
-        --version|-V) echo "linix 0.0.0-mutation-stub"; exit 0 ;;
+        --version|-V) echo "shall 0.0.0-mutation-stub"; exit 0 ;;
     esac
 done
-echo "linix: this stub fails everything" >&2
+echo "shall: this stub fails everything" >&2
 exit 1
 FAILEOF
 chmod +x "$FAILSTUB"
@@ -144,7 +144,7 @@ measure() { # stub label
     # Unquoted on purpose: the harness's own arguments, split as it would receive them on a
     # command line.
     # shellcheck disable=SC2086
-    LINIX="$_stub" bash "$HARNESS" $HARNESS_ARGS > "$WORK/out.txt" 2>&1
+    SHALL="$_stub" bash "$HARNESS" $HARNESS_ARGS > "$WORK/out.txt" 2>&1
     echo "   harness exit: $?"
 
     # `grep -c` prints `0` and ALSO exits 1 when it matches nothing, so `$( ... || echo 0 )` ran
@@ -174,7 +174,7 @@ measure() { # stub label
     echo
 }
 
-measure "$STUB" "a do-nothing linix"
+measure "$STUB" "a do-nothing shall"
 
 if [ -z "$CHECK" ]; then exit 0; fi
 
@@ -188,7 +188,7 @@ if [ "$((SURVIVORS + CAUGHT))" -eq 0 ]; then
     exit 1
 fi
 if [ "$CAUGHT" -eq 0 ]; then
-    echo " FAILED: not one check noticed that LiNix did nothing at all."
+    echo " FAILED: not one check noticed that Shall did nothing at all."
     exit 1
 fi
 if [ "$SURVIVORS" -gt "$BUDGET" ]; then
@@ -206,10 +206,10 @@ fi
 echo " ok: $SURVIVORS survivors, within the budget of $BUDGET;"
 echo "     $CAUGHT checks did their job, at or above the floor of $FLOOR."
 
-# The second stub, and its own ratchet. A check that passes here cannot tell a LiNix that
+# The second stub, and its own ratchet. A check that passes here cannot tell a Shall that
 # refused on purpose from one that simply broke -- which is the distinction the product
 # publishes as exit 3 and the reason `refuses_with_3` exists beside `nok`.
-measure "$FAILSTUB" "a linix that fails everything"
+measure "$FAILSTUB" "a shall that fails everything"
 if [ "$SURVIVORS" -gt "$FAIL_BUDGET" ]; then
     echo " FAILED: $SURVIVORS checks pass against a binary that fails everything, over the"
     echo "         budget of $FAIL_BUDGET. A check that cannot tell a refusal from a crash is"
@@ -222,5 +222,5 @@ if [ "$CAUGHT" -lt "$FAIL_FLOOR" ]; then
     echo "         of $FAIL_FLOOR. Same reasoning as the floor above, other stub."
     exit 1
 fi
-echo " ok: $SURVIVORS survive a fail-everything linix, within the budget of $FAIL_BUDGET;"
+echo " ok: $SURVIVORS survive a fail-everything shall, within the budget of $FAIL_BUDGET;"
 echo "     $CAUGHT caught it, at or above the floor of $FAIL_FLOOR."

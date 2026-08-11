@@ -25,9 +25,9 @@ pub fn http_timeout() -> Duration {
 /// Query the npm registry search endpoint and return up to `size` matches, tagged with
 /// `backend` (e.g. "npm", "pnpm", "yarn"). Network/parse failures surface as `Err`.
 pub async fn registry_search(query: &str, backend: &str, size: usize) -> Result<Vec<Package>> {
-    // Shared pool: npm, pnpm and yarn all route here, so one `linix search` used to build this
+    // Shared pool: npm, pnpm and yarn all route here, so one `shall search` used to build this
     // client three times and hand registry.npmjs.org three fresh TLS handshakes.
-    let client = crate::core::http::api("linix-manager", http_timeout().as_secs())?;
+    let client = crate::core::http::api("shall-manager", http_timeout().as_secs())?;
 
     let url = "https://registry.npmjs.org/-/v1/search";
     let res = client

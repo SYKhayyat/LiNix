@@ -17,7 +17,7 @@
 //! **Which is what makes it worse, not better.** Three custom guards were written rather than
 //! calling the one two hundred lines away that already counts, caps, protects and reports.
 
-use linix::app::sync::guard::{GuardScope, Reaped};
+use shall::app::sync::guard::{GuardScope, Reaped};
 
 /// The type is the fix, so the type is what this asserts first.
 ///
@@ -85,12 +85,12 @@ fn every_command_that_can_close_a_port_names_itself_in_the_refusal() {
     }
 
     // The message itself, on the path that was silently answering `sync` for all three.
-    let watch = linix::model::firewall::lockout_refusal(22, GuardScope::Watch);
+    let watch = shall::model::firewall::lockout_refusal(22, GuardScope::Watch);
     assert!(
         watch.contains("an unattended watch tick"),
         "the lockout refusal did not carry the scope: {watch}"
     );
-    let sync = linix::model::firewall::lockout_refusal(22, GuardScope::Sync);
+    let sync = shall::model::firewall::lockout_refusal(22, GuardScope::Sync);
     assert!(
         !sync.contains("unattended"),
         "an attended sync was reported as unattended: {sync}"

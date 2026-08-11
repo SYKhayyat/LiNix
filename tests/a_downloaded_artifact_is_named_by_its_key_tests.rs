@@ -1,7 +1,7 @@
 //! **The three backends that download report a package under the key their state file uses.**
 //!
 //! `github:`, `web:` and `appimage:` are the only backends whose "installed" answer comes from a
-//! JSON file LiNix wrote rather than from a manager. That makes the identity rule theirs to get
+//! JSON file Shall wrote rather than from a manager. That makes the identity rule theirs to get
 //! right, and one of them got it wrong in the expensive direction: `appimage:` reported the
 //! *basename* while keying its state by the *URL*, so `info(url)` never matched its own record.
 //! Every declared AppImage read as absent, `sync` re-downloaded all of them on every run for
@@ -14,13 +14,13 @@
 
 use std::path::PathBuf;
 
-use linix::app::sync::guard::{GuardScope, Reaped};
-use linix::backends::{appimage, github, web};
-use linix::core::{CommandExecutor, Installable, Queryable};
+use shall::app::sync::guard::{GuardScope, Reaped};
+use shall::backends::{appimage, github, web};
+use shall::core::{CommandExecutor, Installable, Queryable};
 
 fn scratch(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
-        "linix-artifact-identity-{tag}-{}",
+        "shall-artifact-identity-{tag}-{}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&dir);
@@ -33,7 +33,7 @@ fn exec() -> CommandExecutor {
 }
 
 /// Names reported, sorted, so a map's iteration order is not part of the assertion.
-fn reported(pkgs: Vec<linix::core::Package>) -> Vec<String> {
+fn reported(pkgs: Vec<shall::core::Package>) -> Vec<String> {
     let mut names: Vec<String> = pkgs.into_iter().map(|p| p.name).collect();
     names.sort();
     names

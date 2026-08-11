@@ -12,17 +12,17 @@
 //! angle. This runs it forward, backward, and forward again.
 //!
 //! **Each sync is a fresh `App` over the same files and the same state registry**, because that
-//! is what two runs of `linix sync` are. One `App` memoises each manager's installed listing for
+//! is what two runs of `shall sync` are. One `App` memoises each manager's installed listing for
 //! the run (`CommandExecutor::installed`), so re-planning inside one would answer the second
 //! question from the first question's answer and prove nothing about convergence.
 //!
-//! **The mock is the machine.** After LiNix installs, the test makes brew report the package —
-//! which is what the real brew would do — through every question LiNix asks it; the assertion
+//! **The mock is the machine.** After Shall installs, the test makes brew report the package —
+//! which is what the real brew would do — through every question Shall asks it; the assertion
 //! that the install command actually ran is what keeps that from being fiction.
 
-use linix::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
-use linix::app::sync::resolver::StateResolver;
-use linix::core::executor::{DryRunOutput, MockExecutor};
+use shall::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
+use shall::app::sync::resolver::StateResolver;
+use shall::core::executor::{DryRunOutput, MockExecutor};
 use tokio::fs;
 
 use crate::mock_providers::TestKernel;
@@ -38,7 +38,7 @@ fn answer(mock: &MockExecutor, cmd: &str, stdout: &str) {
     );
 }
 
-/// Put the machine in a state, through **both** questions LiNix asks about brew.
+/// Put the machine in a state, through **both** questions Shall asks about brew.
 ///
 /// `brew` overrides `Queryable::info` to run `brew info --json=v1`, so the planner's
 /// *is it installed?* never touches the listing — while removal planning's `installed_sets`
@@ -51,7 +51,7 @@ async fn machine_holds(mock: &MockExecutor, names: &[&str]) {
     // product's argv — `e2e_tests.rs` registered `brew install {name}` against a product that
     // emits `brew install -- neovim`, and stayed green. That reading does not apply here: this
     // helper describes what the *machine* is holding, and a machine having a state does not mean
-    // LiNix asks about every part of it. `brew leaves` goes unasked whenever nothing is being
+    // Shall asks about every part of it. `brew leaves` goes unasked whenever nothing is being
     // adopted, and `brew info -- fd` whenever no line mentions `fd`.
     mock.allow_unmatched_registrations();
     let listing: String = names.iter().map(|n| format!("{} 1.0.0\n", n)).collect();
@@ -77,7 +77,7 @@ async fn recorded(kernel: &TestKernel, name: &str) -> bool {
     state.is_managed("brew", name)
 }
 
-/// One run of `linix sync`, in its own process's worth of state.
+/// One run of `shall sync`, in its own process's worth of state.
 ///
 /// Returns `(installs, removals)` from the plan, after executing it.
 async fn sync_run(kernel: &TestKernel) -> (usize, usize) {
@@ -97,7 +97,7 @@ async fn sync_run(kernel: &TestKernel) -> (usize, usize) {
 
     let engine = app.sync_engine().await;
     engine
-        .sync(changes, linix::app::sync::guard::GuardScope::Sync)
+        .sync(changes, shall::app::sync::guard::GuardScope::Sync)
         .await
         .expect("the plan applies");
     counts
@@ -155,12 +155,12 @@ async fn a_machine_converges_forward_backward_and_forward_again() {
     assert_eq!(
         (installs, removals),
         (0, 1),
-        "`remove = (present n owned) - desired`: nothing declares it and LiNix owns it"
+        "`remove = (present n owned) - desired`: nothing declares it and Shall owns it"
     );
     kernel.assert_called("brew uninstall -- neovim").await;
     assert!(
         !recorded(&kernel, "neovim").await,
-        "the removal is what drops the registry row; leaving it makes LiNix claim to manage \
+        "the removal is what drops the registry row; leaving it makes Shall claim to manage \
          something it has just deleted"
     );
 
@@ -174,8 +174,8 @@ async fn a_machine_converges_forward_backward_and_forward_again() {
 }
 
 #[tokio::test]
-async fn convergence_never_reaches_for_what_linix_did_not_install() {
-    // II.7: *"What LiNix may remove: what it manages and you stopped declaring. Plus `absent:`.
+async fn convergence_never_reaches_for_what_shall_did_not_install() {
+    // II.7: *"What Shall may remove: what it manages and you stopped declaring. Plus `absent:`.
     // Nothing else, ever."* The forward-backward test above would pass just as well if drift
     // were computed from the machine instead of from the registry — and that version deletes
     // software the user installed by hand. This is the half that tells them apart.
@@ -183,7 +183,7 @@ async fn convergence_never_reaches_for_what_linix_did_not_install() {
     kernel
         .mock_executor
         .set_response("brew install -- neovim", Ok(DryRunOutput::default().into()));
-    // A machine with something on it that LiNix has never heard of.
+    // A machine with something on it that Shall has never heard of.
     machine_holds(&kernel.mock_executor, &["fd"]).await;
 
     declare(&kernel, "brew:neovim\n").await;
@@ -193,7 +193,7 @@ async fn convergence_never_reaches_for_what_linix_did_not_install() {
     assert_eq!(
         sync_run(&kernel).await,
         (0, 0),
-        "`fd` is on the machine, is declared nowhere, and is not LiNix's to remove — a plan \
+        "`fd` is on the machine, is declared nowhere, and is not Shall's to remove — a plan \
          that reaps it is `purge-undeclared`, which is a command you type"
     );
 
@@ -236,7 +236,7 @@ async fn a_failed_plan_does_not_undo_the_part_that_worked_and_is_still_declared(
         .set_response("brew install -- fd", Ok(DryRunOutput::default().into()));
     kernel.mock_executor.set_response(
         "cargo install -- ripgrep",
-        Err(linix::core::Error::command_failed(
+        Err(shall::core::Error::command_failed(
             "error: could not compile `ripgrep`",
         )),
     );
@@ -272,7 +272,7 @@ async fn a_failed_plan_does_not_undo_the_part_that_worked_and_is_still_declared(
     );
     let engine = app.sync_engine().await;
     let outcome = engine
-        .sync(changes, linix::app::sync::guard::GuardScope::Sync)
+        .sync(changes, shall::app::sync::guard::GuardScope::Sync)
         .await;
     assert!(
         outcome.is_err(),

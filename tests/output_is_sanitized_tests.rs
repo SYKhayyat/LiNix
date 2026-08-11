@@ -16,8 +16,8 @@
 //! around it.
 
 use dashmap::DashMap;
-use linix::core::executor::MockExecutor;
-use linix::core::CommandExecutor;
+use shall::core::executor::MockExecutor;
+use shall::core::CommandExecutor;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;

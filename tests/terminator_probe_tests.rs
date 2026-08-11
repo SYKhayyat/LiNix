@@ -1,4 +1,4 @@
-//! Does `--` still mean "options end here" to the tool LiNix says it means it to?
+//! Does `--` still mean "options end here" to the tool Shall says it means it to?
 //!
 //! `src/core/argv.rs` holds one boolean per binary, and four of those booleans have been wrong:
 //! `asdf` read the terminator as a plugin name, `spack` read it into the spec, `gem` read it as
@@ -44,14 +44,14 @@ use std::process::Command;
 
 /// The operand, chosen so its position in an argv is never ambiguous and no manager can
 /// resolve it.
-const SENTINEL: &str = "linix-no-such-thing";
+const SENTINEL: &str = "shall-no-such-thing";
 
 struct Run {
     code: Option<i32>,
     text: String,
 }
 
-/// Run a manager the way LiNix runs it — through the same shim-aware launcher, or a `.cmd`
+/// Run a manager the way Shall runs it — through the same shim-aware launcher, or a `.cmd`
 /// manager is silently "unreachable" and every claim about it goes unchecked.
 ///
 /// **In a scratch directory, never the repo.** A build tool handed a package name treats the
@@ -59,7 +59,7 @@ struct Run {
 /// working tree, because `cabal install <name>` writes its build cache wherever it is standing.
 /// A test that alters the tree it is testing is a test nobody should have to think about.
 fn run(program: &str, args: &[String], cwd: &std::path::Path) -> Option<Run> {
-    let (prog, argv) = linix::core::executor::effective_command(program, args);
+    let (prog, argv) = shall::core::executor::effective_command(program, args);
     // stdin closed: `mix` prompts `Shall I install Hex? [Yn]` and will read whatever is on the
     // handle. During development it read the rest of the probe script and the remaining
     // measurements silently never ran (II.12c, one layer out).
@@ -83,7 +83,7 @@ fn run(program: &str, args: &[String], cwd: &std::path::Path) -> Option<Run> {
 /// as if it were a name?
 ///
 /// `asdf` says `No such plugin: --`; `nimble` says `Unknown option: --`; `spack` echoes
-/// `-- linix-no-such-thing` back as the query it could not match. A tool that consumed the
+/// `-- shall-no-such-thing` back as the query it could not match. A tool that consumed the
 /// terminator has nothing to say about it.
 ///
 /// **Only meaningful against the run that had no terminator to talk about** — see
@@ -153,8 +153,8 @@ fn both_forms(tokens: &[String]) -> Option<(Vec<String>, Vec<String>)> {
 #[tokio::test]
 async fn every_terminator_claim_still_holds_where_the_tool_is_installed() {
     use dashmap::DashMap;
-    use linix::core::executor::MockExecutor;
-    use linix::core::{CommandExecutor, PackageSpec};
+    use shall::core::executor::MockExecutor;
+    use shall::core::{CommandExecutor, PackageSpec};
     use std::sync::Arc;
 
     if std::env::var("TERMINATOR_PROBE").is_err() {
@@ -174,11 +174,11 @@ async fn every_terminator_claim_still_holds_where_the_tool_is_installed() {
     let mock = Arc::new(MockExecutor::new(vfs.clone()));
     let exec =
         CommandExecutor::with_layer(true, false, mock.clone(), vfs, Arc::new(DashMap::new()));
-    let config = linix::config::Config::default();
-    let registry = linix::backends::create_default_registry(
+    let config = shall::config::Config::default();
+    let registry = shall::backends::create_default_registry(
         exec,
         &config,
-        Arc::new(linix::app::hooks::LuaHooks::new(&config).expect("hooks")),
+        Arc::new(shall::app::hooks::LuaHooks::new(&config).expect("hooks")),
     )
     .await;
 
@@ -197,8 +197,8 @@ async fn every_terminator_claim_still_holds_where_the_tool_is_installed() {
                 .remove(
                     &[SENTINEL.to_string()],
                     false,
-                    linix::app::sync::guard::Reaped::for_reason(
-                        linix::app::sync::guard::GuardScope::Remove,
+                    shall::app::sync::guard::Reaped::for_reason(
+                        shall::app::sync::guard::GuardScope::Remove,
                         "a unit test of the effector itself",
                     ),
                 )
@@ -209,7 +209,7 @@ async fn every_terminator_claim_still_holds_where_the_tool_is_installed() {
         }
     }
 
-    let claims: BTreeMap<&str, bool> = linix::core::argv::known_terminator_claims()
+    let claims: BTreeMap<&str, bool> = shall::core::argv::known_terminator_claims()
         .into_iter()
         .collect();
 
@@ -311,14 +311,14 @@ async fn every_terminator_claim_still_holds_where_the_tool_is_installed() {
         // `a_divergent_row_takes_the_refusing_answer` makes it unreachable by construction: a
         // divergent row is always `false`, so `claim` here is always `false` and the only
         // disagreement it can produce is the harmless one.
-        if honours && !claim && linix::core::argv::terminator_answer_differs_by_host(base) {
+        if honours && !claim && shall::core::argv::terminator_answer_differs_by_host(base) {
             could_be_upgraded.push(format!(
                 "{base} (recorded as differing by host; this one honours the terminator)"
             ));
             continue;
         }
         let (measured, why) =
-            linix::core::argv::terminator_evidence(base).unwrap_or((false, "no evidence recorded"));
+            shall::core::argv::terminator_evidence(base).unwrap_or((false, "no evidence recorded"));
         wrong.push(format!(
             "`{base}` is listed as {} and behaves as {}.\n  the row's evidence ({}): {why}\n\
              \n  every verb this run drove:\n{}",

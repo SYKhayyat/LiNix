@@ -12,7 +12,7 @@ type Governor = GovRateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 /// A permit issuer that does not exist until a permit is asked for.
 ///
 /// **Built on first use, not in the constructor.** A backend's `new` runs for every subcommand,
-/// including the ones that touch no network at all — `github`'s ran on `linix path` and cost
+/// including the ones that touch no network at all — `github`'s ran on `shall path` and cost
 /// 200ms building a clock for an API budget the run never spent (AU3). Anything a rate limiter
 /// costs, it costs the first request; a run with no requests pays nothing.
 ///

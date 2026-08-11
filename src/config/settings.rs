@@ -1,8 +1,8 @@
-//! LiNix's own settings — the one file that is not in your repo.
+//! Shall's own settings — the one file that is not in your repo.
 //!
 //! It holds where your repo is, and nothing else. A key inside the repo saying where the repo
 //! is would have to be read out of the file whose location it defines, and no ordering
-//! resolves that. A key in a fixed location resolves it in one step: LiNix reads its own
+//! resolves that. A key in a fixed location resolves it in one step: Shall reads its own
 //! settings from a place it always knows, learns the repo path, and everything after that is
 //! the ordinary model.
 
@@ -23,7 +23,7 @@ pub struct Settings {
 }
 
 /// Which of the four sources answered "where is the repo". Carried rather than discarded so
-/// `linix path` can say why the answer is what it is — a wrong answer is then debuggable in
+/// `shall path` can say why the answer is what it is — a wrong answer is then debuggable in
 /// one command instead of by elimination.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RootSource {
@@ -37,8 +37,8 @@ impl RootSource {
     pub fn describe(self) -> &'static str {
         match self {
             RootSource::Flag => "--config-dir",
-            RootSource::Environment => "$LINIX_CONFIG_DIR",
-            RootSource::SettingsFile => "your LiNix settings file",
+            RootSource::Environment => "$SHALL_CONFIG_DIR",
+            RootSource::SettingsFile => "your Shall settings file",
             RootSource::Default => "the built-in default",
         }
     }
@@ -54,14 +54,14 @@ impl Settings {
     /// The platform config directory, not the data directory: this is configuration, and
     /// putting it beside the data invites the assumption that deleting the data dir is safe.
     ///
-    /// A file rather than `linix/settings.toml`, because **the default repo is
-    /// `<config dir>/linix`** — so the obvious nested spelling puts this file inside the repo
+    /// A file rather than `shall/settings.toml`, because **the default repo is
+    /// `<config dir>/shall`** — so the obvious nested spelling puts this file inside the repo
     /// it exists to locate, where git would commit a machine-specific absolute path and a
     /// fleet would share one box's answer.
     pub fn path() -> PathBuf {
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("linix.settings.toml")
+            .join("shall.settings.toml")
     }
 
     pub fn load() -> Result<Self> {
@@ -87,7 +87,7 @@ impl Settings {
             if key != ONLY_KEY {
                 return Err(Error::Config(format!(
                     "`{}` is not allowed in {}.\n  This file holds `{}` and nothing else — \
-                     where your repo is. Everything about how LiNix behaves goes in \
+                     where your repo is. Everything about how Shall behaves goes in \
                      `preferences.toml`, inside the repo, where it is versioned with the \
                      config it describes.",
                     key,
@@ -126,7 +126,7 @@ impl Settings {
 
 /// The one refusal, so every door that names a directory says the same sentence.
 ///
-/// It said it in one place — `linix path --set` — and the other three doors said nothing, which
+/// It said it in one place — `shall path --set` — and the other three doors said nothing, which
 /// is how `--config-dir ./sandbox` came to read `preferences.toml` from the sandbox and
 /// `modules/` from the real repo (AU2). `source` names the door, because "which of these four
 /// did I get wrong" is the next question after "one of them is relative".
@@ -134,7 +134,7 @@ pub fn absolute_or_refuse(path: PathBuf, source: &str) -> Result<PathBuf> {
     if !path.is_absolute() {
         return Err(Error::Config(format!(
             "{} is `{}`, which is not an absolute path.\n  A relative path would mean a \
-             different directory depending on where you ran LiNix from.",
+             different directory depending on where you ran Shall from.",
             source,
             path.display()
         )));
@@ -149,7 +149,7 @@ pub fn absolute_or_refuse(path: PathBuf, source: &str) -> Result<PathBuf> {
 ///
 /// **Fallible, because a relative answer is refused rather than replaced.** Discarding it and
 /// carrying on is what inverted the documented precedence: the flag was dropped downstream and
-/// `$LINIX_CONFIG_DIR` — which `--help` says the flag outranks — was picked back up in its
+/// `$SHALL_CONFIG_DIR` — which `--help` says the flag outranks — was picked back up in its
 /// place, silently, by the fallback.
 pub fn resolve_root(flag: Option<&Path>, settings: &Settings) -> Result<ResolvedRoot> {
     if let Some(path) = flag {
@@ -158,9 +158,9 @@ pub fn resolve_root(flag: Option<&Path>, settings: &Settings) -> Result<Resolved
             source: RootSource::Flag,
         });
     }
-    if let Some(dir) = std::env::var_os("LINIX_CONFIG_DIR").filter(|v| !v.is_empty()) {
+    if let Some(dir) = std::env::var_os("SHALL_CONFIG_DIR").filter(|v| !v.is_empty()) {
         return Ok(ResolvedRoot {
-            path: absolute_or_refuse(PathBuf::from(dir), "`$LINIX_CONFIG_DIR`")?,
+            path: absolute_or_refuse(PathBuf::from(dir), "`$SHALL_CONFIG_DIR`")?,
             source: RootSource::Environment,
         });
     }
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn the_settings_file_is_never_inside_the_repo_it_locates() {
-        // The default repo is `<config dir>/linix`. A settings file nested under it would be
+        // The default repo is `<config dir>/shall`. A settings file nested under it would be
         // committed to git and would carry one machine's absolute path to every other.
         let settings = Settings::path();
         let default_repo = crate::utils::safe_config_dir();
@@ -216,7 +216,7 @@ mod tests {
 
     #[test]
     fn the_one_key_is_read() {
-        let root = absolute("srv/linix");
+        let root = absolute("srv/shall");
         let s =
             Settings::parse(&format!("config_root = \"{}\"", root), &at("settings.toml")).unwrap();
         assert_eq!(s.config_root, Some(PathBuf::from(root)));
@@ -227,7 +227,7 @@ mod tests {
         let err = Settings::parse(
             &format!(
                 "config_root = \"{}\"\nverbose = true",
-                absolute("srv/linix")
+                absolute("srv/shall")
             ),
             &at("settings.toml"),
         )
@@ -242,7 +242,7 @@ mod tests {
 
     #[test]
     fn a_relative_root_is_refused() {
-        let err = Settings::parse("config_root = \"../linix\"", &at("settings.toml")).unwrap_err();
+        let err = Settings::parse("config_root = \"../shall\"", &at("settings.toml")).unwrap_err();
         assert!(err.to_string().contains("absolute"));
     }
 

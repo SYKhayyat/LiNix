@@ -4,8 +4,8 @@
 //! Measured on Windows, release-equivalent debug binary, one line in a module:
 //!
 //! ```text
-//! $ printf 'winget:a\\b\n' > $LINIX_CONFIG_DIR/modules/starter.txt
-//! $ linix eval
+//! $ printf 'winget:a\\b\n' > $SHALL_CONFIG_DIR/modules/starter.txt
+//! $ shall eval
 //! Error: Configuration error: …\modules\starter.txt:1: a module cannot use a set expression
 //!   a module is a list of what it holds; set math is how a profile chooses between them.
 //!   To say something must NOT exist, write `absent:apt:foo`.
@@ -25,14 +25,14 @@
 //! It is not hypothetical on the platform this repo is developed on. `winget list` on this
 //! machine reports 278 names, and **185 of them contain a backslash** (119 `ARP\Machine\…`,
 //! 66 `MSIX\…`). Every one of those is a name a user could reasonably paste into a module after
-//! reading `linix list`.
+//! reading `shall list`.
 //!
 //! The control below is the reason this measures what it says: a name with a *space* refuses
 //! correctly and legibly (``` `Mozilla Firefox` is not a package name ```), so the grammar is
 //! not simply rejecting everything unusual — it is specifically mis-classifying `\`.
 
-use linix::config::grammar::statement::{parse, Statement};
-use linix::config::grammar::Origin;
+use shall::config::grammar::statement::{parse, Statement};
+use shall::config::grammar::Origin;
 
 fn known(name: &str) -> bool {
     matches!(name, "apt" | "cargo" | "npm" | "winget" | "scoop" | "choco")

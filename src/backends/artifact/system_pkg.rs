@@ -2,7 +2,7 @@
 //!
 //! `github:`/`web:` may resolve to a file that installs *itself* into a second package
 //! database — a `.deb` to `dpkg`, an `.rpm` to `rpm`. When that happens the installing manager,
-//! not LiNix, owns the files on disk: LiNix records **which** manager installed it, and removal,
+//! not Shall, owns the files on disk: Shall records **which** manager installed it, and removal,
 //! upgrade and dedup all route back through that record (D5, owner 2026-07-24). This module is
 //! the one place the argv for that hand-off is built, so github and web cannot drift on what
 //! "hand it to dpkg" means, and so the argv is unit-testable without a live apt/rpm box — which
@@ -12,7 +12,7 @@ use super::format::Format;
 use crate::core::{Error, Result};
 use std::path::Path;
 
-/// The system installer a given artifact format hands itself to, or `None` for a format LiNix
+/// The system installer a given artifact format hands itself to, or `None` for a format Shall
 /// unpacks itself (a tarball) or that no manager on the supported platforms consumes as a file.
 /// Only `.deb`/`.rpm` are wired: `.msi`/`.exe`/`.pkg` are `is_system_package` shapes too, but
 /// their silent-install argv is per-vendor and unruled, so they stay unpacked/deployed, not
@@ -26,7 +26,7 @@ pub fn installer_for(format: Format) -> Option<&'static str> {
 }
 
 /// True when this format is one D5 hands to a system installer (as opposed to `is_system_package`,
-/// which is the broader "installs into a database" set including the Windows/mac shapes LiNix
+/// which is the broader "installs into a database" set including the Windows/mac shapes Shall
 /// does not drive as a file yet).
 pub fn is_handoff_format(format: Format) -> bool {
     installer_for(format).is_some()
@@ -55,7 +55,7 @@ pub fn install_argv(format: Format, file: &Path) -> Result<Vec<String>> {
             path,
         ]),
         other => Err(Error::Validation(format!(
-            "{} is not a file LiNix hands to a system package manager",
+            "{} is not a file Shall hands to a system package manager",
             other
         ))),
     }
@@ -69,7 +69,7 @@ pub fn remove_argv(installer: &str, package: &str) -> Result<Vec<String>> {
         "dpkg" => Ok(vec!["dpkg".into(), "-r".into(), package.into()]),
         "rpm" => Ok(vec!["rpm".into(), "-e".into(), package.into()]),
         other => Err(Error::Validation(format!(
-            "`{}` is not a system installer LiNix knows how to remove from",
+            "`{}` is not a system installer Shall knows how to remove from",
             other
         ))),
     }
@@ -112,7 +112,7 @@ mod tests {
     fn only_deb_and_rpm_are_handoffs() {
         assert_eq!(installer_for(Format::Deb), Some("dpkg"));
         assert_eq!(installer_for(Format::Rpm), Some("rpm"));
-        // A shape that installs into a database on another OS is not a handoff LiNix drives.
+        // A shape that installs into a database on another OS is not a handoff Shall drives.
         assert_eq!(installer_for(Format::Msi), None);
         assert_eq!(installer_for(Format::Tarball), None);
         assert!(is_handoff_format(Format::Deb));

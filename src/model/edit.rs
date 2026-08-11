@@ -47,7 +47,7 @@ impl Target {
 /// The three landing modules, named for how the package arrived (II.8).
 ///
 /// Provenance ends up in the filename, so `modules/hooks.txt` is exactly what got in behind
-/// LiNix's back. One `local.txt` mixed them and forgot which was which (V.40).
+/// Shall's back. One `local.txt` mixed them and forgot which was which (V.40).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Landing {
     Imperative,
@@ -68,22 +68,22 @@ impl Landing {
         Target::Module(ModuleName::literal(self.module()))
     }
 
-    /// Why this file exists, written into it the first time LiNix creates it.
+    /// Why this file exists, written into it the first time Shall creates it.
     fn header(self) -> &'static str {
         match self {
             Landing::Imperative => {
-                "# Packages that arrived via `linix install`.\n\
+                "# Packages that arrived via `shall install`.\n\
                  #\n\
                  # This is an ordinary module: read it, edit it, delete a line to uninstall.\n\
-                 # LiNix writes here so an imperative command still ends up as a file you own.\n\n"
+                 # Shall writes here so an imperative command still ends up as a file you own.\n\n"
             }
             Landing::Hooks => {
-                "# Packages that arrived behind LiNix's back — `apt install`, caught by the hook.\n\
+                "# Packages that arrived behind Shall's back — `apt install`, caught by the hook.\n\
                  #\n\
                  # This is an ordinary module: read it, edit it, delete a line to uninstall.\n\n"
             }
             Landing::Adopted => {
-                "# Packages that arrived via `linix adopt` — what was already on this machine.\n\
+                "# Packages that arrived via `shall adopt` — what was already on this machine.\n\
                  #\n\
                  # This is an ordinary module: read it, edit it, delete a line to uninstall.\n\n"
             }
@@ -91,7 +91,7 @@ impl Landing {
     }
 }
 
-/// One file LiNix touched, for the sentence II.8 requires it to print.
+/// One file Shall touched, for the sentence II.8 requires it to print.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Edit {
     pub file: PathBuf,
@@ -224,7 +224,7 @@ impl<'a> Editor<'a> {
     /// **The grammar goes out of its way to accept a BOM because that is what Notepad writes,
     /// and then every rewrite converted the file to LF, which is the other thing Notepad
     /// writes.** `str::lines()` drops the carriage return along with the newline, so rejoining
-    /// with a bare newline turns a CRLF module into an LF one in full: one `linix install`
+    /// with a bare newline turns a CRLF module into an LF one in full: one `shall install`
     /// becomes a whole-file diff, and every later `git blame` points at the run that touched
     /// the line endings instead of at the change. Two halves of one courtesy, one delivered.
     ///
@@ -263,7 +263,7 @@ impl<'a> Editor<'a> {
     pub fn add(&self, target: &Target, line: &str) -> Result<Edit> {
         // Before anything is written, and here rather than in each caller. A line the grammar
         // cannot read wedges every later command — they all parse the model — and the file it
-        // wedges is one LiNix generated, so nobody sees it until the next command dies. The
+        // wedges is one Shall generated, so nobody sees it until the next command dies. The
         // pm-hook path reaches this with whatever was on a real `choco install` command line
         // (`choco:Google Chrome`), and `adopt` reached it with `winget list`'s
         // `ARP\Machine\X64\Android Studio`.
@@ -318,7 +318,7 @@ impl<'a> Editor<'a> {
     /// Replace a module's whole contents with generated text, and make sure something
     /// reaches it.
     ///
-    /// For a module LiNix writes rather than edits — `adopted`, which II.9 says is **one**
+    /// For a module Shall writes rather than edits — `adopted`, which II.9 says is **one**
     /// file. A timestamped file per run would make the second `adopt` declare everything
     /// twice, and two declarations of one package is a conflict the resolver then refuses
     /// (II.7 rule 5). Overwriting is also what makes it re-runnable: `adopt` again and the
@@ -439,8 +439,8 @@ impl<'a> Editor<'a> {
                 "nothing is active, so there is nowhere to put this.",
             )
             .with_hint(
-                "activate a profile first (`linix activate Main`), or name one with \
-                 `--into <Profile>`. A module no profile reaches is a module LiNix never reads.",
+                "activate a profile first (`shall activate Main`), or name one with \
+                 `--into <Profile>`. A module no profile reaches is a module Shall never reads.",
             )),
 
             // Several: `--into` is how II.8 already asks this question, so ask it rather
@@ -856,7 +856,7 @@ mod tests {
     fn a_line_the_grammar_cannot_read_is_refused_before_the_file_is_touched() {
         // The root of the adopted.txt:69 wedge. `key_of` parsed and returned `None` on an
         // error, and the line was then appended anyway — so a write could put a parse error
-        // into a file LiNix generated, and every later command died reading it. Both live
+        // into a file Shall generated, and every later command died reading it. Both live
         // sources produced real ones: `winget list`'s `ARP\Machine\X64\Android Studio`, and
         // the pm-hook taking its target off a `choco install "Google Chrome"` command line.
         let f = fx(&[("active", "Work\n"), ("profiles/Work", "use dev\n")]);
@@ -968,7 +968,7 @@ mod tests {
             .add(&Landing::Hooks.target(), "apt:htop")
             .unwrap();
         let body = read(&f, "modules/hooks.txt");
-        assert!(body.contains("behind LiNix's back"), "{}", body);
+        assert!(body.contains("behind Shall's back"), "{}", body);
         assert!(body.contains("apt:htop"));
     }
 
@@ -1028,7 +1028,7 @@ mod tests {
 
     #[test]
     fn removing_keeps_comments_and_blank_lines() {
-        // LiNix must not rewrite your files beyond the line it was asked to remove.
+        // Shall must not rewrite your files beyond the line it was asked to remove.
         let f = fx(&[(
             "modules/dev.txt",
             "# my tools\n\napt:curl   # needed for work\napt:jq\n",
@@ -1068,7 +1068,7 @@ mod tests {
 
     #[test]
     fn a_service_line_is_declared_and_undeclared_by_name() {
-        // `linix service enable nginx` writes a line; `disable` takes it away again. It is
+        // `shall service enable nginx` writes a line; `disable` takes it away again. It is
         // not a package, so matching it on backend and name would never find it.
         let f = fx(&[("active", "Work\n"), ("profiles/Work", "use imperative\n")]);
         let e = editor(&f);

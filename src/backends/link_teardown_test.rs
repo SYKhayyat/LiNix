@@ -148,7 +148,7 @@ fn a_secret_may_not_be_decrypted_into_the_config_repo() {
     refuse_target_in_repo(&config, &outside.path().join("token")).unwrap();
 }
 
-/// T1: decrypt mode never writes `<target>.linix-backup`. Asserted by path, because the
+/// T1: decrypt mode never writes `<target>.shall-backup`. Asserted by path, because the
 /// failure it prevents is a file sitting there — not a code path that was skipped.
 ///
 /// The decrypt tool is not run here (that needs `age` on the machine); what is asserted is the

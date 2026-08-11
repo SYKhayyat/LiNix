@@ -128,7 +128,7 @@ impl Installable for AppImageInstallable {
             let allow_http = crate::core::download::allows_http(spec);
             crate::core::download::check_scheme(url, allow_http, url)?;
             crate::core::download::check_checksum_declared(spec)?;
-            let client = crate::core::download::client(allow_http, "linix-manager")?;
+            let client = crate::core::download::client(allow_http, "shall-manager")?;
             let filename = url.split('/').next_back().unwrap_or("app.AppImage");
             let dest_path = self.core.install_dir.join(filename);
 
@@ -482,7 +482,7 @@ mod tests {
     }
 
     /// The twin of `web.rs`'s. A path the OS refuses leaves the AppImage installed, so the record
-    /// must go back: dropping it would make the resource drift **no sync can see**, because LiNix
+    /// must go back: dropping it would make the resource drift **no sync can see**, because Shall
     /// would have forgotten the only thing that knows it is there.
     ///
     /// The undeletable path is a NUL byte, which every platform's path API refuses with

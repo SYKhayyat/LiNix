@@ -7,7 +7,7 @@ use crate::verbs::sync::{enforce_policy, print_vars_changed};
 /// the fact, so what it bought is listed for as long as the package is installed.
 ///
 /// The heading avoids "downloaded": since Q5 the flag also covers a manager that verifies a
-/// signature itself (`helm`), where LiNix downloaded nothing.
+/// signature itself (`helm`), where Shall downloaded nothing.
 const UNVERIFIED_HEADING: &str = "! installed with `@unverified` — nothing checked the bytes";
 
 /// Every managed package whose install skipped a verification. Reads the recorded option and
@@ -106,7 +106,7 @@ pub async fn handle_status(app: &App, out: Output) -> Result<()> {
         }
     }
     // Distinct from `undeclared` below, and the distinction is the point: an undeclared
-    // package is one LiNix never took responsibility for, and one of these is a package it
+    // package is one Shall never took responsibility for, and one of these is a package it
     // manages, that nothing declares, and that it has decided never to remove (AU1).
     if !report.skipped.is_empty() {
         println!(
@@ -151,7 +151,7 @@ pub async fn handle_status(app: &App, out: Output) -> Result<()> {
         }
     }
     if !resources.unverifiable.is_empty() {
-        // Said out loud on this view too: these are resources LiNix cannot read back, so
+        // Said out loud on this view too: these are resources Shall cannot read back, so
         // "nothing to do" about them is an assumption and not a measurement.
         println!(
             "? could not be read back — assumed in place ({}):",
@@ -202,7 +202,7 @@ pub async fn compute_full_changes(
     // and for the stronger reason: `sync` re-plans every run and would correct itself, while
     // this plan is written to a file and applied later. Unscoped, it froze a removal for every
     // managed package whose backend `priority` does not name, and `apply` then carried them out
-    // against a machine that had never agreed to LiNix touching that manager.
+    // against a machine that had never agreed to Shall touching that manager.
     let hosts = app.host_backends().await;
     let changes = {
         let state_guard = app.state.lock().await;
@@ -254,7 +254,7 @@ pub async fn handle_plan(app: &App, out: &str) -> Result<()> {
             "Wrote plan to {} — system already matches desired state (no changes).",
             out
         );
-        // Not silence: `check` says the same thing in the same breath, and a resource LiNix
+        // Not silence: `check` says the same thing in the same breath, and a resource Shall
         // cannot read back is a limit on what "already matches" means here.
         if !full.resources.unverifiable.is_empty() {
             println!(
@@ -266,7 +266,7 @@ pub async fn handle_plan(app: &App, out: &str) -> Result<()> {
     } else {
         println!(
             "Wrote plan to {} — {} install(s), {} removal(s), {} resource(s) to place, {} to \
-             undo.\nReview it, then run `linix apply {}`.",
+             undo.\nReview it, then run `shall apply {}`.",
             out,
             plan.installs.len(),
             plan.removals.len(),
@@ -308,7 +308,7 @@ pub async fn handle_plan(app: &App, out: &str) -> Result<()> {
         .await;
         if !refusals.is_empty() {
             println!(
-                "\nWARNING: `linix apply` will refuse this plan.\n{}",
+                "\nWARNING: `shall apply` will refuse this plan.\n{}",
                 refusals.join("\n")
             );
         }
@@ -346,7 +346,7 @@ pub async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Result<()> {
 
     if plan.schema != crate::app::sync::PLAN_SCHEMA {
         anyhow::bail!(
-            "plan schema {} is unsupported (this linix speaks schema {})",
+            "plan schema {} is unsupported (this shall speaks schema {})",
             plan.schema,
             crate::app::sync::PLAN_SCHEMA
         );
@@ -354,7 +354,7 @@ pub async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Result<()> {
     // Integrity: refuse a hand-edited plan unless forced.
     if plan.recomputed_hash() != plan.desired_hash && !yes {
         anyhow::bail!(
-            "plan file looks modified (content hash mismatch). Re-generate with `linix plan`, \
+            "plan file looks modified (content hash mismatch). Re-generate with `shall plan`, \
              or pass --yes to force."
         );
     }
@@ -390,11 +390,11 @@ pub async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Result<()> {
                     crate::core::prompt::Unattended::Refuse(
                         "The captured plan no longer matches this machine, and there is no \
                          terminal to confirm on. Re-run with --yes to apply it anyway, or \
-                         `linix plan` to capture a fresh one.",
+                         `shall plan` to capture a fresh one.",
                     ),
                 )?;
                 if !proceed {
-                    println!("Aborted. Run `linix plan` to capture a fresh plan.");
+                    println!("Aborted. Run `shall plan` to capture a fresh plan.");
                     return Ok(());
                 }
             }
@@ -450,7 +450,7 @@ pub async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Result<()> {
     // **The frozen plan is executed by the engine that executes every other plan.**
     //
     // This was a pair of serial loops calling `Installable::install` and `::remove` a package
-    // at a time, and what they skipped was not decoration. No write-ahead log — so `linix heal`,
+    // at a time, and what they skipped was not decoration. No write-ahead log — so `shall heal`,
     // which reads the journal, could not recover an interrupted `apply` at all, on the one
     // command named after review and deliberation. No transaction, so no rollback and no
     // prior-state probe. No snapshot and no health check, so `@health=` on a line in the plan
@@ -503,7 +503,7 @@ pub fn version_lock_path(app: &App) -> std::path::PathBuf {
 }
 
 /// The pins on disk. A missing or unreadable file is an empty set of pins — the ordinary state
-/// of a machine that has never run `linix lock`, never an error.
+/// of a machine that has never run `shall lock`, never an error.
 pub fn load_version_locks(path: &std::path::Path) -> serde_json::Map<String, Value> {
     let Ok(body) = std::fs::read_to_string(path) else {
         return serde_json::Map::new();
@@ -559,7 +559,7 @@ pub(crate) async fn scan_installed_versions(app: &App) -> serde_json::Map<String
 }
 
 /// Build and write `locks/versions.json` from the current managed state. Returns the number of
-/// versions pinned. Shared by `linix lock versions` and by `linix heal` (which reconciles the
+/// versions pinned. Shared by `shall lock versions` and by `shall heal` (which reconciles the
 /// lockfile).
 pub async fn build_and_write_locks(app: &App) -> Result<(usize, bool)> {
     let locks = scan_installed_versions(app).await;
@@ -658,7 +658,7 @@ fn quoted(names: &[String]) -> String {
         .join(", ")
 }
 
-/// `linix lock [AXIS] [NAME…]` — freeze what a sync would otherwise decide again (Z2).
+/// `shall lock [AXIS] [NAME…]` — freeze what a sync would otherwise decide again (Z2).
 pub async fn handle_lock(app: &App, axis: LockAxis, names: &[String], list: bool) -> Result<()> {
     if list {
         return list_locks(app, axis);
@@ -818,7 +818,7 @@ async fn lock_scripts(app: &App, names: &[String]) -> Result<()> {
             ledger_path.display()
         );
     }
-    // A hook on one of LiNix's own events (XIII.13) is the same surface: a script the repo
+    // A hook on one of Shall's own events (XIII.13) is the same surface: a script the repo
     // carries, run without anyone watching. Both of U15's locations are approved here, and
     // separately — the shared policy's approval must not cover this machine's local file.
     let events = crate::app::events::EventHooks::load(&app.config);
@@ -849,7 +849,7 @@ async fn lock_scripts(app: &App, names: &[String]) -> Result<()> {
         }
     }
     // And every `adapters/` file (7a/U10). They travel with the repo, and a definition is
-    // argv LiNix will run, so each is approved here or it does not load.
+    // argv Shall will run, so each is approved here or it does not load.
     for name in approve_adapters(app)? {
         if !scoped {
             println!(
@@ -916,7 +916,7 @@ async fn lock_scripts(app: &App, names: &[String]) -> Result<()> {
     if hit.is_empty() {
         warn!(
             "nothing the configuration can run matches {} — nothing approved. \
-             `linix lock scripts --list` names what is approvable.",
+             `shall lock scripts --list` names what is approvable.",
             quoted(names)
         );
     }
@@ -927,7 +927,7 @@ async fn lock_scripts(app: &App, names: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// `linix lock --list` / `linix unlock --list` — what is locked on this axis, changing nothing.
+/// `shall lock --list` / `shall unlock --list` — what is locked on this axis, changing nothing.
 fn list_locks(app: &App, axis: LockAxis) -> Result<()> {
     use crate::core::hook_lock::HookLedger;
     use crate::core::BareLock;
@@ -1210,7 +1210,7 @@ pub fn approve_vars_provider(app: &App) -> Result<Option<String>> {
     Ok(Some(filename))
 }
 
-/// `linix unlock [AXIS] [NAME…]` — release a lock, so the next sync decides it again (Z2).
+/// `shall unlock [AXIS] [NAME…]` — release a lock, so the next sync decides it again (Z2).
 pub async fn handle_unlock(app: &App, axis: LockAxis, names: &[String], list: bool) -> Result<()> {
     if list {
         return list_locks(app, axis);
@@ -1282,7 +1282,7 @@ async fn unlock_backends(app: &App, names: &[String]) -> Result<()> {
     if changed {
         lock.save(&path)?;
         println!(
-            "Run `linix sync` to re-resolve. A name that moves manager is reinstalled from \
+            "Run `shall sync` to re-resolve. A name that moves manager is reinstalled from \
              the new one and removed from the old."
         );
     }
@@ -1347,7 +1347,7 @@ fn unlock_scripts(app: &App, names: &[String]) -> Result<()> {
     let (tag, withdrew) = tense("Unlock", "withdrew", "would withdraw");
     println!(
         "{} scripts: {} {}. A sync that reaches one now refuses to run it until \
-         `linix lock scripts` approves it again.",
+         `shall lock scripts` approves it again.",
         tag,
         withdrew,
         revoked.join(", ")
@@ -1628,9 +1628,9 @@ mod unverified_tests {
         );
     }
 
-    /// helm downloads nothing LiNix can see, so the heading cannot claim it did.
+    /// helm downloads nothing Shall can see, so the heading cannot claim it did.
     #[test]
-    fn the_heading_does_not_claim_linix_downloaded_it() {
+    fn the_heading_does_not_claim_shall_downloaded_it() {
         assert!(!UNVERIFIED_HEADING.contains("downloaded"));
         assert!(UNVERIFIED_HEADING.contains("@unverified"));
     }

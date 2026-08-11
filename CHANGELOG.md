@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to LiNix are documented here.
+All notable changes to Shall are documented here.
 
 ## [0.8.0] — unreleased — the first published binaries
 
@@ -11,7 +11,7 @@ about to repeat it — and the reason was not the missing tag. `ci.yml` listened
 `push: branches: [main]` and nothing else, so the release job's `if: refs/tags/v*` was gated on a
 ref its own workflow could never be running under. A tag would have done nothing.
 
-This is the one that ships: `linix-<target>` binaries for x86_64 Linux, both Apple architectures
+This is the one that ships: `shall-<target>` binaries for x86_64 Linux, both Apple architectures
 and x86_64 Windows, and installers that download them.
 
 *What follows is a day's work on top of that write-up — the 2026-08-11 assessment's order, and
@@ -24,16 +24,16 @@ entry it was written for now carries them rather than sitting above an untagged 
   its run.** `Commands` now answers `LockScope::Reader`, `Writer` or `Deferred`, exhaustively, so
   the next unbounded verb does not compile until it says which it is. `watch` was a whole-run
   writer and never returns — so for as long as the documented GitOps daemon was up, every writing
-  LiNix command on that machine waited 120 seconds and then failed, including `linix install` and
+  Shall command on that machine waited 120 seconds and then failed, including `shall install` and
   the `hook-reconcile` a hand-typed `apt install` fires. `shell` (an interactive `$SHELL`) and
-  `run` (a command LiNix does not own) were the same shape. This bug had already been found and
+  `run` (a command Shall does not own) were the same shape. This bug had already been found and
   fixed three times, for `edit`, `fleet` and `history`, each time for one verb.
 
 ### `@hold=true` in a manifest now holds
 
 - **It was read by nothing.** The option is in `PACKAGE_OPTION_KEYS`, the grammar refuses it
   beside `@version` as a contradiction, and II.2 documents it — and the only writer of the held
-  set was the imperative `linix hold`, so a declaration carrying it parsed, validated, and did
+  set was the imperative `shall hold`, so a declaration carrying it parsed, validated, and did
   nothing at all. Found by making `tests/grade6_option_edit_reaches_the_machine_tests.rs`
   table-driven over `PACKAGE_OPTION_KEYS` itself: every one of the 24 keys now declares where its
   value ends up, and the six that are read only while installing are a confession under a ceiling.
@@ -42,16 +42,16 @@ entry it was written for now carries them rather than sitting above an untagged 
   ledger's readers and silently remediated a package the manifest had frozen — a change to a
   declared package, against the declaration. The "holds are not enforced by a native whole-system
   upgrade" note counted the ledger, so somebody whose holds were all declared was told nothing.
-  And `linix hold` with no arguments — the command whose entire job is *tell me what is held* —
+  And `shall hold` with no arguments — the command whose entire job is *tell me what is held* —
   answered `No packages are held.` over a manifest holding three. `app::holds::Holds` is the
   union now, no other module may reach the ledger at all, and the listing says which command
   releases each hold, because the two are released differently.
 
-### Hooks, and the answers LiNix gives about a machine
+### Hooks, and the answers Shall gives about a machine
 
-- **All three hook subcommands stand down when LiNix started the manager.** The guard matched
+- **All three hook subcommands stand down when Shall started the manager.** The guard matched
   `hook-reconcile` alone — what apt, dnf, zypper, apk, xbps, portage and eopkg invoke. It did not
-  match `hook-record`, which is what LiNix installs as pacman's `PostTransaction` hook, so every
+  match `hook-record`, which is what Shall installs as pacman's `PostTransaction` hook, so every
   pacman transaction inside a sync waited the full 120-second lock timeout in silence and lost
   the record anyway. It is a property of the command now, not a third match arm.
 - **A resolve that failed is no longer reported as a machine that lacks the package.** `info
@@ -67,7 +67,7 @@ entry it was written for now carries them rather than sitting above an untagged 
 
 - **Four terminator rows replaced inferences with measurements** (`winget`, `choco`, `launchctl`
   now terminate; `stack` does not). The differential probe disagreed with all four; `stack` was
-  the unsafe direction, where LiNix was passing a `--` the tool reads as a package name.
+  the unsafe direction, where Shall was passing a `--` the tool reads as a package name.
 - **Nothing writes ANSI escapes into a pipe.** The tracing subscriber never asked whether stderr
   was a terminal, and `TERM=dumb` was honoured by nothing.
 - **CI has a concurrency group**, and — the half nobody had looked at — **it listens for tag
@@ -86,20 +86,20 @@ entry it was written for now carries them rather than sitting above an untagged 
   (default 20) splits ports out of `max_extra_removals`; `max_total_changes` (default 0, off)
   counts everything one command does — installs and upgrades, removals of every kind, resources
   written, ports opened and closed. A refusal now names every ceiling it hit rather than the
-  first, and `linix protected` prints all five instead of `max_removals` alone.
+  first, and `shall protected` prints all five instead of `max_removals` alone.
 
-### Other package managers, and the processes LiNix starts
+### Other package managers, and the processes Shall starts
 
-*Both found by the arch integration leg, which kills LiNix mid-sync on purpose and then asks the
+*Both found by the arch integration leg, which kills Shall mid-sync on purpose and then asks the
 machine to converge. It could not, twice, for two different reasons — and neither was about the
 crash.*
 
-- **LiNix waits for another package manager instead of failing at it** (`Q51`). An `apt upgrade`
-  in your other terminal, an unattended-upgrade timer, a GUI updater: `linix sync` used to retry
+- **Shall waits for another package manager instead of failing at it** (`Q51`). An `apt upgrade`
+  in your other terminal, an unattended-upgrade timer, a GUI updater: `shall sync` used to retry
   four times over about three and a half seconds and then say *"this is not the transient failure
   its output looks like"* — which was false in exactly that case. It now asks the machine which
   of three states the lock is in and does the matching thing: **wait** for a live holder,
-  announcing who it is; **fail at once and name `linix heal`** for a lock left behind by a killed
+  announcing who it is; **fail at once and name `shall heal`** for a lock left behind by a killed
   run, because waiting on that never ends; **back off as before** if the holder let go in
   between. Bounded by `manager_lock_wait_secs` (default 300, `0` to opt out), as one budget
   across the whole retry loop. Nothing is scanned unless the manager already said the word, so a
@@ -114,9 +114,9 @@ crash.*
   other ran them concurrently and let `db.lck` arbitrate, which it does by failing whichever
   lost. Same for `apt`/`apt-get` and `dnf`/`yum`/`microdnf`.
 - **A package manager is asked to stop before it is killed** (`Q52`). `kill_on_drop` and the idle
-  timeout were SIGKILL, which cannot be caught — so a manager LiNix stopped never rolled its
-  transaction back or unlinked its lock, and LiNix was manufacturing the wedged machine `heal`
-  exists to repair. Worse, LiNix's child is usually `sudo`: SIGKILL killed `sudo` and left the
+  timeout were SIGKILL, which cannot be caught — so a manager Shall stopped never rolled its
+  transaction back or unlinked its lock, and Shall was manufacturing the wedged machine `heal`
+  exists to repair. Worse, Shall's child is usually `sudo`: SIGKILL killed `sudo` and left the
   real manager running as root with its parent gone. Now SIGTERM, a grace period, then SIGKILL
   only for a child that will not go.
 - **Seventeen places that started a process now own it.** Dropping a future that awaits a command
@@ -132,7 +132,7 @@ crash.*
 ### A `dnf` failure that read as success
 
 - **`dnf` reported success over a transaction that never happened** (`S83`). `dnf check-update`
-  exits 100 when it *finds* updates, so LiNix rightly forgives that code — but with no failure
+  exits 100 when it *finds* updates, so Shall rightly forgives that code — but with no failure
   phrasing able to contradict it, every dnf run ending on 100 read as a success, including one
   that did nothing. It is the same defect that once let choco's 3010 stand over an install that
   installed no package. Fixed by giving dnf its own words, measured in the Fedora image rather
@@ -147,14 +147,14 @@ crash.*
 - **One advisory is silenced, and it says so.** `RUSTSEC-2026-0249` — `smartstring` is
   unmaintained, its repository archived on 2026-05-03. It is not a vulnerability and there is no
   upgrade: it is a non-optional dependency of `rhai`, which is one of the three hook dialects and
-  what `vars.linix` runs on, and the newest rhai still carries it. The entry in `deny.toml` names
+  what `vars.shall` runs on, and the newest rhai still carries it. The entry in `deny.toml` names
   the advisory, why no fix exists, and the one-line check that ends it. A test now audits that
   ignore list the way every other exemption table here is audited — a supply-chain gate with a
   quietly growing list of exceptions is not a gate.
 
 ### Looking
 
-- **`linix check adapters`**, the ninth section: extension files that are written and not in
+- **`shall check adapters`**, the ninth section: extension files that are written and not in
   use. A malformed `adapters/*.toml` still warns and is skipped mid-sync — a typo in an optional
   file must not stop you installing a package — so this is where it is a non-zero exit instead.
 
@@ -163,14 +163,14 @@ crash.*
 - **CI ran for the first time in ten commits.** A step ending in `pty_tests::` made the workflow
   file unparseable, which fails the run rather than a job: zero seconds, no log, nothing to open.
   A `cargo test` gate now reads every workflow for the class of scalar YAML re-reads as a key.
-- **Release assets are named for their target.** All four builds produce a file called `linix`,
+- **Release assets are named for their target.** All four builds produce a file called `shall`,
   so the release job as written would have published one binary and let three platforms download
   the wrong architecture.
 
 ### Performance
 
 *The whole of `docs/INEFFICIENCIES.md`, which audited every place in the tree slower than it has
-to be. LiNix spends its entire runtime waiting on other people's processes and other people's
+to be. Shall spends its entire runtime waiting on other people's processes and other people's
 networks, so all of this is one of four shapes: don't ask twice, don't ask one at a time, don't
 ask at all, ask in one breath.*
 
@@ -220,7 +220,7 @@ ask at all, ask in one breath.*
   `yarn`, `pnpm`, `vscode`, `emacs`, `krew`, `go`. The ones that share a system package database
   still run one at a time (`Y2`).
 - **Variables resolve once per invocation**, which Part IX has always required. Measured: one
-  `linix check` ran the user's `vars.sh` **three times**, so its side effects happened three
+  `shall check` ran the user's `vars.sh` **three times**, so its side effects happened three
   times and any `http()` variable was fetched three times.
 - **One HTTP connection pool** instead of a fresh `reqwest::Client` per request in eight places.
   Every OSV advisory GET, every registry query and every asset download paid a full TCP and TLS
@@ -307,7 +307,7 @@ ask at all, ask in one breath.*
 ### Fixed
 - **A `#!` hook runs on Windows** (`Y17`). It never had: Windows has no shebang mechanism, so a
   script file reached `CreateProcess` and came back *"not a valid application for this OS
-  platform"* — a message blaming a script that was fine. LiNix now reads that first line itself
+  platform"* — a message blaming a script that was fine. Shall now reads that first line itself
   and names the interpreter on the command line, on every platform. `#!/usr/bin/env python3` is
   looked up as `python3`, then **`python`, then `py`**, because that is what a Windows install is
   usually called; an absolute interpreter that exists is used as written, so Unix launches exactly
@@ -329,9 +329,9 @@ ask at all, ask in one breath.*
     kernel; an interpreter named on the command line only reads it.
 - **A read that fails no longer becomes an empty answer** (`Q40`). `run_output` ignored exit
   status by design — "no such package" is an ordinary non-zero reply — but it ignored the *silent*
-  failures too. Measured without LiNix present: 3 of 16 concurrent cold-start `winget list` exit
-  `0x8A150001` having written zero bytes anywhere. Through LiNix that became `Ok("")` → no
-  packages → **`linix list --backend winget` printing nothing and exiting 0 on a machine with 280
+  failures too. Measured without Shall present: 3 of 16 concurrent cold-start `winget list` exit
+  `0x8A150001` having written zero bytes anywhere. Through Shall that became `Ok("")` → no
+  packages → **`shall list --backend winget` printing nothing and exiting 0 on a machine with 280
   packages**, and `info` reporting an installed package as absent. Now a non-zero exit that said
   nothing on either stream is a failure; one that printed keeps what it printed. Fixed at the
   primitive and at the three callers that turned it into a claim.
@@ -347,8 +347,8 @@ ask at all, ask in one breath.*
   Ruby, and the marker is not part of the version — no `@version=` could ever match it.
 
 
-- **A command that stops talking no longer stops LiNix forever.** An uninstall sat 76 minutes on
-  a Windows restore point that had already been written; nothing in LiNix bounded a child
+- **A command that stops talking no longer stops Shall forever.** An uninstall sat 76 minutes on
+  a Windows restore point that had already been written; nothing in Shall bounded a child
   process, because the only timeout in the tree covers the transaction DAG and snapshots, state
   reads, the guard and `plan` all run outside it. Two earlier hangs had been killed by hand and
   never diagnosed. A child that produces nothing on either stream and does not exit is now
@@ -357,7 +357,7 @@ ask at all, ask in one breath.*
   streams** — `git` on every invocation, the `--version` and `--help` probes, `generate:`
   scripts, vars providers, the `sh()` builtin, download commands, the Windows sandbox probe. A
   child that prompted there asked into a pipe nobody displays and then waited on a terminal it
-  was never handed. All ten close stdin now; the deliberately interactive ones (`linix run`, the
+  was never handed. All ten close stdin now; the deliberately interactive ones (`shall run`, the
   shell, `$EDITOR`, the history TUI, the bisect oracle) are unchanged.
 
 ### Added
@@ -379,7 +379,7 @@ ask at all, ask in one breath.*
 
 > **The version is `0.7.0` and the design is "v7"**, which are two different numbers and were
 > confusing each other. `Cargo.toml` said `0.1.0` while every document called the rewrite v7, so
-> a user reading `linix --version` had no way to tell which tree they had. The crate version now
+> a user reading `shall --version` had no way to tell which tree they had. The crate version now
 > tracks the design generation; the leading `0.` says what is true — this has never been
 > installed from an artifact by anyone.
 >
@@ -405,8 +405,8 @@ There is no migration path and no compatibility shim. Nothing reads a v6 config.
   backends in `priority`, profile names in `active`. One rule, no per-file exceptions.
 - **The repo layout is `modules/`, `profiles/`, `active`, `priority`, `schedules`, `locks/`.**
   A module is a list; it does nothing until an active profile `use`s it.
-- **History is git.** `linix git init` makes the config directory a repo, every sync commits,
-  and `linix rollback <commit>` restores those manifests and converges the machine. There is no
+- **History is git.** `shall git init` makes the config directory a repo, every sync commits,
+  and `shall rollback <commit>` restores those manifests and converges the machine. There is no
   second generation store.
 - **`activate` sets, `activate -a` adds, `deactivate` removes.** Several profiles can be active
   at once; their package sets are unioned, and deactivating one removes only what nothing else
@@ -439,30 +439,30 @@ There is no migration path and no compatibility shim. Nothing reads a v6 config.
   backend that could not act on it, rather than being accepted and ignored. The grammar's list
   and the keys backends read are one list with a test across the join, which is what stops a key
   being read by code no line can reach.
-- **`linix path` and `linix edit` find your files for you**, so neither you nor your scripts
-  have to hard-code `~/.config/linix`. `linix path --set DIR` records the repo location in
-  LiNix's own settings file — the one file that lives outside the repo, because a key inside
+- **`shall path` and `shall edit` find your files for you**, so neither you nor your scripts
+  have to hard-code `~/.config/shall`. `shall path --set DIR` records the repo location in
+  Shall's own settings file — the one file that lives outside the repo, because a key inside
   the repo saying where the repo is cannot be read before you know where the repo is. That
   file holds exactly one key and the parser refuses any other, naming `preferences.toml` as
   where behaviour settings belong. `--config-dir` overrides it for one run; the order is
-  `--config-dir`, `$LINIX_CONFIG_DIR`, the settings file, the default, and
-  `linix path --explain` says which one won.
+  `--config-dir`, `$SHALL_CONFIG_DIR`, the settings file, the default, and
+  `shall path --explain` says which one won.
 - **Behaviour lives in `preferences.toml`, inside your repo.** `config.toml` is gone — it was
   never in the spec's file list, and it held the key that said where the repo was, which could
   only ever be read from the directory it was moving away from. An unknown key is now an error
   naming the key rather than a silent shrug, which it had been while eight documented settings
-  no longer existed. `linix config path` and `config edit` are gone too; `linix path` and
-  `linix edit` answer those questions, and `linix edit preferences.toml` re-checks that the
+  no longer existed. `shall config path` and `config edit` are gone too; `shall path` and
+  `shall edit` answer those questions, and `shall edit preferences.toml` re-checks that the
   file still parses when you save it.
 - **You can name your own conditions.** A `vars` file holds `role = desktop` lines with `when`
   blocks that override them, and `when $role == travel` gates packages anywhere `when` is
-  legal. The `$` keeps your names and LiNix's detected facts in separate namespaces, so new
+  legal. The `$` keeps your names and Shall's detected facts in separate namespaces, so new
   facts can be added forever without changing what an existing file means. A variable needs a
   default at the top level — a `when` block may override one but never introduce it, so every
   variable is defined on every machine and a typo is always an error rather than a block that
   quietly never fires. Values may be built from other variables (`tier = ${role}-heavy`),
   resolved in dependency order with loops reported by name.
-- **`linix rebuild` repairs what `sync` cannot see.** `sync` applies the difference between
+- **`shall rebuild` repairs what `sync` cannot see.** `sync` applies the difference between
   your files and the machine, so a package that is declared and installed but broken produces
   no difference and `sync` reports success over it forever. `rebuild` asserts the declared set
   from scratch instead — one backend at a time, all of its packages down and then all of them
@@ -480,15 +480,15 @@ There is no migration path and no compatibility shim. Nothing reads a v6 config.
 - **`remove-orphans` previews, guards, then asks.** It lists what each manager considers
   orphaned, puts the whole set through the guard, and removes exactly what it showed.
 - **`export` never silently overwrites.** A taken filename is written beside the real file
-  (`package.linix.json`); `--force` overwrites deliberately.
+  (`package.shall.json`); `--force` overwrites deliberately.
 - **File-backed backends no longer report a removal that failed.** If the binary could not be
   deleted, the package stays recorded rather than becoming drift nothing can see.
 - **A crash aged out of the write-ahead log is still healable**, so an interrupted run left
   unattended for hours is still repaired rather than dropped.
 - **`sync`, `rollback` and `remove-orphans` refuse to apply unconfirmed** in a non-interactive
   shell without `--yes`.
-- **Commits are made as you, and signatures are shown.** LiNix no longer authors its commits as
-  `linix <linix@localhost>` — your git identity and your `commit.gpgsign` decide. `git log` and
+- **Commits are made as you, and signatures are shown.** Shall no longer authors its commits as
+  `shall <shall@localhost>` — your git identity and your `commit.gpgsign` decide. `git log` and
   `history` show each commit's signature and signer, and a signature git will not vouch for is
   never displayed as a good one. `require_signed_history` (off by default) refuses a rollback to
   a commit git cannot verify.
@@ -529,7 +529,7 @@ the old engine underneath it is gone.
 
 ### Fixed
 
-- **`linix --help` panicked on every debug build.** `status` carried an alias `diff` that
+- **`shall --help` panicked on every debug build.** `status` carried an alias `diff` that
   collided with the real `diff` command; clap's debug assertions aborted before `main`. The
   test suite stayed green throughout, because nothing in it ran the binary.
 - **A manager reporting "No packages found." was parsed as a package named `No`** — a phantom
@@ -546,22 +546,22 @@ the old engine underneath it is gone.
   JSON keys.
 - **`network_timeout_secs` was ignored below 10**, and `max_parallel` did not detect the core
   count.
-- **A rebuild reported its removals as removals.** `linix rebuild` prints its own plan, but the
+- **A rebuild reported its removals as removals.** `shall rebuild` prints its own plan, but the
   two transactions underneath it ran through the ordinary sync path, whose summary said
   "Removals: N" on a run where all N come straight back. It now reads "Reinstalled" and
   "Removed to reinstall"; plain "Removals" means removals that stay removed.
-- **`linix plan` did not say when a variable caused a removal.** `sync` named the variables that
+- **`shall plan` did not say when a variable caused a removal.** `sync` named the variables that
   had moved since the last sync and `plan` — the command you read first — did not.
-- **`linix status` reported packages only.** A deleted `service:` / `link:` / `repo:` / `shim:` /
+- **`shall status` reported packages only.** A deleted `service:` / `link:` / `repo:` / `shim:` /
   `setting:` / `schedule:` line is drift that `sync` undoes, and status called it nothing to do.
-- **`linix init` did not create the `vars` file** it documents. It now writes a commented one,
+- **`shall init` did not create the `vars` file** it documents. It now writes a commented one,
   with no variable invented for you.
 - **The Linux build did not compile.** `registry.rs` used `OrphanDryRun` in the apt block
   without importing it — invisible on Windows, where that block is `cfg`-ed out, so the whole
   container matrix failed to build until a run on Linux said so.
 - **A refused `install` wedged the config.** `install` writes the line and syncs after it
-  (S15), and the write happened before anything checked whether the backend was one LiNix
-  uses — so `linix install dnf:jq` on a machine without dnf left `dnf:jq` in
+  (S15), and the write happened before anything checked whether the backend was one Shall
+  uses — so `shall install dnf:jq` on a machine without dnf left `dnf:jq` in
   `modules/imperative.txt`, and from that moment `status`, `plan`, `check`, `why`, `upgrade`,
   `conflicts`, `activate` and every later install were a hard parse error until someone edited
   the file by hand. `App::declare` now refuses such a line before writing it, which covers
@@ -574,11 +574,11 @@ the old engine underneath it is gone.
 - **`gem` could not install anything.** It was listed as a manager that ends its options at
   `--`, but RubyGems' `--` introduces the **build arguments** for a C extension — so
   `gem install -- colorize` named no gem at all and failed with "Please specify at least one
-  gem name". Every `gem` install and removal through LiNix had been broken since the option
+  gem name". Every `gem` install and removal through Shall had been broken since the option
   terminator was introduced.
 - **`krew` reported READY on a machine without krew.** Its probe asked for `kubectl`; krew is
   a *plugin*, so `kubectl krew …` works only when krew has installed `kubectl-krew`. Every
-  krew command failed with `unknown command "krew"` — and took `linix update` down with it.
+  krew command failed with `unknown command "krew"` — and took `shall update` down with it.
 - **One backend could cancel every backend after it.** `update` and `upgrade` swept the
   registry and gave up on the first failure, so a single manager that could not refresh
   silently skipped the rest. Each failure is named now and the sweep finishes.
@@ -589,12 +589,12 @@ the old engine underneath it is gone.
   offsets now, sharing one table reader with the winget parser.
 - **`cargo test` wrote into the repository on Linux.** Three test helpers fell back to the
   current directory when neither `TMP` nor `TMPDIR` was set — which is every plain Linux
-  shell — leaving `linix-embedded-*.linix`, `linix-marker-*` and `linix-vars-test-*/` in the
+  shell — leaving `shall-embedded-*.shall`, `shall-marker-*` and `shall-vars-test-*/` in the
   working tree. All three use the platform temp directory now.
 
 ## [6.0.0] — 2026-07-02
 
-Class-defining cross-ecosystem features that are only possible because LiNix sits above
+Class-defining cross-ecosystem features that are only possible because Shall sits above
 every package manager at once, plus safety and honesty fixes.
 
 ### Added (features)
@@ -641,7 +641,7 @@ This release closes the capability gaps across backends, fixes a data-loss-class
 scoped upgrades, makes parallelism configurable, and adds first-class application config.
 
 ### Fixed (correctness)
-- **Scoped `upgrade` is now non-destructive.** `linix upgrade --module X` / `--group X` /
+- **Scoped `upgrade` is now non-destructive.** `shall upgrade --module X` / `--group X` /
   `--profile X` previously scheduled removal of *every managed package outside the scope*
   (scope filtering ran before global drift-removal). Removal planning is now skipped
   entirely when a scope is set; a targeted upgrade only installs/upgrades within scope.
@@ -680,9 +680,9 @@ scoped upgrades, makes parallelism configurable, and adds first-class applicatio
 ### Added (safety & reproducibility)
 - **`sync` no longer removes drift by default.** Drift removal is now opt-in: `sync` only
   installs/upgrades unless `prune_on_sync = true`. Removal is an explicit, separate step.
-- **`linix prune`** — remove packages installed but no longer in your manifests (with a
+- **`shall prune`** — remove packages installed but no longer in your manifests (with a
   confirmation prompt; honors `confirm_destructive`/`--yes`).
-- **`linix status`** (alias **`diff`**) — read-only report of what `sync` would install,
+- **`shall status`** (alias **`diff`**) — read-only report of what `sync` would install,
   what drift `prune` would remove, and what's installed-but-unmanaged. `--json` supported.
 - **Per-backend version pinning for reproducible/locked installs.** Each backend now honors
   `options["version"]` in its native syntax: `apt`/`apk`/`zypper` `name=ver`, `dnf`
@@ -690,15 +690,15 @@ scoped upgrades, makes parallelism configurable, and adds first-class applicatio
   `cargo`/`gem`/`winget`/`choco` via flags, `vscode` `ext@ver`. `brew` is best-effort
   (versioned formulae); `pacman`/`snap`/`flatpak`/`nix`/`mas` don't support fixed-version
   pins (rolling/channel/flake/store models) and install latest.
-- **`linix lock`** — record the installed version of every managed package to
+- **`shall lock`** — record the installed version of every managed package to
   `locks.json`, so `sync --locked` reproduces those exact versions on another machine
   ("reproducible inputs"; see README for the honest limits vs. Nix).
 
 ### Added (CLI)
 - Previously-silent subcommands now work: **`teleport`**, **`unmanaged`**, **`update`**,
   **`shim`**. `orphans` now *lists* drift non-destructively (distinct from `clean`).
-- **`linix config init | path | show`** to scaffold/inspect the application config.
-- **`linix completions <shell>`** to emit a shell completion script (the generator
+- **`shall config init | path | show`** to scaffold/inspect the application config.
+- **`shall completions <shell>`** to emit a shell completion script (the generator
   existed but was never wired to a command).
 - `install`/`remove` honor `--json` (with `--dry-run`) and emit a machine-readable plan.
 - **Richer output:** `info` now shows version, description, install path, properties, and

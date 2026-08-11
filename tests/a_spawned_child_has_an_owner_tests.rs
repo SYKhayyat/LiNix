@@ -1,4 +1,4 @@
-//! **Every process LiNix starts belongs to LiNix.**
+//! **Every process Shall starts belongs to Shall.**
 //!
 //! There are three doors. `core::executor::supervised_output` (and its `_fed` sibling)
 //! captures the streams, bounds the silence, and stops the child on the way out.

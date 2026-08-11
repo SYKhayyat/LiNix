@@ -8,9 +8,9 @@
 //! the flag when the tool's help does not document it — and the probe defeated the gate:
 //!
 //!     # one character of drift planted in the capability table
-//!     $ sed -i 's/--verify=false/--linix-bogus-flag-zzz/' src/backends/artifact/capability.rs
+//!     $ sed -i 's/--verify=false/--shall-bogus-flag-zzz/' src/backends/artifact/capability.rs
 //!     $ DRIFT_DUMP=1 cargo test --test argv_drift_tests -- --include-ignored
-//!     CALL: helm plugin install -- https://example.invalid/linix-drift-probe
+//!     CALL: helm plugin install -- https://example.invalid/shall-drift-probe
 //!     test result: ok. 1 passed
 //!
 //! The bogus flag never reaches an argv, so a gate that reads argvs has nothing to check.
@@ -37,7 +37,7 @@
 //!
 //! **The discriminator is the whole point, and the obvious version of this test does not have
 //! it.** Asserting only "the argv agrees with `accepts_flag`" is green whatever the table says:
-//! plant `--linix-bogus-flag-zzz`, helm 4 does not document it, LiNix withholds it, and the
+//! plant `--shall-bogus-flag-zzz`, helm 4 does not document it, Shall withholds it, and the
 //! test calls that correct. That is G-8 all over again inside its own regression test. Asking
 //! `documents_verification` separates "this tool never verified" from "our flag is the old
 //! name", which is the one question `accepts_flag` cannot answer.
@@ -77,8 +77,8 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
 }
 
 /// The program and the subcommand chain a call was built with: the non-flag prefix, which is
-/// the help that documents the flag. Read off the argv LiNix produced rather than copied from
-/// the backend, so the test asks the tool about the exact command LiNix ran.
+/// the help that documents the flag. Read off the argv Shall produced rather than copied from
+/// the backend, so the test asks the tool about the exact command Shall ran.
 fn chain_of(call: &str) -> (String, Vec<String>) {
     let mut words = call.split_whitespace().map(str::to_string);
     let program = words.next().unwrap_or_default();
@@ -89,8 +89,8 @@ fn chain_of(call: &str) -> (String, Vec<String>) {
 #[tokio::test]
 async fn a_capability_flag_is_sent_exactly_when_the_tool_documents_it() {
     use dashmap::DashMap;
-    use linix::core::executor::MockExecutor;
-    use linix::core::{CommandExecutor, PackageSpec};
+    use shall::core::executor::MockExecutor;
+    use shall::core::{CommandExecutor, PackageSpec};
 
     let captured = Captured::default();
     let _log = tracing::subscriber::set_default(
@@ -104,11 +104,11 @@ async fn a_capability_flag_is_sent_exactly_when_the_tool_documents_it() {
     let mock = Arc::new(MockExecutor::new(vfs.clone()));
     let exec =
         CommandExecutor::with_layer(true, false, mock.clone(), vfs, Arc::new(DashMap::new()));
-    let config = linix::config::Config::default();
-    let registry = linix::backends::create_default_registry(
+    let config = shall::config::Config::default();
+    let registry = shall::backends::create_default_registry(
         exec,
         &config,
-        Arc::new(linix::app::hooks::LuaHooks::new(&config).expect("hooks")),
+        Arc::new(shall::app::hooks::LuaHooks::new(&config).expect("hooks")),
     )
     .await;
 
@@ -117,7 +117,7 @@ async fn a_capability_flag_is_sent_exactly_when_the_tool_documents_it() {
 
     for backend in registry.available() {
         let name = backend.name().to_string();
-        let Some(flag) = linix::backends::capability::unverified_arg(&name) else {
+        let Some(flag) = shall::backends::capability::unverified_arg(&name) else {
             continue;
         };
         let Some(installable) = backend.as_installable() else {
@@ -133,10 +133,10 @@ async fn a_capability_flag_is_sent_exactly_when_the_tool_documents_it() {
             .set("unverified".to_string(), "true".to_string());
         // The install source, where the backend demands one — helm's `plugin install` takes a
         // URL, and without it the call fails before it builds an argv at all.
-        if let Some(key) = linix::backends::capability::install_source_key(&name) {
+        if let Some(key) = shall::backends::capability::install_source_key(&name) {
             spec.options.set(
                 key.to_string(),
-                "https://example.invalid/linix-drift-probe".to_string(),
+                "https://example.invalid/shall-drift-probe".to_string(),
             );
         }
 
@@ -160,8 +160,8 @@ async fn a_capability_flag_is_sent_exactly_when_the_tool_documents_it() {
         // Which branch this tool is in — asked of the tool, about the same command. `None`
         // means the probe could not ask (no such program here, or its help would not run), and
         // the capability table stays in charge, so there is nothing to assert either way.
-        let verifies = linix::core::tool_help::documents_verification(&program, &chain);
-        let accepts = linix::core::tool_help::accepts_flag(&program, &chain, flag);
+        let verifies = shall::core::tool_help::documents_verification(&program, &chain);
+        let accepts = shall::core::tool_help::accepts_flag(&program, &chain, flag);
 
         match verifies {
             None => verdicts.push(format!(
@@ -187,7 +187,7 @@ async fn a_capability_flag_is_sent_exactly_when_the_tool_documents_it() {
                     ));
                 } else if !sent {
                     wrong.push(format!(
-                        "`{name}`: `{program}` documents `{flag}` and LiNix built an argv \
+                        "`{name}`: `{program}` documents `{flag}` and Shall built an argv \
                          without it:\n      {}",
                         produced.join("\n      ")
                     ));
@@ -201,7 +201,7 @@ async fn a_capability_flag_is_sent_exactly_when_the_tool_documents_it() {
                 ));
                 if sent {
                     wrong.push(format!(
-                        "`{name}`: `{program}` documents no verification and LiNix sent \
+                        "`{name}`: `{program}` documents no verification and Shall sent \
                          `{flag}` anyway, which is `unknown flag` on every one of \
                          them:\n      {}",
                         produced.join("\n      ")
@@ -210,7 +210,7 @@ async fn a_capability_flag_is_sent_exactly_when_the_tool_documents_it() {
                 let said = captured.text();
                 if said.contains(flag) || said.contains("does not accept") {
                     wrong.push(format!(
-                        "`{name}`: the flag was correctly withheld and LiNix warned about it. \
+                        "`{name}`: the flag was correctly withheld and Shall warned about it. \
                          Q14 (V.104): this tool does not verify, so `@unverified` is already \
                          true here and a correct no-op is not something to warn about. It \
                          said:\n      {}",
@@ -232,7 +232,7 @@ async fn a_capability_flag_is_sent_exactly_when_the_tool_documents_it() {
 
     assert!(
         wrong.is_empty(),
-        "the argv LiNix builds disagrees with the tool's own help:\n  {}",
+        "the argv Shall builds disagrees with the tool's own help:\n  {}",
         wrong.join("\n  ")
     );
 }

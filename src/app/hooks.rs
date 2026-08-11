@@ -4,7 +4,7 @@
 //!
 //! **They are one feature in three notations, so they get the same things.** All three are
 //! handed the same four facts ([`LuaHooks::hook_facts`]), and the `#rhai` arm builds its engine
-//! from `core::rhai_stdlib` — the same one `vars.linix` uses, because II.6b already ruled that
+//! from `core::rhai_stdlib` — the same one `vars.shall` uses, because II.6b already ruled that
 //! file *"trusted the same as a hook"* and a hook may not have less than the thing defined by
 //! reference to it. It previously had `print` and nothing else, which made the shipped example
 //! config's `exec("systemctl enable docker")` a call into an empty room.
@@ -78,7 +78,7 @@ impl LuaHooks {
 
     /// The supply-chain gate (II.12): before a sync runs any hook, every configured hook must
     /// be approved at its current hash. A new or changed script stops the sync — `-y` cannot
-    /// skip this, and only `linix lock` approves. Called with `?` from a place that propagates,
+    /// skip this, and only `shall lock` approves. Called with `?` from a place that propagates,
     /// because a swallowed refusal here is no refusal at all.
     ///
     /// Reports every unapproved hook at once, not just the first: a reader fixing their locks
@@ -105,7 +105,7 @@ impl LuaHooks {
         )))
     }
 
-    /// Approve every configured hook at its current hash — what `linix lock` does for hooks.
+    /// Approve every configured hook at its current hash — what `shall lock` does for hooks.
     /// Returns how many approvals were written. This is the only path that writes an approval,
     /// so approval stays a deliberate act.
     pub fn approve_all_hooks(&self) -> Result<usize> {
@@ -175,7 +175,7 @@ impl LuaHooks {
 
         let launch = crate::model::script::launch_for(&tmp_script, code).map_err(|e| {
             Error::Other(format!(
-                "{}\nA `#rhai` or Lua hook needs no interpreter and runs wherever LiNix does.",
+                "{}\nA `#rhai` or Lua hook needs no interpreter and runs wherever Shall does.",
                 e
             ))
         })?;
@@ -183,7 +183,7 @@ impl LuaHooks {
         let mut cmd = Command::new(&launch.program);
         cmd.args(&launch.args);
         for (name, value) in Self::hook_facts(hook, pkg) {
-            cmd.env(format!("LINIX_{}", name), value);
+            cmd.env(format!("SHALL_{}", name), value);
         }
 
         // Supervised: a hook is arbitrary code, and plenty of them run a package manager. Left
@@ -344,7 +344,7 @@ mod tests {
     #[tokio::test]
     async fn a_rhai_hook_reaches_the_whole_standard_library_vars_has() {
         // Not just the shell: II.6b's "trusted the same as a hook" is a two-way statement, so
-        // every provider `vars.linix` has, a hook has. One test per family, not one per member.
+        // every provider `vars.shall` has, a hook has. One test per family, not one per member.
         let hooks = hooks_with(
             r#"#rhai
             if weekday() == "" { throw "no clock" }
@@ -417,12 +417,12 @@ mod tests {
         let marker = dir.path().join("ran.txt");
         let hooks = hooks_with(&if cfg!(windows) {
             format!(
-                "#!/usr/bin/env powershell\nSet-Content -Path '{}' -Value $env:LINIX_PKG_NAME\n",
+                "#!/usr/bin/env powershell\nSet-Content -Path '{}' -Value $env:SHALL_PKG_NAME\n",
                 marker.display()
             )
         } else {
             format!(
-                "#!/bin/sh\nprintf %s \"$LINIX_PKG_NAME\" > '{}'\n",
+                "#!/bin/sh\nprintf %s \"$SHALL_PKG_NAME\" > '{}'\n",
                 marker.display()
             )
         });
@@ -455,7 +455,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a temp dir");
         let marker = dir.path().join("ran.txt");
         let hooks = hooks_with(&format!(
-            "#!/usr/bin/env python3\nimport os\nopen(r'{}', 'w').write(os.environ['LINIX_PKG_NAME'])\n",
+            "#!/usr/bin/env python3\nimport os\nopen(r'{}', 'w').write(os.environ['SHALL_PKG_NAME'])\n",
             marker.to_string_lossy().replace('\\', "/")
         ));
 
@@ -481,7 +481,7 @@ mod tests {
 
     #[test]
     fn the_rhai_marker_is_not_handed_to_the_engine_but_the_shebang_is() {
-        // `#rhai` is a LiNix marker; `#!` is the script's own first instruction. Confusing the
+        // `#rhai` is a Shall marker; `#!` is the script's own first instruction. Confusing the
         // two either way breaks a dialect: a kept `#rhai` is a syntax error on line 1, and a
         // stripped `#!` leaves nothing to name the interpreter the author chose.
         let (dialect, body) = Dialect::of("#rhai\nlet x = 1;\n");

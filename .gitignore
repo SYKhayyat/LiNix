@@ -9,6 +9,6 @@
 project_dump.txt
 dump_files.ps1
 
-# `linix plan` writes here when no `--out` is given; it is a run artifact.
-linix-plan.json
+# `shall plan` writes here when no `--out` is given; it is a run artifact.
+shall-plan.json
 scratch_*.sh

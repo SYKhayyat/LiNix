@@ -1,4 +1,4 @@
-# The backends LiNix ships with, as ROWS IN THE SAME TABLE a user adds a row to — parsed by the
+# The backends Shall ships with, as ROWS IN THE SAME TABLE a user adds a row to — parsed by the
 # same loader, wired by the same `build_capabilities`, reading with the same named readers.
 # `setting_stores.toml` states the reason in its own header: an adapter mechanism the built-ins
 # bypass is one nobody has tested, and this was the table with sixty rows doing the bypassing.
@@ -9,7 +9,7 @@
 #
 # `reads` / `searches` name a reader in `src/parsers/named.rs`, each of which is a function with a
 # fixture behind it. `[backend.parser]` describes a shape instead, and is what a user writes for a
-# manager LiNix has never seen. A row may use either; a row with `list_args` and neither is caught
+# manager Shall has never seen. A row may use either; a row with `list_args` and neither is caught
 # by `every_row_can_read_what_it_asks_for` in the suite, because a listing nobody can parse reads
 # as an empty machine and `sync` answers that by installing everything.
 #
@@ -249,7 +249,7 @@ name = "mix"
 install_args = ["archive.install", "hex", "--force"]
 # `--force` on the removal too, and not for symmetry: measured, a bare `mix archive.uninstall
 # phx_new` with no terminal prints `Are you sure…? [Yn]`, takes the empty answer, EXITS 0 and
-# leaves the archive installed. LiNix reported a removal that did not happen — the scoop-exit-0
+# leaves the archive installed. Shall reported a removal that did not happen — the scoop-exit-0
 # shape (E7), one manager over.
 remove_args = ["archive.uninstall", "--force"]
 list_args = ["archive"]
@@ -274,7 +274,7 @@ expect = [
 # Helm plugins. Chart releases are a different concept and out of scope.
 #
 # A declaration is `helm:NAME@url=SOURCE`: helm installs a plugin from a URL but lists and
-# uninstalls it by the name in its `plugin.yaml`, so naming the URL would install a plugin LiNix
+# uninstalls it by the name in its `plugin.yaml`, so naming the URL would install a plugin Shall
 # could never remove or recognise again (U39).
 [[backend]]
 name = "helm"
@@ -601,7 +601,7 @@ expect = ["ruff@0.16.2"]
 #
 # `extra_probes` is the thing 193 lines of hand-written Rust knew and the table did not: krew is a
 # PLUGIN, so `kubectl` alone is not enough. A host with kubectl and no krew reported READY and
-# then failed every command with `unknown command "krew"` — including `linix update`, which
+# then failed every command with `unknown command "krew"` — including `shall update`, which
 # refreshes every backend at once.
 [[backend]]
 name = "krew"

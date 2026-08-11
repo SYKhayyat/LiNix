@@ -1,4 +1,4 @@
-use linix::core::SnapshotManager;
+use shall::core::SnapshotManager;
 
 // Import our exhaustive A+ Test Infrastructure
 use crate::mock_providers::{MockSnapshotProvider, TestKernel};
@@ -7,22 +7,22 @@ use crate::mock_providers::{MockSnapshotProvider, TestKernel};
 // FEATURE 2: SNAPSHOT LIFECYCLE (PHYSICAL PRUNING)
 // ============================================================================
 
-/// The one retention engine (`prune_with_policy`): it reaps only LiNix-owned snapshots, and
+/// The one retention engine (`prune_with_policy`): it reaps only Shall-owned snapshots, and
 /// always keeps the most recent one — the floor the old `prune_stale_snapshots` lacked.
 #[tokio::test]
-async fn test_snapshot_retention_reaps_only_linix_owned_and_keeps_the_newest() {
-    use linix::core::RetentionPolicy;
+async fn test_snapshot_retention_reaps_only_shall_owned_and_keeps_the_newest() {
+    use shall::core::RetentionPolicy;
     let _kernel = TestKernel::new().await;
     let mock_provider = MockSnapshotProvider::new();
 
-    // LiNix-owned (the id carries `linix_`): one recent, one ancient.
+    // Shall-owned (the id carries `shall_`): one recent, one ancient.
     mock_provider
-        .add_historical_snapshot("linix_recent", 1)
+        .add_historical_snapshot("shall_recent", 1)
         .await;
     mock_provider
-        .add_historical_snapshot("linix_ancient", 45)
+        .add_historical_snapshot("shall_ancient", 45)
         .await;
-    // NOT LiNix's — a user or other-tool snapshot. Retention must never touch it.
+    // NOT Shall's — a user or other-tool snapshot. Retention must never touch it.
     mock_provider
         .add_historical_snapshot("weekly_backup", 90)
         .await;
@@ -48,31 +48,31 @@ async fn test_snapshot_retention_reaps_only_linix_owned_and_keeps_the_newest() {
         .map(|s| s.id.clone())
         .collect();
 
-    // linix_ancient: not the newest, and 45 > 30 days -> reaped.
+    // shall_ancient: not the newest, and 45 > 30 days -> reaped.
     assert!(
-        !remaining.contains(&"linix_ancient".to_string()),
-        "the ancient LiNix snapshot should have been reaped"
+        !remaining.contains(&"shall_ancient".to_string()),
+        "the ancient Shall snapshot should have been reaped"
     );
-    // linix_recent: the newest -> kept by the floor.
-    assert!(remaining.contains(&"linix_recent".to_string()));
-    // weekly_backup: not LiNix's -> never touched, even at 90 days.
+    // shall_recent: the newest -> kept by the floor.
+    assert!(remaining.contains(&"shall_recent".to_string()));
+    // weekly_backup: not Shall's -> never touched, even at 90 days.
     assert!(
         remaining.contains(&"weekly_backup".to_string()),
-        "retention must not reap a snapshot LiNix did not create"
+        "retention must not reap a snapshot Shall did not create"
     );
 }
 
 /// Dry-run identifies what it *would* delete but touches nothing.
 #[tokio::test]
 async fn test_snapshot_retention_respects_dry_run() {
-    use linix::core::RetentionPolicy;
+    use shall::core::RetentionPolicy;
     let mock_provider = MockSnapshotProvider::new();
     // Two owned snapshots so one is past the always-keep-newest floor.
     mock_provider
-        .add_historical_snapshot("linix_newest", 1)
+        .add_historical_snapshot("shall_newest", 1)
         .await;
     mock_provider
-        .add_historical_snapshot("linix_stale", 100)
+        .add_historical_snapshot("shall_stale", 100)
         .await;
     let manager = SnapshotManager::with_provider(Box::new(mock_provider));
 
@@ -86,8 +86,8 @@ async fn test_snapshot_retention_respects_dry_run() {
         .await
         .unwrap();
 
-    // linix_stale is past the floor and older than 1 day -> identified...
-    assert!(doomed.contains(&"linix_stale".to_string()));
+    // shall_stale is past the floor and older than 1 day -> identified...
+    assert!(doomed.contains(&"shall_stale".to_string()));
     // ...but dry-run physically deletes nothing.
     assert_eq!(
         manager.list_snapshots().await.unwrap().len(),
@@ -116,7 +116,7 @@ async fn test_systemd_oncalendar_translation_logic() {
         .scheduler
         .provision(
             &kernel.app.executor,
-            &linix::config::config::ScheduleConfig {
+            &shall::config::config::ScheduleConfig {
                 name: "weekly-sync-task".into(),
                 cron: cron.into(),
                 command: "sync".into(),
@@ -133,7 +133,7 @@ async fn test_systemd_oncalendar_translation_logic() {
         .iter()
         .find(|(path, _)| {
             path.to_string_lossy()
-                .contains("linix-weekly-sync-task.timer")
+                .contains("shall-weekly-sync-task.timer")
         })
         .expect("Systemd timer unit was not written to VFS.");
 
@@ -152,7 +152,7 @@ async fn test_systemd_oncalendar_translation_logic() {
         .assert_called("systemctl --no-pager --user daemon-reload")
         .await;
     kernel
-        .assert_called("systemctl --no-pager --user enable --now linix-weekly-sync-task.timer")
+        .assert_called("systemctl --no-pager --user enable --now shall-weekly-sync-task.timer")
         .await;
 }
 
@@ -171,7 +171,7 @@ async fn test_launchd_plist_translation_logic() {
         .scheduler
         .provision(
             &kernel.app.executor,
-            &linix::config::config::ScheduleConfig {
+            &shall::config::config::ScheduleConfig {
                 name: "monthly-maintenance-job".into(),
                 cron: cron.into(),
                 command: "upgrade".into(),
@@ -188,7 +188,7 @@ async fn test_launchd_plist_translation_logic() {
         .iter()
         .find(|(p, _)| {
             p.to_string_lossy()
-                .contains("com.linix.monthly-maintenance-job.plist")
+                .contains("com.shall.monthly-maintenance-job.plist")
         })
         .expect("macOS Plist was not written to VFS.");
 
@@ -221,7 +221,7 @@ async fn test_scheduler_reboot_mapping_fidelity() {
         .scheduler
         .provision(
             &kernel.app.executor,
-            &linix::config::config::ScheduleConfig {
+            &shall::config::config::ScheduleConfig {
                 name: "reboot-cleanup".into(),
                 cron: "@reboot".into(),
                 command: "clean".into(),
@@ -237,7 +237,7 @@ async fn test_scheduler_reboot_mapping_fidelity() {
         let vfs_diff = kernel.app.executor.get_vfs_diff();
         let (_, service_content) = vfs_diff
             .iter()
-            .find(|(p, _)| p.to_string_lossy().contains("linix-reboot-cleanup.service"))
+            .find(|(p, _)| p.to_string_lossy().contains("shall-reboot-cleanup.service"))
             .expect("Systemd service file missing from VFS.");
 
         // A+ Logic: @reboot in Linux must use the default.target dependency
@@ -254,7 +254,7 @@ async fn test_scheduler_reboot_mapping_fidelity() {
             .iter()
             .find(|(p, _)| {
                 p.to_string_lossy()
-                    .contains("com.linix.reboot-cleanup.plist")
+                    .contains("com.shall.reboot-cleanup.plist")
             })
             .expect("macOS Plist missing from VFS.");
 

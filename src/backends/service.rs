@@ -1,6 +1,6 @@
 //! The `service:` backend — one spelling across every init system (U36).
 //!
-//! **Rows, not Rust.** The init systems LiNix drives — systemd, OpenRC, SysVinit, launchd,
+//! **Rows, not Rust.** The init systems Shall drives — systemd, OpenRC, SysVinit, launchd,
 //! Windows `sc` — are rows in `init_providers.toml`, parsed by the same approved loader a user's
 //! own `adapters/init.toml` row goes through. s6, dinit, runit, GNU Shepherd and every appliance
 //! init were unreachable while this was a closed `enum`; now they are six lines of TOML. The
@@ -363,7 +363,7 @@ impl BackendCore for ServiceBackendCore {
 #[async_trait]
 impl MetadataProvider for ServiceBackendCore {
     async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
-        // Services handle their own unit dependencies; LiNix manages state only.
+        // Services handle their own unit dependencies; Shall manages state only.
         Ok(vec![])
     }
 }
@@ -454,7 +454,7 @@ impl Queryable for ServiceQueryable {
     /// chose."* Running is a fact about the machine, not evidence of intent — on the host this
     /// was measured on, `adopt` wrote 150 service lines out of 161 declarations, and two of
     /// them were trigger-start services Windows had already stopped again twenty minutes later.
-    /// `linix adopt service` still takes them.
+    /// `shall adopt service` still takes them.
     fn adopted_unasked(&self) -> bool {
         false
     }

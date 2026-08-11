@@ -1,4 +1,4 @@
-# The settings stores LiNix ships with (K17). These are ROWS IN THE SAME TABLE a user adds a
+# The settings stores Shall ships with (K17). These are ROWS IN THE SAME TABLE a user adds a
 # row to, parsed by the same loader — an adapter mechanism the built-ins bypass is one nobody
 # has tested.
 #
@@ -17,7 +17,7 @@ write = ["gsettings", "set", "{schema}", "{key}", "{value}"]
 reset = ["gsettings", "reset", "{schema}", "{key}"]
 
 # Windows registry (7e/U19). The line is `setting:<subkey path>/<value name>@value=<data>` — the
-# path uses `\`, the single `/` separates the value name. LiNix folds the HIVE into the argv, so
+# path uses `\`, the single `/` separates the value name. Shall folds the HIVE into the argv, so
 # @scope decides HKCU (default, per-user, U19) vs HKLM (system): a `@scope=system` line writes
 # HKLM, a plain one writes HKCU, and neither can silently land in the other. Values are written
 # REG_SZ (strings/enums — what desktop settings are); `reg query`'s verbose read is understood by
@@ -46,5 +46,5 @@ system_reset = ["reg", "delete", "HKLM\\{schema}", "/v", "{key}", "/f"]
 #
 #   Hyprland is NOT a `setting:` at all (7e decision): its truth is a text config file, and
 #   `hyprctl getoption` reports a runtime value that can disagree with it. Owning individual lines
-#   inside a file LiNix did not write is what `link:` already does at whole-file granularity —
+#   inside a file Shall did not write is what `link:` already does at whole-file granularity —
 #   which is the right tool here — so a Hyprland `setting:` adapter is deliberately not built.

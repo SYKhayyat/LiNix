@@ -78,7 +78,7 @@ fn every_real_release_resolves_to_the_asset_a_human_checked() {
 }
 
 /// The quiet one, stated separately because the test above would still pass if `binary` were
-/// never chosen at all: across every real asset here, the only files LiNix would run as
+/// never chosen at all: across every real asset here, the only files Shall would run as
 /// executables are the ones whose names say which machine they are for.
 #[test]
 fn nothing_becomes_an_executable_without_naming_the_machine() {

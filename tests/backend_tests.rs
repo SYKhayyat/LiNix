@@ -1,11 +1,11 @@
 // tests/backend_tests.rs
 
-use linix::core::executor::DryRunOutput;
+use shall::core::executor::DryRunOutput;
 // Only the two `cfg(target_os = "linux")` tests below escalate, so the import lives with them
 // rather than at the top, where every other platform would carry an unused one.
 #[cfg(target_os = "linux")]
-use linix::core::executor::CommandExecutor;
-use linix::core::{BackendCapabilities, PackageSpec};
+use shall::core::executor::CommandExecutor;
+use shall::core::{BackendCapabilities, PackageSpec};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -42,8 +42,8 @@ async fn run_capability_test(backend: Arc<BackendCapabilities>, package_name: &s
         .remove(
             &[package_name.to_string()],
             backend.needs_root(),
-            linix::app::sync::guard::Reaped::for_reason(
-                linix::app::sync::guard::GuardScope::Remove,
+            shall::app::sync::guard::Reaped::for_reason(
+                shall::app::sync::guard::GuardScope::Remove,
                 "a unit test of the effector itself",
             ),
         )
@@ -209,7 +209,7 @@ async fn test_link_backend_vfs_integrity() {
         .unwrap();
     let target_path = kernel.tmp.path().join("target_link.conf");
 
-    let mut options = linix::config::grammar::Options::default();
+    let mut options = shall::config::grammar::Options::default();
     options.set("target", target_path.to_string_lossy().to_string());
 
     let spec = PackageSpec {
@@ -240,8 +240,8 @@ async fn test_link_backend_vfs_integrity() {
         .remove(
             &[target_path.to_string_lossy().to_string()],
             false,
-            linix::app::sync::guard::Reaped::for_reason(
-                linix::app::sync::guard::GuardScope::Remove,
+            shall::app::sync::guard::Reaped::for_reason(
+                shall::app::sync::guard::GuardScope::Remove,
                 "a unit test of the effector itself",
             ),
         )
@@ -289,7 +289,7 @@ async fn rebuild_puts_every_root_backend_before_every_user_backend() {
     priority.sort_by_key(|n| registry.get(n).map(|b| b.needs_root()).unwrap_or(false));
 
     let is_foundation = |b: &str| registry.get(b).map(|x| x.needs_root()).unwrap_or(false);
-    let ordered = linix::app::rebuild::order_backends(&names, &priority, &is_foundation);
+    let ordered = shall::app::rebuild::order_backends(&names, &priority, &is_foundation);
 
     let mut seen_user_backend: Option<String> = None;
     for name in &ordered {

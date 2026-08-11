@@ -1,21 +1,21 @@
 //! GRADER round 3, 2026-07-29 — RED. `check drift` says the machine matches while a declared
 //! resource is missing from it.
 //!
-//! `linix check` is the command whose whole job is the question *does the machine match your
+//! `shall check` is the command whose whole job is the question *does the machine match your
 //! files?* Measured on Windows, with three `link:` lines declared and nothing placed yet:
 //!
-//!     $ linix check
+//!     $ shall check
 //!     ok  config      0 package(s) declared
 //!     ok  drift       the machine matches your files
 //!
-//! Then, after `sync -y` placed all three, with one deleted behind LiNix's back:
+//! Then, after `sync -y` placed all three, with one deleted behind Shall's back:
 //!
-//!     $ rm dest/s2 && linix check
+//!     $ rm dest/s2 && shall check
 //!     ok  drift       the machine matches your files
 //!
 //! Control, same fixture, same binary — drift is not broken in general:
 //!
-//!     $ echo 'scoop:linix-no-such-pkg-zzz' > modules/starter.txt && linix check
+//!     $ echo 'scoop:shall-no-such-pkg-zzz' > modules/starter.txt && shall check
 //!     ok  config      1 package(s) declared
 //!     ->  drift       1 to install, 0 to remove
 //!
@@ -74,7 +74,7 @@ fn check_reports_drift_for_a_declared_resource_that_is_not_there() {
     //
     // `cargo:`, and qualified on purpose. The prefix has to name a backend in this host's
     // priority list or the module does not resolve at all — as `scoop:` this read `scoop is not
-    // a backend LiNix uses` on macOS and `scoop isn't in your priority list` on a Windows runner
+    // a backend Shall uses` on macOS and `scoop isn't in your priority list` on a Windows runner
     // without scoop, the control reporting that the module did not parse, which is the one
     // explanation it exists to rule out. Bare is not the fix either: an unqualified name is
     // searched for across the managers, and a deliberately absent one is refused with `no
@@ -83,7 +83,7 @@ fn check_reports_drift_for_a_declared_resource_that_is_not_there() {
     // platform this suite runs on.
     std::fs::write(
         f.cfg().join("modules/starter.txt"),
-        "cargo:linix-no-such-pkg-zzz\n",
+        "cargo:shall-no-such-pkg-zzz\n",
     )
     .unwrap();
     // U21: a read-only command that looked and found work exits 2, so 0 and 2 both mean it ran.
@@ -109,10 +109,10 @@ fn check_reports_drift_for_a_declared_resource_that_is_not_there() {
     );
 }
 
-/// The same question after convergence: something LiNix placed is deleted behind its back.
+/// The same question after convergence: something Shall placed is deleted behind its back.
 /// This is `rebuild`'s and `heal`'s reason to exist, and `check` is how a user finds out.
 #[test]
-fn check_reports_drift_when_a_placed_resource_is_deleted_behind_linixs_back() {
+fn check_reports_drift_when_a_placed_resource_is_deleted_behind_shalls_back() {
     let f = setup("grade2-check-drift-after");
     let target = f.declare_one_link();
 
@@ -129,7 +129,7 @@ fn check_reports_drift_when_a_placed_resource_is_deleted_behind_linixs_back() {
     assert!(code == 0 || code == 2, "`check` failed ({code}):\n{out}");
     assert!(
         !out.contains("the machine matches your files"),
-        "a file LiNix placed was deleted and `check` still reports the machine matches your \
+        "a file Shall placed was deleted and `check` still reports the machine matches your \
          files. The one command whose job is that question is green over the gap.\n{out}"
     );
 }

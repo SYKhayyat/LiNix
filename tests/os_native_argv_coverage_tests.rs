@@ -242,7 +242,7 @@ fn the_registrar_scan_can_actually_fail() {
     // A registrar with no row is reported rather than passed over.
     let table = argv_table(&src);
     assert!(
-        !mentions(table, "backends::linix_nonexistent::register"),
+        !mentions(table, "backends::shall_nonexistent::register"),
         "the table cannot mention a module that does not exist"
     );
 

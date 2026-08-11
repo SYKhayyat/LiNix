@@ -43,17 +43,17 @@ fn declarations(f: &Fixture) -> (String, Vec<String>) {
 
     let mut module = format!(
         "link:{} @target={}\n\
-         service:linix-test-svc @enabled=false\n\
-         setting:org.linix.test/key @value=1\n\
-         shim:linix-test-shim\n",
+         service:shall-test-svc @enabled=false\n\
+         setting:org.shall.test/key @value=1\n\
+         shim:shall-test-shim\n",
         decl(&src),
         decl(&dst)
     );
     let mut keys = vec![
         format!("link:{}", decl(&dst)),
-        "service:linix-test-svc".to_string(),
-        "setting:org.linix.test/key".to_string(),
-        "shim:linix-test-shim".to_string(),
+        "service:shall-test-svc".to_string(),
+        "setting:org.shall.test/key".to_string(),
+        "shim:shall-test-shim".to_string(),
     ];
     // `repo:` is the one kind that cannot be a constant: it names a package manager, and
     // resolution refuses a `repo:` whose backend is not in this host's `priority` — so hardcoded
@@ -61,8 +61,8 @@ fn declarations(f: &Fixture) -> (String, Vec<String>) {
     // then read `does not resolve` instead of a number. Taken from the `priority` that `init`
     // just wrote, so the line names a manager this machine actually uses.
     if let Some(be) = repo_backend(f) {
-        module.push_str(&format!("repo:{be}:linix-test-bucket\n"));
-        keys.push(format!("repo:{be}:linix-test-bucket"));
+        module.push_str(&format!("repo:{be}:shall-test-bucket\n"));
+        keys.push(format!("repo:{be}:shall-test-bucket"));
     } else {
         eprintln!(
             "  note: no repository-owning manager in this host's priority list, so the `repo:` \
@@ -115,7 +115,7 @@ fn every_kind_of_undeclared_resource_is_reported_by_check_and_frozen_by_plan() {
         out
     );
 
-    let frozen = std::fs::read_to_string(f.root.join("linix-plan.json")).expect("plan file");
+    let frozen = std::fs::read_to_string(f.root.join("shall-plan.json")).expect("plan file");
     for key in &keys {
         assert!(
             frozen.contains(key),
@@ -155,7 +155,7 @@ fn every_kind_of_undeclared_resource_is_reported_as_a_teardown() {
         assert!(
             out.contains(key),
             "`plan` did not name `{key}` as a teardown. The guard's refusal text sends the user \
-             to `linix plan` to see exactly what would be undone.\n{out}"
+             to `shall plan` to see exactly what would be undone.\n{out}"
         );
     }
 
@@ -169,7 +169,7 @@ fn every_kind_of_undeclared_resource_is_reported_as_a_teardown() {
     );
 }
 
-/// A resource LiNix placed and can read back: it must report converged, or `check` is red
+/// A resource Shall placed and can read back: it must report converged, or `check` is red
 /// forever on a machine that matches.
 ///
 /// This is the positive half of the probe, and without it the two tests above would pass on an
@@ -208,26 +208,26 @@ fn a_resource_that_is_applied_and_present_is_not_reported_as_drift() {
 }
 
 /// And the bound, stated out loud. A `setting:` cannot be read back through its adapter, so
-/// LiNix does not know whether it is still in effect — and says so rather than reporting a
+/// Shall does not know whether it is still in effect — and says so rather than reporting a
 /// match it did not verify.
 ///
 /// This is the assertion that separates "converged" from "unexamined". Without it, returning
-/// "in effect" for every kind LiNix cannot probe would pass every other test in this file.
+/// "in effect" for every kind Shall cannot probe would pass every other test in this file.
 #[test]
 fn a_resource_that_cannot_be_read_back_is_named_rather_than_assumed() {
     let f = setup("resource-family-unverifiable");
-    f.write_module("setting:org.linix.test/key @value=1\n");
-    f.seed_ledger(&["setting:org.linix.test/key"]);
+    f.write_module("setting:org.shall.test/key @value=1\n");
+    f.seed_ledger(&["setting:org.shall.test/key"]);
 
     let (out, code) = f.run(&["check"]);
     assert!(code == 0 || code == 2, "`check` failed ({code}):\n{out}");
     assert!(
         out.contains("cannot read back"),
-        "`check` reported a plain match over a `setting:` whose current value LiNix never asked \
+        "`check` reported a plain match over a `setting:` whose current value Shall never asked \
          for. An unstated bound on what `check` means is the whole shape of this finding.\n{out}"
     );
     assert!(
-        out.contains("setting:org.linix.test/key"),
+        out.contains("setting:org.shall.test/key"),
         "the unreadable resource is counted but not named, so nobody can tell which one it \
          is:\n{out}"
     );

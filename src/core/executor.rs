@@ -15,10 +15,10 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use tracing::debug;
 
-/// Set on every process LiNix spawns, carrying the pid of the LiNix that spawned it. A
-/// `linix` that finds it in its environment was started by a package manager LiNix is
+/// Set on every process Shall spawns, carrying the pid of the Shall that spawned it. A
+/// `shall` that finds it in its environment was started by a package manager Shall is
 /// already driving.
-pub const INSIDE_LINIX: &str = "LINIX_INSIDE";
+pub const INSIDE_SHALL: &str = "SHALL_INSIDE";
 
 #[derive(Debug, Clone, Default)]
 pub struct DryRunOutput {
@@ -111,14 +111,14 @@ pub trait ExecutionLayer: Send + Sync {
     fn check_command(&self, cmd: &str) -> bool;
     async fn symlink(&self, src: &Path, dst: &Path) -> Result<()>;
 
-    /// Whether a child spawned by this layer may read LiNix's own stdin. Only the raw layer
+    /// Whether a child spawned by this layer may read Shall's own stdin. Only the raw layer
     /// behind mutations may; a layer that spawns nothing answers false.
     fn shares_stdin(&self) -> bool {
         false
     }
 }
 
-/// Whether a spawned child may read from LiNix's own stdin.
+/// Whether a spawned child may read from Shall's own stdin.
 ///
 /// It is the only stream a child ever shares. stdout and stderr are captured on every path,
 /// because every read parses `output.stdout` — a child writing straight to the terminal hands
@@ -133,7 +133,7 @@ pub enum ChildStdin {
     Interactive,
 }
 
-/// How long a child may produce **nothing at all** before LiNix stops waiting for it.
+/// How long a child may produce **nothing at all** before Shall stops waiting for it.
 ///
 /// Silence, not duration. A `cargo install` compiling from source and an `apt dist-upgrade`
 /// both run for tens of minutes and are working the whole time; no wall-clock cap can tell
@@ -144,7 +144,7 @@ pub enum ChildStdin {
 /// Seeded from `Config::command_idle_timeout_secs` at startup, where `0` means no bound.
 static COMMAND_IDLE_TIMEOUT_SECS: once_cell::sync::OnceCell<u64> = once_cell::sync::OnceCell::new();
 
-/// How long a **read** may produce nothing before LiNix stops waiting for it.
+/// How long a **read** may produce nothing before Shall stops waiting for it.
 ///
 /// The bound above was chosen for `Checkpoint-Computer`, a mutation that legitimately runs
 /// silent for minutes, and reads inherited it because there was only one number. They are not
@@ -158,7 +158,7 @@ static COMMAND_IDLE_TIMEOUT_SECS: once_cell::sync::OnceCell<u64> = once_cell::sy
 /// fires first.
 static QUERY_IDLE_TIMEOUT_SECS: once_cell::sync::OnceCell<u64> = once_cell::sync::OnceCell::new();
 
-/// How many times a read that failed *transiently* is asked again before LiNix gives up.
+/// How many times a read that failed *transiently* is asked again before Shall gives up.
 ///
 /// Reads are idempotent — that is the whole justification. A mutation retried on a guess can
 /// install something twice; asking a manager what it has, twice, costs a second. Seeded from
@@ -194,7 +194,7 @@ pub const DEFAULT_QUERY_IDLE_TIMEOUT_SECS: u64 = 120;
 /// reproduce, so one more attempt is usually the whole fix and two more is the margin.
 pub const DEFAULT_READ_RETRY_ATTEMPTS: u32 = 3;
 
-/// How long LiNix waits for a person to type a sudo password before giving up (`S88`).
+/// How long Shall waits for a person to type a sudo password before giving up (`S88`).
 ///
 /// Two minutes: long enough to find a password manager, short enough that an unattended
 /// terminal is a two-minute pause and not a quarter-hour hang. It is deliberately **not** the
@@ -241,8 +241,8 @@ static SUDO_PRIMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 /// password bound *per manager*. Measured in the `tools` nightly, twice a night for weeks:
 ///
 /// ```text
-/// FAIL  sudo: a wrong password left LiNix waiting 900s instead of reporting a failure
-/// FAIL  sudo: a terminal with nobody at it wedged LiNix for 900s
+/// FAIL  sudo: a wrong password left Shall waiting 900s instead of reporting a failure
+/// FAIL  sudo: a terminal with nobody at it wedged Shall for 900s
 /// ```
 ///
 /// Both assertions bound the wait at 120s and both saw 900. The 120-second bound was working
@@ -350,10 +350,10 @@ pub fn program_exists(cmd: &str) -> bool {
     resolve_program(cmd).is_some()
 }
 
-/// Drop the memo, for the one case where PATH really does change mid-run: LiNix has just
+/// Drop the memo, for the one case where PATH really does change mid-run: Shall has just
 /// installed the program it is about to ask about.
 ///
-/// Without this, `linix setup` would install a manager and then keep answering from the
+/// Without this, `shall setup` would install a manager and then keep answering from the
 /// lookup it took before the installer ran.
 pub fn forget_path_lookups() {
     PATH_LOOKUP.clear();
@@ -389,12 +389,12 @@ static LOCK_DIRS: once_cell::sync::Lazy<dashmap::DashSet<PathBuf>> =
 ///
 /// **SIGKILL is not a way to stop a package manager.** It cannot be caught, so nothing gets to
 /// run: `dpkg`'s database is left mid-write, `pacman`'s `db.lck` is left on disk, and the next
-/// LiNix run on that machine — and every `apt` the user types afterwards — fails on a lock whose
-/// owner is dead. That is the wedged machine `linix heal` exists to unwedge, and LiNix was
+/// Shall run on that machine — and every `apt` the user types afterwards — fails on a lock whose
+/// owner is dead. That is the wedged machine `shall heal` exists to unwedge, and Shall was
 /// creating it itself. SIGTERM *is* caught: apt rolls the transaction back, pacman unlinks its
 /// lock, and the machine is left usable.
 ///
-/// **And LiNix's child is usually `sudo`, not the manager.** `sudo` forwards a SIGTERM to the
+/// **And Shall's child is usually `sudo`, not the manager.** `sudo` forwards a SIGTERM to the
 /// command it runs; a SIGKILL kills `sudo` alone and leaves the manager running as root with its
 /// parent gone — an orphan still holding the lock, which is precisely the state that makes the
 /// next run fail with a lock nobody appears to hold.
@@ -448,7 +448,7 @@ impl Stopping {
 /// The abort path — a worker whose task was cancelled, the global timeout — reaches the child
 /// only through `Drop`, which cannot wait for anything. It sends the signal that lets a manager
 /// clean up and does not stay to watch: a package manager finishing its own transaction after
-/// LiNix has stopped caring is the *good* outcome, and the run after it now waits for that
+/// Shall has stopped caring is the *good* outcome, and the run after it now waits for that
 /// manager rather than failing on its lock.
 #[cfg(unix)]
 impl Drop for Stopping {
@@ -460,7 +460,7 @@ impl Drop for Stopping {
     }
 }
 
-/// Run an outside tool LiNix does not otherwise supervise, under the same ownership and the same
+/// Run an outside tool Shall does not otherwise supervise, under the same ownership and the same
 /// bound as everything else it spawns.
 ///
 /// **A child spawned outside `RawExecutor` used to have neither.** Awaiting `Command::output()`
@@ -472,12 +472,12 @@ impl Drop for Stopping {
 /// on a prompt blocks every sync on that machine, forever, with no message.
 ///
 /// `stdin` is closed unless `feed` gives it something. A tool that needs one otherwise is a tool
-/// asking a question nobody will answer, and a child sharing LiNix's stdin eats input meant for
-/// LiNix.
+/// asking a question nobody will answer, and a child sharing Shall's stdin eats input meant for
+/// Shall.
 ///
 /// `mirror` echoes the tool's output to stderr as it arrives, for the callers whose tool used to
 /// inherit the terminal — a hook and the bisect oracle both printed as they ran, and capturing
-/// that silently would be a regression dressed as a fix. Never stdout: that carries LiNix's own
+/// that silently would be a regression dressed as a fix. Never stdout: that carries Shall's own
 /// answer, and a child's chatter interleaved with it is not parseable by whoever piped us.
 pub async fn supervised_output(command: Command, what: &str, mirror: bool) -> Result<StdOutput> {
     supervise(command, what, mirror, None).await
@@ -499,11 +499,11 @@ pub async fn supervised_output_fed(
 
 /// The other door: a child that **takes the terminal**, run to completion and owned all the same.
 ///
-/// `linix run`, the ephemeral shell, an interpreter a user is watching. Its streams are inherited
+/// `shall run`, the ephemeral shell, an interpreter a user is watching. Its streams are inherited
 /// rather than captured, because the point is that the person is looking at it, and there is no
 /// idle bound for the same reason — a shell sitting at a prompt is not a hung command. What it
 /// does get is an owner: abandoning the future used to leave the child holding the terminal after
-/// LiNix was gone, which is a mess nobody can attribute to anything.
+/// Shall was gone, which is a mess nobody can attribute to anything.
 pub async fn supervised_status(
     mut command: Command,
     what: &str,
@@ -606,7 +606,7 @@ impl RawExecutor {
     /// How long a child gets to stop itself before it is killed outright.
     ///
     /// Long enough for a package manager to abort a transaction and unlink its lock, short
-    /// enough that a run LiNix has already given up on does not sit there. `dpkg`'s own
+    /// enough that a run Shall has already given up on does not sit there. `dpkg`'s own
     /// shutdown path is the slowest of these and finishes well inside it.
     ///
     /// Unix only, because it is the grace between the signal that can be caught and the one that
@@ -624,7 +624,7 @@ impl RawExecutor {
     /// The wait is sliced rather than awaited whole so the child stays reachable between
     /// slices — killing it needs the same `&mut` the wait future holds.
     ///
-    /// The child is stopped through [`Stopping`], never with a bare kill: what LiNix spawns is
+    /// The child is stopped through [`Stopping`], never with a bare kill: what Shall spawns is
     /// usually a package manager, and how you stop one of those decides whether the machine is
     /// usable afterwards.
     async fn wait_watched(
@@ -697,7 +697,7 @@ impl RawExecutor {
                     // command that has already proved it does not finish, and a user watching
                     // three silences instead of one learns nothing new from the second two.
                     return Err(Error::command_failed_permanently(format!(
-                        "`{}` produced no output for {}s and had not exited; LiNix asked it to \
+                        "`{}` produced no output for {}s and had not exited; Shall asked it to \
                          stop and killed it if it would not. If this command is legitimately \
                          silent for longer, raise `command_idle_timeout_secs` (0 disables the \
                          bound).",
@@ -724,7 +724,7 @@ impl RawExecutor {
             err_task.abort();
             return Err(Error::command_failed_permanently(format!(
                 "`{}` exited, but something still holds its output open and has printed \
-                 nothing for {}s; LiNix stopped waiting. This is what a command that hands \
+                 nothing for {}s; Shall stopped waiting. This is what a command that hands \
                  its work to a background process looks like from here. If it is legitimately \
                  silent for longer, raise `command_idle_timeout_secs` (0 disables the bound).",
                 cmd,
@@ -870,11 +870,11 @@ fn preferred_shim(resolved: &Path) -> std::path::PathBuf {
     resolved.to_path_buf()
 }
 
-/// How LiNix actually launches `cmd` on this platform.
+/// How Shall actually launches `cmd` on this platform.
 ///
 /// On Windows a manager is usually a `.cmd`/`.ps1` shim that `Command::new` cannot execute at
 /// all, so the real launch goes through an interpreter. Anything that runs a manager the way
-/// LiNix runs it must come through here — including the argv-drift gate, which asks each
+/// Shall runs it must come through here — including the argv-drift gate, which asks each
 /// manager about its own subcommands and was skipping every shimmed one on this platform as
 /// "its help could not be read". A gate that launches programs differently from the product is
 /// testing a different program from the one that ships.
@@ -946,8 +946,8 @@ impl ExecutionLayer for RawExecutor {
         command.stdin(if interactive && std::io::stdin().is_terminal() {
             Stdio::inherit()
         } else {
-            // Not `inherit` when LiNix's own stdin is a pipe: a child that reads it would eat
-            // input meant for LiNix, and one that blocks on it would never return.
+            // Not `inherit` when Shall's own stdin is a pipe: a child that reads it would eat
+            // input meant for Shall, and one that blocks on it would never return.
             Stdio::null()
         });
 
@@ -964,7 +964,7 @@ impl ExecutionLayer for RawExecutor {
         // A mutation can run for minutes. Its progress used to reach the terminal because the
         // handles were inherited — which is exactly what emptied `output.stdout` and broke
         // every parser. Capture it and mirror it instead, so the bytes go both places.
-        // The mirror is stderr, never stdout: stdout carries LiNix's own answer, and a child's
+        // The mirror is stderr, never stdout: stdout carries Shall's own answer, and a child's
         // chatter interleaved with it is not parseable by whoever piped us.
         let mirror = interactive && std::io::stderr().is_terminal();
         Self::wait_watched(child, &describe(cmd, args), mirror, self.idle).await
@@ -1425,7 +1425,7 @@ impl CommandExecutor {
     ///
     /// Called at registration, beside the rest of that backend's definition, so a manager
     /// with a new convention is added by declaring one — never by editing this file.
-    /// Can this executor's manager tell LiNix that a name does not exist?
+    /// Can this executor's manager tell Shall that a name does not exist?
     ///
     /// Exposed so the property is *observable*: a backend that quietly lost its policy still
     /// runs the same argv, so nothing else can see the loss. `cargo` and `pipx` lost theirs in
@@ -1479,7 +1479,7 @@ impl CommandExecutor {
             .join(" ");
         if Self::escalates(sudo) {
             // `-n` is part of the argv, so it is part of what a mock matches (`S88`). Leaving it
-            // out here would make every Linux stub register a command LiNix no longer runs.
+            // out here would make every Linux stub register a command Shall no longer runs.
             format!("sudo -n {line}")
         } else {
             line
@@ -1524,7 +1524,7 @@ impl CommandExecutor {
             // **The password is asked for here or nowhere** (`S88`). Every escalated command
             // runs `sudo -n`, so no manager invocation can ever sit on a prompt: sudo reads a
             // password from `/dev/tty` and not from stdin, so a null stdin does not stop it
-            // waiting, and a terminal with nobody at it — or one wrong password — wedged LiNix
+            // waiting, and a terminal with nobody at it — or one wrong password — wedged Shall
             // for the full command idle bound, fifteen minutes, with no message. Priming the
             // timestamp first, once, under a bound of its own, is what keeps the interactive
             // case working while making the hang structurally impossible.
@@ -1535,12 +1535,12 @@ impl CommandExecutor {
         }
 
         // `apt install`, run by a sync that already holds the data-directory lock, fires the
-        // `DPkg::Post-Invoke` hook LiNix installed — which is another `linix`, and it would
+        // `DPkg::Post-Invoke` hook Shall installed — which is another `shall`, and it would
         // wait on a lock this process does not release until it exits. The env var travels
         // to every descendant, and `hook-reconcile` stands down when it sees it.
         let mut env = HashMap::new();
         env.insert(
-            crate::core::executor::INSIDE_LINIX.to_string(),
+            crate::core::executor::INSIDE_SHALL.to_string(),
             std::process::id().to_string(),
         );
         Self::suppress_pagers(&mut env);
@@ -1603,7 +1603,7 @@ impl CommandExecutor {
     /// returning `Ok("")` for it hands every caller an answer the manager never gave.
     ///
     /// Measured: 3 of 16 concurrent cold-start `winget list` exit `0x8A150001` having written
-    /// zero bytes anywhere. Read as an empty listing, that made `linix list --backend winget`
+    /// zero bytes anywhere. Read as an empty listing, that made `shall list --backend winget`
     /// print nothing and exit 0 on a machine with 280 packages on it — and `info` report an
     /// installed package as absent, which is the shape it was first noticed in.
     ///
@@ -1694,7 +1694,7 @@ impl CommandExecutor {
         let hay = ExitPolicy::haystack(&output.stdout, &output.stderr);
         Error::CommandFailed {
             message: format!(
-                "`{} {}` exited {code} with no output, so LiNix has no answer from it — not an \
+                "`{} {}` exited {code} with no output, so Shall has no answer from it — not an \
                  empty one.{detail}",
                 cmd,
                 args.join(" ")
@@ -1734,11 +1734,11 @@ impl CommandExecutor {
         )))
     }
 
-    /// The file behind `run_exclusive`'s cross-process lock, in LiNix's own data directory.
+    /// The file behind `run_exclusive`'s cross-process lock, in Shall's own data directory.
     ///
     /// It lived at a fixed, guessable name in the shared temp directory and was opened with
     /// `File::create`, which truncates and follows symlinks — so anyone with write access to
-    /// that directory could pre-plant `linix_apt.lock` as a symlink and have the next
+    /// that directory could pre-plant `shall_apt.lock` as a symlink and have the next
     /// exclusive run, frequently privileged, truncate the target. `datalock.rs` had already
     /// solved this; this is the same treatment, so there is one locking style in the tree and
     /// not two.
@@ -1813,7 +1813,7 @@ impl CommandExecutor {
         }
 
         let lock_file = Self::open_exec_lock(lock_key)?;
-        // `fs2`'s flock is a blocking syscall. When a second `linix` holds this lock, taking it
+        // `fs2`'s flock is a blocking syscall. When a second `shall` holds this lock, taking it
         // inline parks a whole runtime worker for however long that other process runs —
         // minutes, for an `apt dist-upgrade`. The wait belongs on the blocking pool; the file
         // comes back out so the unlock below is the same handle.
@@ -2001,7 +2001,7 @@ impl CommandExecutor {
     /// **It had no `flush` and no `sync_all`.** A rename is atomic against a concurrent reader
     /// and says nothing about power loss, so a crash after a sync could leave a zero-length
     /// systemd unit while `registry.json` and the WAL — which go through `persist` — survived
-    /// intact. LiNix's record of what it did, without the thing it did.
+    /// intact. Shall's record of what it did, without the thing it did.
     pub async fn write_atomic(&self, path: &Path, content: &str) -> Result<()> {
         if self.dry_run {
             self.vfs.insert(path.to_path_buf(), content.to_string());
@@ -2038,7 +2038,7 @@ impl CommandExecutor {
     ///
     /// On Unix the temp file is already created `0600` by `tempfile`; this asserts it rather
     /// than assuming it. On Windows the inherited ACEs are stripped and only the running user
-    /// is granted access, via `icacls` — LiNix drives the tool the OS already has.
+    /// is granted access, via `icacls` — Shall drives the tool the OS already has.
     pub async fn write_secret(&self, path: &Path, content: &str) -> Result<()> {
         if self.dry_run {
             self.vfs.insert(path.to_path_buf(), content.to_string());
@@ -2083,7 +2083,7 @@ impl CommandExecutor {
     /// (`S88`).
     ///
     /// **The bug this ends.** sudo reads its password from `/dev/tty`, not from stdin, so
-    /// nothing LiNix did to the child's stdin could stop it waiting: a wrong password left the
+    /// nothing Shall did to the child's stdin could stop it waiting: a wrong password left the
     /// program sitting for 900 seconds, and so did a terminal with nobody in front of it. Both
     /// were silent — no prompt reached the user, because the child's stderr is captured — and
     /// both looked exactly like a slow package manager. It failed that way every night for six
@@ -2091,7 +2091,7 @@ impl CommandExecutor {
     ///
     /// **Three outcomes, all of them prompt.** The timestamp is already warm, so nothing is
     /// asked; a person is at a terminal and gets one bounded chance to type; or there is nobody
-    /// to ask and LiNix says so immediately instead of waiting to be told what it already knows.
+    /// to ask and Shall says so immediately instead of waiting to be told what it already knows.
     async fn ensure_sudo_credentials(&self, layer: &Arc<dyn ExecutionLayer>) -> Result<()> {
         use std::sync::atomic::Ordering;
         if cfg!(windows) || Self::is_root() || self.dry_run {
@@ -2126,7 +2126,7 @@ impl CommandExecutor {
         // backoff, and retrying spends the whole bound again to learn the same thing.
         if !(layer.shares_stdin() && std::io::stdin().is_terminal()) {
             return Err(sudo_refused(
-                "sudo needs a password and there is no terminal to ask on. Run LiNix from a \
+                "sudo needs a password and there is no terminal to ask on. Run Shall from a \
                  terminal, give this user a NOPASSWD rule for the package managers it drives, \
                  or run it as root."
                     .to_string(),
@@ -2163,7 +2163,7 @@ impl CommandExecutor {
             // not a sudoer — on the terminal it owns. Repeating a guess at it here would be
             // narration over a message the user has already read.
             Ok(_) => Err(sudo_refused(
-                "sudo refused: LiNix cannot run the commands that need root.".to_string(),
+                "sudo refused: Shall cannot run the commands that need root.".to_string(),
             )),
             Err(e) => Err(sudo_refused(format!("sudo could not be run: {e}"))),
         }
@@ -2323,7 +2323,7 @@ mod child_process_tests {
     }
 
     fn tmpdir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("linix-{}-{}", tag, std::process::id()));
+        let d = std::env::temp_dir().join(format!("shall-{}-{}", tag, std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -2346,12 +2346,12 @@ mod child_process_tests {
     /// Measured, on a real host: 3 of 16 cold-start concurrent `winget list` exit `0x8A150001`
     /// having written zero bytes to either stream. `run_output` did not look at the status, so
     /// the caller got `Ok("")`, the parser found no packages in it, and `list_installed`
-    /// answered `Ok(vec![])`. Nothing anywhere thought winget had failed — LiNix believed the
+    /// answered `Ok(vec![])`. Nothing anywhere thought winget had failed — Shall believed the
     /// machine was empty and said so at exit 0:
     ///
     /// ```text
     /// round 1 : rows min=0 max=280   EMPTY_LISTINGS=1/16
-    ///         rc=0  ms=2285  rows=0   <-- `linix list --backend winget` reported no packages
+    ///         rc=0  ms=2285  rows=0   <-- `shall list --backend winget` reported no packages
     /// ```
     ///
     /// A silent non-zero exit is the one case that cannot be an answer: every manager with
@@ -2526,7 +2526,7 @@ mod child_process_tests {
         let _ = e.run_output("git", &["log", "--oneline"], false).await;
         let env = mock.last_env.lock().await.clone();
         assert_eq!(env.get("GIT_PAGER").map(String::as_str), Some("cat"));
-        assert!(env.contains_key(super::INSIDE_LINIX));
+        assert!(env.contains_key(super::INSIDE_SHALL));
     }
 
     /// A sudo refusal is remembered, so the next escalated command does not pay for it again.
@@ -2603,7 +2603,7 @@ mod child_process_tests {
         #[cfg(windows)]
         {
             let path =
-                std::env::temp_dir().join(format!("linix-detach-{}.cmd", std::process::id()));
+                std::env::temp_dir().join(format!("shall-detach-{}.cmd", std::process::id()));
             std::fs::write(
                 &path,
                 format!(
@@ -2670,7 +2670,7 @@ mod child_process_tests {
         started.elapsed()
     }
 
-    /// The bug: `linix uninstall choco:bat` sat 76 minutes on a `Checkpoint-Computer` that had
+    /// The bug: `shall uninstall choco:bat` sat 76 minutes on a `Checkpoint-Computer` that had
     /// already written its restore point, because nothing outside the DAG bounded a child at
     /// all. Two earlier hangs were killed by hand and recorded as undiagnosed.
     #[tokio::test]
@@ -2772,12 +2772,12 @@ mod child_process_tests {
 
     /// The bound watches the child's **exit**, and the read of its output sits outside it.
     ///
-    /// A manager that backgrounds its work and returns leaves LiNix reading a pipe the orphan
+    /// A manager that backgrounds its work and returns leaves Shall reading a pipe the orphan
     /// still holds open: `child.wait()` has already returned, so the loop that could abort the
     /// readers is over, and `out_task.await` has no clock on it at all. There is no child left
     /// to kill and nothing in the tree that can end the wait.
     ///
-    /// Found by capturing a wedged sweep instead of killing it: `linix -y install
+    /// Found by capturing a wedged sweep instead of killing it: `shall -y install
     /// nimble:nimjson` at zero CPU with **no children**, while three orphaned `nim.exe` ran
     /// outside its process tree. Then reproduced to a number — a 20s bound and a child that
     /// detached for 60s took 64s and reported SUCCESS.
@@ -2817,13 +2817,13 @@ mod child_process_tests {
             waited
         );
         // The separable half, and the worse one: the child exits 0, so before the bound reached
-        // the readers this returned SUCCESS after waiting out the orphan. A command LiNix
+        // the readers this returned SUCCESS after waiting out the orphan. A command Shall
         // stopped waiting on did not do what it was asked (Q28).
-        let err = outcome.expect_err("a command LiNix gave up on must not report success");
+        let err = outcome.expect_err("a command Shall gave up on must not report success");
         let said = err.to_string();
         assert!(
             said.contains(&cmd) && said.contains("holds its output open"),
-            "the failure must name the command and why LiNix stopped: {}",
+            "the failure must name the command and why Shall stopped: {}",
             said
         );
         assert_eq!(
@@ -2841,7 +2841,7 @@ mod child_process_tests {
         let layer =
             RawExecutor::with_idle(ChildStdin::Closed, Some(std::time::Duration::from_secs(2)));
         // `pgrep -f` on a marker only this test uses; a survivor is visible to the whole host.
-        let marker = format!("linix-idle-probe-{}", std::process::id());
+        let marker = format!("shall-idle-probe-{}", std::process::id());
         let args = vec!["-c".to_string(), format!("# {}\nsleep 600", marker)];
         let _ = layer.execute("sh", &args, &HashMap::new()).await;
         let found = std::process::Command::new("pgrep")
@@ -2990,7 +2990,7 @@ mod child_process_tests {
         panic!("the keepalive outlived its guard");
     }
 
-    /// `envs()` adds to what the child inherits, so a value LiNix sets must win over the same
+    /// `envs()` adds to what the child inherits, so a value Shall sets must win over the same
     /// name in the environment it was started with.
     /// The fabricated statuses used to be `/bin/false` and `cmd /C exit 1` with `.expect()` on
     /// the spawn — a panic on the one path whose premise is that nothing runs.
@@ -3096,7 +3096,7 @@ mod exit_status_tests {
     #[test]
     fn scoop_missing_manifest_is_a_failure_despite_exit_zero() {
         let scoop = executor_for(exit_policy::scoop());
-        let out = "Couldn't find manifest for 'linix-nonexistent-pkg'.\n";
+        let out = "Couldn't find manifest for 'shall-nonexistent-pkg'.\n";
         assert!(scoop.ensure_status("scoop", finished(0, out, "")).is_err());
         assert!(scoop
             .ensure_status(

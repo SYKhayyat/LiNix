@@ -138,7 +138,7 @@ mod tests {
         use std::io::Write;
 
         let dir = tempfile::tempdir().unwrap();
-        let payload = b"linix-was-here";
+        let payload = b"shall-was-here";
 
         // One tar in memory, wrapped a different way per suffix.
         let mut tar_bytes = Vec::new();

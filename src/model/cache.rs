@@ -1,5 +1,5 @@
 //! Finding and removing an artifact's cached copy when a download-backend package is removed
-//! (K4). LiNix knows the file only where it fetched it itself, so this covers the *download*
+//! (K4). Shall knows the file only where it fetched it itself, so this covers the *download*
 //! backends (`github:`/`web:`/`appimage:`) — the ordinary package managers own their own caches
 //! and clean them their own way.
 //!
@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 /// `~/.cache/<tool>/<file>` layout, shallow enough that `/var/cache` is not a full-disk walk.
 const MAX_DEPTH: usize = 4;
 
-/// The cache locations LiNix searches, in addition to any the user pointed it at. Order does not
+/// The cache locations Shall searches, in addition to any the user pointed it at. Order does not
 /// matter — every match is removed — but the list is the standard XDG/system spots plus the two
 /// download backends keep their own trees under.
 pub fn standard_cache_dirs() -> Vec<PathBuf> {

@@ -39,7 +39,7 @@ struct InstalledArtifact {
     format: String,
     bin_path: Option<String>,
     /// The system manager that owns this artifact (D5), when the file installed itself into a
-    /// package database (`dpkg`/`rpm`) rather than being deployed to PATH by LiNix.
+    /// package database (`dpkg`/`rpm`) rather than being deployed to PATH by Shall.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     installed_by: Option<String>,
     /// The name that manager knows it as — what removal and dedup use.
@@ -76,14 +76,14 @@ pub struct GithubBackendCore {
     /// 380µs of work for a run that asks GitHub nothing.
     client: std::sync::OnceLock<reqwest::Client>,
     pub install_dir: PathBuf,
-    /// Where the executable is deployed — `[bin_dir]`, the one LiNix's shims use and the one a
+    /// Where the executable is deployed — `[bin_dir]`, the one Shall's shims use and the one a
     /// sandboxed config moves. Built here from `dirs::home_dir()` until 2026-07-29, which put a
     /// test's downloads in the developer's real `~/.local/bin` and let the reachability warning
     /// name a directory this deploy had not used.
     pub bin_dir: PathBuf,
     pub state_file: PathBuf,
     /// `locks/github.toml` — what each declaration resolved to, in the config repo (VIII.2).
-    /// Separate from `state_file`, which is LiNix's own bookkeeping and is not in git.
+    /// Separate from `state_file`, which is Shall's own bookkeeping and is not in git.
     pub locks_file: PathBuf,
     pub rate_limiter: RateLimiter,
     /// `[guard] confine_bin`: whether the deployed name may reach outside `bin_dir` (SEC1).
@@ -220,13 +220,13 @@ impl GithubBackendCore {
     /// where a promised HTTPS download can stop being one.
     fn client(&self) -> &reqwest::Client {
         self.client.get_or_init(|| {
-            crate::core::download::client(false, "linix-manager")
+            crate::core::download::client(false, "shall-manager")
                 .unwrap_or_else(|_| reqwest::Client::new())
         })
     }
 
     async fn send(&self, url: &str) -> Result<reqwest::Response> {
-        let mut request_builder = self.client().get(url).header("User-Agent", "linix-manager");
+        let mut request_builder = self.client().get(url).header("User-Agent", "shall-manager");
         if let Some(token) = &self.github_token {
             request_builder = request_builder.header("Authorization", format!("Bearer {}", token));
         }
@@ -760,7 +760,7 @@ impl Installable for GithubInstallable {
                 .unwrap_or_default();
 
             // D5: a `.deb`/`.rpm` is handed to its system manager, never unpacked or put on
-            // PATH; the rest are LiNix's to deploy. Split them so the deploy-naming rule counts
+            // PATH; the rest are Shall's to deploy. Split them so the deploy-naming rule counts
             // only the artifacts that actually take a PATH name.
             let handoff_idx: Vec<usize> = downloaded
                 .iter()
@@ -815,7 +815,7 @@ impl Installable for GithubInstallable {
 
                 let discovered =
                     artifact::find_executable(&listing, &spec.name, wanted.bin.as_deref())
-                        // An archive that carries no program LiNix can find is a `@bin=` the
+                        // An archive that carries no program Shall can find is a `@bin=` the
                         // user can supply, not a name that does not exist.
                         .map_err(|e| Error::Validation(e.to_string()))?;
 
@@ -861,7 +861,7 @@ impl Installable for GithubInstallable {
             let mut installed_artifacts: Vec<InstalledArtifact> = Vec::new();
             let mut locks: Vec<ArtifactLock> = Vec::new();
 
-            // D5: hand each `.deb`/`.rpm` to its manager. The manager now owns the files — LiNix
+            // D5: hand each `.deb`/`.rpm` to its manager. The manager now owns the files — Shall
             // records only *which* manager and the name it listed the package under, and removal,
             // upgrade and dedup route through that record. The name is read from the file before
             // the install, because after the install the file is gone and the name is the only
@@ -1054,7 +1054,7 @@ impl Queryable for GithubQueryable {
     }
 
     async fn owned_system_packages(&self) -> Vec<(String, String)> {
-        // D5: read the ledger LiNix wrote, not the network — a `.deb` this backend handed to
+        // D5: read the ledger Shall wrote, not the network — a `.deb` this backend handed to
         // dpkg is recorded there as `installed_by`/`system_package`.
         ArtifactLedger::load(&self.core.locks_file)
             .map(|l| l.system_packages())
@@ -1174,7 +1174,7 @@ mod tests {
         GithubState {
             repo: "sharkdp/fd".into(),
             version: version.to_string(),
-            install_path: "/opt/linix/sharkdp_fd".into(),
+            install_path: "/opt/shall/sharkdp_fd".into(),
             artifacts: assets
                 .iter()
                 .map(|a| InstalledArtifact {
@@ -1204,7 +1204,7 @@ mod tests {
         // Archives never depend on a system installer.
         assert!(installable_here(Format::Tarball, false, false));
         assert!(installable_here(Format::Binary, false, false));
-        // A macOS/Windows database shape LiNix does not hand off is not installable via this path.
+        // A macOS/Windows database shape Shall does not hand off is not installable via this path.
         assert!(!installable_here(Format::Msi, true, true));
     }
 

@@ -47,7 +47,7 @@ pub enum Scope {
 ///
 /// A newtype and not a `Vec<String>`, because this list is the whole of what `priority`
 /// promises — the promise is written in the error a new user reads when the file is missing:
-/// *"Listed means LiNix uses it. Not listed means LiNix does not touch it at all."* A plan that
+/// *"Listed means Shall uses it. Not listed means Shall does not touch it at all."* A plan that
 /// reaps has to be handed the list, and the only thing that can produce one is the resolver
 /// that read the file.
 ///
@@ -118,7 +118,7 @@ impl PlanScope {
 
 /// Split a desired-state map into what must exist and what must not.
 ///
-/// `absent:` is a declaration, not drift: it is you reaching outside what LiNix manages,
+/// `absent:` is a declaration, not drift: it is you reaching outside what Shall manages,
 /// deliberately, by name (V.7). It shares the map with wishes because the map type is the
 /// seam, so it must be separated before anything reads the map as a wish list.
 fn partition_by_presence(
@@ -259,7 +259,7 @@ pub enum Declined {
     AlreadyScheduled,
     /// Something still declares it, so there is no drift. This is convergence working.
     StillDeclared,
-    /// Its backend is not in this host's `priority` file (II.6), so LiNix does not manage that
+    /// Its backend is not in this host's `priority` file (II.6), so Shall does not manage that
     /// manager here and will never reap through it.
     BackendNotInPriority(String),
     /// Its backend is not on this machine (II.7c) — a different OS's manager, or one that is
@@ -283,7 +283,7 @@ impl Declined {
         match self {
             Self::AlreadyScheduled | Self::StillDeclared => None,
             Self::BackendNotInPriority(backend) => Some(format!(
-                "`{}` is not in your `priority` file, so LiNix does not manage that backend on \
+                "`{}` is not in your `priority` file, so Shall does not manage that backend on \
                  this host",
                 backend
             )),
@@ -539,7 +539,7 @@ impl<'a> ChangePlanner<'a> {
         // bloatware paths came to skip it.
         //
         // The reason comes from the guard's own vocabulary rather than a sentence written here,
-        // so the inspector (`linix protected`), the refusal and this skip all say the same thing
+        // so the inspector (`shall protected`), the refusal and this skip all say the same thing
         // about the same package.
         if let Some(rule) = self.config.protection_rule(&pkg.name) {
             return Some(Declined::Protected(rule.to_string()));
@@ -567,7 +567,7 @@ impl<'a> ChangePlanner<'a> {
     /// [`is_installed`](Self::is_installed) treats that as "assume it is there", preserving
     /// exactly the behaviour that existed before this check: schedule the removal and let it
     /// report its own failure. Not knowing must never turn into "so skip it", or a backend
-    /// having a bad day silently stops LiNix removing anything through it.
+    /// having a bad day silently stops Shall removing anything through it.
     async fn installed_sets(
         &self,
         backends: &std::collections::BTreeSet<String>,
@@ -660,8 +660,8 @@ impl<'a> ChangePlanner<'a> {
             // fails every time it runs. `absent:jq` on a machine that has never had jq made
             // every sync fail, permanently, with an error from the package manager about a
             // package it does not have.
-            // `absent:` — the one thing LiNix removes that it does not manage, because
-            // you named it (V.7). Scheduled whether or not LiNix *installed* it, which is
+            // `absent:` — the one thing Shall removes that it does not manage, because
+            // you named it (V.7). Scheduled whether or not Shall *installed* it, which is
             // the point of the rule; not scheduled when it is not there, which is not a
             // removal at all. The guard still decides whether it may actually go (Phase 3).
             for (backend, specs) in &unwanted {
@@ -710,7 +710,7 @@ impl<'a> ChangePlanner<'a> {
                 // NOT gated on "is it still installed", deliberately — unlike the `absent:`
                 // loop above. A managed package that has vanished from the machine still has a
                 // registry entry, and the removal is what *drops* that entry: skipping it here
-                // would leave LiNix permanently claiming to manage something that is gone,
+                // would leave Shall permanently claiming to manage something that is gone,
                 // which is a quieter wrong state than the failed removal it would avoid.
                 // Reconciling a stale entry is `heal`'s job, not the planner's.
 
@@ -724,7 +724,7 @@ impl<'a> ChangePlanner<'a> {
                     );
                     changes.add_removal(&pkg.backend, &pkg.name);
                 } else {
-                    // Drift: LiNix manages it and nothing declares it any more. Removing
+                    // Drift: Shall manages it and nothing declares it any more. Removing
                     // that is what sync IS (V.34) — not a mode, not a second command with
                     // the install half amputated.
                     //
@@ -922,7 +922,7 @@ impl<'a> ChangePlanner<'a> {
             // set. `search_output` already draws this distinction for the same reason (V.7c).
             Err(e) => {
                 return Err(Error::Other(format!(
-                    "`{}` could not say whether {} is installed, so LiNix cannot tell what \
+                    "`{}` could not say whether {} is installed, so Shall cannot tell what \
                      needs doing: {}",
                     spec.backend, spec.name, e
                 )))
@@ -932,7 +932,7 @@ impl<'a> ChangePlanner<'a> {
         // version change for it, even if a manifest asks for a newer version. (Hold does not
         // block a first install of an absent package.)
         //
-        // **Two sources, one question.** The ledger is what `linix hold` writes; `@hold=true`
+        // **Two sources, one question.** The ledger is what `shall hold` writes; `@hold=true`
         // on the line is what the manifest says. Only the first was ever asked, so a declared
         // hold was accepted by the grammar, refused beside `@version` as a contradiction, and
         // then read by nothing.
@@ -1016,12 +1016,12 @@ impl<'a> ChangePlanner<'a> {
 
     /// Every declared spec, keyed `backend:name`, with duplicates collapsed.
     ///
-    /// **What a package depends on is the manager's answer, not LiNix's question.** This used
+    /// **What a package depends on is the manager's answer, not Shall's question.** This used
     /// to ask each backend for a package's dependencies and add each one as an install node of
     /// its own. Three separate things were wrong with that, and only the first was ever
     /// reported:
     ///
-    /// - Every install node is written into `registry.json` as a package LiNix manages, so one
+    /// - Every install node is written into `registry.json` as a package Shall manages, so one
     ///   `apt:nginx` line took ownership of nginx's direct dependencies — and a managed package
     ///   nothing declares is drift, which `sync` removes. The dependencies were shielded only
     ///   by being re-derived identically on the next run; a single failed `apt-cache depends`
@@ -1029,7 +1029,7 @@ impl<'a> ChangePlanner<'a> {
     ///   refuses a backend that cannot tell a dependency from a choice, for exactly this
     ///   outcome, and the planner was manufacturing the same rows behind it.
     /// - The node it added wired an edge, and an edge splits the manager's wave into two
-    ///   command lines — so the one case where LiNix knew two declared packages were related
+    ///   command lines — so the one case where Shall knew two declared packages were related
     ///   was the one case it refused to put them on one `apt install`.
     /// - It cost a subprocess per declared package and another per discovered dependency,
     ///   before any install began.
@@ -1245,7 +1245,7 @@ mod tests {
         );
     }
 
-    /// V.7: `absent:` is the one exception to "LiNix only removes what it manages" —
+    /// V.7: `absent:` is the one exception to "Shall only removes what it manages" —
     /// because you named it. So it is scheduled even though the registry never owned it.
     #[tokio::test]
     async fn an_absent_declaration_is_scheduled_for_removal_even_if_unmanaged() {
@@ -1528,7 +1528,7 @@ mod tests {
     #[tokio::test]
     async fn sync_removes_what_it_manages_and_you_stopped_declaring() {
         // V.34: sync removes drift BY DEFINITION. `prune_on_sync` made that a setting, so
-        // sync could be configured into something that is not sync — and `linix prune` was
+        // sync could be configured into something that is not sync — and `shall prune` was
         // sync with the install half amputated.
         let registry = registry_reporting("generic-test", &[]);
         let config = Config::default();
@@ -1573,7 +1573,7 @@ mod tests {
 
     #[tokio::test]
     async fn sync_never_removes_what_it_does_not_manage() {
-        // II.7: what LiNix may remove is what it manages and you stopped declaring, plus
+        // II.7: what Shall may remove is what it manages and you stopped declaring, plus
         // `absent:`. Nothing else, ever. `prune_scope = "system"` was a setting that broke
         // that rule — a routine sync deleting software it never installed (V.21). It is
         // `purge-undeclared` instead: a command you type, not a mode you inherit.
@@ -1776,7 +1776,7 @@ mod tests {
 
     /// **A plan installs what you declared. Not what your declarations depend on.**
     ///
-    /// Every install node is written into the state registry as a package LiNix manages, and
+    /// Every install node is written into the state registry as a package Shall manages, and
     /// anything in that registry is a removal candidate the moment nothing declares it. A
     /// dependency is never declared, so expanding one manufactures a managed package with no
     /// line behind it — `Queryable::tracks_manual` says exactly this about `adopt`, which
@@ -1804,7 +1804,7 @@ mod tests {
         assert_eq!(
             names,
             vec!["nginx"],
-            "libfoo and libbar are the manager's business, not LiNix's"
+            "libfoo and libbar are the manager's business, not Shall's"
         );
         assert_eq!(
             asked.load(std::sync::atomic::Ordering::SeqCst),

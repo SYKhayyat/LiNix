@@ -1,7 +1,7 @@
-    Prompt: linix-no-such-pkg-zzz not found in any local packages.json, check internet for updated packages? -> [forced yes]
+    Prompt: shall-no-such-pkg-zzz not found in any local packages.json, check internet for updated packages? -> [forced yes]
 Downloading Official package list
     Success Package list downloaded.
        Tip: 5 messages have been suppressed, use --verbose to show them.
 download.nim(1134)       getDownloadInfo
 
-    Error:  Package linix-no-such-pkg-zzz@any version not found.
+    Error:  Package shall-no-such-pkg-zzz@any version not found.

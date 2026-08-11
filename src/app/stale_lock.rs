@@ -2,7 +2,7 @@
 //!
 //! **The failure.** A sync is interrupted — Ctrl-C, a dead battery, a container torn down mid
 //! transaction — and the manager underneath it dies with its lock file still on disk. From then
-//! on *every* LiNix run on that machine fails, with the manager's own words:
+//! on *every* Shall run on that machine fails, with the manager's own words:
 //!
 //! ```text
 //! error: failed to init transaction (unable to lock database)
@@ -11,7 +11,7 @@
 //!   /var/lib/pacman/db.lck
 //! ```
 //!
-//! LiNix already says this well — it relays the advice and adds *"tried 4 times; the failure did
+//! Shall already says this well — it relays the advice and adds *"tried 4 times; the failure did
 //! not change, so this is not the transient failure its output looks like"*. What it could not do
 //! is act, and `heal` is the command whose entire job is *a run was interrupted, make this
 //! machine workable again*.
@@ -40,7 +40,7 @@
 //!
 //! **And the other half of the same knowledge: waiting.** A lock that a *live* manager holds is
 //! not a defect at all — it is the ordinary case of two package managers on one machine, and the
-//! only thing that helps is to wait for the one that got there first. LiNix used to retry four
+//! only thing that helps is to wait for the one that got there first. Shall used to retry four
 //! times over three and a half seconds and then tell the user *"this is not the transient failure
 //! its output looks like"*, which was false in exactly the case it was printed. [`held_for`]
 //! answers which of the three states the machine is in, so the retry loop can wait, refuse, or
@@ -242,7 +242,7 @@ impl Processes for ProcFs {
 /// What the machine says about a manager's lock right now.
 ///
 /// The three answers are three different actions, and collapsing any two of them is how the
-/// wrong sentence got printed: LiNix treated *held by a running manager* and *left behind by a
+/// wrong sentence got printed: Shall treated *held by a running manager* and *left behind by a
 /// dead one* as one failure, retried both four times in three and a half seconds, and told the
 /// user neither.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -262,7 +262,7 @@ pub fn lock_of(backend: &str) -> Option<&'static ManagerLock> {
 
 /// Whether this failure text is the manager saying someone else holds its lock.
 ///
-/// Asked of the failure LiNix already has rather than of the filesystem, because the manager is
+/// Asked of the failure Shall already has rather than of the filesystem, because the manager is
 /// the only one that knows which of its locks it wanted. A backend with no lock in the table
 /// answers `false` and pays one list scan for it.
 pub fn says_the_lock_is_taken(backend: &str, message: &str) -> bool {

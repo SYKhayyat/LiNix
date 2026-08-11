@@ -29,7 +29,7 @@
 //! | `zypper/search-installed.txt` | `opensuse/leap:15` | `zypper --non-interactive search -i -t package` |
 //! | `apk/info-v-installed.txt` | `alpine:3.20` | `apk info -v` |
 
-use linix::parsers::{apt, bsd, common, dnf, pacman, ParseResult};
+use shall::parsers::{apt, bsd, common, dnf, pacman, ParseResult};
 
 /// Every fixture must parse to a real listing — not to an empty one, and not to a failure.
 ///
@@ -85,7 +85,7 @@ fn apt_reads_its_own_dpkg_query_output() {
 #[test]
 fn apt_reads_its_own_showmanual_output() {
     const F: &str = include_str!("fixtures/apt/apt-mark-showmanual.txt");
-    let pkgs = linix::parsers::parse_bare_names(F, "apt").expect("captured output");
+    let pkgs = shall::parsers::parse_bare_names(F, "apt").expect("captured output");
     assert!(pkgs.len() >= 50, "read {} manual package(s)", pkgs.len());
     assert!(pkgs.iter().any(|p| p.name == "apt"));
     assert!(
@@ -170,7 +170,7 @@ fn apk_reads_its_own_info_output() {
 /// better than inventing a fixture for it.
 #[test]
 fn opam_reads_its_own_short_listing() {
-    use linix::parsers::ecosystem;
+    use shall::parsers::ecosystem;
     const F: &str = include_str!("fixtures/opam/list-installed-short.txt");
     let pkgs = ecosystem::names_only(F, "opam").expect("captured `opam list --installed --short`");
     assert_eq!(pkgs.len(), 10, "{pkgs:?}");

@@ -6,15 +6,15 @@
 //!
 //! Measured against the release binary:
 //!
-//!     $ linix install 'web:http://example.com/tool.tar.gz' -y
+//!     $ shall install 'web:http://example.com/tool.tar.gz' -y
 //!     Error: Validation error: refusing to download … over plain HTTP
 //!     EXIT=1                                            <-- contract says 3
 //!
-//!     $ linix install github:sharkdp/fd -y              # ~/.local/bin/fd.exe already exists
-//!     Error: Validation error: refusing to deploy `fd.exe`: … LiNix did not create it.
+//!     $ shall install github:sharkdp/fd -y              # ~/.local/bin/fd.exe already exists
+//!     Error: Validation error: refusing to deploy `fd.exe`: … Shall did not create it.
 //!     EXIT=1                                            <-- contract says 3
 //!
-//!     $ linix reset </dev/null
+//!     $ shall reset </dev/null
 //!     EXIT=3                                            <-- correct, for contrast
 //!
 //! Enumerated from the code rather than from the two that were reported, every site whose own
@@ -34,13 +34,13 @@
 //!
 //! Two consequences, and the second is worse than the exit code:
 //!
-//! 1. A script branching on the documented table reads "LiNix refused to download over plain
-//!    HTTP" as "LiNix crashed", and cannot tell it from a network failure.
+//! 1. A script branching on the documented table reads "Shall refused to download over plain
+//!    HTTP" as "Shall crashed", and cannot tell it from a network failure.
 //! 2. `src/main.rs:185` says, of the `Error::Refused` arm: *"`on_guard_refusal` (XIII.13) fires
 //!    here and nowhere else: this is the one point every refusal in the program passes through,
 //!    so no command can be added that refuses without the hook hearing about it."* **That is
 //!    false for all eight sites above.** A user who wires `on_guard_refusal` to be told when
-//!    LiNix refuses something is told about a mass removal and is *not* told when LiNix refuses
+//!    Shall refuses something is told about a mass removal and is *not* told when Shall refuses
 //!    an unverified download, an unprotected secret, or an unapproved hook. It is silent exactly
 //!    where it matters most — and it is a comment asserting something about paths it never
 //!    enumerated, which is the failure mode `spec/history.md` records as costing more than the
@@ -56,10 +56,10 @@ use std::path::Path;
 use std::process::Command;
 
 fn run(dir: &Path, args: &[&str]) -> (String, i32) {
-    let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+    let out = Command::new(env!("CARGO_BIN_EXE_shall"))
         .args(args)
-        .env("LINIX_CONFIG_DIR", dir.join("config"))
-        .env("LINIX_DATA_DIR", dir.join("data"))
+        .env("SHALL_CONFIG_DIR", dir.join("config"))
+        .env("SHALL_DATA_DIR", dir.join("data"))
         .stdin(std::process::Stdio::null())
         .output()
         .expect("the binary should run");
@@ -105,7 +105,7 @@ fn a_security_refusal_exits_with_the_documented_refusal_code() {
     );
     assert_eq!(
         code, 3,
-        "LiNix refused (its own word) and exited {code}; readme.md defines 3 as refused \
+        "Shall refused (its own word) and exited {code}; readme.md defines 3 as refused \
          and 1 as failed, so a script cannot tell this from a network error.\n\
          `reset` returns 3 from the same binary.\n{out}"
     );
@@ -114,7 +114,7 @@ fn a_security_refusal_exits_with_the_documented_refusal_code() {
 /// The half of G-10 that the exit code is only a symptom of: **does the hook actually fire?**
 ///
 /// `src/main.rs:185` promises `on_guard_refusal` fires for every refusal in the program. Someone
-/// wires that hook precisely so they are told when LiNix refuses something — and until now they
+/// wires that hook precisely so they are told when Shall refuses something — and until now they
 /// were told about a mass package removal and *not* about a refused plain-HTTP download, an
 /// unverified binary, an unprotected secret or an unapproved hook. Silent where it matters most.
 ///
@@ -159,7 +159,7 @@ fn a_security_refusal_fires_the_refusal_hook() {
         marker.exists(),
         "`on_guard_refusal` did not fire for a security refusal.\n\
          src/main.rs:185 says it fires for every refusal in the program — a user who wired this \
-         hook to be told when LiNix refuses is told about a mass removal and not about a \
+         hook to be told when Shall refuses is told about a mass removal and not about a \
          refused plain-HTTP download.\n{out}"
     );
 }
@@ -255,16 +255,16 @@ fn call_sites(
 /// exited 1, and the round-2 sweep of this exact class could not see it because it matched
 /// only the first phrasing.
 ///
-/// `refuses to` is deliberately NOT here: it is the phrasing LiNix uses about somebody ELSE
+/// `refuses to` is deliberately NOT here: it is the phrasing Shall uses about somebody ELSE
 /// refusing — "Windows Task Scheduler refuses to register one otherwise" is an
-/// `Error::Permission` and correctly so, and `linix protected`'s heading is "what LiNix
+/// `Error::Permission` and correctly so, and `shall protected`'s heading is "what Shall
 /// refuses to remove". Both were measured as offenders when the phrase was included, and both
 /// are right as they are.
 const REFUSAL_VOCABULARY: &[&str] = &["refusing to", "Refusing to", "refuses unless"];
 
 /// Does this line claim to be refusing something?
 ///
-/// A refusal is RETURNED, never printed: `linix protected`'s heading says "what LiNix refuses
+/// A refusal is RETURNED, never printed: `shall protected`'s heading says "what Shall refuses
 /// to remove" and is not itself a refusal. Comments and assertions about a refusal are not
 /// refusals either.
 fn says_it_is_refusing(line: &str) -> bool {
@@ -451,7 +451,7 @@ fn the_refusal_scan_rejects_an_unwrapped_builder() {
             "        println!(\"refusing to remove {}\", n);",
         ),
         (
-            "`refuses to` describes somebody else refusing — Task Scheduler, not LiNix",
+            "`refuses to` describes somebody else refusing — Task Scheduler, not Shall",
             "        let m = \"Windows Task Scheduler refuses to register one otherwise\";",
         ),
     ] {

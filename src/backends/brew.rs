@@ -146,8 +146,8 @@ impl Queryable for BrewQueryable {
     /// record for anything in a tapped repository, installed or not, with `"installed": []` as
     /// the only thing that distinguishes the two — and that array was read for its properties
     /// while its emptiness was ignored. So `info` said `Some` for every formula Homebrew has
-    /// ever heard of: `linix install brew:jq` reported *already up to date* and installed
-    /// nothing, and `linix info jq` told the user a package was on their machine because a tap
+    /// ever heard of: `shall install brew:jq` reported *already up to date* and installed
+    /// nothing, and `shall info jq` told the user a package was on their machine because a tap
     /// knows the name.
     ///
     /// **And the version came from `versions.stable`, which is the newest published one.** A
