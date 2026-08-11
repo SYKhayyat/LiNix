@@ -1628,6 +1628,15 @@ crash_run() {
     else
         hard "crash/$_tag: the cleanup uninstall left $_left of$CRASH_PKGS still on PATH"
         sed 's/^/        | /' /tmp/crash-wipe-win.out
+        # The twin of the container's diagnostic: `already up to date` over an installed package
+        # is either "LiNix thinks it is not installed" or "LiNix thinks it is not managed", and
+        # only `why` separates them. Added here in the same change, because this branch reported
+        # the same sentence on the macOS leg with the same missing fact.
+        for _p in $CRASH_PKGS; do
+            on_path "$_p" || continue
+            echo "        ? why $BACKEND:$_p"
+            $TO "$LINIX" why "$BACKEND:$_p" 2>&1 | sed 's/^/        ? /' | head -6
+        done
     fi
 }
 

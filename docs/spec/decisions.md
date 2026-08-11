@@ -338,6 +338,7 @@ II.19 and the reasons in V.115–V.118.*
 | **Q50** | A killed run leaves the package manager's own lock behind, and every later run fails. | 2026-08-10 |
 | **Q51** | Another package manager holding its own lock made LiNix fail in 3.5 seconds, with a sentence that was false in exactly that case. RULED: **wait for it.** | 2026-08-10 |
 | **Q52** | LiNix started processes it did not own — SIGKILL for a package manager mid-transaction, and seventeen sites that detached a child or parked a runtime worker. RULED: **every child has an owner, through one of three doors.** | 2026-08-10 |
+| **Q53** | What does `@version=` mean on a manager that cannot express one? `brew` builds a formula name that does not exist and the sync dies; ten other backends drop the pin and report success. OPEN. | 2026-08-10 |
 | **Q48** | Every `link:` on Windows took the cross-drive COPY fallback, same drive or not: `is_same_drive` compared a verbatim prefix against a plain one — and the limitation it guarded does not exist, since a Windows symlink spans volumes. RULED: **a `link:` links; only a missing privilege gets a copy, and it says so.** | 2026-08-06 |
 | **Y11** | Two backends built install and remove argv by hand and lost the `--` terminator; forty backends could not clear a cache because no row could say how; one manager took two locks over one database. The argv table recorded all of it and checked none of it. RULED: **one path per backend, and a capability the machinery lacks is a field.** | 2026-08-06 |
 | **Y12** | `ChangePlanner::plan` took `Option<Scope>`, where `None` meant both "do not filter the desired set" and "reap every backend on the box"; five of eight callers passed it and four wanted only the first — the transient shell, whose desired set is its own requests, planned a removal for every other package on the machine. RULED: **a plan says what it is computed over, and the case that reaps cannot be written without the list that bounds it.** | 2026-08-06 |
@@ -7586,3 +7587,58 @@ it belongs to the guard and to a declaration that asked for it, and a channel ed
 
 Rules in II.2, reasons in `why.md` under `V.151`. `capability::HAS_CHANNELS` is
 `["snap", "flatpak"]` and both report their channel now, so the family is closed by enumeration.
+
+
+## Q53
+
+**Status: OPEN — raised 2026-08-10, measured, not ruled. `S85` is the bug; this is the choice.**
+
+**The question in plain words.** LiNix lets a line pin a version (`brew:tokei@version=14.0.0`),
+and `linix lock` writes those pins by itself from what it finds installed. Most package managers
+can install an exact version. Several cannot. LiNix has never decided what it owes the user in
+that second case, so it does two different wrong things depending on which manager it is.
+
+**What actually happens today, measured on the macOS nightly leg.** A sync installs `brew:tokei`.
+`lock` records `14.0.0` — correctly; that is tokei's version. Every later sync reads it back as
+`@version=14.0.0`, `brew.rs` builds `tokei@14.0.0`, and brew answers *No available formula with
+the name "tokei@14.0.0"*. The sync dies, and it dies for ever, on a pin the user never typed.
+Homebrew's `name@version` is a **different formula's name**, not a version selector: versioned
+formulae exist for a handful of packages and carry a series (`python@3.12`, `openssl@3`), never a
+full semver.
+
+On fourteen other backends the same declaration is dropped and the install reports success at
+whatever version the manager picked. Ten of those cannot do otherwise — `pacman`, `yay`, `paru`,
+`scoop`, `mas`, `macports`, `krew`, `slackpkg`, `eopkg`, `emerge` have no mechanism to ask for a
+version. **Four could and simply were not built**: `xbps`, `pkgin`, `pkg` and `pkg_add` all take a
+`name-version` operand. That second group is the lie class: a command that did not do what it was
+asked and said nothing.
+
+**The chiluk that makes this tractable.** A lockfile has two jobs, and they are not the same job:
+
+1. **Reproduce** — put this exact version back on another machine.
+2. **Detect drift** — notice that this machine has moved off what was recorded.
+
+Job 2 works on every manager, because it only needs to *read* a version. Job 1 needs the manager
+to *accept* one. Conflating them is precisely what killed the macOS run: a record kept for job 2
+was fed back as an install argument for job 1.
+
+**Recommendation, if it helps.** Three parts, and the middle one is the whole fix:
+
+- **Record the version everywhere, replay it only where it can be replayed.** The lockfile keeps
+  what it observes on every manager, and drift reporting keeps working; a version is turned into
+  an install argument only for a manager with a `version_pin`. Nothing is removed and nothing is
+  refused.
+- **A hand-written pin that cannot be honoured is refused at plan time, by name, before anything
+  runs** — not dropped, not attempted. `linix sync` should say *"`pkgin` cannot install an exact
+  version, so `@version=1.2.3` on line 9 cannot be met"*, and under `--locked` that is fatal.
+  A pin the user typed is a decision; silently installing something else is the one outcome that
+  is worse than either honouring it or refusing it.
+- **`brew` stops hand-rolling a pin syntax it does not have.** Either it uses a versioned formula
+  when one genuinely exists, or it joins the cannot-pin list. It must not build a name and hope.
+
+**What is owed either way, and needs no ruling:** a reasoned exemption ledger over `version_pin`,
+so a backend can be unable to pin but cannot be *silently* unable to pin, and so the four that
+could pin and simply were not built (`helm`, and the `name-version` forms of `pkgin`, `pkg`,
+`pkg_add`, `xbps`) are visible as a ratchet rather than invisible as a default. The registry walk
+cannot be the instrument — registration is `cfg!(target_os)`-shaped, which is exactly how `dnf`
+went unaudited in `S83`.

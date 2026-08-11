@@ -605,6 +605,91 @@ fn collapses_to_one_job(matrix: &str) -> Option<String> {
     })
 }
 
+/// Runner labels GitHub has withdrawn, and what to use instead.
+///
+/// **A job that asks for a label with no runner behind it does not fail — it queues.** For ever,
+/// with no error, no log and no annotation: measured 2026-08-10, where `Build for
+/// x86_64-apple-darwin` on `macos-13` sat 83 minutes without starting while the `macos-latest`
+/// row beside it started in three seconds. `Create Release` needs every build, so the release
+/// simply could not be cut, and the only visible symptom was a run that never finished.
+///
+/// Kept as data because the failure is silent by construction: nothing in a workflow run says
+/// "that label is gone", so the only place it can be said is here.
+const WITHDRAWN_RUNNERS: &[(&str, &str)] = &[
+    (
+        "macos-13",
+        "the last Intel image, retired — build `x86_64-apple-darwin` on `macos-latest`, which \
+         cross-compiles to it",
+    ),
+    ("macos-12", "retired — use `macos-latest`"),
+    ("ubuntu-20.04", "retired — use `ubuntu-latest` or `ubuntu-22.04`"),
+    ("ubuntu-18.04", "retired — use `ubuntu-latest`"),
+    ("windows-2019", "retired — use `windows-latest`"),
+];
+
+fn withdrawn_runners_named_in(body: &str) -> Vec<String> {
+    body.lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with('#'))
+        .filter_map(|l| l.strip_prefix("- os: ").or_else(|| l.strip_prefix("os: ")))
+        .map(|l| l.trim().trim_matches(|c| c == '\'' || c == '"').to_string())
+        .filter(|label| WITHDRAWN_RUNNERS.iter().any(|(dead, _)| dead == label))
+        .collect()
+}
+
+/// No job may ask for a runner that no longer exists.
+#[test]
+fn no_workflow_asks_for_a_runner_github_has_withdrawn() {
+    let workflows = files_in(".github/workflows", &[".yml", ".yaml"]);
+    assert!(
+        !workflows.is_empty(),
+        "no workflow files found; this scan has stopped matching the repo"
+    );
+    for w in &workflows {
+        let body = read(&format!(".github/workflows/{}", base(w)));
+        let dead = withdrawn_runners_named_in(&body);
+        assert!(
+            dead.is_empty(),
+            "{} asks for {:?}, which GitHub no longer provides. Such a job queues for ever \
+             instead of failing, and any job that needs it can never run. {}",
+            base(w),
+            dead,
+            WITHDRAWN_RUNNERS
+                .iter()
+                .filter(|(l, _)| dead.iter().any(|d| d == l))
+                .map(|(l, why)| format!("`{l}`: {why}"))
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+}
+
+/// **The predicate above, shown failing** — on the exact row that shipped, because a scan for
+/// a *withdrawn* label has nothing to match in a healthy tree and would otherwise pass by
+/// having found nothing at all.
+#[test]
+fn the_withdrawn_runner_scan_sees_the_row_that_queued_for_ever() {
+    let shipped = "      matrix:\n        include:\n          - os: macos-13\n            \
+                   target: x86_64-apple-darwin\n          - os: macos-latest\n            \
+                   target: aarch64-apple-darwin\n";
+    assert_eq!(
+        withdrawn_runners_named_in(shipped),
+        vec!["macos-13".to_string()],
+        "the scan cannot see the row that blocked the release"
+    );
+    assert!(
+        withdrawn_runners_named_in("          - os: macos-latest\n").is_empty(),
+        "a live runner label was reported withdrawn"
+    );
+    // A label named only inside a comment is history, not a request for a runner. Three of the
+    // comments in `ci.yml` explain why `macos-13` is gone, and a scan that could not tell the
+    // difference would make writing that explanation impossible.
+    assert!(
+        withdrawn_runners_named_in("      # `macos-13` was the last Intel image\n").is_empty(),
+        "a label mentioned in a comment was read as a job asking for it"
+    );
+}
+
 /// **The predicate above, shown failing.** A scan that has never objected to anything is
 /// indistinguishable from a clean tree, and three of this repo's gates once passed for exactly
 /// that reason. So it is fed the shape CI actually shipped for three runs.

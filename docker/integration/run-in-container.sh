@@ -2102,6 +2102,18 @@ crash_run() {
         # pair of lines in this function cost two thirds of this section's coverage and took
         # two full runs to name.
         sed 's/^/        | /' /tmp/crash-wipe.out
+        # **And WHO OWNS the ones left behind.** `already up to date` over an installed package
+        # has exactly two causes and the wipe log cannot tell them apart: LiNix believes the
+        # package is not installed, or LiNix believes it is not managed. `why` answers the second
+        # directly — the ownership record is what recovery is documented to have missed once
+        # before (`sync/mod.rs`, the ledger note on the recovery path), and on the run that
+        # produced this branch it was the first question anyone asked and the one fact the log
+        # did not carry.
+        for _p in $CRASH_PKGS; do
+            on_path "$_p" || continue
+            echo "        ? why $BACKEND:$_p"
+            $TO "$LINIX" why "$BACKEND:$_p" 2>&1 | sed 's/^/        ? /' | head -6
+        done
     fi
 }
 

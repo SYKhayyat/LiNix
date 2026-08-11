@@ -91,8 +91,15 @@ jobs:
       # no published binary**. Masked because `scripts/install.*` builds from source, which
       # means the three published binaries were installed by nothing.
       #
-      # Named by target because two rows now share `macos`, and each builds on the hardware
-      # it targets: `macos-latest` is arm64 and `macos-13` is the last Intel image.
+      # Named by target because two rows now share `macos`, and **both build on arm64**.
+      #
+      # `macos-13` was the last Intel image and GitHub has retired it. A job asking for a label
+      # with no runner behind it does not fail — it queues, silently, for ever: measured
+      # 2026-08-10 at 83 minutes and still waiting, in a run where the arm64 Mac beside it
+      # started in three seconds. `Create Release` needs all four builds, so the release could
+      # not be cut and nothing said why. Apple Silicon cross-compiles to x86_64 natively, so the
+      # target still ships; what it loses is a native test run, which `native: true` below marks
+      # honestly rather than pretending the cross build was exercised.
       #
       # **Every row carries its own `rust`, and there is no base matrix.** With `rust: [stable]`
       # above the `include:`, the matrix had exactly ONE combination, and GitHub merges an
@@ -107,15 +114,19 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             rust: stable
-          - os: macos-13
+            native: true
+          - os: macos-latest
             target: x86_64-apple-darwin
             rust: stable
+            native: false
           - os: macos-latest
             target: aarch64-apple-darwin
             rust: stable
+            native: true
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             rust: stable
+            native: true
 
     # **Fat LTO and one codegen unit are settings for a binary somebody downloads, not for a
     # gate.** `codegen-units = 1` forbids parallel codegen by definition, so this job cannot use
@@ -148,9 +159,10 @@ jobs:
           ~/.cargo/git
           target
         # `matrix.target` is in the key because it is in the path on the very next line.
-        # Without it `macos-13` (x86_64) and `macos-latest` (aarch64) share one entry, and
-        # `actions/cache` does not save on an exact-key hit — so whichever Apple target
-        # loses the race rebuilds cold on every run, permanently.
+        # Without it the two Apple targets share one entry — and now that both build on
+        # `macos-latest` they would collide on `runner.os` alone — and `actions/cache` does not
+        # save on an exact-key hit, so whichever loses the race rebuilds cold on every run,
+        # permanently.
         key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-cargo-
@@ -162,8 +174,22 @@ jobs:
     # dozens. Run 30503630610 reported exactly one failing target per OS and never ran the rest —
     # three findings visible and the remainder of the suite unmeasured on every platform, at 45
     # minutes a dispatch to learn the next one.
+    #
+    # Skipped for the one target this matrix cross-compiles. An x86_64 test binary needs Rosetta
+    # to run on an arm64 runner, and a step that MIGHT be translated is worse than one that is
+    # honestly absent: it reports green whether it ran the suite or a stub. The step below says
+    # so in the job log, because a skip nobody is told about is the same silence that let this
+    # matrix build one target of four.
     - name: Run tests
       run: cargo test --release --target ${{ matrix.target }} --no-fail-fast
+      if: matrix.native
+
+    - name: Tests for this target run elsewhere
+      run: |
+        echo "${{ matrix.target }} is cross-compiled from $(uname -m) and its tests are NOT run here."
+        echo "The suite for this OS runs on the aarch64-apple-darwin row: same source, same tests,"
+        echo "same OS, different instruction set. Only codegen is unexercised."
+      if: ${{ !matrix.native }}
 
     # The blind spot every other gate in this file shares: builds, tests, clippy and all four
     # container lifecycles run with pipes on every handle, so none of them can see what LiNix
