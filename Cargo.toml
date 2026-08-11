@@ -144,22 +144,6 @@ tempfile = "3.8"
 # without standing up a server. Same major as the one reqwest 0.12 exposes.
 http = "1"
 
-# **The test loop's profile.** `cargo test` in debug spawns a binary that is roughly twice as
-# slow at everything, and this suite spawns one several hundred times: the same 509 tests take
-# ~121s on CI (which runs `--release`) and 610-840s here in debug. `--release` locally is not the
-# answer either — `lto = true` with `codegen-units = 1` over a 108k-line crate with a vendored C
-# Lua is a fifteen-minute link, which is the right trade for a published binary and the wrong one
-# for an edit.
-#
-# So: release codegen, ordinary linking. `cargo test --profile quick`.
-[profile.quick]
-inherits = "release"
-lto = false
-codegen-units = 16
-# The whole point is a fast link; stripping and unwinding are the shipped binary's concerns.
-strip = false
-panic = "unwind"
-
 [profile.release]
 opt-level = 3
 lto = true
