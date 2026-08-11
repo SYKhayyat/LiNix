@@ -1,6 +1,10 @@
 // tests/backend_tests.rs
 
 use linix::core::executor::DryRunOutput;
+// Only the two `cfg(target_os = "linux")` tests below escalate, so the import lives with them
+// rather than at the top, where every other platform would carry an unused one.
+#[cfg(target_os = "linux")]
+use linix::core::executor::CommandExecutor;
 use linix::core::{BackendCapabilities, PackageSpec};
 use std::sync::Arc;
 use std::time::Duration;
@@ -69,11 +73,11 @@ async fn test_apt_backend_hermetic_logic() {
     // `purge`, which became opt-in. A stub nobody matches proves nothing, which is the whole
     // reason the mock refuses to stay quiet about one.
     kernel.mock_executor.set_response(
-        "sudo apt install -y -- curl",
+        &CommandExecutor::as_launched("apt", &["install", "-y", "--", "curl"], true),
         Ok(DryRunOutput::default().into()),
     );
     kernel.mock_executor.set_response(
-        "sudo apt remove -y -- curl",
+        &CommandExecutor::as_launched("apt", &["remove", "-y", "--", "curl"], true),
         Ok(DryRunOutput::default().into()),
     );
 
@@ -93,11 +97,15 @@ async fn test_pacman_backend_hermetic_logic() {
         .expect("Missing pacman backend");
 
     kernel.mock_executor.set_response(
-        "sudo pacman -S --noconfirm --needed -- git",
+        &CommandExecutor::as_launched(
+            "pacman",
+            &["-S", "--noconfirm", "--needed", "--", "git"],
+            true,
+        ),
         Ok(DryRunOutput::default().into()),
     );
     kernel.mock_executor.set_response(
-        "sudo pacman -Rs --noconfirm -- git",
+        &CommandExecutor::as_launched("pacman", &["-Rs", "--noconfirm", "--", "git"], true),
         Ok(DryRunOutput::default().into()),
     );
 

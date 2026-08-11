@@ -158,6 +158,11 @@ fn install_argv(target: &str) -> Vec<String> {
 
 #[async_trait]
 impl Installable for GoInstallable {
+    /// `go install module@v1.2.3` — the module path takes the version as its suffix (`Q53`).
+    fn pins_version(&self) -> bool {
+        true
+    }
+
     async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
         for spec in specs {
             // `go install` requires an @version suffix in module mode. Honor an explicit

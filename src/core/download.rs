@@ -20,6 +20,123 @@
 
 use crate::core::{Error, PackageSpec, Result};
 
+/// The ceiling on one downloaded body, in bytes. 2 GiB.
+///
+/// **Sized to the largest thing anyone legitimately ships this way**, which is an AppImage: the
+/// fattest in common use are a few hundred megabytes, so this is roughly eight times the real
+/// worst case. It is not a security boundary — a hostile server that stays under it still gets a
+/// file written — it is the bound that stops a redirect to something enormous, or a server that
+/// never stops sending, from filling the disk while LiNix reports progress.
+pub const DEFAULT_MAX_DOWNLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Seeded from `Config::max_download_bytes`; `0` removes the bound.
+static MAX_DOWNLOAD_BYTES: once_cell::sync::OnceCell<u64> = once_cell::sync::OnceCell::new();
+
+/// Set the process-wide download ceiling (called once during startup). Later calls no-op.
+pub fn set_max_download_bytes(bytes: u64) {
+    let _ = MAX_DOWNLOAD_BYTES.set(bytes);
+}
+
+fn max_download_bytes() -> Option<u64> {
+    match *MAX_DOWNLOAD_BYTES
+        .get()
+        .unwrap_or(&DEFAULT_MAX_DOWNLOAD_BYTES)
+    {
+        0 => None,
+        bytes => Some(bytes),
+    }
+}
+
+/// Write a response body to `dest`, refusing one that is larger than the ceiling.
+///
+/// **Streamed, not buffered, and that is the larger half of the fix.** All three download
+/// backends read the whole body into memory with `.bytes()` before writing it, so a URL that
+/// answered with something enormous exhausted RAM before it ever touched the disk — and neither
+/// the size nor the ceiling mattered, because there was no ceiling. Writing chunk by chunk
+/// bounds the memory to one chunk whatever the server sends, and the counter bounds the disk.
+///
+/// **`Content-Length` is checked first and trusted for nothing.** When a server declares a size
+/// over the ceiling the transfer is refused before a byte moves, which turns a two-gigabyte wait
+/// into an immediate message; when it declares nothing, or lies, the running count catches it
+/// anyway. One of those is a courtesy and the other is the actual bound.
+pub async fn write_capped(
+    response: reqwest::Response,
+    dest: &std::path::Path,
+    what: &str,
+) -> Result<u64> {
+    write_capped_to(response, dest, what, max_download_bytes()).await
+}
+
+/// The body of [`write_capped`] with the ceiling passed in.
+///
+/// Split out so a test can name its own bound: the process-wide one is a `OnceCell` seeded at
+/// startup, and a test that set it would decide the value for every other test in the binary.
+async fn write_capped_to(
+    response: reqwest::Response,
+    dest: &std::path::Path,
+    what: &str,
+    cap: Option<u64>,
+) -> Result<u64> {
+    use futures::StreamExt;
+    use tokio::io::AsyncWriteExt;
+
+    if let (Some(cap), Some(declared)) = (cap, response.content_length()) {
+        if declared > cap {
+            return Err(refused_size(what, declared, cap));
+        }
+    }
+
+    let mut file = tokio::fs::File::create(dest).await.map_err(Error::from)?;
+    let mut written: u64 = 0;
+    let mut body = response.bytes_stream();
+    while let Some(chunk) = body.next().await {
+        let chunk = chunk.map_err(Error::from)?;
+        written += chunk.len() as u64;
+        if let Some(cap) = cap {
+            if written > cap {
+                // Take the partial file with it. A half-downloaded artifact left on disk is one
+                // a later run can find and treat as complete, and the checksum that would have
+                // caught that is the one `@unverified` is allowed to turn off.
+                drop(file);
+                let _ = tokio::fs::remove_file(dest).await;
+                return Err(refused_size(what, written, cap));
+            }
+        }
+        file.write_all(&chunk).await.map_err(Error::from)?;
+    }
+    file.flush().await.map_err(Error::from)?;
+    Ok(written)
+}
+
+/// Permanent: the same URL answers with the same size next time, so a retry spends the transfer
+/// again to reach the same refusal.
+fn refused_size(what: &str, size: u64, cap: u64) -> Error {
+    Error::command_failed_permanently(format!(
+        "{} is {} and the ceiling is {} — refused before it filled the disk. Raise \
+         `max_download_bytes`, or set it to 0 to remove the bound.",
+        what,
+        human_bytes(size),
+        human_bytes(cap)
+    ))
+}
+
+/// Bytes as a person reads them. A refusal that says `2147483648` makes the reader do the
+/// arithmetic before they can decide whether the number is wrong.
+fn human_bytes(n: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
+    let mut value = n as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} {}", n, UNITS[0])
+    } else {
+        format!("{:.1} {}", value, UNITS[unit])
+    }
+}
+
 /// Whether a bare flag is set on a spec. The grammar stores a bare `@flag` as `"true"`.
 fn flag(spec: &PackageSpec, name: &str) -> bool {
     spec.options.one(name).is_some_and(|v| v == "true")
@@ -135,5 +252,67 @@ mod tests {
     fn an_unset_flag_is_not_a_set_one() {
         assert!(!allows_http(&spec(&[])));
         assert!(!is_unverified(&spec(&[("unverified", "false")])));
+    }
+
+    /// A body with no `Content-Length`, which is the case the running counter exists for — a
+    /// chunked response declares nothing, so a ceiling that only read the header would bound
+    /// exactly the servers that are honest about their size.
+    fn undeclared(body: &'static str) -> reqwest::Response {
+        let stream = futures::stream::once(async move { Ok::<_, std::io::Error>(body.as_bytes()) });
+        reqwest::Response::from(
+            http::Response::builder()
+                .body(reqwest::Body::wrap_stream(stream))
+                .expect("a response with a streamed body"),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_body_over_the_ceiling_is_refused_and_leaves_nothing_behind() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("artifact");
+        let err = write_capped_to(undeclared("0123456789"), &dest, "an artifact", Some(4))
+            .await
+            .expect_err("ten bytes under a four-byte ceiling");
+        let message = err.to_string();
+        assert!(message.contains("ceiling"), "{message}");
+        assert!(
+            !dest.exists(),
+            "the partial file survived, and a later run would read it as a complete download"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_body_under_the_ceiling_is_written_whole() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("artifact");
+        let written = write_capped_to(undeclared("0123456789"), &dest, "an artifact", Some(1024))
+            .await
+            .expect("ten bytes under a kilobyte ceiling");
+        assert_eq!(written, 10);
+        assert_eq!(
+            std::fs::read(&dest).expect("the file was written"),
+            b"0123456789"
+        );
+    }
+
+    /// `0` means no bound, and it has to mean that all the way down — a `Some(0)` would refuse
+    /// every download instead of allowing every one.
+    #[tokio::test]
+    async fn no_ceiling_writes_anything() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("artifact");
+        assert_eq!(
+            write_capped_to(undeclared("0123456789"), &dest, "an artifact", None)
+                .await
+                .expect("no ceiling refuses nothing"),
+            10
+        );
+    }
+
+    #[test]
+    fn a_size_is_reported_the_way_a_person_reads_one() {
+        assert_eq!(human_bytes(512), "512 B");
+        assert_eq!(human_bytes(2 * 1024 * 1024 * 1024), "2.0 GiB");
+        assert_eq!(human_bytes(DEFAULT_MAX_DOWNLOAD_BYTES), "2.0 GiB");
     }
 }

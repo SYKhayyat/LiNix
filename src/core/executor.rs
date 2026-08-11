@@ -194,6 +194,42 @@ pub const DEFAULT_QUERY_IDLE_TIMEOUT_SECS: u64 = 120;
 /// reproduce, so one more attempt is usually the whole fix and two more is the margin.
 pub const DEFAULT_READ_RETRY_ATTEMPTS: u32 = 3;
 
+/// How long LiNix waits for a person to type a sudo password before giving up (`S88`).
+///
+/// Two minutes: long enough to find a password manager, short enough that an unattended
+/// terminal is a two-minute pause and not a quarter-hour hang. It is deliberately **not** the
+/// command idle bound: a package manager may legitimately work in silence for minutes, and a
+/// password prompt cannot — either somebody is typing or nobody is there.
+pub const DEFAULT_SUDO_PASSWORD_TIMEOUT_SECS: u64 = 120;
+
+/// Seeded from `Config::sudo_password_timeout_secs`; `0` waits as long as sudo itself would.
+static SUDO_PASSWORD_TIMEOUT_SECS: once_cell::sync::OnceCell<u64> =
+    once_cell::sync::OnceCell::new();
+
+/// Set the process-wide sudo password bound (called once during startup). Later calls no-op.
+pub fn set_sudo_password_timeout(secs: u64) {
+    let _ = SUDO_PASSWORD_TIMEOUT_SECS.set(secs);
+}
+
+fn sudo_password_timeout() -> Option<std::time::Duration> {
+    match *SUDO_PASSWORD_TIMEOUT_SECS
+        .get()
+        .unwrap_or(&DEFAULT_SUDO_PASSWORD_TIMEOUT_SECS)
+    {
+        0 => None,
+        secs => Some(std::time::Duration::from_secs(secs)),
+    }
+}
+
+/// Whether this process has already proved it can escalate, so the probe runs once per run
+/// rather than once per command.
+///
+/// The keepalive refreshes the timestamp every 60s for as long as a sync holds it, so a run
+/// that primes once stays primed. A false here costs one `sudo -n -v`, which is a few
+/// milliseconds; a true that is wrong costs nothing either, because the command itself still
+/// carries `-n` and fails by name rather than blocking.
+static SUDO_PRIMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Set the process-wide read bounds (called once during startup). Later calls no-op.
 pub fn set_query_bounds(idle_secs: u64, retry_attempts: u32) {
     let _ = QUERY_IDLE_TIMEOUT_SECS.set(idle_secs);
@@ -1397,14 +1433,22 @@ impl CommandExecutor {
     }
 
     /// The argv `run_on` would actually launch, as one string — what a mock registers against.
-    #[cfg(test)]
+    ///
+    /// **Public, and not `#[cfg(test)]`, for the reason [`escalates`](Self::escalates) is a
+    /// function**: the integration suite registers stubs by this exact string, and a stub that
+    /// spells the prefix by hand is a stub that goes unmatched the next time the prefix moves.
+    /// It moved when `S88` put `-n` on every escalated command, and four registrations in
+    /// `backend_tests.rs` would have silently stopped matching on Linux — the platform this
+    /// machine cannot run, which is how the last set of unmatched stubs survived for months.
     pub fn as_launched(cmd: &str, args: &[&str], sudo: bool) -> String {
         let line = std::iter::once(cmd)
             .chain(args.iter().copied())
             .collect::<Vec<_>>()
             .join(" ");
         if Self::escalates(sudo) {
-            format!("sudo {line}")
+            // `-n` is part of the argv, so it is part of what a mock matches (`S88`). Leaving it
+            // out here would make every Linux stub register a command LiNix no longer runs.
+            format!("sudo -n {line}")
         } else {
             line
         }
@@ -1445,7 +1489,16 @@ impl CommandExecutor {
         let mut final_args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
 
         if Self::escalates(sudo) {
+            // **The password is asked for here or nowhere** (`S88`). Every escalated command
+            // runs `sudo -n`, so no manager invocation can ever sit on a prompt: sudo reads a
+            // password from `/dev/tty` and not from stdin, so a null stdin does not stop it
+            // waiting, and a terminal with nobody at it — or one wrong password — wedged LiNix
+            // for the full command idle bound, fifteen minutes, with no message. Priming the
+            // timestamp first, once, under a bound of its own, is what keeps the interactive
+            // case working while making the hang structurally impossible.
+            self.ensure_sudo_credentials(layer).await?;
             final_args.insert(0, final_cmd);
+            final_args.insert(0, "-n".to_string());
             final_cmd = "sudo".to_string();
         }
 
@@ -1992,6 +2045,91 @@ impl CommandExecutor {
 
     pub fn command_exists_sync(&self, cmd: &str) -> bool {
         self.reader.check_command(cmd)
+    }
+
+    /// Make sure `sudo` will run without asking, or fail **now** with a sentence saying why
+    /// (`S88`).
+    ///
+    /// **The bug this ends.** sudo reads its password from `/dev/tty`, not from stdin, so
+    /// nothing LiNix did to the child's stdin could stop it waiting: a wrong password left the
+    /// program sitting for 900 seconds, and so did a terminal with nobody in front of it. Both
+    /// were silent — no prompt reached the user, because the child's stderr is captured — and
+    /// both looked exactly like a slow package manager. It failed that way every night for six
+    /// nights in the `tools` leg, and took 48 minutes to do it.
+    ///
+    /// **Three outcomes, all of them prompt.** The timestamp is already warm, so nothing is
+    /// asked; a person is at a terminal and gets one bounded chance to type; or there is nobody
+    /// to ask and LiNix says so immediately instead of waiting to be told what it already knows.
+    async fn ensure_sudo_credentials(&self, layer: &Arc<dyn ExecutionLayer>) -> Result<()> {
+        use std::sync::atomic::Ordering;
+        if cfg!(windows) || Self::is_root() || self.dry_run {
+            return Ok(());
+        }
+        if SUDO_PRIMED.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        // Warm timestamp, `NOPASSWD`, or an already-primed session: `-n` makes this instant and
+        // silent, and it is the common case on every run after the first.
+        let warm = Command::new("sudo")
+            .args(["-n", "-v"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .status()
+            .await;
+        if matches!(warm, Ok(status) if status.success()) {
+            SUDO_PRIMED.store(true, Ordering::Relaxed);
+            return Ok(());
+        }
+
+        // Nobody to ask. **Permanent, not transient**: a password does not arrive during a
+        // backoff, and retrying spends the whole bound again to learn the same thing.
+        if !(layer.shares_stdin() && std::io::stdin().is_terminal()) {
+            return Err(Error::command_failed_permanently(
+                "sudo needs a password and there is no terminal to ask on. Run LiNix from a \
+                 terminal, give this user a NOPASSWD rule for the package managers it drives, \
+                 or run it as root."
+                    .to_string(),
+            ));
+        }
+
+        let ask = Command::new("sudo")
+            .arg("-v")
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .kill_on_drop(true)
+            .status();
+        let answered = match sudo_password_timeout() {
+            Some(bound) => match tokio::time::timeout(bound, ask).await {
+                Ok(status) => status,
+                Err(_) => {
+                    return Err(Error::command_failed_permanently(format!(
+                        "sudo asked for a password and none was entered within {}s. Set \
+                         `sudo_password_timeout_secs` to wait longer, or `0` to wait as long as \
+                         sudo would.",
+                        bound.as_secs()
+                    )))
+                }
+            },
+            None => ask.await,
+        };
+        match answered {
+            Ok(status) if status.success() => {
+                SUDO_PRIMED.store(true, Ordering::Relaxed);
+                Ok(())
+            }
+            // sudo has already printed its own reason — a wrong password, an account that is
+            // not a sudoer — on the terminal it owns. Repeating a guess at it here would be
+            // narration over a message the user has already read.
+            Ok(_) => Err(Error::command_failed_permanently(
+                "sudo refused: LiNix cannot run the commands that need root.".to_string(),
+            )),
+            Err(e) => Err(Error::command_failed_permanently(format!(
+                "sudo could not be run: {e}"
+            ))),
+        }
     }
 
     /// Refresh the `sudo` timestamp for as long as the returned guard is held, so a long sync

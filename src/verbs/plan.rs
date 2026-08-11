@@ -534,7 +534,7 @@ pub async fn write_version_locks(
 /// The live answer from the backend, falling back to recorded state. `list_installed` is memoized
 /// once per run (`Queryable::list_installed`), so asking `info` per package costs one command per
 /// manager, not one per package.
-async fn scan_installed_versions(app: &App) -> serde_json::Map<String, Value> {
+pub(crate) async fn scan_installed_versions(app: &App) -> serde_json::Map<String, Value> {
     let mut locks = serde_json::Map::new();
     let state = app.state.lock().await;
     for pkg in &state.packages {
@@ -939,7 +939,26 @@ fn list_locks(app: &App, axis: LockAxis) -> Result<()> {
             println!("versions: nothing is pinned.");
         } else {
             for (key, version) in &locks {
-                println!("versions: {} -> {}", key, version.as_str().unwrap_or("?"));
+                // **Say which of these can actually be put back** (`Q53`). A lockfile does two
+                // jobs — reproduce, and detect drift — and only the second works on a manager
+                // that cannot be asked for a version. Recording one there is still right, and it
+                // is what makes `check drift` work on brew and pacman; reading the file and
+                // believing every line is replayable is what is wrong. The mark is here rather
+                // than in the file because the file is a record other tools read, and adding a
+                // shape to it would break every reader for a sentence only a person needs.
+                let replayable = key
+                    .split_once(':')
+                    .is_some_and(|(backend, _)| app.registry.pins_version(backend));
+                println!(
+                    "versions: {} -> {}{}",
+                    key,
+                    version.as_str().unwrap_or("?"),
+                    if replayable {
+                        ""
+                    } else {
+                        "  (observed; this manager cannot be asked to install it)"
+                    }
+                );
             }
         }
     }

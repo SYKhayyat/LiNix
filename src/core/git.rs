@@ -127,6 +127,22 @@ impl GitManager {
         self.root.join(".git").exists()
     }
 
+    /// Stop git asking a question nobody can answer (`S88`'s family).
+    ///
+    /// **ssh is deliberately left alone.** `-o BatchMode=yes` would close the last hole, but the
+    /// only way to set it from here is `GIT_SSH_COMMAND`, which overrides a user's
+    /// `core.sshCommand` — so silencing a prompt on a misconfigured remote would break every
+    /// working custom transport. A passphrase with no agent is the user's setup to fix; an
+    /// unprompted credential is ours.
+    fn ask_nothing(cmd: &mut std::process::Command) {
+        // git's own prompt.
+        cmd.env("GIT_TERMINAL_PROMPT", "0");
+        // Git Credential Manager, the default on Windows, which does not print a prompt — it
+        // opens a *window*, so nothing appears in a captured stream at all and the wait looks
+        // exactly like a slow network.
+        cmd.env("GCM_INTERACTIVE", "never");
+    }
+
     /// Nothing about the user's git is overridden here — not the identity, not the signing
     /// flags. A commit signed by your key and authored by `linix@localhost` attributes a
     /// verified change to a person who does not exist (owner ruling, 2026-07-21), and a repo
@@ -136,9 +152,16 @@ impl GitManager {
         cmd.arg("-C").arg(&self.root);
         cmd.args(args);
         // git prompts — for a credential, for a passphrase — and this captures both its
-        // streams, so the question would be asked where nobody can read it. Closed stdin turns
-        // that into git's own error instead of a wait with no end and nothing on screen.
+        // streams, so the question would be asked where nobody can read it.
+        //
+        // **Closing stdin does not stop it, and believing it did was the same mistake as
+        // `S88`.** git's credential prompt, like sudo's, is read from `/dev/tty` and not from
+        // stdin, so a null stdin leaves a session with a controlling terminal waiting for an
+        // answer nobody is there to give. These two variables are what actually turn the
+        // question into an error: git declines to prompt, and Git Credential Manager — the
+        // default on Windows, which pops a *window* — declines to open one.
         cmd.stdin(std::process::Stdio::null());
+        Self::ask_nothing(&mut cmd);
         // Blocking, from a synchronous API that async verbs call — and LiNix runs git after
         // every successful sync. Held a runtime worker for the length of every commit.
         crate::core::blocking::command_output(&mut cmd)
@@ -445,6 +468,33 @@ fn parse_log(raw: &str) -> Vec<GitCommit> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// **A closed stdin does not stop a credential prompt** — git reads it from `/dev/tty`, the
+    /// same way sudo does, which is what made `S88` a fifteen-minute silence rather than an
+    /// error. Asserted on the command LiNix builds, because the failure it guards against has
+    /// no output to match on: the run simply never returns.
+    #[test]
+    fn git_is_told_not_to_ask_for_anything() {
+        let mut cmd = std::process::Command::new("git");
+        GitManager::ask_nothing(&mut cmd);
+        let env: Vec<(String, Option<String>)> = cmd
+            .get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.map(|v| v.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        assert!(
+            env.contains(&("GIT_TERMINAL_PROMPT".to_string(), Some("0".to_string()))),
+            "git will still prompt for a credential: {env:?}"
+        );
+        assert!(
+            env.contains(&("GCM_INTERACTIVE".to_string(), Some("never".to_string()))),
+            "Git Credential Manager will still open a window nobody sees: {env:?}"
+        );
+    }
 
     #[test]
     fn parse_manifest_changes_keeps_content_lines_drops_headers() {

@@ -140,6 +140,9 @@ winapi = { version = "0.3", features = [
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3.8"
+# Building a `reqwest::Response` by hand, which is the only way to test the download ceiling
+# without standing up a server. Same major as the one reqwest 0.12 exposes.
+http = "1"
 
 [profile.release]
 opt-level = 3

@@ -851,6 +851,8 @@ fn apply_process_wide_config(config: &linix::config::Config) {
         config.query_idle_timeout_secs,
         config.read_retry_attempts,
     );
+    linix::core::executor::set_sudo_password_timeout(config.sudo_password_timeout_secs);
+    linix::core::download::set_max_download_bytes(config.max_download_bytes);
 }
 
 /// Run a user verb: build the config and app once from the shared leading flags, then dispatch

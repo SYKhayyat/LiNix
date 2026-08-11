@@ -69,6 +69,17 @@ impl BackendRegistry {
         self.get(name).is_some_and(|b| b.is_available())
     }
 
+    /// Whether an exact `@version=` can be turned into an install argument here (`Q53`).
+    ///
+    /// **A backend that cannot install at all cannot replay a version either**, so a name with
+    /// no `Installable` answers no — the same shape as `runs_here`, where the two ways to answer
+    /// no are one answer to the user.
+    pub fn pins_version(&self, name: &str) -> bool {
+        self.get(name)
+            .and_then(|b| b.as_installable().map(|i| i.pins_version()))
+            .unwrap_or(false)
+    }
+
     pub fn available(&self) -> Vec<Arc<BackendCapabilities>> {
         self.backends
             .values()
@@ -528,7 +539,11 @@ fn register_xbps(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     cfg.remove_binary = Some("xbps-remove".into());
     cfg.list_binary = Some("xbps-query".into());
     cfg.search_binary = Some("xbps-query".into());
-    // Void is rolling, like Arch: no exact-version pin.
+    // Void is rolling, like Arch: no exact-version pin. The syntax exists — `xbps-install
+    // name-1.2.3_1` — but the operand needs the package's *revision* suffix, which `@version=`
+    // does not carry and cannot derive, so building `name-1.2.3` would be naming a package that
+    // does not exist and hoping. Same shape as Portage's atom needing a category (`Q53`).
+    cfg.version_pin = None;
     cfg.install_args = vec!["-Sy".into()];
     cfg.remove_args = vec!["-y".into()];
     cfg.list_args = vec!["-l".into()];
@@ -1501,7 +1516,8 @@ fn register_pkgin(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             name: "pkgin".into(),
             binary: None,
             remove_binary: None,
-            version_pin: None,
+            // `pkgin install name-1.2.3` — pkgsrc spells a version as the operand's suffix.
+            version_pin: Some(VersionPin::Inline("{name}-{version}".into())),
             install_args: vec!["-y".into(), "install".into()],
             remove_args: vec!["-y".into(), "remove".into()],
             purge_args: None,
@@ -1570,7 +1586,8 @@ fn register_pkg_freebsd(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             name: "pkg".into(),
             binary: None,
             remove_binary: None,
-            version_pin: None,
+            // `pkg install name-1.2.3` — FreeBSD spells a version as the operand's suffix.
+            version_pin: Some(VersionPin::Inline("{name}-{version}".into())),
             install_args: vec!["install".into(), "-y".into()],
             // `pkg delete` is the canonical uninstall; `-y` so a non-interactive sync does not hang.
             remove_args: vec!["delete".into(), "-y".into()],
@@ -1647,7 +1664,8 @@ fn register_pkg_add_openbsd(reg: &mut BackendRegistry, executor: &CommandExecuto
             // The uninstaller is its own program; `pkg_delete <name>` takes no subcommand, so
             // remove_args stays empty and the separate-binary path in `remove` handles it.
             remove_binary: Some("pkg_delete".into()),
-            version_pin: None,
+            // `pkg_add name-1.2.3` — OpenBSD spells a version as the operand's suffix.
+            version_pin: Some(VersionPin::Inline("{name}-{version}".into())),
             // `pkg_add <name>` — the binary itself is the verb, so no leading subcommand.
             install_args: vec![],
             remove_args: vec![],

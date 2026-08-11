@@ -1632,6 +1632,7 @@ dependencies = [
  "governor",
  "hex",
  "hostname",
+ "http",
  "indicatif",
  "libc",
  "mlua",

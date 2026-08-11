@@ -13,21 +13,25 @@
 //! had no `version_pin` key. A comment is not an instrument — it cannot be enumerated, counted,
 //! or made to fail.
 //!
-//! **What this gate does.** Every registrar in `registry.rs` that builds a `ManagerConfig`, and
-//! every row of `builtin_backends.toml`, must either pin a version or appear in the ledger below
-//! with a reason. The ledger separates two things a single `None` conflates:
+//! **What this gate does.** Every registrar in `registry.rs` that builds a `ManagerConfig`, every
+//! row of `builtin_backends.toml`, and every hand-written backend module, must either pin a
+//! version or appear in the ledger with a reason. Two lists, and they are not the same list:
 //!
-//! - [`NO_VERSION_TO_ASK_FOR`] — the manager has no mechanism. Dropping the pin is the manager's
-//!   limit, not LiNix's, and the entry is permanent.
+//! - `capability::CANNOT_PIN_VERSION` — the manager has no mechanism. Dropping the pin is the
+//!   manager's limit, not LiNix's, and the entry is permanent. It lives in the **program**
+//!   because the refusal quotes it at the user.
 //! - [`COULD_PIN_AND_DOES_NOT`] — the manager takes a version and LiNix does not send one. Every
-//!   entry here is a live `@version=` that reports success at the wrong version. The list is
-//!   under a ceiling and only shrinks.
+//!   entry here is a live `@version=` that reports success at the wrong version. A to-do, not a
+//!   reason, under a ceiling that only shrinks. Empty since `Q53`.
 //!
 //! **What it does not do.** It reads declarations, not argv. Whether a declared pin lands in the
-//! right place in the command line is the existing per-backend argv assertions in `registry.rs`,
-//! which cover the nine that pin. And it says nothing about `brew`, which pins through its own
-//! `Installable` rather than through `version_pin` — `brew` builds a formula name that does not
-//! exist, which is `S85` and awaits the ruling in `Q53`.
+//! right place in the command line is the existing per-backend argv assertions in `registry.rs`.
+//!
+//! **What `Q53` changed.** A pin the named manager cannot express is no longer dropped: the
+//! planner refuses that package by name before anything runs, and `sync --locked` treats the same
+//! fact as fatal. So this gate is no longer only about a missing struct field — a backend that
+//! answers `pins_version() == false` with no ledger row now produces a refusal that cannot say
+//! why, which is the shape `V.42` bans.
 //!
 //! **Why a source scan and not a registry walk.** `create_default_registry` registers behind
 //! `cfg!(target_os = …)`, so a walk sees `apt` only on Linux and `mas` only on a Mac. That is
@@ -57,91 +61,51 @@ fn names_the_pin(trimmed: &str) -> bool {
         && (stripped.starts_with("version_pin:") || stripped.starts_with("version_pin ="))
 }
 
-/// The manager cannot be asked for a version. Permanent entries.
+/// The backend names one registrar builds.
 ///
-/// Keyed by the registrar or the `builtin_backends.toml` row, because that is what the scan
-/// finds; `register_aur_helper` builds both `yay` and `paru` from one body and has no single
-/// backend name to key on.
-///
-/// **Four of these are documented rather than measured** — `macports`, `krew`, `slackpkg` and
-/// `eopkg` are read from their managers' documentation, not from a container that ran them.
-/// The `gentoo` image can settle `emerge`; there is no image here for the other four.
-const NO_VERSION_TO_ASK_FOR: &[(&str, &str)] = &[
-    (
-        "register_pacman",
-        "Arch is rolling: the repositories publish one version of a package and there is no \
-         flag that asks for another",
-    ),
-    (
-        "register_aur_helper",
-        "yay and paru speak pacman's flags over the same rolling repositories, so they inherit \
-         pacman's answer",
-    ),
-    (
-        "register_scoop",
-        "scoop pins through a versioned manifest in a bucket, not through an install flag",
-    ),
-    (
-        "register_mas",
-        "the Mac App Store serves the current published version of an app and no other",
-    ),
-    (
-        "register_macports",
-        "a Portfile carries its own version; installing an older one means checking out an \
-         older ports tree, which is not something an install argument can express",
-    ),
-    (
-        "krew",
-        "the kubectl plugin index serves the current version of a plugin only",
-    ),
-    (
-        "slackpkg",
-        "slackpkg installs what the configured mirror carries and takes no version",
-    ),
-    (
-        "eopkg",
-        "Solus is rolling: the repository holds one version and eopkg has no flag for another",
-    ),
-    (
-        "emerge",
-        "Portage pins with an atom (`=category/name-version`), which needs the category as well \
-         as the version — a bare `@version=` cannot be turned into a valid atom",
-    ),
-];
+/// `register_X` builds `X` for all but three, and each exception is why this mapping is written
+/// out rather than derived: `register_aur_helper` builds **two** backends from one body, and the
+/// two BSD registrars are named for their platform while the backend is named for its binary.
+fn backends_of(registrar: &str) -> Vec<String> {
+    match registrar {
+        "register_aur_helper" => vec!["yay".into(), "paru".into()],
+        "register_pkg_freebsd" => vec!["pkg".into()],
+        "register_pkg_add_openbsd" => vec!["pkg_add".into()],
+        other => vec![other.trim_start_matches("register_").to_string()],
+    }
+}
 
 /// The manager takes a version and LiNix does not send one. **Every entry is a live defect**: a
 /// declared `@version=` is dropped and the install reports success at the wrong version.
 ///
 /// Under a ceiling, and the ceiling only goes down. Lower it in the same change that builds one.
-const COULD_PIN_AND_DOES_NOT: &[(&str, &str)] = &[
-    (
-        "register_xbps",
-        "`xbps-install name-1.2.3_1` takes a version, and the field is not named here at all — \
-         note the pin also needs the `_revision` suffix that `@version=` does not carry",
-    ),
-    (
-        "register_pkgin",
-        "`pkgin install name-1.2.3` takes a version",
-    ),
-    (
-        "register_pkg_freebsd",
-        "`pkg install name-1.2.3` takes a version",
-    ),
-    (
-        "register_pkg_add_openbsd",
-        "`pkg_add name-1.2.3` takes a version",
-    ),
-];
+///
+/// **Empty since `Q53` was ruled.** `pkgin`, `pkg` and `pkg_add` were built — all three spell a
+/// version as the operand's suffix — and `xbps` moved to the permanent side of the ledger,
+/// because `name-1.2.3` without the revision suffix names a package that does not exist, which
+/// is building a name and hoping rather than pinning.
+const COULD_PIN_AND_DOES_NOT: &[(&str, &str)] = &[];
 
-/// It only shrinks. Four when this was written (`S85`).
-const UNBUILT_CEILING: usize = 4;
+// The list carried a `UNBUILT_CEILING` while it had entries, and the ceiling only ever went
+// down: four when this was written (`S85`), then zero once `Q53` was ruled and the three
+// buildable ones were built. At zero a ceiling is not a ratchet any more — it is `is_empty()`
+// with arithmetic around it, which clippy says out loud — so the assertion below says that
+// instead. Anyone who needs an entry here again re-introduces a bound deliberately, with the
+// count in it, rather than inheriting a number that has stopped meaning anything.
 
+/// Why this backend cannot pin, from the ledger the **program** reads.
+///
+/// **Not a second table.** The reasons live in `capability::CANNOT_PIN_VERSION` because the
+/// refusal quotes them at the user; a copy here would be a list that agrees with the messages
+/// until the day it does not. This asks that one, and adds only the defect list above — which is
+/// a to-do, not a reason, and has no business in a user-facing message.
 fn ledger_reason(key: &str) -> Option<&'static str> {
-    NO_VERSION_TO_ASK_FOR
+    if let Some((_, why)) = COULD_PIN_AND_DOES_NOT.iter().find(|(k, _)| *k == key) {
+        return Some(why);
+    }
+    backends_of(key)
         .iter()
-        .chain(COULD_PIN_AND_DOES_NOT.iter())
-        .find(|(k, _)| *k == key)
-        .map(|(_, why)| *why)
+        .find_map(|b| linix::backends::capability::cannot_pin_reason(b))
 }
 
 /// Every registrar in `registry.rs` that builds a `ManagerConfig`, and whether it names a
@@ -254,37 +218,49 @@ fn every_data_defined_backend_pins_a_version_or_says_why() {
     );
 }
 
+/// Every backend the scans can see, keyed the way a *user* names it rather than the way the
+/// source spells it — which is the key the ledger the program reads is written in.
+fn pins_by_backend_name() -> BTreeMap<String, bool> {
+    let mut out: BTreeMap<String, bool> = BTreeMap::new();
+    for (registrar, pins) in registrars_and_their_pins() {
+        for backend in backends_of(&registrar) {
+            out.insert(backend, pins);
+        }
+    }
+    out.extend(data_rows_and_their_pins());
+    out
+}
+
 /// The other direction, and the one that rots first. An entry that stays behind after its
 /// backend gained a pin makes the ledger a list of things that used to be true.
 #[test]
 fn the_ledger_names_nothing_that_now_pins() {
-    let mut all = registrars_and_their_pins();
-    all.extend(data_rows_and_their_pins());
+    let all = pins_by_backend_name();
 
-    let stale: Vec<&str> = NO_VERSION_TO_ASK_FOR
-        .iter()
-        .chain(COULD_PIN_AND_DOES_NOT.iter())
-        .map(|(k, _)| *k)
-        .filter(|k| all.get(*k).copied().unwrap_or(false))
+    let stale: Vec<&str> = linix::backends::capability::backends_that_cannot_pin()
+        .into_iter()
+        .filter(|b| all.get(*b).copied().unwrap_or(false))
         .collect();
     assert!(
         stale.is_empty(),
         "these pin a version now and are still recorded as unable to: {stale:?}"
     );
 
-    let unknown: Vec<&str> = NO_VERSION_TO_ASK_FOR
+    let stale_defects: Vec<&str> = COULD_PIN_AND_DOES_NOT
         .iter()
-        .chain(COULD_PIN_AND_DOES_NOT.iter())
         .map(|(k, _)| *k)
-        .filter(|k| !all.contains_key(*k))
+        .filter(|k| {
+            backends_of(k)
+                .iter()
+                .any(|b| all.get(b).copied().unwrap_or(false))
+        })
         .collect();
     assert!(
-        unknown.is_empty(),
-        "these are in the ledger and neither scan finds them — a renamed registrar or a deleted \
-         row leaves an exemption covering nothing: {unknown:?}"
+        stale_defects.is_empty(),
+        "these were built and are still listed as unbuilt defects: {stale_defects:?}"
     );
 
-    for (key, why) in NO_VERSION_TO_ASK_FOR.iter().chain(COULD_PIN_AND_DOES_NOT) {
+    for (key, why) in COULD_PIN_AND_DOES_NOT {
         assert!(
             why.len() > 20,
             "`{key}` is exempt with no reason worth reading: {why:?}"
@@ -292,15 +268,123 @@ fn the_ledger_names_nothing_that_now_pins() {
     }
 }
 
+/// **The ledger the program reads is the ledger the tests check.** `capability::cannot_pin_reason`
+/// is what a refusal quotes at the user, so an entry there with no backend behind it is a message
+/// that can never print, and a reason too short to act on is `V.42`'s narration with a different
+/// hat on.
+///
+/// The hand-written backends are exempt from the "some scan finds it" half: `brew`, `nix`,
+/// `snap`, `flatpak` and the rest build their `Installable` in their own module and appear in
+/// neither `registry.rs`'s registrars nor `builtin_backends.toml`. That gap is exactly how `S85`
+/// lived in `brew.rs` while a gate named "every backend pins a version or says why" passed —
+/// `every_hand_written_backend_answers_the_pin_question` below is what closed it.
+#[test]
+fn every_reason_in_the_program_s_ledger_is_worth_printing() {
+    let names = linix::backends::capability::backends_that_cannot_pin();
+    assert!(
+        names.len() >= 20,
+        "only {} backend(s) in the ledger; it has stopped covering the hand-written ones",
+        names.len()
+    );
+    for name in names {
+        let why = linix::backends::capability::cannot_pin_reason(name)
+            .expect("a name from the ledger has a reason in the ledger");
+        assert!(
+            why.len() > 20,
+            "`{name}` is exempt with no reason worth reading: {why:?}"
+        );
+        assert!(
+            !why.ends_with('.'),
+            "`{name}`'s reason is a clause the refusal embeds mid-sentence, not its own \
+             sentence: {why:?}"
+        );
+    }
+}
+
+/// **The gap `S85` lived in.** The two scans above read `registry.rs` and
+/// `builtin_backends.toml`, and a backend that writes its own `Installable` is in neither — so a
+/// gate that claimed to cover "every backend" was blind to `brew`, which did not merely drop a
+/// pin but *invented* one, built `tokei@14.0.0`, and failed for ever on a version `lock` had
+/// written by itself.
+///
+/// Source-scanned for the same reason the others are: these modules are compiled everywhere but
+/// only *register* behind `cfg!(target_os = …)`, so asking the registry would ask whichever host
+/// the suite happens to run on.
+#[test]
+fn every_hand_written_backend_answers_the_pin_question() {
+    // Every module under `src/backends/` that implements `Installable` itself. Listed rather
+    // than globbed: a new backend file should make somebody answer this question on purpose.
+    const HAND_WRITTEN: &[&str] = &[
+        "appimage",
+        "brew",
+        "btrfs",
+        "emacs",
+        "flatpak",
+        "github",
+        "go",
+        "link",
+        "mise",
+        "nix",
+        "psresource",
+        "service",
+        "setting",
+        "snap",
+        "storage",
+        "vscode",
+        "web",
+    ];
+    let mut unanswered: Vec<String> = Vec::new();
+    for module in HAND_WRITTEN {
+        let path = root().join(format!("src/backends/{module}.rs"));
+        let src = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{} is in this repo: {e}", path.display()));
+        assert!(
+            src.contains("impl Installable for"),
+            "`{module}` is listed as hand-written and implements no Installable — the list has \
+             drifted from the modules"
+        );
+        // Omitting the method takes the trait's default (`false`), which is the safe answer and
+        // the one that owes a reason. `storage` builds three backends and `firewall` one, so the
+        // module name is not always the backend name — the ledger is asked per backend below.
+        if src.contains("fn pins_version") {
+            continue;
+        }
+        for backend in backends_named_by(module) {
+            if linix::backends::capability::cannot_pin_reason(&backend).is_none() {
+                unanswered.push(backend);
+            }
+        }
+    }
+    assert!(
+        unanswered.is_empty(),
+        "these hand-written backends silently drop a declared `@version=`: {unanswered:?}. \
+         Either implement `pins_version`, or add a row to `capability::CANNOT_PIN_VERSION` \
+         saying why the manager cannot be asked."
+    );
+}
+
+/// The backend names a hand-written module registers. All but `storage` name one; it builds both
+/// `zfs` and `lvm`, while `btrfs` has a module of its own.
+fn backends_named_by(module: &str) -> Vec<String> {
+    match module {
+        "storage" => vec!["zfs".into(), "lvm".into()],
+        other => vec![other.to_string()],
+    }
+}
+
 /// The ratchet. `COULD_PIN_AND_DOES_NOT` is a list of live defects, not a list of decisions.
 #[test]
 fn the_backends_that_could_pin_and_do_not_only_get_fewer() {
     assert!(
-        COULD_PIN_AND_DOES_NOT.len() <= UNBUILT_CEILING,
-        "{} backend(s) take a version LiNix does not send, and the ceiling is {}. Build one, or \
-         move it to NO_VERSION_TO_ASK_FOR with the reason it cannot be built.",
+        COULD_PIN_AND_DOES_NOT.is_empty(),
+        "{} backend(s) take a version LiNix does not send, which means a declared `@version=` \
+         there installs the wrong version and reports success: {:?}. Build the pin, or move it \
+         to `capability::CANNOT_PIN_VERSION` with the reason it cannot be built.",
         COULD_PIN_AND_DOES_NOT.len(),
-        UNBUILT_CEILING
+        COULD_PIN_AND_DOES_NOT
+            .iter()
+            .map(|(k, _)| *k)
+            .collect::<Vec<_>>()
     );
 }
 

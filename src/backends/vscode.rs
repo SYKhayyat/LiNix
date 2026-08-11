@@ -113,6 +113,12 @@ pub struct VscodeInstallable {
 
 #[async_trait]
 impl Installable for VscodeInstallable {
+    /// `code --install-extension publisher.name@1.2.3` — the marketplace serves that exact
+    /// version, so unlike Homebrew's formula names this `@` really is a version selector (`Q53`).
+    fn pins_version(&self) -> bool {
+        true
+    }
+
     /// One `code` process for every extension (`Q45`).
     ///
     /// **The flag repeats; the operand does not.** `--install-extension a --install-extension b`

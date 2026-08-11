@@ -173,13 +173,10 @@ impl Installable for WebInstallable {
 
             info!("Web: Downloading resource: {}", spec.name);
             let response = client.get(&spec.name).send().await.map_err(Error::from)?;
-            let bytes = response.bytes().await.map_err(Error::from)?;
 
             let tmp_dir = tempfile::tempdir().map_err(Error::from)?;
             let dl_path = tmp_dir.path().join("downloaded_file");
-            tokio::fs::write(&dl_path, bytes)
-                .await
-                .map_err(Error::from)?;
+            crate::core::download::write_capped(response, &dl_path, &spec.name).await?;
 
             if let Some(expected_sha) = spec.options.one("sha256") {
                 verify_checksum(&dl_path, expected_sha).await?;

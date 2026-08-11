@@ -3301,3 +3301,72 @@ data-directory lock's two-minute poll: each of them parked a tokio worker for it
 reaches `spawn`/`output`/`status` outside the executor unless it goes through a door or sits in
 an exemption table with a sentence. Fixing seventeen sites fixes seventeen sites; the gate is
 what stops the eighteenth — and it found ten of the seventeen on its first run.
+
+## II.53 A version is recorded everywhere and replayed only where it can be (`Q53`, V.183)
+
+**A lockfile does two jobs and only one of them works on every manager.** *Reproduce* needs the
+manager to accept a version as an install argument; *detect drift* only needs it to report one.
+So `linix lock` records what it observes on every backend, and a recorded version becomes an
+install argument only for a backend that can take one.
+
+**The report that reads those records is `check`'s own, not the planner's.** The planner answers
+*what would a sync change*, and a sync changes nothing on a manager it cannot tell which version
+to install — so leaving version drift to the planner would report none at all for Homebrew,
+pacman, snap and the rest, which are exactly the managers whose record is the only place the
+movement is visible. `check` compares the lockfile against what is installed and **names** what
+moved: a count sends the reader off to diff two files by hand.
+
+**A version LiNix recorded is never fed back to a manager that cannot replay it.** Doing so is
+what killed a release: brew's observed `tokei 14.0.0` was read back as `@version=14.0.0`, built
+into `tokei@14.0.0`, and Homebrew answered *No available formula with that name* — because
+`name@version` there is a different formula's **name**, not a version selector. The sync failed
+permanently on a pin nobody typed.
+
+**A pin somebody typed that cannot be honoured is refused by name, before anything runs.** Not
+dropped, not attempted. `sync` names the manager, the pin and the reason, skips that package and
+continues; `sync --locked` treats the same fact as fatal, because a run whose purpose is to
+reproduce a machine must not report success over a package it resolved freely. Silently
+installing a different version is the one outcome worse than either honouring the pin or refusing
+it.
+
+**Whether and why are separate, and are checked against each other.**
+`Installable::pins_version` answers whether, and defaults to **false** — a backend that says
+nothing refuses a pin it might have honoured, which is a message, where the opposite default
+installs the wrong version and reports success, which is not.
+`capability::CANNOT_PIN_VERSION` answers why, in the words the refusal prints. Neither is derived
+from the other: `a_version_pin_is_honoured_or_explained_tests` fails on a backend that cannot pin
+and has no reason recorded, **and** on a reason left behind by a backend that has since learned
+to pin. A backend may be unable to pin. It may not be silently unable.
+
+## II.54 Nothing outside LiNix may ask a question LiNix cannot answer (`S88`, V.184)
+
+**A password prompt is not read from stdin.** `sudo`, `git` and their credential helpers open
+`/dev/tty` directly, so closing a child's stdin does not stop one waiting — it only guarantees
+nobody sees the question. A mistyped sudo password, and a terminal with nobody in front of it,
+each cost LiNix the full command idle bound: fifteen silent minutes, indistinguishable from a
+slow package manager, every night for six nights.
+
+**So the asking happens in exactly one place, or not at all.** Credentials are primed once per
+run with a bounded, interactive `sudo -v`, and **every escalated command then runs `sudo -n`** —
+which can refuse, and cannot wait. With no terminal to ask on, LiNix says so immediately instead
+of waiting to be told what it already knows. git is given `GIT_TERMINAL_PROMPT=0` and
+`GCM_INTERACTIVE=never` for the same reason, and ssh is deliberately left alone: silencing it
+means overriding `core.sshCommand`, which would break every working custom transport to fix a
+misconfigured one.
+
+**A password bound is not a command bound.** A package manager may legitimately work in silence
+for minutes; a prompt cannot — either somebody is typing or nobody is there.
+`sudo_password_timeout_secs` is its own number for that reason.
+
+## II.55 A download is bounded before it fills the disk (`V.185`)
+
+**A response body is streamed to disk, never buffered whole.** All three download backends read
+the entire body into memory before writing it, so a URL answering with something enormous
+exhausted RAM before the disk was ever touched. Chunked writing bounds the memory to one chunk
+whatever the server sends.
+
+**And it is counted against a ceiling.** `max_download_bytes` is generous — AppImages are
+legitimately large — and movable, and `0` removes it. A declared `Content-Length` over the
+ceiling refuses before a byte moves; a server that declares nothing, or lies, is caught by the
+running count. A body that goes over takes its partial file with it, because a half-downloaded
+artifact left on disk is one a later run can find and treat as complete.

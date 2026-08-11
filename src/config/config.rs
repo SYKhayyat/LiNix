@@ -373,6 +373,25 @@ pub struct Config {
     #[serde(default = "default_query_idle_timeout_secs")]
     pub query_idle_timeout_secs: u64,
 
+    /// How long LiNix waits for a person to type a **sudo password** before giving up. `0`
+    /// waits as long as sudo itself would.
+    ///
+    /// Its own number, not the command bound, because the two measure different things. A
+    /// package manager may legitimately work in silence for minutes; a password prompt cannot —
+    /// either somebody is typing or nobody is there. Sharing one number is what made a mistyped
+    /// password, and an unattended terminal, cost fifteen silent minutes each (`S88`).
+    #[serde(default = "default_sudo_password_timeout_secs")]
+    pub sudo_password_timeout_secs: u64,
+
+    /// The largest body `web:`, `appimage:` and `github:` will write to disk, in bytes. `0`
+    /// removes the bound.
+    ///
+    /// A ceiling rather than a refusal: AppImages are legitimately large, so the number is
+    /// generous and movable. What it stops is a redirect to something enormous, or a server that
+    /// simply never stops sending, being written until the disk is full.
+    #[serde(default = "default_max_download_bytes")]
+    pub max_download_bytes: u64,
+
     /// How many times a read whose failure is classified **transient** is asked again. `1`
     /// asks once and does not retry.
     ///
@@ -612,6 +631,12 @@ fn default_command_idle_timeout_secs() -> u64 {
 fn default_query_idle_timeout_secs() -> u64 {
     crate::core::executor::DEFAULT_QUERY_IDLE_TIMEOUT_SECS
 }
+fn default_sudo_password_timeout_secs() -> u64 {
+    crate::core::executor::DEFAULT_SUDO_PASSWORD_TIMEOUT_SECS
+}
+fn default_max_download_bytes() -> u64 {
+    crate::core::download::DEFAULT_MAX_DOWNLOAD_BYTES
+}
 fn default_read_retry_attempts() -> u32 {
     crate::core::executor::DEFAULT_READ_RETRY_ATTEMPTS
 }
@@ -746,6 +771,8 @@ impl Default for Config {
             network_timeout_secs: default_network_timeout_secs(),
             command_idle_timeout_secs: default_command_idle_timeout_secs(),
             query_idle_timeout_secs: default_query_idle_timeout_secs(),
+            sudo_password_timeout_secs: default_sudo_password_timeout_secs(),
+            max_download_bytes: default_max_download_bytes(),
             read_retry_attempts: default_read_retry_attempts(),
             rate_limit_max_wait_secs: default_rate_limit_max_wait_secs(),
             manager_lock_wait_secs: default_manager_lock_wait_secs(),

@@ -115,6 +115,19 @@ jobs:
             target: x86_64-unknown-linux-gnu
             rust: stable
             native: true
+          # **The most obvious gap in the release until now**: every arm64 Linux box — a Pi, a
+          # Graviton instance, an arm64 container — fell through to `install.sh`'s source build,
+          # which is 448 crates under fat LTO on hardware chosen for its power draw.
+          #
+          # Cross-compiled from x86_64 rather than built on an arm64 runner, deliberately. A
+          # runner label with nothing behind it queues silently for ever instead of failing
+          # (`S86`, measured at 83 minutes), so a row that needs a label this workflow has never
+          # used is a row that can stall the release with no error to read. A cross build either
+          # compiles or goes red, and `native: false` says plainly that its tests did not run.
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            rust: stable
+            native: false
           - os: macos-latest
             target: x86_64-apple-darwin
             rust: stable
@@ -167,6 +180,20 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-
 
+    # `mlua` is vendored and `ring` ships assembly, so this target needs a C cross toolchain and
+    # not only a Rust one — `rustup target add` alone links against the host's libc and fails at
+    # the last step of a ten-minute build.
+    - name: Cross toolchain for aarch64 Linux
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-aarch64-linux-gnu
+        {
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc"
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc"
+          echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar"
+        } >> "$GITHUB_ENV"
+      if: matrix.target == 'aarch64-unknown-linux-gnu'
+
     - name: Build
       run: cargo build --release --target ${{ matrix.target }}
 
@@ -202,11 +229,11 @@ jobs:
     # never executed a step. Every `run:` whose value ends in a colon needs these quotes.
     - name: Terminal (pty) behaviour
       run: "cargo test --release --target ${{ matrix.target }} --test suite pty_tests::"
-      if: matrix.os == 'ubuntu-latest'
+      if: matrix.target == 'x86_64-unknown-linux-gnu'
 
     - name: Check formatting
       run: cargo fmt -- --check
-      if: matrix.os == 'ubuntu-latest'
+      if: matrix.target == 'x86_64-unknown-linux-gnu'
 
     - name: Run clippy
       run: cargo clippy --all-targets --all-features -- -D warnings
@@ -219,7 +246,7 @@ jobs:
     # was never updated, which silently emptied two whole sections of that sweep.
     - name: Harness predicates
       run: LINIX_BIN="$PWD/target/${{ matrix.target }}/release/linix" bash scripts/harness-logic-test.sh
-      if: matrix.os == 'ubuntu-latest'
+      if: matrix.target == 'x86_64-unknown-linux-gnu'
 
     - name: Upload binary artifact
       uses: actions/upload-artifact@v4
@@ -281,12 +308,12 @@ jobs:
       run: |
         set -eu
         missing=
-        for target in x86_64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin; do
+        for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin; do
           test -f "dist/linix-${target}" || missing="${missing} linix-${target}"
         done
         test -f dist/linix-x86_64-pc-windows-msvc.exe || missing="${missing} linix-x86_64-pc-windows-msvc.exe"
         test -z "$missing" || { echo "the release is missing:${missing}" >&2; exit 1; }
-        echo "all four targets present"
+        echo "all five targets present"
 
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/v')

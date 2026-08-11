@@ -963,29 +963,59 @@ pub async fn check_health(app: &App, out: Output) -> Result<()> {
                     .map(|p| format!("{}:{}", p.backend, p.name))
                     .collect()
             };
-            let locked_keys: std::collections::HashSet<String> =
+            let recorded: serde_json::Map<String, serde_json::Value> =
                 match tokio::fs::read_to_string(&lock_path).await {
                     Ok(data) => serde_json::from_str::<serde_json::Value>(&data)
                         .ok()
-                        .and_then(|v| {
-                            v.get("locks")
-                                .and_then(|l| l.as_object())
-                                .map(|o| o.keys().cloned().collect())
-                        })
+                        .and_then(|v| v.get("locks").and_then(|l| l.as_object()).cloned())
                         .unwrap_or_default(),
-                    Err(_) => std::collections::HashSet::new(),
+                    Err(_) => serde_json::Map::new(),
                 };
+            let locked_keys: std::collections::HashSet<String> = recorded.keys().cloned().collect();
             let missing = managed.difference(&locked_keys).count();
             let stale = locked_keys.difference(&managed).count();
-            if missing == 0 && stale == 0 {
+
+            // **Which packages have moved off the version that was recorded** — the job a
+            // lockfile does on *every* manager, because it needs only a version the manager can
+            // report and not one it can accept (II.53). It is asked here rather than left to the
+            // planner because the planner answers "what would a sync change", and a sync changes
+            // nothing on a manager that cannot be told which version to install: brew, pacman,
+            // snap and the rest would silently have no version drift at all.
+            let current = crate::verbs::plan::scan_installed_versions(app).await;
+            let moved: Vec<String> = recorded
+                .iter()
+                .filter_map(|(key, was)| {
+                    let now = current.get(key)?;
+                    (now != was).then(|| {
+                        format!(
+                            "{} {} -> {}",
+                            key,
+                            was.as_str().unwrap_or("?"),
+                            now.as_str().unwrap_or("?")
+                        )
+                    })
+                })
+                .collect();
+
+            if missing == 0 && stale == 0 && moved.is_empty() {
                 system.push(("lockfile".into(), HealthStatus::Ok, None));
             } else {
+                let mut parts = Vec::new();
+                if missing > 0 || stale > 0 {
+                    parts.push(format!("{} unpinned / {} stale", missing, stale));
+                }
+                if !moved.is_empty() {
+                    // Named, not counted. "3 moved" sends the reader to diff two files by hand,
+                    // and the whole point of recording a version on a manager that cannot replay
+                    // one is that the record is the only place the movement is visible.
+                    parts.push(format!("moved: {}", moved.join(", ")));
+                }
                 system.push((
                     "lockfile".into(),
                     HealthStatus::Degraded,
                     Some(format!(
-                        "drifted: {} unpinned / {} stale (run `linix lock`, or `linix heal`)",
-                        missing, stale
+                        "drifted: {} (run `linix lock`, or `linix heal`)",
+                        parts.join("; ")
                     )),
                 ));
             }

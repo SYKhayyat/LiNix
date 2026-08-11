@@ -70,6 +70,11 @@ pub struct MiseInstallable {
 
 #[async_trait]
 impl Installable for MiseInstallable {
+    /// `mise install tool@1.2.3` — asking for a version is the whole point of the tool (`Q53`).
+    fn pins_version(&self) -> bool {
+        true
+    }
+
     /// One `mise use -g` for every tool (`Q45`). `mise use -g node@22 go@1.23` is one
     /// resolution and one write to the global config; one call each rewrites that file N times.
     async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {

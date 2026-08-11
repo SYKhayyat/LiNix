@@ -166,8 +166,7 @@ impl Installable for AppImageInstallable {
                 )));
             }
 
-            let bytes = response.bytes().await?;
-            tokio::fs::write(&dest_path, bytes).await?;
+            crate::core::download::write_capped(response, &dest_path, url).await?;
 
             // Before the chmod below, never after: an unverified file must never exist as an
             // executable, even briefly.

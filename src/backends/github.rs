@@ -476,6 +476,11 @@ fn is_executable(entry: &walkdir::DirEntry) -> bool {
 
 #[async_trait]
 impl Installable for GithubInstallable {
+    /// A release tag *is* the version here, and the asset URL is built from it (`Q53`).
+    fn pins_version(&self) -> bool {
+        true
+    }
+
     async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
         let mut state = self.core.load_state_internal().await;
         let mut ledger = ArtifactLedger::load(&self.core.locks_file)?;
@@ -632,17 +637,9 @@ impl Installable for GithubInstallable {
             let tmp_dir = tempfile::tempdir().map_err(Error::from)?;
             let mut downloaded: Vec<(&artifact::Pick, PathBuf, String)> = Vec::new();
             for pick in &selection.picks {
-                let bytes = self
-                    .core
-                    .github_get(&pick.asset.url)
-                    .await?
-                    .bytes()
-                    .await
-                    .map_err(Error::from)?;
+                let response = self.core.github_get(&pick.asset.url).await?;
                 let dl_path = tmp_dir.path().join(&pick.asset.name);
-                tokio::fs::write(&dl_path, bytes)
-                    .await
-                    .map_err(Error::from)?;
+                crate::core::download::write_capped(response, &dl_path, &pick.asset.name).await?;
 
                 // `@sha256` is legal only on a line that resolves to exactly one file
                 // (VIII.2/D6), so it needs no per-artifact story here.

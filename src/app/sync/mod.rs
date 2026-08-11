@@ -13,6 +13,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, error, info, instrument, warn};
 
 pub mod guard;
+pub mod pins;
 pub mod planner;
 pub mod resolver;
 pub mod saved_plan;

@@ -579,6 +579,57 @@ fn every_target_the_release_publishes_is_one_the_matrix_actually_builds() {
     );
 }
 
+/// **Every triple the installer asks for is a triple the release publishes.**
+///
+/// `install.sh` maps `uname` to a target and downloads `linix-<triple>`; when there is no asset
+/// it falls back to building from source — 448 crates under fat LTO, on whatever hardware the
+/// user has. That fallback is silent, so a triple the installer names and the release does not
+/// publish is not a 404 anybody sees: it is a thirty-second promise that takes twenty minutes.
+///
+/// It has already happened once in the other direction — the matrix could not express
+/// `aarch64-apple-darwin`, so every Mac sold since 2020 built from source — and the shape here
+/// is identical. Linux on arm64 was the same gap until `v0.8.0`.
+#[test]
+fn every_triple_the_installer_downloads_is_one_the_release_publishes() {
+    let ci = read(".github/workflows/ci.yml");
+    let built: std::collections::BTreeSet<String> = ci
+        .lines()
+        .map(str::trim)
+        .filter_map(|l| l.strip_prefix("target: "))
+        .map(|t| t.trim().to_string())
+        .collect();
+
+    // The triples `target_triple()` can echo. Read from the script rather than restated, or
+    // this test pins a list somebody edits the script out from under.
+    let installer = read("scripts/install.sh");
+    let asked: std::collections::BTreeSet<String> = installer
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with('#'))
+        .filter_map(|l| l.split("echo ").nth(1))
+        .map(|t| {
+            t.split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .trim_end_matches(';')
+                .to_string()
+        })
+        .filter(|t| t.contains("-unknown-") || t.contains("-apple-") || t.contains("-pc-"))
+        .collect();
+    assert!(
+        asked.len() >= 4,
+        "the installer names {} triple(s); this scan has stopped matching install.sh: {asked:?}",
+        asked.len()
+    );
+
+    let unpublished: Vec<&String> = asked.difference(&built).collect();
+    assert!(
+        unpublished.is_empty(),
+        "`install.sh` downloads {unpublished:?} and no matrix row builds them, so every user on \
+         that platform silently compiles from source instead."
+    );
+}
+
 /// Why a matrix block would expand to fewer jobs than it has rows, or `None` if it is sound.
 ///
 /// A base key beside `include:` gives the matrix one combination, and GitHub merges an include

@@ -158,6 +158,24 @@ pub trait Installable: Send + Sync {
     fn supports_purge(&self) -> bool {
         false
     }
+
+    /// Whether this manager can be *asked* for an exact version at install time (`Q53`).
+    ///
+    /// **Not "does a version mean anything here" — "will this backend send one".** A lockfile
+    /// records a version on every manager, because reading one only needs the manager to report
+    /// it; replaying one needs the manager to accept it as an argument. Conflating the two is
+    /// what killed the macOS run: `lock` recorded brew's `tokei 14.0.0`, the next sync fed it
+    /// back as an install argument, and `tokei@14.0.0` is a formula that does not exist.
+    ///
+    /// **Defaults to `false`, and that direction is deliberate.** A new backend that says
+    /// nothing refuses a pin it might have been able to honour, which is a message; the other
+    /// default installs the wrong version and reports success, which is not. Every `false` owes
+    /// a reason in [`capability::cannot_pin_reason`](crate::backends::capability::cannot_pin_reason),
+    /// and `a_version_pin_is_honoured_or_explained_tests` fails when one does not have it — so a
+    /// backend may be unable to pin, but not *silently* unable.
+    fn pins_version(&self) -> bool {
+        false
+    }
 }
 
 #[async_trait]

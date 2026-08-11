@@ -229,6 +229,155 @@ pub fn channel_backends() -> String {
     HAS_CHANNELS.join(", ")
 }
 
+/// Why a backend cannot turn `@version=1.2.3` into an install argument (`Q53`).
+///
+/// **The ledger exists so that a backend can be unable to pin but never *silently* unable.**
+/// [`Installable::pins_version`](crate::core::manager::Installable::pins_version) defaults to
+/// `false`, so a backend that answers nothing refuses every pin — and this table is what turns
+/// that refusal into a sentence a person can act on instead of a shrug. Every `false` needs a
+/// row here, asserted by `a_version_pin_is_honoured_or_explained_tests`.
+///
+/// A row is a **reason**, not a to-do. A backend that could pin and simply has not been built
+/// does not belong here: it belongs in that test's `COULD_PIN_AND_DOES_NOT`, which is a list of
+/// live defects under a ceiling that only goes down.
+///
+/// **Read by the refusal, not only by the test**, which is why it is here and not beside the
+/// scan. A message that says "cannot be met" without saying why is a puzzle (`V.42`).
+const CANNOT_PIN_VERSION: &[(&str, &str)] = &[
+    // Rolling repositories: one published version, and no flag that asks for another.
+    (
+        "pacman",
+        "Arch is rolling — the repositories publish one version of a package and pacman has no \
+         flag that asks for another",
+    ),
+    (
+        "yay",
+        "yay speaks pacman's flags over the same rolling repositories, so it inherits pacman's \
+         answer",
+    ),
+    (
+        "paru",
+        "paru speaks pacman's flags over the same rolling repositories, so it inherits pacman's \
+         answer",
+    ),
+    (
+        "eopkg",
+        "Solus is rolling — the repository holds one version and eopkg has no flag for another",
+    ),
+    (
+        "slackpkg",
+        "slackpkg installs what the configured mirror carries and takes no version",
+    ),
+    // The manager pins, but through something a bare version string cannot be turned into.
+    (
+        "brew",
+        "Homebrew's `name@version` is a *different formula's name* (`python@3.12`), not a version \
+         selector — a full version built into one names a formula that does not exist, and the \
+         install fails permanently",
+    ),
+    (
+        "scoop",
+        "scoop pins through a versioned manifest in a bucket, not through an install flag",
+    ),
+    (
+        "emerge",
+        "Portage pins with an atom (`=category/name-version`), which needs the category as well \
+         as the version — a bare `@version=` cannot be turned into a valid atom",
+    ),
+    (
+        "macports",
+        "a Portfile carries its own version, so installing an older one means checking out an \
+         older ports tree — not something an install argument can express",
+    ),
+    (
+        "xbps",
+        "`xbps-install name-1.2.3_1` needs the package's revision suffix as well as its version, \
+         which `@version=` does not carry and cannot derive — and Void is rolling, so there is \
+         one version in the repository to select anyway",
+    ),
+    (
+        "snap",
+        "snap selects a channel or a revision number, and neither can be derived from a version",
+    ),
+    (
+        "flatpak",
+        "flatpak selects a branch or a commit hash, and neither can be derived from a version",
+    ),
+    (
+        "nix",
+        "a nix flake URI carries its own revision, so pinning means naming a different URI rather \
+         than passing a version",
+    ),
+    // The index serves exactly one version, so there is nothing to choose between.
+    (
+        "mas",
+        "the Mac App Store serves the current published version of an app and no other",
+    ),
+    (
+        "krew",
+        "the kubectl plugin index serves the current version of a plugin only",
+    ),
+    (
+        "emacs",
+        "package.el installs what the configured archive currently carries and takes no version",
+    ),
+    // The declaration already names the exact artifact, so a version would be a second answer
+    // to a question that is already answered.
+    (
+        "web",
+        "a `web:` line names one URL, which already is the exact thing to install",
+    ),
+    (
+        "appimage",
+        "an `appimage:` line names one file, which already is the exact thing to install",
+    ),
+    (
+        "link",
+        "a `link:` line creates a symlink, which has no version to install",
+    ),
+    // Not packages at all: these converge a machine's state, and state has no version.
+    (
+        "service",
+        "a `service:` line enables a unit the system already has — the version is the package's, \
+         not the service's",
+    ),
+    (
+        "setting",
+        "a `setting:` line writes a configuration value, which has no version",
+    ),
+    (
+        "btrfs",
+        "a `btrfs:` line creates a subvolume, which has no version",
+    ),
+    (
+        "zfs",
+        "a `zfs:` line creates a dataset, which has no version",
+    ),
+    (
+        "lvm",
+        "a `lvm:` line creates a volume, which has no version",
+    ),
+];
+
+/// Why `backend` cannot honour an exact version, or `None` if it can.
+///
+/// **Asked of the ledger, not of the backend.** The backend answers *whether*
+/// ([`Installable::pins_version`](crate::core::manager::Installable::pins_version)); this
+/// answers *why*, and the two are checked against each other rather than derived from one
+/// another — a backend that starts pinning and leaves its row behind makes the ledger a list of
+/// things that used to be true, which the test catches from this side.
+pub fn cannot_pin_reason(backend: &str) -> Option<&'static str> {
+    CANNOT_PIN_VERSION
+        .iter()
+        .find(|(b, _)| *b == backend)
+        .map(|(_, why)| *why)
+}
+
+/// Every backend the ledger excuses, for a test to check against the backends themselves.
+pub fn backends_that_cannot_pin() -> Vec<&'static str> {
+    CANNOT_PIN_VERSION.iter().map(|(b, _)| *b).collect()
+}
+
 /// The comparable part of a channel string. A snap channel is `track/risk`
 /// (`latest/stable`), and the user usually writes just the risk (`stable`), so the two must
 /// compare equal or a channel change would fire on every sync (D13).

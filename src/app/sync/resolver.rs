@@ -1,3 +1,4 @@
+use crate::app::sync::pins::UnmeetablePin;
 use crate::app::vocab::Vocab;
 use crate::backends::BackendRegistry;
 use crate::config::grammar::{statement, Candidates, Gates, GrammarError, Origin, Statement};
@@ -1143,7 +1144,60 @@ impl<'a> StateResolver<'a> {
                     }
                     continue;
                 }
+                // **Recorded everywhere, replayed only where it can be replayed** (`Q53`).
+                //
+                // A lockfile does two jobs and they are not the same job: *reproduce* needs the
+                // manager to accept a version, *detect drift* only needs it to report one. Job 2
+                // works on every manager, so `lock` records on every manager — and feeding that
+                // record back as an install argument is what killed the macOS run, where brew's
+                // observed `tokei 14.0.0` became `tokei@14.0.0`, a formula that does not exist.
+                //
+                // Not injecting here is also what makes the planner's refusal correct: after
+                // this, a version on a manager that cannot pin can only have come from a line
+                // somebody typed, so it can be refused as a decision rather than guessed about.
+                if !self.registry.pins_version(backend) {
+                    if self.locked {
+                        warn!(
+                            "{} is recorded at {} and `{}` cannot install an exact version, so \
+                             this run reproduces whatever it offers today.",
+                            key, locked, backend
+                        );
+                    } else {
+                        debug!(
+                            "{}: {} is recorded but `{}` cannot replay a version; the record \
+                             stays a drift reference.",
+                            key, locked, backend
+                        );
+                    }
+                    continue;
+                }
                 spec.options.set("version".to_string(), locked.clone());
+            }
+        }
+        // `--locked` promises an exact machine, so a pin it cannot replay is fatal here rather
+        // than a named skip: a run whose whole purpose is "reproduce this" must not report
+        // success over a package it resolved freely. Without the flag the planner refuses the
+        // package by name and the rest of the manifest proceeds — same fact, two severities, one
+        // implementation in `sync::pins` so the rule cannot hold on one command and not its
+        // neighbour.
+        if self.locked {
+            let unmeetable = crate::app::sync::pins::unmeetable(
+                &self.registry,
+                state
+                    .packages
+                    .iter()
+                    .flat_map(|(b, specs)| specs.iter().map(move |s| (b.as_str(), s))),
+            );
+            if !unmeetable.is_empty() {
+                return Err(Error::Validation(format!(
+                    "Locked Mode Error: {} declared version(s) cannot be reproduced.\n  {}",
+                    unmeetable.len(),
+                    unmeetable
+                        .iter()
+                        .map(UnmeetablePin::message)
+                        .collect::<Vec<_>>()
+                        .join("\n  ")
+                )));
             }
         }
         Ok(())

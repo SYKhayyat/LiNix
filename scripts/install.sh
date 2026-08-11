@@ -27,7 +27,10 @@ say "bootstrapping — detecting toolchain..."
 # `uname -m` on arm64 macOS says `arm64`; the Rust triple says `aarch64`.
 target_triple() {
   case "$(uname -s 2>/dev/null || echo unknown)" in
-    Linux)  [ "$(uname -m)" = "x86_64" ] && echo x86_64-unknown-linux-gnu ;;
+    Linux)  case "$(uname -m)" in
+              x86_64)        echo x86_64-unknown-linux-gnu ;;
+              aarch64|arm64) echo aarch64-unknown-linux-gnu ;;
+            esac ;;
     Darwin) case "$(uname -m)" in
               arm64|aarch64) echo aarch64-apple-darwin ;;
               x86_64)        echo x86_64-apple-darwin ;;

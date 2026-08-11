@@ -6031,3 +6031,120 @@ silence to time out. A `std::process::Command` cannot be abandoned at all — it
 opposite, that it holds a runtime worker until the child exits, which is why `git commit` after
 every sync was parking a thread. Collapsing those into one mechanism is the same mistake as
 collapsing V.181's three lock states into one failure.
+
+---
+
+**V.183 — Why a version is recorded everywhere and replayed only where it can be.**
+*(Rule in II.53. Ruled by the owner 2026-08-10 as `Q53`; the bug is `S85`.)*
+
+**The failure, measured on the macOS nightly leg.** A sync installs `brew:tokei`. `lock` records
+`14.0.0` — correctly; that is tokei's version. A later sync reads it back as `@version=14.0.0`,
+`brew.rs` builds `tokei@14.0.0`, and brew answers *No available formula with the name
+"tokei@14.0.0"*. The sync dies, and it dies for ever, on a pin the user never typed. Homebrew's
+`name@version` is a **different formula's name** — versioned formulae exist for a handful of
+packages and carry a series (`python@3.12`, `openssl@3`), never a full semver.
+
+On fourteen other backends the same declaration was dropped and the install reported success at
+whatever version the manager picked. Ten could not do otherwise. Four could and had simply never
+been built. That second group is the lie class: a command that did not do what it was asked and
+said nothing.
+
+**The chiluk that makes it tractable is that a lockfile has two jobs, and they are not the same
+job.** Reproduce needs the manager to *accept* a version. Detect drift needs it only to *report*
+one. Job two works everywhere. Conflating them is precisely what killed the run: a record kept
+for job two was fed back as an install argument for job one. Once they are separated, nothing has
+to be given up — the recording stays universal, and only the replay is narrowed to where replay
+is possible.
+
+**But separating them makes a report necessary that did not exist.** Before this, the only thing
+that ever compared a recorded version against an installed one was the *planner*, by way of the
+version it had injected into the spec — so the moment injection stopped, version drift on every
+cannot-pin manager would have become invisible, and the ruling's own claim that "detect drift
+keeps working" would have been false in the same commit that wrote it down. The comparison moved
+to `check`, where it belongs: it is a question about two records, not about what a sync would do,
+and asking it there is what makes it answerable for Homebrew and pacman at all.
+
+**Why the refusal needs no provenance flag.** The obvious design carries a bit on each spec
+saying whether a person typed the pin or `lock` recorded it, and a bit like that is one more
+thing to set wrong. It is unnecessary: once `apply_locks` stops injecting a recorded version into
+a spec whose backend cannot replay one, **a version reaching the planner on such a backend can
+only have come from a line somebody wrote.** The distinction falls out of the mechanism instead
+of being carried alongside it.
+
+**Why `pins_version` defaults to false.** A new backend that answers nothing refuses a pin it
+might have been able to honour — a message, and a wrong one, but a *visible* one. The other
+default installs the wrong version and reports success. When a default has to be wrong in one
+direction, it goes in the direction somebody notices.
+
+**Why the ledger sits in the program and not in the test.** The refusal quotes it. A reason table
+kept beside the scan would be a list that agrees with the messages until the day it does not, and
+"cannot be met" with no *why* is a puzzle rather than a message (V.42).
+
+**What the fix turned up, which is the part worth remembering.** The gate that claimed to cover
+"every backend pins a version or says why" scanned `registry.rs`'s registrars and
+`builtin_backends.toml`'s rows — and `brew` is neither. The one backend that did not merely drop
+a pin but *invented* one was structurally invisible to the instrument built to find exactly that,
+and eleven more hand-written backends sat in the same blind spot. It is the same shape as `S83`,
+where a registry walk audited whichever backends happened to register on the host: an instrument
+that enumerates one representation of a thing reports cleanly on every representation it cannot
+see.
+
+---
+
+**V.184 — Why nothing outside LiNix may ask a question LiNix cannot answer.**
+*(Rule in II.54. The bug is `S88`.)*
+
+**A closed stdin is not a closed mouth.** Every wrong theory about this bug came from one false
+premise: that a child with `Stdio::null()` cannot ask for anything. `sudo` opens `/dev/tty`
+directly and reads the password there, and so does git's credential prompt. A process with a
+controlling terminal — a CI job under a pty, a session nobody is sitting at — waits at that
+prompt indefinitely, and because LiNix captures the child's streams, **the question is never
+displayed**. There is no output, no error and no end: exactly the signature of a slow package
+manager.
+
+Two hard failures, both in the `tools` leg, both nightly, both for at least six nights: *"a wrong
+password left LiNix waiting 900s instead of reporting a failure"* and *"a terminal with nobody at
+it wedged LiNix for 900s"*. 900 is the harness's own timeout, so both were hangs without end, and
+they were most of why that job took 48 minutes. It sat unread for the same reason `S84` did: a
+red nightly job nobody opens.
+
+**Why priming once rather than bounding the prompt.** The bound is the obvious fix and it is the
+weaker one: it makes the hang cheaper without making it impossible, and every escalated command
+keeps its own chance to sit at a prompt. Priming the credential once and running every command
+with `-n` moves the asking to a single place that can be bounded properly, and leaves every other
+invocation structurally unable to wait — `sudo -n` can refuse, and cannot block. The keepalive
+already worked this way and already carried the reasoning; the foreground path had simply never
+been brought in line with it.
+
+**Why ssh is left alone.** `-o BatchMode=yes` would close the last hole, and the only way to set
+it from here is `GIT_SSH_COMMAND`, which overrides a user's `core.sshCommand`. Silencing a prompt
+on a misconfigured remote is not worth breaking every working custom transport. A passphrase with
+no agent is the user's setup to fix; an unprompted credential is ours.
+
+**Why this belongs to `Q52`'s family from the other end.** `Q52` was about children LiNix
+abandons. This is a child LiNix waits on for ever — and it was the last place where a program
+outside LiNix could stop this one indefinitely with no message.
+
+---
+
+**V.185 — Why a download is bounded before it fills the disk.**
+*(Rule in II.55.)*
+
+`web:`, `appimage:` and `github:` each read a whole response body into memory with `.bytes()` and
+then wrote it out. Two problems in one line: the memory is unbounded regardless of what the file
+turns out to be, and there was no ceiling on the file either. A redirect to something enormous —
+or a server that simply never stops sending — is answered by allocating until something dies.
+
+Streaming fixes the larger half by itself, and the ceiling is what makes the refusal legible.
+`Content-Length` is checked first and trusted for nothing: when a server declares a size over the
+ceiling the transfer is refused before a byte moves, which turns a two-gigabyte wait into an
+immediate message, and when it declares nothing — a chunked response declares nothing — the
+running count catches it anyway. One of those is a courtesy; the other is the actual bound.
+
+**Why a ceiling and not a refusal.** AppImages are legitimately large, so a number here is a
+guess about somebody else's artifact. It is set generously, it is in the config, and `0` removes
+it. The failure it exists to stop is not a large download; it is an unbounded one.
+
+**Why the partial file is deleted.** A half-downloaded artifact left on disk is one a later run
+can find and treat as complete — and the checksum that would have caught that is exactly the one
+`@unverified` is allowed to switch off.

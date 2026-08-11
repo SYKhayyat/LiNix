@@ -67,15 +67,14 @@ impl Installable for BrewInstallable {
         if specs.is_empty() {
             return Ok(());
         }
-        // Best-effort version pin via brew's versioned formulae (e.g. `python@3.11`).
-        // Only some formulae publish versioned variants; otherwise brew installs latest.
-        let targets: Vec<String> = specs
-            .iter()
-            .map(|spec| match spec.options.one("version") {
-                Some(v) if crate::backends::concrete_version(v) => format!("{}@{}", spec.name, v),
-                _ => spec.name.clone(),
-            })
-            .collect();
+        // **No version goes on this command line** (`Q53`, `S85`). `name@version` is a different
+        // formula's *name* in Homebrew — `python@3.12`, `openssl@3` — not a version selector, and
+        // building one from a full version names a formula that does not exist. `brew install
+        // tokei@14.0.0` answers *No available formula*, and because `lock` records the version it
+        // observes, the sync that fed it back failed on a pin the user never typed and failed
+        // that way for ever. A pin that cannot be honoured is refused by the planner, by name,
+        // before anything runs; it is never built and hoped for here.
+        let targets: Vec<String> = specs.iter().map(|spec| spec.name.clone()).collect();
         info!("Brew: Installing {} formula(e)...", targets.len());
         let mut args = vec!["install".to_string()];
         crate::core::argv::push_names(&mut args, "brew", targets.iter().map(String::as_str));

@@ -963,6 +963,12 @@ impl Installable for GenericInstallable {
         self.core.config.purge_args.is_some()
     }
 
+    /// The pin syntax is the whole answer: a config that names one can build an install argument
+    /// from a version, and a config that names none cannot (`Q53`).
+    fn pins_version(&self) -> bool {
+        self.core.config.version_pin.is_some()
+    }
+
     async fn purge(
         &self,
         names: &[String],
@@ -1021,6 +1027,23 @@ impl GenericInstallable {
                     // branches now answer the same question the same way.
                     trailing_option |= pin.emits_trailing_option();
                     names.extend(pin.apply(&spec.name, &fallback));
+                }
+                // A concrete version with no syntax to spend it on. The planner refuses this by
+                // name before anything runs (`Q53`), so reaching here means something built a
+                // spec without going through a plan — and dropping the pin silently is the one
+                // outcome worse than either honouring it or refusing it, because the install
+                // then reports success at a version nobody asked for.
+                (Some(ver), None) if is_concrete_version(ver) => {
+                    return Err(crate::core::Error::Unsupported(format!(
+                        "`{}` cannot install an exact version, so `{}@version={}` cannot be met{}",
+                        self.core.name,
+                        spec.name,
+                        ver,
+                        match capability::cannot_pin_reason(&self.core.name) {
+                            Some(why) => format!(" — {}", why),
+                            None => String::new(),
+                        }
+                    )));
                 }
                 _ => names.push(spec.name.clone()),
             }

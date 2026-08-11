@@ -820,6 +820,53 @@ impl Transaction {
             .collect();
         let names: Vec<String> = keep.iter().map(|&i| members[i].2.clone()).collect();
 
+        // **A compensating install carries a version nobody declared** (`Q53`). Rollback
+        // reads what a package was on before the transaction touched it and puts that back,
+        // so a version reaches this point on a manager the planner never got to vet — and
+        // on a manager that cannot be asked for one there is nothing to send.
+        //
+        // Stripped and **named**, not refused: refusing would end a rollback with the
+        // package uninstalled, which is worse than putting it back at what the manager
+        // offers and saying which version could not be restored. The declared case is the
+        // one that gets refused, and it is refused at plan time.
+        //
+        // Before this, `brew.rs` answered the same situation by building `pkg-a@1.0` — a
+        // formula name that does not exist — so the rollback failed on a real Mac and
+        // passed in every test, because a mock matches any string.
+        let specs: Vec<PackageSpec> = if is_install
+            && backend_cap
+                .as_installable()
+                .is_some_and(|i| !i.pins_version())
+        {
+            specs
+                .into_iter()
+                .map(|mut spec| {
+                    match spec.options.one("version").map(str::to_string) {
+                        Some(v) if crate::backends::concrete_version(&v) => {
+                            warn!(
+                                "{}:{} was on {} and `{}` cannot be asked for a version — \
+                                 putting it back at whatever `{}` offers.{}",
+                                b_name,
+                                spec.name,
+                                v,
+                                b_name,
+                                b_name,
+                                match crate::backends::capability::cannot_pin_reason(&b_name) {
+                                    Some(why) => format!(" {}.", why),
+                                    None => String::new(),
+                                }
+                            );
+                            spec.options.remove("version");
+                        }
+                        _ => {}
+                    }
+                    spec
+                })
+                .collect()
+        } else {
+            specs
+        };
+
         let mut attempt = 0;
         let mut last_error = None;
         let mut lock_waited = Duration::ZERO;

@@ -261,8 +261,19 @@ async fn a_failed_upgrade_is_reverted_and_never_uninstalled() {
         calls
     );
     assert!(
-        calls.iter().any(|c| c.contains("install -- pkg-a@1.0")),
-        "rollback did not put pkg-a back at the version it was on: {:?}",
+        calls.iter().any(|c| c.contains("install -- pkg-a")),
+        "rollback did not put pkg-a back at all: {:?}",
+        calls
+    );
+    // **The version is not smuggled into the formula name** (`S85`/`Q53`). This assertion used
+    // to read `install -- pkg-a@1.0`, and it was green over a rollback that could not have
+    // worked: `pkg-a@1.0` is a *different formula's name* in Homebrew, so on a real Mac this
+    // compensation answered *No available formula* and the rollback failed. A mock matches any
+    // string, which is exactly why the fiction survived. brew cannot be asked for a version, so
+    // the compensation puts the package back and says which version it could not restore.
+    assert!(
+        !calls.iter().any(|c| c.contains("pkg-a@")),
+        "rollback built a versioned formula name that does not exist: {:?}",
         calls
     );
 }
@@ -288,8 +299,17 @@ async fn a_rolled_back_removal_comes_back_at_the_version_it_left_at() {
         calls
     );
     assert!(
-        calls.iter().any(|c| c.contains("install -- pkg-a@1.0")),
-        "the reinstall lost the version: {:?}",
+        calls.iter().any(|c| c.contains("install -- pkg-a")),
+        "the removal was never compensated: {:?}",
+        calls
+    );
+    // As above: the compensation must not invent `pkg-a@1.0`, which names nothing in Homebrew.
+    // What a *pinning* backend does with the same compensation is asserted at the argv layer —
+    // `generic.rs`'s `version_pin_renders_native_syntax` and the per-backend assertions in
+    // `registry.rs` — because that is where a version becomes a command line.
+    assert!(
+        !calls.iter().any(|c| c.contains("pkg-a@")),
+        "the reinstall built a versioned formula name that does not exist: {:?}",
         calls
     );
 }

@@ -212,6 +212,11 @@ pub struct PsResourceInstallable {
 
 #[async_trait]
 impl Installable for PsResourceInstallable {
+    /// `Install-PSResource -Version` takes an exact version (`Q53`).
+    fn pins_version(&self) -> bool {
+        true
+    }
+
     async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
         for spec in specs {
             validate_name(&spec.name)?;

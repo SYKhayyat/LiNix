@@ -624,6 +624,9 @@ impl<'a> ChangePlanner<'a> {
             Self::declared_specs(&filtered_desired),
             &mut changes,
         );
+        // After the machine question, not before: "`pacman` cannot pin" is a misleading answer on
+        // a host that has no pacman, where the true answer is that the manager is not here.
+        let declared = self.drop_pins_this_manager_cannot_meet(declared, &mut changes);
 
         // Precompute desired keys for O(1) lookup
         let desired_keys: HashSet<String> = declared.keys().cloned().collect();
@@ -796,6 +799,39 @@ impl<'a> ChangePlanner<'a> {
             });
         }
         runnable
+    }
+
+    /// Drop the declarations whose `@version=` the manager they name cannot express (`Q53`).
+    ///
+    /// **Refused, not dropped and not attempted.** Before this, a pin on such a manager was
+    /// silently discarded and the install reported success at whatever version the manager
+    /// picked — a command that did not do what it was asked and said nothing, which is the one
+    /// outcome worse than either honouring the pin or refusing it. Homebrew was worse still: it
+    /// built `name@version`, which is a *different formula's name*, and died on a pin that
+    /// `lock` had written by itself.
+    ///
+    /// Refusing the package rather than the run, because the rest of the manifest is fine and a
+    /// whole sync stopped by one unmeetable line teaches less than a named skip does.
+    /// `sync --locked` is the exception and makes the same fact fatal, from the resolver.
+    fn drop_pins_this_manager_cannot_meet(
+        &self,
+        mut declared: HashMap<String, PackageSpec>,
+        changes: &mut SyncChanges,
+    ) -> HashMap<String, PackageSpec> {
+        let unmeetable = super::pins::unmeetable(
+            &self.registry,
+            declared.values().map(|s| (s.backend.as_str(), s)),
+        );
+        for pin in unmeetable {
+            let reason = pin.message();
+            warn!("{} — skipping it.", reason);
+            declared.remove(&pin.key);
+            changes.skipped.push(Skipped {
+                key: pin.key,
+                reason,
+            });
+        }
+        declared
     }
 
     /// **Borrowed, not cloned, when there is nothing to filter.** The unscoped case is the

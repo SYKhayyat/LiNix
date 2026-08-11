@@ -15,9 +15,9 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
-| **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **2** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **181** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
+| **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **184** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -73,11 +73,10 @@ status loses that, so it is kept here:
 
 ## Index
 
-**One is open: `Q53`, raised 2026-08-10 — what a version pin means on a manager that cannot
-express one. `Z1` — the licence — was ruled 2026-08-09, and `Y18` is RULED in full as of
-the same day: `@source=` on a `shim:` line is read, and `Y23` — flatpak's unreadable channel —
-was ruled and built beside it.** All 188 are accounted
-for: **181 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 2 BUILT NEVER RULED, 1 OPEN** — and this line
+**Nothing is open.** `Q53` — what a version pin means on a manager that cannot express one — was
+raised, measured and ruled on 2026-08-10, and the two entries that had run ahead of a ruling were
+ruled the same day: `Q24`'s idle bound and `Y19`'s unreadable-parser failure. All 188 are accounted
+for: **184 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -273,7 +272,7 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q21** | Is converging-on-change a property of *every* option, or of the five that happen to have it — RULED 2026-07-31: every option, proved per option. | 2026-07-31 |
 | **Q22** | A config file saved by a Windows editor starts with a byte-order mark, which became part of the first name — refuse it, or read the file? — RULED 2026-07-31: **read it.** The mark is stripped where text enters a parser. | 2026-07-31 |
 | **Q23** | A package name that begins with `@` — every scoped npm package — was read as an option list and could not be written at all. — RULED 2026-07-31: **the leading `@` is part of the name.** | 2026-07-31 |
-| **Q24** | An uninstall sat 76 minutes on a child that had finished its work and never returned; nothing outside the DAG bounded a command at all. BUILT 2026-08-02: a bound on **silence**, `command_idle_timeout_secs = 900`. The number is unruled. | — |
+| **Q24** | An uninstall sat 76 minutes on a child that had finished its work and never returned; nothing outside the DAG bounded a command at all. Built 2026-08-02: a bound on **silence**, `command_idle_timeout_secs = 900`. — RULED: **the user sets it; 900 stays.** Killing a legitimately silent install breaks a machine and waiting on a hang costs minutes, so the ceiling sits on the side that costs minutes. The sharp numbers live where they can be measured — reads at 120s (`Q32`), and the sudo prompt at 120s (`S88`). | 2026-08-10 |
 | **Q25** | May ownership be derived from the config repo's git history, demoting `registry.json` to a cache? — RULED: **no**, in both the git-required and the corroborating-source form. | 2026-08-03 |
 | **Q26** | Is the plan a public versioned artifact with a hard refusal on schema mismatch? — **DEFERRED.** The *internal* plan object is ruled **build it**; publishing the format is not. | 2026-08-03 |
 | **Q27** | Does Part II gain a tier-1 / tier-2 distinction, printed per row by `plan`? — RULED: **no.** | 2026-08-03 |
@@ -339,7 +338,7 @@ II.19 and the reasons in V.115–V.118.*
 | **Q50** | A killed run leaves the package manager's own lock behind, and every later run fails. | 2026-08-10 |
 | **Q51** | Another package manager holding its own lock made LiNix fail in 3.5 seconds, with a sentence that was false in exactly that case. RULED: **wait for it.** | 2026-08-10 |
 | **Q52** | LiNix started processes it did not own — SIGKILL for a package manager mid-transaction, and seventeen sites that detached a child or parked a runtime worker. RULED: **every child has an owner, through one of three doors.** | 2026-08-10 |
-| **Q53** | What does `@version=` mean on a manager that cannot express one? `brew` builds a formula name that does not exist and the sync dies; ten other backends drop the pin and report success. OPEN. | 2026-08-10 |
+| **Q53** | What does `@version=` mean on a manager that cannot express one? `brew` builds a formula name that does not exist and the sync dies; ten other backends drop the pin and report success. — RULED: **record everywhere, replay only where it can be replayed.** A recorded version is never fed back as an install argument to a manager that cannot take one, so drift detection keeps working everywhere; a pin somebody *typed* that cannot be honoured is refused at plan time by name, and is fatal under `--locked`. `brew` stops inventing `name@version`. (II.53, V.183) | 2026-08-10 |
 | **Q48** | Every `link:` on Windows took the cross-drive COPY fallback, same drive or not: `is_same_drive` compared a verbatim prefix against a plain one — and the limitation it guarded does not exist, since a Windows symlink spans volumes. RULED: **a `link:` links; only a missing privilege gets a copy, and it says so.** | 2026-08-06 |
 | **Y11** | Two backends built install and remove argv by hand and lost the `--` terminator; forty backends could not clear a cache because no row could say how; one manager took two locks over one database. The argv table recorded all of it and checked none of it. RULED: **one path per backend, and a capability the machinery lacks is a field.** | 2026-08-06 |
 | **Y12** | `ChangePlanner::plan` took `Option<Scope>`, where `None` meant both "do not filter the desired set" and "reap every backend on the box"; five of eight callers passed it and four wanted only the first — the transient shell, whose desired set is its own requests, planned a removal for every other package on the machine. RULED: **a plan says what it is computed over, and the case that reaps cannot be written without the list that bounds it.** | 2026-08-06 |
@@ -4515,9 +4514,30 @@ is positional, and there is exactly one special position.
 
 ## Q24
 
-**Status: BUILT, NEVER RULED — built 2026-08-02.** The owner said *"find the linix bug (not just
-symptom but root) and fix"*, which rules that a bound must exist. It does not rule the number, and
-the number is the whole cost of being wrong in either direction.
+**Status: ANSWERED — built 2026-08-02, ruled 2026-08-10.** The owner said *"find the linix bug
+(not just symptom but root) and fix"*, which ruled that a bound must exist. It did not rule the
+number, and the number is the whole cost of being wrong in either direction.
+
+**RULED (owner, 2026-08-10): the user sets it, and the default is the builder's call.** The
+numbers stand — **900s for a mutation, 120s for a read** — and the reason for keeping 900 rather
+than lowering it is worth writing down, because the instinct was to lower it:
+
+- **The costs are asymmetric.** Killing a package manager that was legitimately working in
+  silence leaves a half-applied install; waiting too long on a hang costs minutes. A large MSI
+  under `winget`, or `Checkpoint-Computer`, can genuinely print nothing for a long time, and no
+  wall-clock number distinguishes that from a wedge. When one direction breaks a machine and the
+  other wastes time, the number belongs on the side that wastes time.
+- **The bound that actually fires is already tight and already measured.** `Q32` split reads out
+  as `query_idle_timeout_secs`, sized at 120s against a cold `winget list` at 2.6s under
+  sixteen-way contention — about 46× the worst observed. A wedged *question* costs two minutes,
+  not fifteen, and questions are what wedge.
+- **The fifteen-minute hangs the owner was actually seeing were not this bound doing its job.**
+  They were `S88`: sudo waiting on `/dev/tty` for a password nobody was going to type, running out
+  the clock. Lowering the mutation bound would have made that hang cheaper while leaving it a
+  hang. Fixing `S88` removed it.
+
+So the ceiling stays where a legitimately slow command survives it, and the sharp numbers live on
+the two bounds that can be sized from measurements: reads, and now the sudo prompt.
 
 **Q24 — How long may a command say nothing before LiNix stops waiting for it?**
 
@@ -7240,10 +7260,15 @@ mechanism that hid them was identical — one fact, several copies, a gate aroun
 
 ## Y19
 
-**Status: BUILT, NEVER RULED — built 2026-08-07 from `LX-1`.** Not a new rule: Part II already
-made this ruling for one field and the parser layer had no type to express it with. Recorded here
-because the *visible* behaviour changed — a manager whose output a parser cannot read now stops
-the read instead of reporting an empty machine — and a user could notice that.
+**Status: ANSWERED — built 2026-08-07 from `LX-1`, ruled 2026-08-10.** Not a new rule: Part II
+already made this ruling for one field and the parser layer had no type to express it with.
+Recorded here because the *visible* behaviour changed — a manager whose output a parser cannot
+read now stops the read instead of reporting an empty machine — and a user could notice that.
+
+**RULED (owner, 2026-08-10): yes, keep it.** A hard failure where there used to be a clean-looking
+empty result is the right trade, and the asymmetry below is the whole argument: a manager that
+fails is safe, and a manager that succeeds with a changed format silently reports the whole
+machine as drifted and adopts nothing. The louder answer is the correct one.
 
 **Y19 — `parse_installed` could not say "I read four hundred bytes and recognised nothing".**
 
@@ -7592,7 +7617,7 @@ Rules in II.2, reasons in `why.md` under `V.151`. `capability::HAS_CHANNELS` is
 
 ## Q53
 
-**Status: OPEN — raised 2026-08-10, measured, not ruled. `S85` is the bug; this is the choice.**
+**Status: ANSWERED — raised and ruled 2026-08-10. `S85` is the bug; this was the choice.**
 
 **The question in plain words.** LiNix lets a line pin a version (`brew:tokei@version=14.0.0`),
 and `linix lock` writes those pins by itself from what it finds installed. Most package managers
@@ -7623,19 +7648,50 @@ Job 2 works on every manager, because it only needs to *read* a version. Job 1 n
 to *accept* one. Conflating them is precisely what killed the macOS run: a record kept for job 2
 was fed back as an install argument for job 1.
 
-**Recommendation, if it helps.** Three parts, and the middle one is the whole fix:
+**RULED (owner, 2026-08-10): all three parts, as recommended.** Rule in **II.53**, reason in
+**V.183**.
 
 - **Record the version everywhere, replay it only where it can be replayed.** The lockfile keeps
   what it observes on every manager, and drift reporting keeps working; a version is turned into
-  an install argument only for a manager with a `version_pin`. Nothing is removed and nothing is
+  an install argument only for a manager that can accept one. Nothing is removed and nothing is
   refused.
 - **A hand-written pin that cannot be honoured is refused at plan time, by name, before anything
-  runs** — not dropped, not attempted. `linix sync` should say *"`pkgin` cannot install an exact
-  version, so `@version=1.2.3` on line 9 cannot be met"*, and under `--locked` that is fatal.
-  A pin the user typed is a decision; silently installing something else is the one outcome that
-  is worse than either honouring it or refusing it.
-- **`brew` stops hand-rolling a pin syntax it does not have.** Either it uses a versioned formula
-  when one genuinely exists, or it joins the cannot-pin list. It must not build a name and hope.
+  runs** — not dropped, not attempted. `linix sync` says *"`pkgin` cannot install an exact
+  version, so `jq@version=1.2.3` cannot be met — …"*, skips that package and continues; under
+  `--locked` the same fact is fatal, because a run whose whole purpose is to reproduce a machine
+  must not report success over a package it resolved freely. A pin the user typed is a decision;
+  silently installing something else is the one outcome that is worse than either honouring it
+  or refusing it.
+- **`brew` stops hand-rolling a pin syntax it does not have.** It joined the cannot-pin list:
+  Homebrew publishes versioned formulae only as a *series* (`python@3.12`), never as a full
+  semver, so there was no honest version of "use a versioned formula when one exists" to build.
+
+**What the ruling is built out of.** The provenance question — did a person type this pin, or did
+`lock` record it? — needed no flag in the end, and that is the part worth keeping. `apply_locks`
+stops injecting a recorded version into a spec whose backend cannot replay one, so **a version
+that survives to the planner on such a backend can only have come from a line somebody wrote.**
+The refusal is correct by construction rather than by a field that could be set wrong.
+
+`Installable::pins_version` answers *whether*, defaulting to `false` — a new backend that says
+nothing refuses a pin it might have honoured, which is a message, where the other default installs
+the wrong version and reports success, which is not. `capability::CANNOT_PIN_VERSION` answers
+*why*, and the refusal quotes it. The two are checked against each other rather than derived from
+one another, so a backend that starts pinning and leaves its row behind is caught from both sides.
+
+**Three things it turned up on the way**, all of them the same shape as the bug:
+
+- **The exemption ledger did not cover the hand-written backends at all.** It scanned
+  `registry.rs`'s registrars and `builtin_backends.toml`'s rows — and `brew` is neither, so the
+  gate named *"every backend pins a version or says why"* was structurally blind to the one
+  backend that did not merely drop a pin but invented one. Eleven more sat in the same blind spot.
+- **`xbps` moved to the permanent side rather than being built.** `xbps-install name-1.2.3_1`
+  needs the package's *revision* suffix, which `@version=` does not carry, so `name-1.2.3` names
+  a package that does not exist — building a name and hoping, which is exactly what `brew` was
+  doing. `pkgin`, `pkg` and `pkg_add` take a plain `name-version` and were built; the unbuilt
+  ceiling went from four to **zero**.
+- **A recorded version on a cannot-pin manager is still worth writing**, and `linix lock --list`
+  now says which entries those are. The file's shape did not change: a record other tools read is
+  not the place to put a sentence only a person needs.
 
 **What is owed either way, and needs no ruling:** a reasoned exemption ledger over `version_pin`,
 so a backend can be unable to pin but cannot be *silently* unable to pin, and so the four that
