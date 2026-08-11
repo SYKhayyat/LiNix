@@ -622,7 +622,10 @@ const WITHDRAWN_RUNNERS: &[(&str, &str)] = &[
          cross-compiles to it",
     ),
     ("macos-12", "retired — use `macos-latest`"),
-    ("ubuntu-20.04", "retired — use `ubuntu-latest` or `ubuntu-22.04`"),
+    (
+        "ubuntu-20.04",
+        "retired — use `ubuntu-latest` or `ubuntu-22.04`",
+    ),
     ("ubuntu-18.04", "retired — use `ubuntu-latest`"),
     ("windows-2019", "retired — use `windows-latest`"),
 ];
