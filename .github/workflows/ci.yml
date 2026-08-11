@@ -308,7 +308,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Download all artifacts
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
 
     # **A release asset is named by its basename, and every build target produces `shall`.**
     # Four artifact directories carrying one filename between them upload as one asset that
