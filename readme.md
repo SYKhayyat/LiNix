@@ -1,7 +1,8 @@
 # Shall
 
 A declarative package manager: you list the packages you want in a file, and `sync` makes the
-machine match the list — across every package manager on the box.
+machine match the list — across every package manager on the box. The name is what a line in
+that file means: *this machine **shall** have ripgrep.*
 
 Shall does not replace apt, pacman, brew, cargo or npm. It drives them. One file says what
 should be installed; `shall sync` installs what is missing, removes what is no longer listed,

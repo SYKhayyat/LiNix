@@ -302,7 +302,7 @@ impl NixBackendCore {
 /// `nix profile list --json` -> the packages Shall owns.
 ///
 /// **Two shapes, one manager.** `elements` was an ARRAY (position = identity) until Nix 2.20 and
-/// is an OBJECT KEYED BY NAME from schema v3 onward. Shall read only the array, so on a modern
+/// is an OBJECT KEYED BY NAME from schema v3 onward. Shall parsed only the array, so on a modern
 /// nix `list` returned nothing it had just installed — E6's class, a blind `list` producing
 /// permanent phantom drift, on the one backend no image had ever installed. Measured against
 /// Determinate Nix 3.21.9 in the tools image; the capture is

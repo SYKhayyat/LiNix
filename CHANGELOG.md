@@ -18,6 +18,20 @@ and x86_64 Windows, and installers that download them.
 five things the assessment did not know about. All of them are in this release, which is why the
 entry it was written for now carries them rather than sitting above an untagged number.*
 
+### The project is called Shall
+
+- **It was LiNix.** Everything that carried the old name moved with it: the binary and the crate
+  are `shall`, the config directory is `~/.config/shall`, the machine file is
+  `/etc/shall/machine.toml`, every environment variable took the `SHALL_` prefix, the release
+  assets are `shall-<target>`, and the hook files dropped into `/etc/pacman.d/`, the zypp plugin
+  directory and `/etc/sudoers.d/` are named `shall`.
+- **Nothing was ever published under the old name.** No tag, no release, no crates.io entry — so
+  there is no installed binary anywhere that needs replacing, and this entry is a rename rather
+  than a migration.
+- **The old paths are not read.** A config directory left at `~/.config/linix` is not found and
+  not fallen back to; move it. P2 applies to a name exactly as it applies to a file format, and a
+  dual lookup added here would only need deleting later.
+
 ### `watch` no longer disables the rest of the CLI
 
 - **A command whose duration is a person's or a loop's takes the data lock at the write, not for

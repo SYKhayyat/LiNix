@@ -1096,7 +1096,7 @@ fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             remove_args: vec!["uninstall".into(), "-y".into()],
             purge_args: None,
             // Chocolatey 2.x removed `-lo`: `list` is local-only now and the flag is an
-            // error, so the command failed, the output was empty, and Shall read that as
+            // error, so the command failed, the output was empty, and Shall took that as
             // "nothing is installed" — the input to a mass removal, not a bad listing.
             list_args: vec!["list".into(), "-r".into()],
             // `choco list` reports locally-installed packages, all user-requested.

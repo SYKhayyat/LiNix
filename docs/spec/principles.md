@@ -25,11 +25,10 @@ reason. If you can't state the reason, don't add the number.
 does — the line does that. Not where it came from — git does that. Not that it's good —
 that's the reader's call.
 
-**P7. Shall is not Linux-first, whatever the name says (owner ruling, 2026-07-23).** Windows
-and macOS are not ports and not a later phase. **A feature designed for one system is not
-finished until the other two have an equivalent or a stated, written reason there can be
-none** — and "the Linux tool has no counterpart" is a reason only after someone looked. The
-name is a pun, not a scope.
+**P7. Shall is not Linux-first (owner ruling, 2026-07-23).** Windows and macOS are not ports
+and not a later phase. **A feature designed for one system is not finished until the other
+two have an equivalent or a stated, written reason there can be none** — and "the Linux tool
+has no counterpart" is a reason only after someone looked.
 
 This is a design rule, not an aspiration, and it has teeth in three places:
 

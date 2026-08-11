@@ -4455,7 +4455,7 @@ on a module saved the way Windows saves files.
 Notepad writes UTF-8 **with** a BOM by default, and so does PowerShell 5.1's `Set-Content
 -Encoding utf8` — the editor and the shell this project is developed in. The three bytes are an
 encoding artefact: no editor displays them, and the user has no way to see what is wrong.
-Shall read them as part of the first name on the first line:
+Shall took them as part of the first name on the first line:
 
 ```text
 $ shall eval
