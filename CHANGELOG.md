@@ -2,10 +2,21 @@
 
 All notable changes to LiNix are documented here.
 
-## [Unreleased]
+## [0.8.0] — 2026-08-11 — the first published binaries
 
-*The 2026-08-11 assessment's work order, executed. Two of these are things the assessment did not
-know about, and both were found by an enumeration rather than by anybody hitting them.*
+**The first release anyone can install without a Rust toolchain.** `0.7.0` named the rewrite in
+this file and was never tagged, so no binary was ever published and `install.sh` compiled 448
+crates on every machine that ran it. `0.8.0` was written up the same way a day earlier and was
+about to repeat it — and the reason was not the missing tag. `ci.yml` listened for
+`push: branches: [main]` and nothing else, so the release job's `if: refs/tags/v*` was gated on a
+ref its own workflow could never be running under. A tag would have done nothing.
+
+This is the one that ships: `linix-<target>` binaries for x86_64 Linux, both Apple architectures
+and x86_64 Windows, and installers that download them.
+
+*What follows is a day's work on top of that write-up — the 2026-08-11 assessment's order, and
+five things the assessment did not know about. All of them are in this release, which is why the
+entry it was written for now carries them rather than sitting above an untagged number.*
 
 ### `watch` no longer disables the rest of the CLI
 
@@ -68,13 +79,6 @@ know about, and both were found by an enumeration rather than by anybody hitting
   ceiling in seconds and correctly so, but `--timings` has computed the overlap ratio and the
   wave count since it was written and nothing read either. A change that serialises the fan-out
   now fails a test instead of staying inside a budget of `None` for ever.
-
-## [0.8.0] — 2026-08-10 — the first published binaries
-
-**The first release anyone can install without a Rust toolchain.** `0.7.0` named the rewrite in
-this file and was never tagged, so no binary was ever published and `install.sh` compiled 448
-crates on every machine that ran it. This is the one that ships: `linix-<target>` binaries for
-x86_64 Linux, both Apple architectures and x86_64 Windows, and installers that download them.
 
 ### Guard
 

@@ -45,12 +45,6 @@ compiler. Published builds are x86_64 Linux, both Apple architectures, and x86_6
 anywhere else the script falls back to building from source, which needs
 [Rust](https://rustup.rs) and takes rather longer than thirty seconds.
 
-> **No release has been tagged yet, so today every platform takes the fallback.** The scripts
-> above resolve to a release that does not exist, notice, and build from source — which needs
-> Rust and takes about fifteen minutes. Nothing is broken and nothing lies to you at the
-> prompt; the sentence above is simply a promise the repository has not kept yet. Delete this
-> note in the commit that pushes the first `v*` tag.
-
 `LINIX_REF=v0.8.0` installs an exact release instead of the newest. From a checkout:
 
 ```bash
