@@ -1,7 +1,9 @@
-//! Shall - a declarative package manager.
+//! Shall - declarative configuration for a machine.
 //!
-//! You list the packages you want in a file; `sync` installs what is missing and
-//! removes what is no longer listed, across every supported package manager.
+//! You write what the machine should have in a file; `sync` installs what is missing
+//! and removes what is no longer listed. Packages are the largest kind and not the only
+//! one: repositories, services, schedules, symlinks, OS and desktop settings, scripts,
+//! generated declarations, dotfile trees and firewall rules are all declared the same way.
 
 pub mod app;
 pub mod backends;

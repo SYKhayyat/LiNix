@@ -16,7 +16,7 @@ authors = ["Shall Contributors"]
 # `LICENSE-MIT` and `LICENSE-APACHE` are both at the repo root; the SPDX expression is what
 # crates.io and `cargo deny` read.
 license = "MIT OR Apache-2.0"
-description = "Universal Mission-Critical Package Manager with DAG-based parallel execution"
+description = "Declare a machine in files — packages, services, settings, firewall rules, dotfiles — and sync it to match, driving the tools already installed"
 # **One test target, not a hundred.** Cargo claims every `tests/*.rs` as its own binary, and each
 # one is fat-LTO-linked against a 100k-line crate under `codegen-units = 1` - 36 of them without
 # ever calling the library API. The `target/` directory that produces reached 194 GB and filled a

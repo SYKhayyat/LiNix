@@ -1,12 +1,17 @@
 # Shall
 
-A declarative package manager: you list the packages you want in a file, and `sync` makes the
-machine match the list — across every package manager on the box. The name is what a line in
-that file means: *this machine **shall** have ripgrep.*
+Declarative configuration for a machine: you write down what it should have, and `sync` makes
+the machine match. The name is what a line in that file means: *this machine **shall** have
+ripgrep.*
 
-Shall does not replace apt, pacman, brew, cargo or npm. It drives them. One file says what
-should be installed; `shall sync` installs what is missing, removes what is no longer listed,
-and leaves everything else alone.
+**Packages are the largest kind and not the only one.** Repositories, services, schedules,
+symlinks, OS and desktop settings, scripts, generated declarations, dotfile trees and firewall
+rules are all declared in the same files, by the same grammar, and converged by the same
+`sync`.
+
+Shall does not replace apt, pacman, brew, cargo or npm — nor systemd, ufw or gsettings. It
+drives them. One file says what the machine should have; `shall sync` adds what is missing,
+removes what is no longer listed, and leaves everything else alone.
 
 ```
 $ cat ~/.config/shall/modules/tools.txt

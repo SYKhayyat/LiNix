@@ -44,13 +44,13 @@ The map (every command above, by what you are doing):
 Start with `shall init`, then `shall edit modules/starter.txt`, then `shall sync`.
 `shall <command> --help` explains any one of them.";
 
-/// Shall - a declarative package manager: you edit a file listing the packages you
-/// want, and `sync` makes the machine match it.
+/// Shall - declarative configuration for a machine: you edit a file saying what it
+/// should have, and `sync` makes the machine match it.
 #[derive(Parser, Debug)]
 #[command(
     name = "shall",
     version = env!("CARGO_PKG_VERSION"),
-    about = "A declarative package manager: edit a file, sync the machine to match",
+    about = "Declare a machine - packages, services, settings, firewall, dotfiles - and sync makes it match",
     after_help = COMMAND_MAP,
 )]
 pub struct Cli {
@@ -165,7 +165,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Install, remove and update packages until the machine matches your files
+    /// Add, remove and update whatever your files declare until the machine matches
     Sync {
         /// Refuse to proceed unless every package is in the lock and agrees with it
         #[arg(long)]
@@ -259,8 +259,8 @@ pub enum Commands {
         all: bool,
     },
 
-    /// Make Shall forget it manages anything — the registry and snapshots are deleted, the
-    /// packages stay installed (X.3, level 3).
+    /// Make Shall forget it manages anything — the registry and snapshots are deleted, and
+    /// nothing on the machine is undone (X.3, level 3).
     ///
     /// This is not a cleanup. Losing the registry means Shall can no longer tell software you
     /// declared from software that was already there, which is the one distinction the whole
@@ -344,7 +344,7 @@ pub enum Commands {
     },
 
     /// Compute what `sync` would do and freeze it to a reviewable file, so the exact plan you
-    /// inspect is the one you later `apply` (Terraform-style plan/apply for packages).
+    /// inspect is the one you later `apply` (Terraform-style plan/apply).
     Plan {
         /// Where to write the plan (default: shall-plan.json)
         #[arg(long, default_value = "shall-plan.json")]
@@ -627,7 +627,7 @@ pub enum Commands {
     },
 
     /// Deactivate one or more profiles: drop each from the active set and converge, removing
-    /// packages no longer required by any remaining active profile. Live; no reboot.
+    /// whatever is no longer required by any remaining active profile. Live; no reboot.
     Deactivate {
         /// Profile name(s) to deactivate
         #[arg(required = true)]
@@ -638,7 +638,7 @@ pub enum Commands {
     Profile(ProfileArgs),
 
     // --- NEW FOR 3.6.0 ---
-    /// Reusable package lists (`modules/`, referenced with `use`)
+    /// Reusable declaration lists (`modules/`, referenced with `use`)
     Module(ModuleArgs),
 
     /// System snapshots and atomic rollbacks
