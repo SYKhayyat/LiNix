@@ -52,19 +52,43 @@ pub enum Class {
 /// computes the overlap ratio and the wave count on every run that asks for them, and nothing
 /// read either. So the regression this could not see is the important one: a change that
 /// serialises a fan-out drops overlap from 6.3× to 1.2×, the wall clock stays inside a budget of
-/// `None`, and it stays there for ever. Measured on Windows with 24 ready backends: 23 child
-/// commands summing to 23.67 s inside 3.75 s of wall clock, 6.3× overlap, 2 waves.
+/// `None`, and it stays there for ever.
+///
+/// **Collapse detectors, not targets, and the difference cost a red gate to learn.**
+///
+/// The first version of this carried `min_overlap: 2.0` and `max_waves: 2`, taken from the one
+/// host it was written on — Windows, 24 ready backends, 6.3× and 2 waves. ubuntu-latest runs 16
+/// child commands and reported **2.0× and 3 waves**: sitting exactly on one floor and over the
+/// other, on a machine doing nothing wrong. That is the mistake `lifecycle-floor.txt` is entirely
+/// about — *"the honest number varies by host, and a number guessed once is the kind of constant
+/// this repo keeps discovering was wrong"* — committed while building the gate.
+///
+/// So neither number is absolute now. What is actually being asserted is that the fan-out is not
+/// **serial**, and a serial run has an exact signature: overlap ≈ 1.0 and one wave per child.
+/// Both bounds are expressed against that, which makes them true on a host nobody has measured.
 #[derive(Debug, Clone, Copy)]
 pub struct Shape {
-    /// Summed child time over wall clock. A collapse to serial is ~1.0.
+    /// Summed child time over wall clock. A collapse to serial is ~1.0; the lowest legitimate
+    /// reading seen on any host is 2.0, so this sits between them.
     pub min_overlap: f64,
-    /// How many times the run went completely quiet and started again. One means everything
-    /// overlapped; `n` means it stopped `n - 1` times to wait for an answer.
-    pub max_waves: usize,
+    /// The wave ceiling as a fraction of the child count: waves may not exceed
+    /// `children / waves_per_child`. A serial run has one wave per child, so the ceiling scales
+    /// with the fan-out instead of pinning a number measured on somebody's desk.
+    pub waves_per_child: usize,
+    /// The floor under that fraction, so a small fan-out is not policed into failure: four
+    /// children over a divisor of three would allow one wave, which no real run achieves.
+    pub min_waves_allowed: usize,
     /// Below this many child commands the ratio is not a measurement of anything — three
     /// managers on a bare CI runner cannot overlap 2×, and a gate that says they should is a
     /// gate people learn to ignore.
     pub min_children: usize,
+}
+
+impl Shape {
+    /// How many waves this many children may take before the run is serial enough to fail.
+    pub fn wave_ceiling(&self, children: usize) -> usize {
+        (children / self.waves_per_child.max(1)).max(self.min_waves_allowed)
+    }
 }
 
 impl Class {
@@ -83,14 +107,26 @@ impl Class {
     /// wave on purpose. Asserting a shape there would fail a graph that is doing exactly what
     /// it was asked to do.
     ///
-    /// The numbers are collapse detectors, not targets, for the same reason the second budgets
-    /// are set an order of magnitude above what was measured: 2× against a measured 6.3×
-    /// catches serialisation and survives a loaded runner.
+    /// Every number here is a collapse detector — see [`Shape`] for what the first draft's
+    /// targets cost. Four readings, from three platforms, all of them healthy:
+    ///
+    /// ```text
+    /// Windows, release   23 children   6.3x   2 waves
+    /// Windows, debug     23 children   5.7x   2 waves
+    /// ubuntu-latest      16 children   2.0x   3 waves
+    /// macos-latest        9 children   1.9x   3 waves
+    /// ```
+    ///
+    /// A serial run is 1.0× with one wave per child. The floor sits at 1.5× — below every
+    /// reading above and half again above serial — and the wave ceiling at half the child count
+    /// with a floor of four, which still catches a nine-child run that took nine waves while
+    /// leaving the honest three alone.
     pub fn shape(self) -> Option<Shape> {
         match self {
             Class::EveryBackend => Some(Shape {
-                min_overlap: 2.0,
-                max_waves: 2,
+                min_overlap: 1.5,
+                waves_per_child: 2,
+                min_waves_allowed: 4,
                 min_children: 4,
             }),
             Class::ConfigOnly | Class::OneBackend | Class::Mutating => None,
@@ -195,12 +231,15 @@ pub fn shape_violation(
             wall.as_secs_f64()
         ));
     }
-    if waves > shape.max_waves {
+    let ceiling = shape.wave_ceiling(children);
+    if waves > ceiling {
         faults.push(format!(
-            "{} wave(s), over the ceiling of {} — the run went quiet {} time(s), because \
-             something had to be answered before the next question could be asked",
+            "{} wave(s) over {} child command(s), against a ceiling of {} — the run went quiet \
+             {} time(s), because something had to be answered before the next question could be \
+             asked, and that is close to asking them one at a time",
             waves,
-            shape.max_waves,
+            children,
+            ceiling,
             waves - 1
         ));
     }
@@ -253,17 +292,33 @@ mod tests {
             .shape()
             .expect("`list` asks every manager");
 
-        let healthy = shape_violation(
-            shape,
-            23,
-            Duration::from_millis(23_670),
-            Duration::from_millis(3_750),
-            2,
-        );
-        assert!(
-            healthy.is_none(),
-            "the measured release-build run is reported as a violation: {healthy:?}"
-        );
+        // Real readings from three hosts, including the one that failed the first draft's
+        // numbers: 2.0x against a floor of 2.0, and three waves against a ceiling of two, on a
+        // runner doing nothing wrong.
+        for (children, summed_ms, wall_ms, waves, host) in [
+            (23, 23_670, 3_750, 2, "Windows, release: 6.3x"),
+            (23, 32_620, 5_730, 2, "Windows, debug: 5.7x"),
+            (
+                16,
+                8_440,
+                4_270,
+                3,
+                "ubuntu-latest, CI run 31517073405: 2.0x",
+            ),
+            (9, 3_340, 1_760, 3, "macos-latest, CI run 31517073405: 1.9x"),
+        ] {
+            let healthy = shape_violation(
+                shape,
+                children,
+                Duration::from_millis(summed_ms),
+                Duration::from_millis(wall_ms),
+                waves,
+            );
+            assert!(
+                healthy.is_none(),
+                "a measured healthy run is reported as a violation ({host}): {healthy:?}"
+            );
+        }
 
         // The same children, run one after another. Wall clock == summed, so overlap is 1.0.
         let serial = shape_violation(

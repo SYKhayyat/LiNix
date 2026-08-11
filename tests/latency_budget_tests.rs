@@ -362,19 +362,27 @@ fn the_fan_out_commands_still_fan_out() {
     let overlap = number_before("x overlap").expect("the summary line prints an overlap ratio");
     let waves = number_before(" wave(s)").expect("the summary line prints a wave count") as usize;
 
-    // The same floors `Class::EveryBackend`'s `Shape` carries, and for the same reason they are
-    // collapse detectors rather than targets: measured at 5.7× debug and 6.3× release here.
+    // **The bounds come from `Shape`, not from a second copy of them here.** The first draft
+    // wrote `>= 2.0` and `<= 2` in both places, taken from one host, and ubuntu-latest reported
+    // 2.0x over 16 children with 3 waves — inside neither. Two copies of a guessed constant is
+    // two places to be wrong; asking the type is one.
+    let shape = linix::core::latency::Class::of("list")
+        .shape()
+        .expect("`list` asks every manager, so it carries a shape budget");
+    let ceiling = shape.wave_ceiling(children);
+
     assert!(
-        overlap >= 2.0,
-        "`linix list` asked {children} managers and overlapped them only {overlap:.1}x, which is \
-         close to asking them one at a time. The seconds a fan-out costs belong to the host; the \
-         scheduling does not.\n  {line}"
+        overlap >= shape.min_overlap,
+        "`linix list` asked {children} managers and overlapped them only {overlap:.1}x, under \
+         the {:.1}x floor — close to asking them one at a time. The seconds a fan-out costs \
+         belong to the host; the scheduling does not.\n  {line}",
+        shape.min_overlap
     );
     assert!(
-        waves <= 2,
-        "`linix list` went quiet {} time(s) mid-run ({waves} waves). Every quiet moment is \
-         something that had to be answered before the next question could be asked, and a fan-out \
-         with a serial prologue is a fan-out that grew one.\n  {line}",
+        waves <= ceiling,
+        "`linix list` went quiet {} time(s) mid-run ({waves} waves over {children} children, \
+         ceiling {ceiling}). A serial run has one wave per child, and this is close enough to it \
+         to be a fan-out that stopped fanning out.\n  {line}",
         waves.saturating_sub(1)
     );
 }

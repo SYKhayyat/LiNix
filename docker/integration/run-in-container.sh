@@ -2579,6 +2579,18 @@ else
 
     rm -rf "$SUDO_CFG" "$SUDO_STATE"
     mkdir -p "$SUDO_CFG" "$SUDO_STATE"
+    # **The bound under test is set here, small, rather than left at its default.**
+    #
+    # Checks (3) and (4) below ask whether LiNix bounds the wait for a password nobody is going
+    # to type. The default bound is 120s, so with it in force the correct behaviour takes 120
+    # seconds — and the assertions, written when the answer was the 900s command-idle timeout,
+    # read `>= 120` and called the bound firing exactly on time a wedge. Four minutes of nightly
+    # spent proving a constant.
+    #
+    # Setting it to 5 tests the mechanism instead of the default's value: sudo asks, nobody
+    # answers, and LiNix has to give up in about five seconds. A run that takes 30 is not
+    # honouring the setting, which is the defect either way and is now the thing being measured.
+    printf 'sudo_password_timeout_secs = 5\n' > "$SUDO_CFG/preferences.toml"
     chown -R "$SUDO_USER_NAME" "$SUDO_CFG" "$SUDO_STATE" 2>/dev/null || true
 
     # Prove the fixture before trusting any result from it. A user who cannot sudo at all, or
@@ -2638,8 +2650,8 @@ EOF
         _took=$(since "$_t0")
         if [ "$_rc" -eq 0 ]; then
             hard "sudo: a wrong password produced a successful privileged command"
-        elif [ "$_took" -ge 120 ]; then
-            hard "sudo: a wrong password left LiNix waiting ${_took}s instead of reporting a failure"
+        elif [ "$_took" -ge 30 ]; then
+            hard "sudo: a wrong password left LiNix waiting ${_took}s against a \`sudo_password_timeout_secs\` of 5 — the bound is not being honoured"
         elif grep -qi "sorry, try again\|incorrect password\|authentication fail\|sudo" /tmp/sudo-wrong.out; then
             PASS=$((PASS + 1)); echo "  PASS  sudo: a wrong password fails in ${_took}s and says which program refused"
         else
@@ -2657,8 +2669,8 @@ EOF
         _took=$(since "$_t0")
         # The output has to name the program that asked. Without that clause "it failed" is
         # true of a binary that fails at everything, and this passed against one.
-        if [ "$_took" -ge 120 ]; then
-            hard "sudo: a terminal with nobody at it wedged LiNix for ${_took}s"
+        if [ "$_took" -ge 30 ]; then
+            hard "sudo: a terminal with nobody at it wedged LiNix for ${_took}s against a \`sudo_password_timeout_secs\` of 5 — the bound is not being honoured"
         elif [ "$_rc" -ne 0 ] && grep -qi "password\|sudo" /tmp/sudo-silent.out; then
             PASS=$((PASS + 1)); echo "  PASS  sudo: an unanswered prompt is a bounded failure (${_took}s) that names sudo, not a wedge"
         elif [ "$_rc" -ne 0 ]; then

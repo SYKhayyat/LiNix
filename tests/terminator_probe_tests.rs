@@ -291,11 +291,30 @@ async fn every_terminator_claim_still_holds_where_the_tool_is_installed() {
         ));
     }
 
+    let mut could_be_upgraded: Vec<String> = Vec::new();
     for (base, &honours) in &confirmed {
         let Some(&claim) = claims.get(base.as_str()) else {
             continue;
         };
         if honours == claim {
+            continue;
+        }
+        // **A row whose hosts disagree cannot be right on both of them**, and this probe runs on
+        // three. `stack` honours the terminator on the tools image and on ubuntu-latest and eats
+        // the operand on windows-latest — measured, both ways, by this same code. Whichever value
+        // the row carried, one platform's nightly went red, and a gate that is a coin toss on
+        // which runner you read is a gate people learn to ignore.
+        //
+        // So the row declares the divergence (`Evidence::Divergent`), takes the refusing answer,
+        // and this accepts the safe direction from a host that disagrees. The unsafe direction —
+        // the row says it terminates and this host swallows the operand — is never exempt, and
+        // `a_divergent_row_takes_the_refusing_answer` makes it unreachable by construction: a
+        // divergent row is always `false`, so `claim` here is always `false` and the only
+        // disagreement it can produce is the harmless one.
+        if honours && !claim && linix::core::argv::terminator_answer_differs_by_host(base) {
+            could_be_upgraded.push(format!(
+                "{base} (recorded as differing by host; this one honours the terminator)"
+            ));
             continue;
         }
         let (measured, why) =
@@ -343,6 +362,12 @@ async fn every_terminator_claim_still_holds_where_the_tool_is_installed() {
     }
     for b in &undriven {
         eprintln!("  skipped: {b} (no backend built an argv carrying an operand for it here)");
+    }
+    // Printed rather than swallowed. A divergence that is only a `continue` is an exemption
+    // nobody ever reads again, and the next person to ask whether `stack` can be upgraded needs
+    // to see that this host said yes.
+    for b in &could_be_upgraded {
+        eprintln!("  divergent: {b}");
     }
 
     assert!(

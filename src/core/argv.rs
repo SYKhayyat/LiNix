@@ -32,6 +32,20 @@ enum Evidence {
     Measured(&'static str),
     /// Never run. Why it is nonetheless listed this way.
     Unasked(&'static str),
+    /// **Run on more than one host, and they did not agree.**
+    ///
+    /// The table is one boolean per binary and the world is not, so a tool that honours the
+    /// terminator on one platform and eats it on another cannot be described by any single
+    /// value the probe will accept everywhere. The row takes the **refusing** answer — the same
+    /// conservative merge the probe already applies across a binary's verbs, where one verb that
+    /// swallows makes the terminator unsafe for the whole binary — and the probe stops calling
+    /// the other host's reading a disagreement.
+    ///
+    /// **Only ever `false`**, asserted by `a_divergent_row_takes_the_refusing_answer`. A
+    /// divergent row that claimed to terminate would be LiNix emitting a `--` that some host
+    /// reads as a package name, which is the failure this whole table exists to prevent; the
+    /// exemption is for the safe direction and for nothing else.
+    Divergent(&'static str),
 }
 
 /// Whether a binary's CLI ends option parsing at `--`, and how that is known.
@@ -238,15 +252,14 @@ const TERMINATORS: &[Terminator] = &[
     row(
         "stack",
         false,
-        Evidence::Measured(
-            "two platforms, two answers, and the table is keyed on the binary — so it takes the \
-             refusing one. On the tools image the differential probe ran `stack install -- \
-             <bogus>` both ways and every signal agreed. On windows-latest the same probe ran \
-             the same argv and reported `swallows`: the terminator changed what stack did with \
-             its operand. The conservative merge the probe already applies across a binary's \
-             verbs — one verb that swallows makes the terminator unsafe for the binary — is the \
-             same rule across hosts, and the cost of being wrong here is an install that names \
-             no package at all (nightly run 31458415385, 2026-08-11)",
+        Evidence::Divergent(
+            "three runs, two answers. `stack install -- <bogus>` is identical to the same line \
+             without the terminator on the tools image (2026-08-04) and on ubuntu-latest (run \
+             31517118980), and on windows-latest the same argv reported `swallows` — the \
+             terminator changed what stack did with its operand (run 31458415385). Both readings \
+             are real, so the row takes the refusing one: the cost of being wrong that way is a \
+             `--` LiNix does not send, and the cost of being wrong the other way is an install \
+             that names no package at all",
         ),
     ),
     // ---- Conda-likes.
@@ -544,9 +557,22 @@ pub fn terminator_evidence(binary: &str) -> Option<(bool, &'static str)> {
         .iter()
         .find(|t| t.binary == base)
         .map(|t| match t.evidence {
-            Evidence::Measured(w) => (true, w),
+            Evidence::Measured(w) | Evidence::Divergent(w) => (true, w),
             Evidence::Unasked(w) => (false, w),
         })
+}
+
+/// Whether this row's answer is known to differ between hosts.
+///
+/// Read by `tests/terminator_probe_tests.rs`, which asserts the table against the tools
+/// themselves and otherwise has no way to be right on both platforms at once: whichever value
+/// the row carries, one host's probe reports a disagreement. See [`Evidence::Divergent`].
+pub fn terminator_answer_differs_by_host(binary: &str) -> bool {
+    let base = base_name(binary);
+    TERMINATORS
+        .iter()
+        .find(|t| t.binary == base)
+        .is_some_and(|t| matches!(t.evidence, Evidence::Divergent(_)))
 }
 
 /// Append package names to an argument list, ending the manager's options first where the
@@ -592,6 +618,29 @@ mod tests {
     /// sentence about a sibling of theirs (`scoop`, `mas`, `sc`); nobody has asked those, and
     /// the ceiling counts them until somebody does.
     const UNASKED_CEILING: usize = 54;
+
+    /// A row whose hosts disagree takes the answer that sends no terminator.
+    ///
+    /// The exemption `Divergent` buys is *the probe stops calling one host's reading a
+    /// disagreement* — and it is only sound in the safe direction. A divergent row claiming to
+    /// terminate would be LiNix emitting a `--` that some platform reads as a package name,
+    /// which is precisely the failure this table exists to prevent, with an exemption on top
+    /// of it. Unrepresentable is better than documented, and this is as close as a const table
+    /// gets.
+    #[test]
+    fn a_divergent_row_takes_the_refusing_answer() {
+        let claiming: Vec<&str> = TERMINATORS
+            .iter()
+            .filter(|t| matches!(t.evidence, Evidence::Divergent(_)) && t.terminates)
+            .map(|t| t.binary)
+            .collect();
+        assert!(
+            claiming.is_empty(),
+            "{claiming:?} say their answer differs by host AND that they terminate. The whole \
+             point of recording divergence is to take the refusing answer; a divergent `true` \
+             is an exemption laid over the defect the table exists to prevent."
+        );
+    }
 
     #[test]
     fn a_gnu_style_manager_terminates_and_a_windows_one_does_not() {
@@ -700,6 +749,7 @@ mod tests {
             let (kind, text) = match t.evidence {
                 Evidence::Measured(w) => ("measured", w),
                 Evidence::Unasked(w) => ("unasked", w),
+                Evidence::Divergent(w) => ("divergent", w),
             };
             assert!(
                 text.len() > 40,
