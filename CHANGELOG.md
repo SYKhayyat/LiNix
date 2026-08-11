@@ -2,7 +2,7 @@
 
 All notable changes to LiNix are documented here.
 
-## [0.8.0] — 2026-08-11 — the first published binaries
+## [0.8.0] — unreleased — the first published binaries
 
 **The first release anyone can install without a Rust toolchain.** `0.7.0` named the rewrite in
 this file and was never tagged, so no binary was ever published and `install.sh` compiled 448
