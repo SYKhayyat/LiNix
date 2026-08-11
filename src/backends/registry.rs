@@ -2675,8 +2675,8 @@ mod tests {
                 &|r, e| crate::backends::flatpak::register(r, e, &Config::default()),
                 // `--or-update` because flatpak calls an already-installed ref an error and
                 // exits non-zero (`Y23`).
-                Runs("flatpak --system install -y --noninteractive --or-update -- jq"),
-                Runs("flatpak --system uninstall -y --noninteractive -- jq"),
+                Runs("flatpak install --system -y --noninteractive --or-update -- jq"),
+                Runs("flatpak uninstall --system -y --noninteractive -- jq"),
             ),
             ArgvCase::pkg(
                 "nix",

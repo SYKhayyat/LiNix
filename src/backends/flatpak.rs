@@ -27,6 +27,25 @@ impl FlatpakBackendCore {
         }
     }
 
+    /// **These go AFTER the subcommand, and every caller here does that.**
+    ///
+    /// `flatpak(1)` is `flatpak [OPTION…] COMMAND`, and its top-level options are `--help`,
+    /// `--version`, `--verbose` and friends. `--user`/`--system` belong to the *commands* —
+    /// `flatpak-install(1)` is `flatpak install [OPTION…] REF…` — so `flatpak --system install`
+    /// is rejected before flatpak decides what it was being asked to do.
+    ///
+    /// Every argv this backend built had the flag in front for as long as the backend has
+    /// existed, and nothing noticed, because flatpak is one of the managers no harness has ever
+    /// driven: it needs a session bus, so the container matrix names it as argv-tested-only. An
+    /// argv test proves a command line was constructed, not that the tool accepts it. What found
+    /// it was `argv_drift_tests`, which asks the real flatpak on the tools image whether it
+    /// documents the flags LiNix passes, and got back
+    ///
+    /// ```text
+    /// `flatpak  --system` — the tool says: error: unknown option --system
+    /// ```
+    ///
+    /// — with the subcommand slot empty, which is exactly where the flag was going.
     pub fn scope_args(&self) -> Vec<&str> {
         match self.scope {
             Scope::User => vec!["--user"],
@@ -151,9 +170,9 @@ impl BackendCore for FlatpakBackendCore {
 #[async_trait]
 impl MetadataProvider for FlatpakBackendCore {
     async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
-        let mut final_args: Vec<String> =
-            self.scope_args().into_iter().map(str::to_string).collect();
-        final_args.extend(["info".to_string(), "--show-metadata".to_string()]);
+        let mut final_args: Vec<String> = vec!["info".to_string()];
+        final_args.extend(self.scope_args().into_iter().map(str::to_string));
+        final_args.push("--show-metadata".to_string());
         crate::core::argv::push_names(&mut final_args, "flatpak", [name]);
         let arg_refs: Vec<&str> = final_args.iter().map(String::as_str).collect();
 
@@ -219,9 +238,9 @@ fn install_ref(spec: &PackageSpec) -> String {
 /// state. `--or-update` is flatpak's own answer to that: *"Update install if already
 /// installed."*
 fn install_argv(scope: &[&str], specs: &[PackageSpec]) -> Vec<String> {
-    let mut args: Vec<String> = scope.iter().map(|s| s.to_string()).collect();
+    let mut args: Vec<String> = vec!["install".to_string()];
+    args.extend(scope.iter().map(|s| s.to_string()));
     args.extend([
-        "install".to_string(),
         "-y".to_string(),
         "--noninteractive".to_string(),
         "--or-update".to_string(),
@@ -234,8 +253,8 @@ fn install_argv(scope: &[&str], specs: &[PackageSpec]) -> Vec<String> {
 /// `flatpak make-current <app> <branch>`, the only thing that moves an app from one branch to
 /// another.
 fn make_current_argv(scope: &[&str], name: &str, branch: &str) -> Vec<String> {
-    let mut args: Vec<String> = scope.iter().map(|s| s.to_string()).collect();
-    args.push("make-current".to_string());
+    let mut args: Vec<String> = vec!["make-current".to_string()];
+    args.extend(scope.iter().map(|s| s.to_string()));
     crate::core::argv::push_names(&mut args, "flatpak", [name, branch]);
     args
 }
@@ -301,17 +320,9 @@ impl Installable for FlatpakInstallable {
             return Ok(());
         }
 
-        let mut args: Vec<String> = self
-            .core
-            .scope_args()
-            .into_iter()
-            .map(str::to_string)
-            .collect();
-        args.extend([
-            "uninstall".to_string(),
-            "-y".to_string(),
-            "--noninteractive".to_string(),
-        ]);
+        let mut args: Vec<String> = vec!["uninstall".to_string()];
+        args.extend(self.core.scope_args().into_iter().map(str::to_string));
+        args.extend(["-y".to_string(), "--noninteractive".to_string()]);
         crate::core::argv::push_names(&mut args, "flatpak", names);
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
 
@@ -408,8 +419,9 @@ impl Upgradable for FlatpakUpgradable {
     async fn update(&self, sudo: bool) -> Result<()> {
         // Must pass -y --noninteractive (like install/upgrade/clean_orphans), otherwise an
         // automated run blocks on flatpak's interactive confirmation prompt.
-        let mut args = self.core.scope_args();
-        args.extend(["update", "-y", "--noninteractive"]);
+        let mut args = vec!["update"];
+        args.extend(self.core.scope_args());
+        args.extend(["-y", "--noninteractive"]);
         debug!("Flatpak: Refreshing remotes...");
         self.core
             .executor
@@ -419,8 +431,9 @@ impl Upgradable for FlatpakUpgradable {
     }
 
     async fn upgrade(&self, sudo: bool) -> Result<()> {
-        let mut args = self.core.scope_args();
-        args.extend(["update", "-y", "--noninteractive"]);
+        let mut args = vec!["update"];
+        args.extend(self.core.scope_args());
+        args.extend(["-y", "--noninteractive"]);
         info!("Flatpak: Upgrading all applications...");
         self.core
             .executor
@@ -568,8 +581,8 @@ mod tests {
         assert_eq!(
             argv,
             [
-                "--system",
                 "install",
+                "--system",
                 "-y",
                 "--noninteractive",
                 "--or-update",
@@ -597,7 +610,7 @@ mod tests {
     fn a_branch_switch_names_the_app_and_the_branch_behind_the_terminator() {
         assert_eq!(
             make_current_argv(&["--user"], "org.gimp.GIMP", "beta"),
-            ["--user", "make-current", "--", "org.gimp.GIMP", "beta"]
+            ["make-current", "--user", "--", "org.gimp.GIMP", "beta"]
         );
     }
 
@@ -709,8 +722,8 @@ mod tests {
             mock.get_calls().await,
             vec![
                 "flatpak list --app --columns=application,version,branch",
-                "flatpak --system install -y --noninteractive --or-update -- org.gimp.GIMP//beta",
-                "flatpak --system make-current -- org.gimp.GIMP beta",
+                "flatpak install --system -y --noninteractive --or-update -- org.gimp.GIMP//beta",
+                "flatpak make-current --system -- org.gimp.GIMP beta",
             ]
         );
     }
@@ -729,7 +742,7 @@ mod tests {
             mock.get_calls().await,
             vec![
                 "flatpak list --app --columns=application,version,branch",
-                "flatpak --system install -y --noninteractive --or-update -- org.gimp.GIMP//beta",
+                "flatpak install --system -y --noninteractive --or-update -- org.gimp.GIMP//beta",
             ]
         );
     }
@@ -773,7 +786,7 @@ mod tests {
 
         assert_eq!(
             mock.get_calls().await,
-            vec!["flatpak --system install -y --noninteractive --or-update -- org.blender.Blender"]
+            vec!["flatpak install --system -y --noninteractive --or-update -- org.blender.Blender"]
         );
     }
 
@@ -821,9 +834,9 @@ mod tests {
         assert_eq!(
             mock.get_calls().await,
             vec![
-                "flatpak --system uninstall -y --noninteractive -- org.gimp.GIMP",
+                "flatpak uninstall --system -y --noninteractive -- org.gimp.GIMP",
                 "flatpak search -- gimp",
-                "flatpak --system info --show-metadata -- org.gimp.GIMP",
+                "flatpak info --system --show-metadata -- org.gimp.GIMP",
             ]
         );
     }
