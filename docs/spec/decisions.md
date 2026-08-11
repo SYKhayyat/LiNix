@@ -1,4 +1,4 @@
-# The decision register — all 187, none of them open
+# The decision register — all 188, one of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -15,7 +15,7 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **2** |
 | **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **181** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
@@ -73,10 +73,11 @@ status loses that, so it is kept here:
 
 ## Index
 
-**Nothing is open. `Z1` — the licence — was ruled 2026-08-09, and `Y18` is RULED in full as of
+**One is open: `Q53`, raised 2026-08-10 — what a version pin means on a manager that cannot
+express one. `Z1` — the licence — was ruled 2026-08-09, and `Y18` is RULED in full as of
 the same day: `@source=` on a `shim:` line is read, and `Y23` — flatpak's unreadable channel —
-was ruled and built beside it.** All 185 are accounted
-for: **181 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 2 BUILT NEVER RULED, 0 OPEN** — and this line
+was ruled and built beside it.** All 188 are accounted
+for: **181 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 2 BUILT NEVER RULED, 1 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -239,7 +240,7 @@ there). It is when the question stopped being open, not when the code landed.
 | **U42** | Do the overlapping command clusters get consolidated? | 2026-07-27 |
 | **U43** | How much does an ordinary run say about itself? | 2026-07-27 |
 
-### Q — the production-readiness round and the grading rounds after it — 51
+### Q — the production-readiness round and the grading rounds after it — 52
 
 *Not a proposal part. These are the questions the readiness assessment forced — behaviour a
 user notices, or a published contract — raised because `CLAUDE.md` requires a ruling for them
