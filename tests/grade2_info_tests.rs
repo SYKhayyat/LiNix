@@ -287,3 +287,50 @@ fn info_shows_no_internal_property_key_as_a_field_label() {
         leaks.join("\n  ")
     );
 }
+
+/// A resolve that **failed** is not a machine that lacks the package.
+///
+/// `get_info` read the resolver with `unwrap_or_default()`, so every way resolution can fail —
+/// a `priority` that does not list the manager, a name the validator rejects, a `@requires`
+/// chain that could not be probed — produced an empty spec list. The loop that asks the manager
+/// then ran zero times, and the branch below it returned `Ok(None)`, which `info` prints as
+/// *"is not installed on this machine"*: a claim about the user's machine, made without asking
+/// anybody, out of an error nobody read.
+///
+/// Thirteen lines further down in the same function sits the comment that fixed this exact
+/// class for the query — *"A manager that could not be asked has not said no… Absence and
+/// unavailability are different answers and only one of them is knowable"* — and the resolve
+/// above it was still swallowing. It is also why
+/// `info_agrees_with_list_about_every_backend_not_only_the_first` passed alone and failed under
+/// suite parallelism.
+///
+/// Driven through `priority`, because that is the one resolve failure a test can produce
+/// deterministically: a real backend, a real package name, and a `priority` file that does not
+/// list the manager. `Priority::reject` is the error, and the user has to see it.
+#[test]
+fn a_resolve_that_failed_is_never_reported_as_a_machine_that_lacks_it() {
+    let f = Fixture::new("grade2-info-unresolvable");
+    // `cargo` is a registered backend, so the prefix check above passes; it is not in this
+    // priority list, so the resolver refuses it. Two different refusals, and only the first
+    // one was ever reported.
+    f.write("priority", "scoop\n");
+
+    let (out, code) = f.run(&["info", "cargo:ripgrep"]);
+
+    assert!(
+        !out.contains("is not installed on this machine"),
+        "`info cargo:ripgrep` reported the package absent from the machine. Nothing asked \
+         cargo anything — the resolve failed before the question — so this is a statement \
+         about the user's computer arrived at by discarding an error.\n{out}"
+    );
+    assert!(
+        out.contains("priority"),
+        "the refusal did not name `priority`, which is the thing that actually refused. A \
+         message that says the lookup failed without saying why is a puzzle (V.42).\n{out}"
+    );
+    assert_ne!(
+        code, 0,
+        "`info` exited 0 over a question it never asked; a script cannot tell that from a \
+         successful lookup that found nothing.\n{out}"
+    );
+}

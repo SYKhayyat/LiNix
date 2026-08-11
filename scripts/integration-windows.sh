@@ -828,11 +828,19 @@ fi
 # skip is the vacuous check IV.1 bans.
 echo "[12] Real lifecycle, every other user-scoped manager on this host"
 
-# The ceiling for the block below, measured on this harness rather than guessed: 15 of the 48
-# backends `check health` registers on Windows are in neither `canary()` nor
-# `no_lifecycle_reason()` — cabal composer conda flatpak lvm mix nix opam pkg pkg_add pkgin snap
-# spack stack zfs. It may only go DOWN. Raising it is Q4's item 4 happening.
-LIFECYCLE_GAP_CEILING=15
+# The ceiling for the block below. It may only go DOWN; raising it is Q4's item 4 happening.
+#
+# Was 15, measured: that many backends were in neither `canary()` nor `no_lifecycle_reason()`.
+# The nightly of 2026-08-11 printed them by name — `14 backend(s) have no path to a real
+# lifecycle (ceiling 15) — cabal composer conda flatpak macports mix nix opam pkg pkg_add pkgin
+# snap spack stack` — under a line calling itself the release blocker, and that had been the
+# whole of the report for weeks: a count, with no statement about any individual member.
+#
+# **A count is not an answer, and fourteen unexplained skips is the vacuous check IV.1 bans,
+# fourteen times.** Every one of those names now says either what runs it or why nothing here
+# can, so the expected count is nought. Derived rather than measured, and stated as such: the
+# nightly is what confirms it, and it fails BY NAME if a fifteenth appears.
+LIFECYCLE_GAP_CEILING=0
 canary() {
     case "$1" in
         scoop)    echo "jq|jq|full|" ;;
@@ -968,6 +976,41 @@ no_lifecycle_reason() {
         # finding. What actually excuses it is the machine, not the backend: creating a subvolume
         # needs a real btrfs filesystem, and Windows has none to give.
         btrfs|lvm|zfs) echo "$1 needs a real block device on a Linux filesystem; the privileged \`storage\` image lifecycles it for real, and this host cannot" ;;
+
+        # ---- The fourteen this sweep counted and never named ----------------
+        #
+        # Every line below is either "another harness runs it" or a confession. A backend that
+        # is lifecycled in the `tools` container is NOT untested — it is untested *here*, and
+        # saying which is the difference between a coverage gap and a coverage map. The ones
+        # with no runner anywhere are the honest half, and they are what the README has to say
+        # out loud before a release (Q4).
+
+        # Linux-only, by the kernel and the daemon they need. There is no version of these that
+        # runs on macOS or Windows, so this is a wall rather than a cost.
+        flatpak)    echo "Flatpak is a Linux runtime with a session bus; this host is not Linux — the container matrix names its own reason for it" ;;
+        snap)       echo "snapd is a Linux daemon over systemd; this host is not Linux, and no image in the matrix runs systemd either — argv-tested only, everywhere" ;;
+
+        # No BSD host exists anywhere in this project's CI. Named so the gap is a stated fact
+        # rather than an absence somebody has to notice.
+        pkg)        echo "FreeBSD's native manager, and there is no FreeBSD host in this matrix at all — argv-tested only, everywhere" ;;
+        pkg_add)    echo "OpenBSD's native manager, and there is no OpenBSD host in this matrix at all — argv-tested only, everywhere" ;;
+        pkgin)      echo "the pkgsrc binary manager (NetBSD, SmartOS), and there is no pkgsrc host in this matrix at all — argv-tested only, everywhere" ;;
+
+        # **The one on this list a runner could actually attempt**, and nobody has. Written as a
+        # cost rather than a wall on purpose: `nix` carried "impossible" for months on reasoning
+        # nobody re-derived, and it turned out to be a price (Q17).
+        macports)   echo "MacPorts installs a whole second package tree under /opt/local beside Homebrew and has never been attempted on a runner — a cost nobody has priced, not a wall" ;;
+
+        # Lifecycled for real in the `tools` container image, which ships each of these and has
+        # a canary for it. Installing them here would be testing their installers on somebody's
+        # machine, which is what `disposable_host` exists to refuse.
+        cabal|composer|conda|mix|nix|opam|spack)
+                    echo "$1 gets a real install/list/binary/remove in the \`tools\` container image, which ships it and has a canary for it; installing it here would test its installer rather than LiNix" ;;
+
+        # The same image, and the same reason the container harness gives: the toolchain can be
+        # baked in, the package's build cannot.
+        stack)      echo "a Haskell package builds from source, so the toolchain can be baked into an image and the build cannot — smoked here, and named the same way in the container harness" ;;
+
         *)          echo "" ;;
     esac
 }
@@ -1831,17 +1874,56 @@ else
             else
                 soft "lock: the stamp was already gone after the kill, so the corpse case is weaker than intended"
             fi
+            # **The subject here is LiNix's own lock, so the package manager's is cleared
+            # first.** Killing a holder mid-sync also orphans the manager it had started, which
+            # keeps its own lock and leaves it behind — so the sync below would fail on *that*
+            # lock and this check would report it as a LiNix lock that was not released. The
+            # container twin learned this and this script did not, which is the same one-of-two
+            # split as the assertion below it. `heal` is the command whose job that repair is
+            # (II.50), and it is untimed: what is measured is the sync.
+            $TO "$LINIX" -y heal >/tmp/lock-corpse-heal-win.out 2>&1 || true
             _t0=$(date +%s)
             $TO "$LINIX" -y sync >/tmp/lock-corpse-win.out 2>&1
             _rc=$?
             _took=$(since "$_t0")
-            if [ "$_rc" -ne 0 ] && [ "$_rc" -ne 2 ]; then
-                hard "lock: a run after a killed holder failed (rc=$_rc) instead of taking the free lock"
+            # **The exit code is asked LAST, and under its own name.** It used to be asked
+            # first, so any failure of the sync was reported as a lock that had not been
+            # released. The macOS nightly failed exactly that way for six nights running:
+            #
+            #     FAIL  lock: a run after a killed holder failed (rc=1) instead of taking
+            #           the free lock
+            #           | Error: `brew` failed (exit 1): No available formula with the
+            #             name "tokei@14.0.0".
+            #
+            # The lock was taken correctly and instantly. What failed was a version pin naming
+            # a Homebrew formula that does not exist — and the only red line in a 296-assertion
+            # run pointed at the wrong mechanism. A check whose name and whose cause are
+            # unrelated is the defect `GRADER.md` exists to catch. Two questions, two sentences.
+            #
+            # The lock question is answered by the clock and by the message, not by rc: LiNix
+            # announces its own wait, so a run that was refused by a dead holder's stamp says so.
+            if grep -q "waiting for the data directory\|is locked by" /tmp/lock-corpse-win.out 2>/dev/null; then
+                hard "lock: the next run waited on the data directory after the holder was killed — the stale stamp file was believed over the lock (${_took}s)"
                 excerpt /tmp/lock-corpse-win.out 6
             elif [ "$_took" -ge 30 ]; then
-                hard "lock: the next run waited ${_took}s on a holder that was already dead — the stale stamp file was believed over the lock"
+                hard "lock: the next run took ${_took}s after a holder that was already dead, without saying what it was waiting for"
+                excerpt /tmp/lock-corpse-win.out 6
+            # **Positive evidence that the lock was taken, not merely that nothing complained.**
+            # `DataLock`'s `Drop` deletes the stamp, so the corpse's file is gone once something
+            # has taken and released the lock — and is still there if nothing did. Without this
+            # the whole branch passed against a stub that does nothing and exits 0, which is a
+            # check that cannot fail and therefore proves nothing when it passes.
+            elif [ -s "$LOCKOWNER" ]; then
+                hard "lock: the killed holder's stamp is still on disk after the next run — nothing took and released the lock, so this check had nothing to measure"
+                excerpt /tmp/lock-corpse-win.out 6
             else
-                PASS=$((PASS + 1)); echo "  PASS  lock: a killed holder's lock died with it — the next run took ${_took}s, not the 120s timeout"
+                PASS=$((PASS + 1)); echo "  PASS  lock: a killed holder's lock died with it — the next run took ${_took}s, took the lock and released it"
+            fi
+            # The other question, asked separately because it is a different question.
+            if [ "$_rc" -ne 0 ] && [ "$_rc" -ne 2 ]; then
+                hard "crash-recovery sync: the run after a killed holder failed (rc=$_rc) — the lock was free, so this is a sync defect and not a lock defect"
+                echo "        heal said: $(tr '\n' ' ' < /tmp/lock-corpse-heal-win.out | tail -c 300)"
+                excerpt /tmp/lock-corpse-win.out 6
             fi
         fi
     fi

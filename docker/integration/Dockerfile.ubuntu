@@ -13,12 +13,18 @@ ENV DEBIAN_FRONTEND=noninteractive
 # them that section reports "not driven here" and the most-used code path in the program stays
 # unrun on every platform.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates build-essential pkg-config libssl-dev git \
+    curl ca-certificates build-essential pkg-config libssl-dev git unzip \
     sudo util-linux passwd \
     nodejs npm python3 python3-pip pipx ruby
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
 # Extra managers via their own installers. Tolerant (`|| true`): if any is unreachable at
 # build time the image still builds; that backend simply won't be READY and is auto-skipped.
+#
+# **The tolerance is why `unzip` is in the list above.** bun's installer needs it, none of these
+# images had it, and `|| true` turned `error: unzip is required to install bun` into a successful
+# build with one manager missing from every run afterwards. A skip the sweep reports honestly is
+# still a skip nobody reads, so the dependencies of these installers belong in the package list
+# rather than in the tolerance.
 RUN corepack enable || true
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh || true
 RUN curl -fsSL https://bun.sh/install | bash || true

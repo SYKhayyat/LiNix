@@ -3198,6 +3198,12 @@ mod tests {
             probe("pacman", "jq", "pacman -S --noconfirm --needed jq"),
             1
         );
+        // And `winget`, which joined the terminating set on 2026-08-11 when the differential
+        // probe measured it on windows-latest — it had been listed as not terminating on the
+        // shape of its parser, and it was one of three rows that reasoning got wrong. It sat on
+        // the "not caught" side of this self-test on the strength of that listing, which is the
+        // instrument agreeing with the claim it was meant to check.
+        assert_eq!(probe("winget", "jq", "winget install jq"), 1);
 
         // Not caught, and each for its own reason — a scan that flagged these would be turned
         // off within a week.
@@ -3208,9 +3214,10 @@ mod tests {
             "terminated, and the operand only contains the subject"
         );
         assert_eq!(
-            probe("winget", "jq", "winget install jq"),
+            probe("scoop", "jq", "scoop install jq"),
             0,
-            "winget reads a bare `--` as the package id"
+            "scoop is a PowerShell script dispatching on $args[0]; a bare `--` becomes an app \
+             name, so a bare operand is the correct argv and must not be flagged"
         );
         assert_eq!(
             probe("apt", "jq", "apt-get autoremove --dry-run"),

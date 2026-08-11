@@ -14,6 +14,7 @@ pub use args::{
     HooksArgs,
     HooksCommand,
     LockAxis,
+    LockScope,
     // New for v3.6.0
     ModuleArgs,
     ModuleCommand,

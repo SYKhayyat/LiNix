@@ -618,6 +618,7 @@ async fn absent_targets(app: &App, packages: &[String]) -> Result<Vec<(String, S
         }
 
         let mut holders: Vec<String> = Vec::new();
+        let mut unasked: Vec<String> = Vec::new();
         for b in app.registry.available() {
             let backend = b.name().to_string();
             if !listings.contains_key(&backend) {
@@ -626,13 +627,23 @@ async fn absent_targets(app: &App, packages: &[String]) -> Result<Vec<(String, S
                 // and that line outlives the run that guessed.
                 let b_cap = app.registry.get(&backend);
                 let listed = match b_cap.as_ref().and_then(|b| b.as_queryable()) {
-                    Some(q) => q.list_installed().await.ok(),
-                    None => None,
+                    Some(q) => q.list_installed().await,
+                    None => continue,
                 };
-                let Some(listed) = listed else {
-                    continue;
+                let listed = match listed {
+                    Ok(listed) => listed,
+                    // Kept, so the refusal below can say which managers were silent. "Not
+                    // installed under any manager LiNix can ask" is true and useless when the
+                    // set of managers it could ask is not stated.
+                    Err(e) => {
+                        unasked.push(format!("{backend} ({e})"));
+                        continue;
+                    }
                 };
-                listings.insert(backend.clone(), listed.into_iter().map(|p| p.name).collect());
+                listings.insert(
+                    backend.clone(),
+                    listed.into_iter().map(|p| p.name).collect(),
+                );
             }
             if listings[&backend].contains(&name) {
                 holders.push(backend);
@@ -640,12 +651,24 @@ async fn absent_targets(app: &App, packages: &[String]) -> Result<Vec<(String, S
         }
 
         if holders.is_empty() {
+            let silence = if unasked.is_empty() {
+                String::new()
+            } else {
+                unasked.sort();
+                format!(
+                    "\n  {} manager(s) could not be asked, so this is not a complete \
+                     answer:\n    {}",
+                    unasked.len(),
+                    unasked.join("\n    ")
+                )
+            };
             anyhow::bail!(
                 "`{}` is not installed under any manager LiNix can ask, so there is nothing \
                  to declare absent. Name the manager — `linix uninstall <backend>:{} \
-                 --absent` — to write the line anyway.",
+                 --absent` — to write the line anyway.{}",
                 name,
-                name
+                name,
+                silence
             );
         }
         out.extend(holders.into_iter().map(|b| (b, name.clone())));
@@ -931,14 +954,18 @@ pub async fn handle_hold(app: &App, packages: &[String]) -> Result<()> {
     // `Held 1 package(s).` at exit 0, against a manager that does not exist.
     app.require_known_spec_backends(packages).await?;
     if packages.is_empty() {
-        let state = app.state.lock().await;
-        let held = state.list_held();
-        if held.is_empty() {
+        // **Both sources.** This listed the ledger alone, so the command whose entire job is
+        // *tell me what is held* answered `No packages are held.` over a manifest holding
+        // three — a read command disagreeing with the machine, which is the defect this
+        // repository grades itself against. The source is printed beside each one because the
+        // two are released by different commands.
+        let holds = app.holds().await;
+        if holds.is_empty() {
             println!("No packages are held.");
         } else {
-            println!("Held packages ({}):", held.len());
-            for h in held {
-                println!("  {}", h);
+            println!("Held packages ({}):", holds.len());
+            for line in holds.describe() {
+                println!("  {}", line);
             }
         }
         return Ok(());
@@ -1031,9 +1058,24 @@ pub struct Outdated {
     latest: String,
 }
 
+/// What `outdated` found, and what it could not find out.
+///
+/// **Two fields, because "nothing is outdated" and "nobody could be asked" printed the same
+/// sentence.** A `lookup` that fails is one package silently dropped from the answer, and a
+/// manager whose registry is down drops all of its packages — so `linix list --outdated`
+/// reported *"Everything is up to date"* over a manager it never heard from. That is the same
+/// category error as `info` reporting "not installed on this machine" for a resolve it could not
+/// run: absence and unavailability are different answers, and only one of them is knowable.
+pub struct OutdatedReport {
+    pub rows: Vec<Outdated>,
+    /// `backend:name` for every package whose newest version could not be established, with the
+    /// reason. Never empty *and* silent.
+    pub unanswered: Vec<String>,
+}
+
 /// Find managed packages whose backend reports a newer version than what's installed. Backends
 /// without a `Searchable` capability (no "latest" source) are honestly skipped, not guessed at.
-pub async fn compute_outdated(app: &App, list: &[crate::core::Package]) -> Vec<Outdated> {
+pub async fn compute_outdated(app: &App, list: &[crate::core::Package]) -> OutdatedReport {
     use futures::stream::{self, StreamExt};
     use std::collections::HashMap;
 
@@ -1053,69 +1095,107 @@ pub async fn compute_outdated(app: &App, list: &[crate::core::Package]) -> Vec<O
         .map(|(backend, installed)| async move {
             let b = app.registry.get(&backend)?;
             // No `Searchable` means no source for "latest" at all — honestly skipped, never
-            // guessed at.
+            // guessed at. This one really is a capability and not a failure, which is why it
+            // does not join `unanswered` below.
             let s = b.as_searchable()?;
 
             // One call for the whole manager, where it has such a verb.
+            //
+            // **A failure here falls through rather than returning.** One broken bulk verb is
+            // not a reason to give up on the manager, and the per-package path below asks the
+            // same registry — so its failures are collected there. Reporting them here as well
+            // would name the manager twice for one outage.
             if let Ok(Some(available)) = s.outdated_all().await {
                 let latest: HashMap<&str, &str> = available
                     .iter()
                     .filter_map(|p| Some((p.name.as_str(), p.version.as_deref()?)))
                     .collect();
-                return Some(
-                    installed
-                        .iter()
-                        .filter_map(|p| {
-                            let cur = p.version.as_deref()?;
-                            let newest = latest.get(p.name.as_str())?;
-                            // The manager has already decided this is an update. Comparing
-                            // again would second-guess it with a version grammar it does not
-                            // use — and `> 3.13.5` is a version winget really prints.
-                            Some(Outdated {
-                                backend: p.backend.clone(),
-                                name: p.name.clone(),
-                                installed: cur.to_string(),
-                                latest: (*newest).to_string(),
-                            })
+                let rows = installed
+                    .iter()
+                    .filter_map(|p| {
+                        let cur = p.version.as_deref()?;
+                        let newest = latest.get(p.name.as_str())?;
+                        // The manager has already decided this is an update. Comparing
+                        // again would second-guess it with a version grammar it does not
+                        // use — and `> 3.13.5` is a version winget really prints.
+                        Some(Outdated {
+                            backend: p.backend.clone(),
+                            name: p.name.clone(),
+                            installed: cur.to_string(),
+                            latest: (*newest).to_string(),
                         })
-                        .collect::<Vec<_>>(),
-                );
+                    })
+                    .collect::<Vec<_>>();
+                return Some((rows, Vec::new()));
             }
 
             // No such verb — ask per package, but concurrently rather than one after another.
             // This is the honest answer for `cargo`, which has no outdated check at all.
-            let rows = stream::iter(installed)
+            let answers = stream::iter(installed)
                 .map(|p| {
                     let s = s.clone();
                     async move {
-                        let cur = p.version.as_deref()?;
-                        let remote = s.lookup(&p.name).await.ok()??;
-                        let newest = remote.version.as_deref()?;
-                        (version_compare::compare(newest, cur) == Ok(version_compare::Cmp::Gt))
-                            .then(|| Outdated {
-                                backend: p.backend.clone(),
-                                name: p.name.clone(),
-                                installed: cur.to_string(),
-                                latest: newest.to_string(),
-                            })
+                        let Some(cur) = p.version.as_deref() else {
+                            return Ok(None);
+                        };
+                        // A `lookup` that FAILED is not a package that is current. It was
+                        // `.ok()??`, so a registry that was down dropped every one of its
+                        // packages out of the answer and `list --outdated` printed
+                        // "Everything is up to date" over it.
+                        let remote = match s.lookup(&p.name).await {
+                            Ok(Some(remote)) => remote,
+                            Ok(None) => return Ok(None),
+                            Err(e) => return Err(format!("{}:{} — {e}", p.backend, p.name)),
+                        };
+                        let Some(newest) = remote.version.as_deref() else {
+                            return Ok(None);
+                        };
+                        Ok(
+                            (version_compare::compare(newest, cur) == Ok(version_compare::Cmp::Gt))
+                                .then(|| Outdated {
+                                    backend: p.backend.clone(),
+                                    name: p.name.clone(),
+                                    installed: cur.to_string(),
+                                    latest: newest.to_string(),
+                                }),
+                        )
                     }
                 })
                 .buffer_unordered(cap)
-                .filter_map(|r| async move { r })
                 .collect::<Vec<_>>()
                 .await;
-            Some(rows)
+
+            let mut rows = Vec::new();
+            let mut unanswered = Vec::new();
+            for answer in answers {
+                match answer {
+                    Ok(Some(row)) => rows.push(row),
+                    Ok(None) => {}
+                    Err(why) => unanswered.push(why),
+                }
+            }
+            Some((rows, unanswered))
         })
         .buffer_unordered(cap)
         .filter_map(|r| async move { r })
-        .collect::<Vec<Vec<Outdated>>>()
+        .collect::<Vec<(Vec<Outdated>, Vec<String>)>>()
         .await;
 
-    let mut out: Vec<Outdated> = per_backend.into_iter().flatten().collect();
+    let mut report = OutdatedReport {
+        rows: Vec::new(),
+        unanswered: Vec::new(),
+    };
+    for (rows, unanswered) in per_backend {
+        report.rows.extend(rows);
+        report.unanswered.extend(unanswered);
+    }
     // The fan-out finishes in whatever order the managers do, and a listing whose order
     // depends on which manager answered quickest changes between runs.
-    out.sort_by(|a, b| (&a.backend, &a.name).cmp(&(&b.backend, &b.name)));
-    out
+    report
+        .rows
+        .sort_by(|a, b| (&a.backend, &a.name).cmp(&(&b.backend, &b.name)));
+    report.unanswered.sort();
+    report
 }
 
 pub async fn handle_list(
@@ -1129,23 +1209,37 @@ pub async fn handle_list(
     app.require_known_backend(backend)?;
     let list = app.list(backend).await?;
     if outdated {
-        let rows = compute_outdated(app, &list).await;
+        let report = compute_outdated(app, &list).await;
         if out.is_json() {
-            println!("{}", serde_json::to_string_pretty(&rows)?);
-        } else if rows.is_empty() {
-            println!("Everything is up to date (for backends that report a latest version).");
+            println!("{}", serde_json::to_string_pretty(&report.rows)?);
+        } else if report.rows.is_empty() {
+            // Only when everybody answered. "Everything is up to date" over a manager whose
+            // registry was down is the sentence this distinction exists to stop printing.
+            if report.unanswered.is_empty() {
+                println!("Everything is up to date (for backends that report a latest version).");
+            } else {
+                println!("Nothing reported an update — but see below; this is not \"up to date\".");
+            }
         } else {
             println!(
                 "{:<12} {:<32} {:<18} LATEST",
                 "BACKEND", "PACKAGE", "INSTALLED"
             );
-            for r in &rows {
+            for r in &report.rows {
                 println!(
                     "{:<12} {:<32} {:<18} {}",
                     r.backend, r.name, r.installed, r.latest
                 );
             }
             println!("\nUpgrade all: `linix upgrade --all`  ·  one: `linix upgrade <name>`");
+        }
+        if !report.unanswered.is_empty() && !out.is_json() {
+            println!(
+                "\n{} package(s) could not be checked, so LiNix cannot tell you they are \
+                 current:\n  {}",
+                report.unanswered.len(),
+                report.unanswered.join("\n  ")
+            );
         }
         return Ok(());
     }

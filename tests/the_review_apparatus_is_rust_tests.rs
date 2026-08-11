@@ -310,7 +310,14 @@ fn every_shell_script_the_repo_runs_has_lf_endings() {
                     .find(|c: char| c == ':' || c == '"' || c.is_whitespace())
                     .unwrap_or(rest.len());
                 let candidate = root().join(&rest[..end]);
-                if candidate.is_file() {
+                // **A file, and a file made of text.** The sweep collects any `$PWD/`-rooted
+                // path the workflow names, and `ci.yml` names one that is not a script at all:
+                // `LINIX="$PWD/target/release/linix.exe"`. On a machine that has done a release
+                // build that path exists, the scan reads it, an executable contains `\r` in the
+                // ordinary course of being an executable, and the gate reported the release
+                // binary as a CRLF shell script. A check that fails for a reason unrelated to
+                // its own sentence proves nothing when it passes.
+                if candidate.is_file() && std::fs::read_to_string(&candidate).is_ok() {
                     files.push(candidate);
                 }
                 rest = &rest[end..];

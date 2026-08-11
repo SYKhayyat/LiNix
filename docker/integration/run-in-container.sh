@@ -999,6 +999,13 @@ echo "[14] Real lifecycle, every other manager on this image"
 # host class and for exactly the same reason — one number over unlike machines is a number that
 # is wrong for all but one of them. Not done tonight, and named here rather than left as a
 # surprise for whoever next lowers this line.
+#
+# **Left at 11 deliberately on 2026-08-11.** Ten names moved out of the gap and into
+# `no_lifecycle_reason` that day — the other distributions' native managers, which had been
+# counted and never named — so every image's number falls, and by different amounts. Lowering
+# this to a number nobody has measured is the mistake the paragraph above records happening once
+# already, against `storage`. The soft branch prints each image's new count; take the largest of
+# them from the next full matrix run and lower this line to it.
 LIFECYCLE_GAP_CEILING=11
 canary() {
     case "$1" in
@@ -1165,6 +1172,29 @@ no_lifecycle_reason() {
         # refusal from reading as ecosystem flakiness run after run.
         pip)      ls /usr/lib/python3*/EXTERNALLY-MANAGED >/dev/null 2>&1 \
                       && echo "this distro marks its Python EXTERNALLY-MANAGED (PEP 668), so a system pip install is refused by design" ;;
+
+        # ---- Native managers of a distro this matrix does not build ---------
+        #
+        # These were counted and never named: the opensuse leg reported `10 backend(s) have no
+        # path to a real lifecycle` and left the reader to work out that six of them are other
+        # distributions' package managers. A count is not an answer. Each is now either "another
+        # harness runs it" or a confession, and the confessions are what the README owes a
+        # reader before a release (Q4).
+        #
+        # No image conditionals here on purpose: none of these is READY on any image in the
+        # matrix, so a per-image reason would be six copies of the same sentence. `emerge` and
+        # the pacman family are the exceptions and say why in their own line.
+        brew)     echo "Homebrew is lifecycled on the macOS runner (scripts/integration-windows.sh brew); Linuxbrew is a second install of the same manager and no image in this matrix builds it" ;;
+        emerge)   echo "Portage runs on the gentoo image and runs there SMOKE_ONLY — a real emerge builds the package from source, which is minutes per canary on every run for ever" ;;
+        yay|paru) echo "an AUR helper builds from source AND refuses to run as root, which is what every container in this matrix is; the arch image lifecycles pacman underneath it — argv-tested only" ;;
+        eopkg)    echo "Solus's native manager, and there is no Solus image in this matrix — argv-tested only" ;;
+        slackpkg) echo "Slackware's native manager, and there is no Slackware image in this matrix — argv-tested only" ;;
+        guix)     echo "GNU Guix needs its own daemon and store, the same shape as the nix finding (Q17) and without nix's answer — argv-tested only" ;;
+        pkg)      echo "FreeBSD's native manager, and there is no FreeBSD host anywhere in this project's CI — argv-tested only" ;;
+        pkg_add)  echo "OpenBSD's native manager, and there is no OpenBSD host anywhere in this project's CI — argv-tested only" ;;
+        pkgin)    echo "the pkgsrc binary manager (NetBSD, SmartOS), and there is no pkgsrc host anywhere in this project's CI — argv-tested only" ;;
+        macports) echo "macOS-only, and the macOS runner has not attempted it either — a cost nobody has priced, named in the same words there" ;;
+
         *)        echo "" ;;
     esac
 }
@@ -2401,27 +2431,48 @@ else
         $TO "$LINIX" -y sync >/tmp/lock-corpse.out 2>&1
         _rc=$?
         _took=$(since "$_t0")
-        if [ "$_rc" -ne 0 ] && [ "$_rc" -ne 2 ]; then
-            hard "lock: a run after a killed holder failed (rc=$_rc) instead of taking the free lock"
-            echo "        heal said: $(tr '\n' ' ' < /tmp/lock-corpse-heal.out | tail -c 300)"
-            excerpt /tmp/lock-corpse.out 6
         # **What must not happen is a wait on the DATA DIRECTORY**, and that is what is
-        # asserted — not a stopwatch. A killed holder also orphans the package manager it had
-        # started, and the next run legitimately waits for that manager to finish (II.51),
-        # announcing it as it goes. On opensuse that was 62 seconds of correct behaviour, and a
-        # bare `>= 30` reported it as "the stale stamp file was believed over the lock" — a
-        # sentence about a mechanism that had not run. The wait LiNix is forbidden from making
-        # here is the one on its own lock, and it says which wait it is making.
-        elif grep -q "waiting for the data directory" /tmp/lock-corpse.out 2>/dev/null; then
+        # asserted — not a stopwatch, and NOT the exit code. A killed holder also orphans the
+        # package manager it had started, and the next run legitimately waits for that manager
+        # to finish (II.51), announcing it as it goes. On opensuse that was 62 seconds of
+        # correct behaviour, and a bare `>= 30` reported it as "the stale stamp file was
+        # believed over the lock" — a sentence about a mechanism that had not run. The wait
+        # LiNix is forbidden from making here is the one on its own lock, and it says which
+        # wait it is making.
+        #
+        # **The exit code is asked LAST, and under its own name.** It used to be asked first,
+        # so any failure of the sync — a package that no longer exists upstream, a repository
+        # that was down — was reported as `lock: a run after a killed holder failed … instead
+        # of taking the free lock`. The macOS nightly failed exactly that way for six nights
+        # over a version pin naming a Homebrew formula that does not exist: the lock was taken
+        # correctly, and the check that reported a lock defect was the only red line in the run.
+        # A check whose name and whose cause are unrelated is the defect `GRADER.md` exists to
+        # catch. The lock question and the sync question are separate questions and now have
+        # separate sentences.
+        if grep -q "waiting for the data directory" /tmp/lock-corpse.out 2>/dev/null; then
             hard "lock: the next run waited on the data directory after the holder was killed — the stale stamp file was believed over the lock (${_took}s)"
             excerpt /tmp/lock-corpse.out 6
         elif [ "$_took" -ge 120 ]; then
             hard "lock: the next run took ${_took}s, which is the data-lock timeout, without saying it was waiting for anything"
             excerpt /tmp/lock-corpse.out 6
+        # **Positive evidence that the lock was taken, not merely that nothing complained.**
+        # `DataLock`'s `Drop` deletes the stamp, so the corpse's file is gone once something has
+        # taken and released the lock — and is still there if nothing did. Without this the
+        # whole branch passed against a stub that does nothing and exits 0, which is a check
+        # that cannot fail and therefore proves nothing when it passes.
+        elif [ -s "$LOCKOWNER" ]; then
+            hard "lock: the killed holder's stamp is still on disk after the next run — nothing took and released the lock, so this check had nothing to measure"
+            excerpt /tmp/lock-corpse.out 6
         else
             _why=""
             grep -q "linix: waiting for" /tmp/lock-corpse.out 2>/dev/null && _why=" (it waited for the package manager the killed run had started, and said so)"
-            PASS=$((PASS + 1)); echo "  PASS  lock: a killed holder's lock died with it — the next run took ${_took}s, not the 120s timeout${_why}"
+            PASS=$((PASS + 1)); echo "  PASS  lock: a killed holder's lock died with it — the next run took ${_took}s, took the lock and released it${_why}"
+        fi
+        # The other question, asked separately because it is a different question.
+        if [ "$_rc" -ne 0 ] && [ "$_rc" -ne 2 ]; then
+            hard "crash-recovery sync: the run after a killed holder failed (rc=$_rc) — the lock was free, so this is a sync defect and not a lock defect"
+            echo "        heal said: $(tr '\n' ' ' < /tmp/lock-corpse-heal.out | tail -c 300)"
+            excerpt /tmp/lock-corpse.out 6
         fi
     fi
     crash_wipe

@@ -607,6 +607,50 @@ mod tests {
         }
     }
 
+    /// The same, for launchd, which was excused from it on the shape of the parser.
+    ///
+    /// The excuse — *"every other init here puts the name between two positionals"* — was simply
+    /// untrue of launchd, whose four rows all end in `{name}`. Nobody had run `launchctl` until
+    /// the terminator probe did, and it disagreed with the row in `core/argv.rs` by name (nightly
+    /// run 31458415385). Asserted per verb rather than "no row is missing one", because the two
+    /// that take a flag put it in a different place from the two that do not.
+    #[test]
+    fn launchd_ends_its_options_before_the_service() {
+        let ld = shipped("launchd");
+        for (action, expected) in [
+            (
+                ServiceAction::Enable,
+                vec!["launchctl", "load", "-w", "--", "nginx"],
+            ),
+            (
+                ServiceAction::Disable,
+                vec!["launchctl", "unload", "-w", "--", "nginx"],
+            ),
+            (
+                ServiceAction::Start,
+                vec!["launchctl", "start", "--", "nginx"],
+            ),
+            (
+                ServiceAction::Stop,
+                vec!["launchctl", "stop", "--", "nginx"],
+            ),
+        ] {
+            let planned: Vec<Vec<String>> = ld
+                .plan(action, "nginx")
+                .into_iter()
+                .map(|(_, c)| c)
+                .collect();
+            assert_eq!(
+                planned,
+                vec![expected
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<String>>()],
+                "{action:?}"
+            );
+        }
+    }
+
     /// A pager waits for a keypress no captured child receives. Every systemctl row has to
     /// carry the suppression, not only the two that print a screenful — `list` and `status`
     /// are where it was seen, and the rest are the same command deciding the same way.
@@ -634,9 +678,16 @@ mod tests {
 
     /// These inits take the service between two positionals, so there is nowhere a `--` could go
     /// — and each of them would read it as the service name.
+    ///
+    /// **`launchd` was on this list by assumption and has been taken off it.** Its four rows all
+    /// end in `{name}`, so a terminator has somewhere to go after all, and the differential probe
+    /// measured launchctl honouring one on macos-latest: `load -w -- <x>`, `unload -w -- <x>`,
+    /// `start -- <x>` and `stop -- <x>` are each identical to the same line without it, in exit
+    /// code, in output, and in how the operand is echoed (nightly run 31458415385, 2026-08-11).
+    /// The row in `core/argv.rs` says the same thing; these are the two layers that have to agree.
     #[test]
     fn the_other_inits_deliberately_emit_no_terminator() {
-        for name in ["openrc", "sysvinit", "launchd", "windows-sc"] {
+        for name in ["openrc", "sysvinit", "windows-sc"] {
             let p = shipped(name);
             for action in [
                 ServiceAction::Enable,

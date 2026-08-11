@@ -902,9 +902,38 @@ pub enum Commands {
     },
 }
 
+/// When a command may hold the exclusive data lock.
+///
+/// **Three answers, because two were never enough.** The question `writes()` asked was "does
+/// this write `data/`", and the lock it decided was held for the whole process. That conflates
+/// two things: *whether* a command writes, and *for how long it is entitled to stop everybody
+/// else*. Six commands write state and are unbounded in time — `edit` blocks on `$EDITOR`,
+/// `history` opens a TUI somebody reads at their own pace, `watch` never returns at all — and
+/// each one was found separately, patched separately, and its sibling left live. `edit`,
+/// `history` and `fleet` were fixed in three commits; `watch`, `shell` and `run` were not
+/// touched, and `watch` is the documented GitOps deployment: while it runs, every other writing
+/// LiNix command on the machine waits 120 seconds and then fails.
+///
+/// Making it one enum is what stops the seventh instance. A new subcommand does not compile
+/// until it answers, and `no_unbounded_command_holds_the_lock_for_its_lifetime` fails if an
+/// answer of [`Deferred`](LockScope::Deferred) ever turns back into a whole-run lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockScope {
+    /// Reads the machine, the config or a remote, and writes no state under `data/`. Takes
+    /// nothing. `fleet` is here because it drives *other* machines over SSH and touches no
+    /// local state at all — it took the 120-second lock for a purely remote report.
+    Reader,
+    /// Writes state, and its duration is the package work it performs. Holds the lock for the
+    /// whole run, which is what makes a set of files that must agree agree.
+    Writer,
+    /// Writes state, but its duration is a person's or a loop's rather than the work's. Takes
+    /// the lock **at each mutating action** and releases it in between, so the waiting is over
+    /// the write and not over the reading, the typing or the sleep.
+    Deferred,
+}
+
 impl Commands {
-    /// Does this command write LiNix's own state under `data/`, and therefore need the
-    /// exclusive lock?
+    /// Whether this command may hold the exclusive data lock, and for how long.
     ///
     /// **Exhaustive, and that is the whole point.** This was a hand-maintained `&[&str]` of
     /// twenty-one names sitting seventy lines from the enum, and its own test docstring
@@ -923,8 +952,30 @@ impl Commands {
     /// **`--dry-run` never exempts anything** (S25): a preview of a writer reads the same
     /// state a concurrent writer is rewriting, and the run that proved it mattered was a
     /// `--dry-run sync` that entered recovery.
-    pub fn writes(&self) -> bool {
+    pub fn lock_scope(&self) -> LockScope {
+        use LockScope::{Deferred, Reader, Writer};
         match self {
+            // **The duration is not the work's.** Each of these writes state and each is
+            // unbounded in time, so the lock is taken where the write happens:
+            //
+            // - `watch` is an unbounded `loop` — the GitOps daemon, meant to be left running.
+            //   It reconciles on a timer, so the lock belongs around the tick and not around
+            //   the daemon. Held for the run, it disabled `install`, `sync` and the
+            //   `hook-reconcile` a hand-typed `apt install` fires, for as long as the daemon
+            //   was up. The user who followed the documented deployment bricked their own CLI.
+            // - `shell` launches `$SHELL` and awaits it: the lock covers provisioning the
+            //   session packages and tearing them down, not the session.
+            // - `run` provisions what a command needs and then runs a command LiNix does not
+            //   own. Same shape as `shell`, one layer smaller.
+            // - `history` opens a TUI a person reads for as long as they like. Its one
+            //   mutating action — `HistoryAction::Rollback`, which reaches `handle_rollback` →
+            //   `handle_sync`, the entire install/remove path — takes the lock where it fires.
+            //   Without that, one function had two doors and only the one reached through
+            //   `Commands::Rollback` was locked.
+            Self::Watch { .. } | Self::Shell { .. } | Self::Run { .. } | Self::History { .. } => {
+                Deferred
+            }
+
             // Reads the machine, the config or a remote, and writes neither.
             Self::Plan { .. }
             | Self::Check { .. }
@@ -944,30 +995,19 @@ impl Commands {
             | Self::Policy { .. }
             | Self::Path { .. }
             | Self::Config { .. }
-            | Self::Edit { .. } => false,
+            | Self::Edit { .. } => Reader,
 
             // `plan --save` writes a plan FILE, not state, so it is not a counter-example.
             // `try` runs the rehearsal inside a container and touches nothing here.
-            Self::Try { .. } => false,
+            Self::Try { .. } => Reader,
 
             // **`fleet` was a writer by omission.** It drives other machines over SSH and
             // touches no local state at all, and it took the 120-second exclusive lock for a
             // purely remote report — the mirror image of `history`'s bug, from the same list.
-            Self::Fleet { .. } => false,
-
-            // **`history` is a reader at this level and a writer inside.** It opens a TUI a
-            // person reads for as long as they like, so locking the whole command reintroduces
-            // exactly the `edit` problem above. Its one mutating action —
-            // `HistoryAction::Rollback`, which reaches `handle_rollback` → `handle_sync`, the
-            // entire install/remove path — takes the lock where it fires. Without that, one
-            // function had two doors and only the one reached through `Commands::Rollback` was
-            // locked.
-            Self::History { .. } => false,
+            Self::Fleet { .. } => Reader,
 
             Self::Sync { .. }
             | Self::Rebuild { .. }
-            | Self::Watch { .. }
-            | Self::Run { .. }
             | Self::Heal { .. }
             | Self::RemoveOrphans { .. }
             | Self::CleanCache { .. }
@@ -985,7 +1025,6 @@ impl Commands {
             | Self::Repo { .. }
             | Self::Adopt { .. }
             | Self::Add { .. }
-            | Self::Shell { .. }
             | Self::Activate { .. }
             | Self::Deactivate { .. }
             | Self::Profile { .. }
@@ -1005,8 +1044,38 @@ impl Commands {
             | Self::HookObserve { .. }
             | Self::Hold { .. }
             | Self::Unhold { .. }
-            | Self::SelfUpgrade { .. } => true,
+            | Self::SelfUpgrade { .. } => Writer,
         }
+    }
+
+    /// Does this command take the exclusive lock for its whole run?
+    ///
+    /// The question `main` and `run_user_verb` ask before dispatching. A [`Deferred`] command
+    /// answers `false` here and takes the lock itself, at the write.
+    ///
+    /// [`Deferred`]: LockScope::Deferred
+    pub fn writes(&self) -> bool {
+        self.lock_scope() == LockScope::Writer
+    }
+
+    /// Is this a callback a package manager fires, rather than a command a person types?
+    ///
+    /// **Asked as a property, not enumerated in a `matches!`.** The re-entrancy stand-down in
+    /// `main` matched `HookReconcile` alone — the one apt, dnf, zypper, apk, xbps, portage and
+    /// eopkg invoke — and left the other two live. `HookRecord` is what LiNix installs as
+    /// pacman's `PostTransaction` hook and `HookObserve` is what the shell wrappers call; both
+    /// are writers by [`writes`](Self::writes), so both took the 120-second exclusive lock
+    /// *inside* the sync that was holding it. pacman waits on its own hook, so that is two
+    /// minutes of silence per transaction on every Arch machine with `linix hooks` installed,
+    /// and the record is lost at the end of it anyway.
+    ///
+    /// Naming a third arm would have left the same hole for a fourth subcommand. clap's name
+    /// for the variant is the answer instead: everything LiNix writes into a manager's hook
+    /// file is spelled `hook-*` on the command line, and `every_hook_linix_installs_stands_down`
+    /// asserts that against `app/pm_hooks.rs` itself rather than against this sentence.
+    /// `hooks` — the verb a person types to install them — is deliberately not one.
+    pub fn is_manager_hook(&self) -> bool {
+        crate::core::latency::subcommand_name(self).starts_with("hook-")
     }
 }
 

@@ -53,6 +53,26 @@ impl Default for PackageSpec {
     }
 }
 
+impl PackageSpec {
+    /// Does this declaration freeze the package against a bulk upgrade (`@hold=true`)?
+    ///
+    /// **The option existed, the grammar validated it, and nothing read it.** `@hold` is in
+    /// `PACKAGE_OPTION_KEYS`, `validate_package` refuses it beside `@version` as a
+    /// contradiction, and II.2 documents it — and the only writer of the hold set was the
+    /// imperative `linix hold` command, so `apt:jq@hold=true` in a manifest parsed, validated,
+    /// and did nothing at all. Found by enumerating that table rather than by anybody hitting
+    /// it, which is the point of the enumeration: an option nobody reads passes every
+    /// lifecycle test for ever.
+    ///
+    /// Read here rather than folded into the ledger on sync: the ledger is `linix hold`'s, the
+    /// declaration is the manifest's, and a sync that wrote one into the other would have to
+    /// decide which of them owns an entry when the line goes away. Two sources, one question,
+    /// asked at both places that ask it.
+    pub fn declares_hold(&self) -> bool {
+        self.options.one("hold") == Some("true")
+    }
+}
+
 impl Package {
     pub fn new(name: impl Into<String>, backend: impl Into<String>) -> Self {
         Self {

@@ -7,9 +7,16 @@
 # exercise the path a user's row does.
 #
 # `{name}` is the service. Argv is a list, so a service name is one argument and never a place a
-# shell could reach. systemd takes the unit as a trailing positional, so its rows carry `--`
-# before `{name}`; every other init here puts the name between two positionals, where there is
-# nowhere a terminator could go and each would read `--` as the service name.
+# shell could reach. An init whose rows put `{name}` LAST carries `--` before it; openrc,
+# sysvinit and their wrappers put the name between two positionals (`rc-service <name> start`),
+# where there is nowhere a terminator could go and each would read `--` as the service name.
+#
+# **launchd was in the second group by assumption and belongs in the first.** Its four rows all
+# end in `{name}`, and this comment said otherwise for as long as nobody had run launchctl. The
+# differential probe did, on macos-latest: `load -w -- <x>`, `unload -w -- <x>`, `start -- <x>`
+# and `stop -- <x>` are each identical to the same line without the terminator, in exit code, in
+# output, and in how the operand is echoed (nightly run 31458415385, 2026-08-11). The row in
+# `core/argv.rs` says the same thing, and these two are the layers that have to agree.
 
 [[init]]
 name = "systemd"
@@ -66,10 +73,10 @@ status = ["service", "{name}", "status"]
 name = "launchd"
 os = "macos"
 detect = "launchctl"
-enable  = [["launchctl", "load", "-w", "{name}"]]
-disable = [["launchctl", "unload", "-w", "{name}"]]
-start   = [["launchctl", "start", "{name}"]]
-stop    = [["launchctl", "stop", "{name}"]]
+enable  = [["launchctl", "load", "-w", "--", "{name}"]]
+disable = [["launchctl", "unload", "-w", "--", "{name}"]]
+start   = [["launchctl", "start", "--", "{name}"]]
+stop    = [["launchctl", "stop", "--", "{name}"]]
 # No native restart verb. Spelled out here as stop-then-start it was indistinguishable from a
 # native one, so both halves were labelled `restart` and neither could be told which codes mean
 # "already in that state". Left absent, the derivation produces the same two commands and labels

@@ -145,6 +145,13 @@ pub async fn upgrade_targeted(
     // package overrides its hold (with a warning) — naming it is a clear intent to upgrade.
     let explicit = !packages.is_empty();
 
+    // **Both sources, asked once.** The ledger `linix hold` writes and the `@hold=true` lines
+    // the manifest declares. This command read only the first, so a package the user froze
+    // declaratively was upgraded by every `linix upgrade` — and the first fix taught two of this
+    // file's readers about the declaration and left a third, `remediate`, building its own
+    // closure over the ledger where nothing grepping for `is_held` would find it.
+    let holds = app.holds().await;
+
     // Dry-run: describe the upgrades (after filters/holds) without touching anything.
     if app.config.dry_run {
         crate::would_print!("would upgrade:");
@@ -158,7 +165,7 @@ pub async fn upgrade_targeted(
             if upgrade_excluded(except, b, name) {
                 continue;
             }
-            if !explicit && app.state.lock().await.is_held(b, name) {
+            if !explicit && holds.contains(b, name) {
                 continue;
             }
             println!("  ↑ {}:{}", b, name);
@@ -182,17 +189,18 @@ pub async fn upgrade_targeted(
             skipped += 1;
             continue;
         }
-        if app.state.lock().await.is_held(&b, &n) {
+        if holds.contains(&b, &n) {
+            // Which command releases it, asked of the hold rather than assumed: telling
+            // somebody to run `linix unhold` against a manifest line sends them to a command
+            // that will report nothing to do.
+            let release = holds.release(&b, &n);
             if explicit {
                 eprintln!(
-                    "upgrade: '{}:{}' is held — upgrading anyway because you named it (still held; `linix unhold` to change).",
-                    b, n
+                    "upgrade: '{b}:{n}' is held — upgrading anyway because you named it (still \
+                     held; {release} to change)."
                 );
             } else {
-                println!(
-                    "upgrade: skipping held {}:{} (`linix unhold` to allow).",
-                    b, n
-                );
+                println!("upgrade: skipping held {b}:{n} ({release} to allow).");
                 skipped += 1;
                 continue;
             }
@@ -235,11 +243,12 @@ pub async fn upgrade_security(app: &App, except: &[String], out: Output) -> Resu
     // them we must reach at least the HIGHEST fixed version across its advisories, so we take
     // the max `fixed` (not the first). Packages with no reported fix pin to None (→ latest).
     use version_compare::{compare, Cmp};
-    let held: Vec<String> = app.state.lock().await.held.clone();
-    let is_held = |backend: &str, name: &str| {
-        let q = format!("{}:{}", backend, name);
-        held.iter().any(|k| k == name || k == &q)
-    };
+    // **Both sources, and this reader was the one nobody found.** It copied the ledger out of
+    // `StateRegistry::held` into a closure of its own, so it contained neither `is_held(` nor
+    // anything else a grep for the ledger's readers would match — and a package the manifest
+    // froze with `@hold=true` was silently remediated by `upgrade --security`, which is a
+    // change to a declared package against the declaration.
+    let holds = app.holds().await;
     let mut order: Vec<String> = Vec::new();
     let mut agg: std::collections::HashMap<String, (String, String, Option<String>)> =
         std::collections::HashMap::new();
@@ -253,7 +262,7 @@ pub async fn upgrade_security(app: &App, except: &[String], out: Output) -> Resu
         }
         // A held package is NOT silently remediated — hold is an explicit "don't touch". We
         // surface it loudly so the user can `unhold` and re-run if they want the fix.
-        if is_held(&f.backend, &f.name) {
+        if holds.contains(&f.backend, &f.name) {
             held_keys.insert(key);
             continue;
         }
@@ -405,7 +414,9 @@ async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
         // Native batch upgrades (`apt upgrade`, `brew upgrade`, …) run inside each manager and
         // can't be told to skip individual packages, so LiNix holds aren't enforced here. Be
         // honest about it rather than pretend the hold was respected.
-        let held_count = app.state.lock().await.held.len();
+        // Both sources again. This counted the ledger, so somebody whose holds were all
+        // declared got no warning at all — and their holds were exactly as unenforced.
+        let held_count = app.holds().await.len();
         if held_count > 0 {
             eprintln!(
                 "note: {} package hold(s) are NOT enforced by the native whole-system upgrade. \

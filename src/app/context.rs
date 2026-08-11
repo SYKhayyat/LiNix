@@ -448,6 +448,33 @@ impl App {
         self.resolver().await.resolve_spec(spec_str).await
     }
 
+    /// Every package frozen against an upgrade, from the ledger **and** from the manifest.
+    ///
+    /// One construction, for the reason the resolver below is one construction: `@hold=true` was
+    /// read by nothing at all, and the first fix taught two of the four readers about it. The
+    /// other two did not contain the string anybody grepped for — one built its own closure over
+    /// `StateRegistry::held`, and `linix hold` with no arguments listed the ledger and reported
+    /// `No packages are held.` over a manifest holding three.
+    ///
+    /// A model that will not resolve is the ledger alone and a warning, never a failure: neither
+    /// `upgrade` nor `hold` is a command that needs the manifest to parse, and refusing to
+    /// upgrade anything because a module has a syntax error is a worse answer than the one they
+    /// gave before.
+    pub async fn holds(&self) -> crate::app::holds::Holds {
+        let desired = match self.resolver().await.resolve_desired_state().await {
+            Ok(desired) => Some(desired),
+            Err(e) => {
+                warn!(
+                    "the manifest could not be resolved ({e}), so `@hold=true` lines are not \
+                     being honoured on this run; `linix hold` entries still are."
+                );
+                None
+            }
+        };
+        let state = self.state.lock().await;
+        crate::app::holds::Holds::new(&state, desired.as_ref())
+    }
+
     /// A resolver over this app's config and registry. One construction, so a caller that needs
     /// two answers from the model does not build two resolvers that can disagree.
     pub async fn resolver(&self) -> StateResolver<'_> {
@@ -726,10 +753,22 @@ impl App {
             }
         }
 
-        // A resolution failure is not an error here: `info` answers about the machine, and a
-        // name no manager *carries* can still be installed on it. Only the prefix check above
-        // is fatal.
-        let specs = self.resolve_spec(package_name).await.unwrap_or_default();
+        // A resolution failure is not fatal here — `info` answers about the machine, and a name
+        // no manager *carries* can still be installed on it — but it is not nothing either, and
+        // `unwrap_or_default()` made it nothing.
+        //
+        // The two halves of this function need opposite things from a failed resolve. A **bare**
+        // name survives it: the fan-out at the bottom asks every manager anyway and already
+        // refuses to say "absent" while any of them is unanswered. A name that **named its
+        // manager** does not: the branch below returns `Ok(None)`, which `info` prints as *"is
+        // not installed on this machine"* — a claim about the user's machine, made without
+        // asking anybody, out of an error nobody read. Thirteen lines further down sits the
+        // comment that fixed this exact class for the query; the resolve above it was still
+        // swallowing (Q36's sibling, one call earlier).
+        let (specs, resolve_failed) = match self.resolve_spec(package_name).await {
+            Ok(specs) => (specs, None),
+            Err(e) => (Vec::new(), Some(e)),
+        };
         for spec in &specs {
             let Some(backend) = self.registry.get(&spec.backend) else {
                 continue;
@@ -752,7 +791,20 @@ impl App {
         // The user named the manager, and it does not have it. Asking a different one would
         // answer a question nobody asked — `info cargo:ripgrep` must never report the choco
         // copy.
-        if named_backend.is_some() {
+        if let Some(backend) = &named_backend {
+            // **Unless nobody was asked.** With a named manager, `specs` is empty only when the
+            // resolve failed — a `priority` that refuses the backend, a name the validator
+            // rejects, a `@requires` chain that could not be probed — so the loop above ran
+            // zero times and this `Ok(None)` would be `info` reporting on a manager it never
+            // spoke to. That is the same category error the loop's own comment names, one
+            // branch earlier: absence and unavailability are different answers, and only one
+            // of them is knowable.
+            if let Some(e) = resolve_failed {
+                return Err(Error::command_failed(format!(
+                    "LiNix could not work out what `{package_name}` refers to, so it cannot \
+                     tell you whether `{backend}` has it: {e}"
+                )));
+            }
             return Ok(None);
         }
 
@@ -779,6 +831,13 @@ impl App {
         // In registry order, so the first manager that *has* it still wins and the fan-out
         // stays the only thing deciding that.
         let mut unanswered = Vec::new();
+        // The bare-name path survives a failed resolve — every manager is asked below either
+        // way — but it does not get to *forget* it. If the fan-out also comes back empty, the
+        // resolve failure is part of why nobody answered, and a run that reports "absent" while
+        // holding an unread error is the shape this whole function keeps producing.
+        if let Some(e) = resolve_failed {
+            unanswered.push(format!("resolving `{package_name}`: {e}"));
+        }
         for answer in answers {
             match answer {
                 Ok(Some(found)) => return Ok(Some(found)),

@@ -625,10 +625,14 @@ pub async fn handle_heal(app: &App) -> Result<()> {
     // wedged manager locks — has nothing to do with the manifest. So a resolution failure costs
     // the ownership half and is reported, rather than aborting the repair that was asked for.
     let declared: Vec<crate::core::PackageSpec> =
-        match crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
-            .await
-            .resolve_model()
-            .await
+        match crate::app::sync::resolver::StateResolver::new(
+            &app.config,
+            app.registry.clone(),
+            false,
+        )
+        .await
+        .resolve_model()
+        .await
         {
             Ok(state) => state.packages.into_values().flatten().collect(),
             Err(e) => {

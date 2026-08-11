@@ -290,3 +290,91 @@ fn the_class_of_a_command_is_read_off_its_own_variant() {
          with a tight one — an unknown command is one nobody measured"
     );
 }
+
+/// The fan-out commands keep their shape.
+///
+/// **The budget the wall clock cannot express, driven for real.** `Class::EveryBackend` carries
+/// no ceiling in seconds, and correctly so: `list` costs whatever the managers on the host cost.
+/// But that left the commands users run most with nothing measuring them at all, and the
+/// regression it could not see is the one that matters — a change that serialises the fan-out
+/// drops overlap from 6.3× to 1.2×, the wall clock stays inside a budget of `None`, and it stays
+/// there for ever.
+///
+/// `--timings` has computed the overlap ratio and the wave count since it was written and
+/// nothing read either. This reads them.
+///
+/// **Skipped, loudly, on a host with too few managers.** The ratio is not a measurement of
+/// anything below four child commands, so a bare runner says so rather than passing silently —
+/// a gate that skips without saying so reads as a pass.
+#[test]
+fn the_fan_out_commands_still_fan_out() {
+    let dir = fresh("latency-shape");
+    let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+        .args(["init"])
+        .env("LINIX_CONFIG_DIR", dir.join("config"))
+        .env("LINIX_DATA_DIR", dir.join("data"))
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("the binary should run");
+    assert!(out.status.success(), "init failed");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+        .args(["--timings", "list"])
+        .env("LINIX_CONFIG_DIR", dir.join("config"))
+        .env("LINIX_DATA_DIR", dir.join("data"))
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("the binary should run");
+    // The breakdown goes to stderr on purpose — `linix eval --timings | jq` must still get
+    // JSON — so that is where it is read from.
+    let report = String::from_utf8_lossy(&out.stderr).into_owned();
+    let line = report
+        .lines()
+        .find(|l| l.starts_with("Timings:"))
+        .unwrap_or_else(|| {
+            panic!("`linix --timings list` printed no `Timings:` line; the instrument this gate reads is gone:\n{report}")
+        });
+
+    // `Timings: 3.75s wall · 23 child command(s) summing to 23.67s · 6.3x overlap · 2 wave(s)`
+    let number_before = |unit: &str| -> Option<f64> {
+        let at = line.find(unit)?;
+        line[..at]
+            .rsplit(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .find(|t| !t.is_empty())?
+            .parse()
+            .ok()
+    };
+    let Some(children) = number_before(" child command(s)") else {
+        // The no-children form is a different sentence entirely, and it is a real answer on a
+        // machine with no managers.
+        eprintln!("latency shape: SKIPPED — no child commands on this host:\n  {line}");
+        return;
+    };
+    let children = children as usize;
+    if children < 4 {
+        eprintln!(
+            "latency shape: SKIPPED — {children} child command(s) on this host, which is too \
+             few for an overlap ratio to mean anything:\n  {line}"
+        );
+        return;
+    }
+
+    let overlap = number_before("x overlap").expect("the summary line prints an overlap ratio");
+    let waves = number_before(" wave(s)").expect("the summary line prints a wave count") as usize;
+
+    // The same floors `Class::EveryBackend`'s `Shape` carries, and for the same reason they are
+    // collapse detectors rather than targets: measured at 5.7× debug and 6.3× release here.
+    assert!(
+        overlap >= 2.0,
+        "`linix list` asked {children} managers and overlapped them only {overlap:.1}x, which is \
+         close to asking them one at a time. The seconds a fan-out costs belong to the host; the \
+         scheduling does not.\n  {line}"
+    );
+    assert!(
+        waves <= 2,
+        "`linix list` went quiet {} time(s) mid-run ({waves} waves). Every quiet moment is \
+         something that had to be answered before the next question could be asked, and a fan-out \
+         with a serial prologue is a fan-out that grew one.\n  {line}",
+        waves.saturating_sub(1)
+    );
+}

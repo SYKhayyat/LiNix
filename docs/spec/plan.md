@@ -65,22 +65,40 @@ what blocks the next one.
     it. Neither of the two options this item offered was taken: recording the name at install
     time keeps a broken declaration working, and dropping `remove` keeps a package LiNix can
     install and never undo.
-0c-bis. **Sweep every option against Q21** — change it after the install and confirm the machine
-    changes. **Seven have been done and the rest are unaudited.** `@quota`, `@size`, `@mount`,
-    `@mount_options` (Q19), `@classic` (Q20) and — found by the round-6 grader in the same table,
-    one layer further in — `@shim` and `@sandbox` (G-1, V.111) converge and are tested;
-    `@version` and `@channel` were already drift-checked. Every other key in
-    `PACKAGE_OPTION_KEYS` and `backends/capability.rs` is unexamined against the rule.
-    `tests/grade6_option_edit_reaches_the_machine_tests.rs` holds the guard over the table: a key
-    with a machine effect is drift-checked by the planner or desugared into a declared resource,
-    and a new one has to say which. This is
-    Tier 0 because it is not a feature gap — it is a class of already-shipped feature that does
-    nothing, and it passes every lifecycle by construction: install → list → remove never edits a
-    declaration. Method and the four-step drive are in `GRADER.md` §3.5; the obligation is Q21.
+0c-bis. ~~**Sweep every option against Q21** — change it after the install and confirm the
+    machine changes.~~ **ENUMERATED 2026-08-11; nine converge, and the other fifteen now say
+    what they do instead.** Nine were audited one at a time — `@quota`, `@size`, `@mount`,
+    `@mount_options` (Q19), `@classic` (Q20), `@shim` and `@sandbox` (G-1, V.111), `@version` and
+    `@channel` — and the remaining fifteen keys in `PACKAGE_OPTION_KEYS` had never been asked the
+    question at all. `tests/grade6_option_edit_reaches_the_machine_tests.rs` is now table-driven
+    **over that constant**, so every key declares where its value ends up: `Converges` (the
+    planner's drift check or a desugared resource), `Resolution`, `EveryRun`, `Permission`, or
+    `InstallTime` — the last being an honest confession, under a ceiling of six that may fall and
+    never rise. Key 25 fails the suite until it answers.
+
+    Running it found the thing the one-at-a-time audit could not: **`@hold=true` was inert.** It
+    is in `PACKAGE_OPTION_KEYS`, `validate_package` refuses it beside `@version` as a
+    contradiction, II.2 documents it — and the only writer of the held set was the imperative
+    `linix hold`, so a manifest line carrying it parsed, validated, and did nothing whatsoever.
+    There were **four** readers of the hold set, not the two anybody found by grepping
+    `is_held`: `upgrade --security` copied the ledger into a closure of its own; the
+    "holds are not enforced by a native whole-system upgrade" note counted the ledger; and
+    `linix hold` with no arguments listed it. `app::holds::Holds` is the union, and
+    `nothing_outside_the_union_reads_the_hold_ledger` fails per call site rather than per file —
+    which is what let two of the four through the first time. Method and the four-step
+    drive are in `GRADER.md` §3.5; the obligation is Q21.
 
 0e. **Cut a version.** `0.1.0`, no tags, `CHANGELOG` still `[Unreleased]`, and `install.sh`
     does `cargo install --git` from `HEAD` — so there is no artifact to install and nothing to
     roll back *to*. The tag-triggered release job in `ci.yml` exists and has never fired.
+
+    **Half of why it never fired was not the missing tag** (found 2026-08-11). `ci.yml`'s `on:`
+    block listened to `push: branches: [main]` and to nothing else, so a `v*` tag push did not
+    start the workflow at all — the release job's `if:` was gated on a ref the workflow could
+    never be running under. Two `CHANGELOG` entries had named a release and neither was
+    published, and the second one opens by describing the first one's failure. `tags: [ 'v*' ]`
+    is now on the trigger; the tag itself is still the owner's to push, and `readme.md` says so
+    at the install command until it happens.
 0f. **macOS has never been exercised**, only compiled and unit-tested. **Scheduled 2026-07-26,
     not yet proven:** a `macos-native` job runs `scripts/integration-windows.sh brew wget` on
     `macos-latest`, nightly — the first execution `release-check.sh`'s Darwin branch will ever

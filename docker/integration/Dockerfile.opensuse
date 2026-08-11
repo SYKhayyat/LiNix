@@ -10,12 +10,18 @@ ENV LINIX_IT_IMAGE=opensuse
 # `--no-recommends`: Tumbleweed's recommends pull a desktop stack into a build image.
 RUN zypper --non-interactive --gpg-auto-import-keys refresh \
     && zypper --non-interactive install --no-recommends \
-       curl gcc make pkg-config libopenssl-devel perl git tar gzip \
+       curl gcc make pkg-config libopenssl-devel perl git tar gzip unzip \
        nodejs npm python3-pipx ruby ruby-devel \
     && zypper --non-interactive clean --all
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
 # Extra managers via their own installers. Tolerant (`|| true`): a build-time network hiccup
 # leaves the image usable; that backend just won't be READY and is auto-skipped by the sweep.
+#
+# **The tolerance is why `unzip` is in the list above.** bun's installer needs it, none of
+# these images had it, and `|| true` turned `error: unzip is required to install bun` into a
+# successful build with one manager missing from every run afterwards. A skip the sweep
+# reports honestly is still a skip nobody reads, so the dependencies of these installers
+# belong in the package list rather than in the tolerance.
 RUN corepack enable || true
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh || true
 RUN curl -fsSL https://bun.sh/install | bash || true

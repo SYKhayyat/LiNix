@@ -15,7 +15,15 @@ use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-/// Held for the whole run of a command that mutates state. Dropping it releases the lock.
+/// How long a waiting run gives the holder before it says so instead.
+///
+/// 120s: long enough to outlast the longest wait a holder can legitimately make before it
+/// starts doing work — the rate-limit ceiling, 30s by default — with room for the install it
+/// then performs. It is not meant to outlast a whole sync: past this point the honest answer is
+/// that someone else is writing, not a longer silence (S27).
+pub const WAIT_SECS: u64 = 120;
+
+/// Held for the mutating part of a command. Dropping it releases the lock.
 pub struct DataLock {
     file: File,
     owner_path: PathBuf,
@@ -86,6 +94,21 @@ impl DataLock {
         let stamp = format!("linix {} (pid {})", command, std::process::id());
         let _ = std::fs::write(&owner_path, stamp);
         Ok(Self { file, owner_path })
+    }
+
+    /// Take the lock for one mutating step of a command that does not hold it for its run.
+    ///
+    /// **The one place the wait and the directory are written down.** Three call sites had
+    /// copied `safe_data_dir()`, `Duration::from_secs(120)` and the name-it-yourself argument,
+    /// which is three chances for the wait to disagree with `main`'s and a fourth caller to
+    /// invent a fifth number. `LockScope::Deferred` is what says a command belongs here.
+    pub async fn for_one_step(what: &str) -> Result<Self> {
+        Self::acquire_async(
+            &crate::utils::safe_data_dir(),
+            what,
+            Duration::from_secs(WAIT_SECS),
+        )
+        .await
     }
 
     /// Who is holding the lock, for the message. The stamp lives beside the lock file rather

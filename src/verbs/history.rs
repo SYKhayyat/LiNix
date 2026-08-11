@@ -314,20 +314,16 @@ pub async fn handle_history(app: &App) -> Result<()> {
     match action {
         HistoryAction::Quit => Ok(()),
         HistoryAction::Rollback { reference } => {
-            // **`history` is exempt from the data lock and this is where that stops being
-            // true.** The browser is a TUI a person reads for as long as they like, so locking
-            // the whole command would stop every other LiNix on the machine for the length of
-            // a reading session — the `edit`-blocks-on-$EDITOR problem AU6 records. But this
-            // arm reaches `handle_rollback` → `handle_sync`: the entire install/remove path,
-            // `state.save()` and all. The same function through `Commands::Rollback` is
-            // locked; through this door it was not, so one function had two locking regimes
-            // decided by which one the user happened to walk through.
-            let _data_lock = crate::core::datalock::DataLock::acquire_async(
-                &crate::utils::safe_data_dir(),
-                "history rollback",
-                std::time::Duration::from_secs(120),
-            )
-            .await?;
+            // **`history` is `LockScope::Deferred` and this is where the deferral ends.** The
+            // browser is a TUI a person reads for as long as they like, so locking the whole
+            // command would stop every other LiNix on the machine for the length of a reading
+            // session — the `edit`-blocks-on-$EDITOR problem AU6 records. But this arm reaches
+            // `handle_rollback` → `handle_sync`: the entire install/remove path, `state.save()`
+            // and all. The same function through `Commands::Rollback` is locked; through this
+            // door it was not, so one function had two locking regimes decided by which one the
+            // user happened to walk through.
+            let _data_lock =
+                crate::core::datalock::DataLock::for_one_step("history rollback").await?;
             println!("Rolling back to {reference}…");
             handle_rollback(app, &reference).await
         }

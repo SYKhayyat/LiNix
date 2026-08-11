@@ -13,9 +13,35 @@ pub const BOLD: &str = "1";
 /// Windows box.
 pub const DIM: &str = "2";
 
-/// Whether colored output should be produced right now: stdout is a TTY and `NO_COLOR` is unset.
+/// Whether this environment permits colour at all, before asking about any one stream.
+///
+/// Two conventions, and only one of them was honoured. `NO_COLOR` was checked; `TERM=dumb` was
+/// not, so a terminal that has told every other tool on the machine it cannot render escape
+/// sequences got them from LiNix anyway. On Windows there is no `TERM` and its absence means
+/// nothing, so an unset variable is not read as "dumb".
+fn color_allowed() -> bool {
+    if std::env::var_os("NO_COLOR").is_some() {
+        return false;
+    }
+    !matches!(std::env::var("TERM").as_deref(), Ok("dumb") | Ok(""))
+}
+
+/// Whether colored output should be produced right now: stdout is a TTY and the environment
+/// permits colour.
 pub fn color_enabled() -> bool {
-    std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal()
+    color_allowed() && std::io::stdout().is_terminal()
+}
+
+/// The same question for the diagnostic stream.
+///
+/// **Two streams, two answers, and one of them was never asked.** The tracing subscriber writes
+/// to stderr and was built with no `.with_ansi(…)` at all, so `tracing-subscriber`'s own default
+/// — colour on, always — decided it: `linix install nosuchpkg 2>&1 | grep` came back carrying
+/// escape codes, and a run redirected into a log file wrote them to disk. `color_enabled` was
+/// the right answer to the wrong stream, and stdout being a pipe while stderr is a terminal is
+/// the *usual* arrangement rather than an odd one.
+pub fn color_enabled_on_stderr() -> bool {
+    color_allowed() && std::io::stderr().is_terminal()
 }
 
 pub fn paint(enabled: bool, code: &str, text: &str) -> String {

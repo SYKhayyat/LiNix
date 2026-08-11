@@ -4,6 +4,71 @@ All notable changes to LiNix are documented here.
 
 ## [Unreleased]
 
+*The 2026-08-11 assessment's work order, executed. Two of these are things the assessment did not
+know about, and both were found by an enumeration rather than by anybody hitting them.*
+
+### `watch` no longer disables the rest of the CLI
+
+- **A command whose duration is a person's or a loop's takes the data lock at the write, not for
+  its run.** `Commands` now answers `LockScope::Reader`, `Writer` or `Deferred`, exhaustively, so
+  the next unbounded verb does not compile until it says which it is. `watch` was a whole-run
+  writer and never returns — so for as long as the documented GitOps daemon was up, every writing
+  LiNix command on that machine waited 120 seconds and then failed, including `linix install` and
+  the `hook-reconcile` a hand-typed `apt install` fires. `shell` (an interactive `$SHELL`) and
+  `run` (a command LiNix does not own) were the same shape. This bug had already been found and
+  fixed three times, for `edit`, `fleet` and `history`, each time for one verb.
+
+### `@hold=true` in a manifest now holds
+
+- **It was read by nothing.** The option is in `PACKAGE_OPTION_KEYS`, the grammar refuses it
+  beside `@version` as a contradiction, and II.2 documents it — and the only writer of the held
+  set was the imperative `linix hold`, so a declaration carrying it parsed, validated, and did
+  nothing at all. Found by making `tests/grade6_option_edit_reaches_the_machine_tests.rs`
+  table-driven over `PACKAGE_OPTION_KEYS` itself: every one of the 24 keys now declares where its
+  value ends up, and the six that are read only while installing are a confession under a ceiling.
+- **There were four readers of the hold set, not two, and a file-level check saw two.**
+  `upgrade --security` copied the ledger into a closure of its own, so it matched no grep for the
+  ledger's readers and silently remediated a package the manifest had frozen — a change to a
+  declared package, against the declaration. The "holds are not enforced by a native whole-system
+  upgrade" note counted the ledger, so somebody whose holds were all declared was told nothing.
+  And `linix hold` with no arguments — the command whose entire job is *tell me what is held* —
+  answered `No packages are held.` over a manifest holding three. `app::holds::Holds` is the
+  union now, no other module may reach the ledger at all, and the listing says which command
+  releases each hold, because the two are released differently.
+
+### Hooks, and the answers LiNix gives about a machine
+
+- **All three hook subcommands stand down when LiNix started the manager.** The guard matched
+  `hook-reconcile` alone — what apt, dnf, zypper, apk, xbps, portage and eopkg invoke. It did not
+  match `hook-record`, which is what LiNix installs as pacman's `PostTransaction` hook, so every
+  pacman transaction inside a sync waited the full 120-second lock timeout in silence and lost
+  the record anyway. It is a property of the command now, not a third match arm.
+- **A resolve that failed is no longer reported as a machine that lacks the package.** `info
+  cargo:ripgrep` on a host whose `priority` does not list cargo printed *"is not installed on
+  this machine"* at exit 0 — a claim about the user's computer, arrived at by discarding an
+  error. Same class fixed one call further on in `list --outdated`, which printed *"Everything is
+  up to date"* over a manager whose registry was down.
+- **A sudo refusal is remembered.** The success was cached and the failure was not, so a verb
+  that continues past a failing backend re-spent the 120-second password bound per manager — the
+  two 900-second wedges the `tools` nightly reported every night.
+
+### Argv, output and the gates
+
+- **Four terminator rows replaced inferences with measurements** (`winget`, `choco`, `launchctl`
+  now terminate; `stack` does not). The differential probe disagreed with all four; `stack` was
+  the unsafe direction, where LiNix was passing a `--` the tool reads as a package name.
+- **Nothing writes ANSI escapes into a pipe.** The tracing subscriber never asked whether stderr
+  was a terminal, and `TERM=dumb` was honoured by nothing.
+- **CI has a concurrency group**, and — the half nobody had looked at — **it listens for tag
+  pushes**. Without `tags: [ 'v*' ]` the release job was gated on a ref its workflow could never
+  be running under, so the two releases this file has named could not have been published even
+  with a tag.
+- **`unzip` is in five container images.** bun's installer needs it and `|| true` hid that.
+- **The fan-out commands have a budget at last.** `list`, `search`, `check` and `adopt` carry no
+  ceiling in seconds and correctly so, but `--timings` has computed the overlap ratio and the
+  wave count since it was written and nothing read either. A change that serialises the fan-out
+  now fails a test instead of staying inside a budget of `None` for ever.
+
 ## [0.8.0] — 2026-08-10 — the first published binaries
 
 **The first release anyone can install without a Rust toolchain.** `0.7.0` named the rewrite in

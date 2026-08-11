@@ -36,6 +36,51 @@ impl Runner {
             .await
     }
 
+    /// Install whatever the command needs and is missing.
+    ///
+    /// Split out of [`run`](Self::run) so the data lock can be scoped to it: this is the whole
+    /// of what `run` writes, and everything after it is somebody else's program.
+    async fn provision(&self, specs: &[PackageSpec]) -> Result<()> {
+        for spec in specs {
+            let backend_caps = self
+                .registry
+                .get(&spec.backend)
+                .ok_or_else(|| Error::BackendNotFound(spec.backend.clone()))?;
+
+            let is_present = if let Some(queryable) = backend_caps.as_queryable() {
+                queryable.info(&spec.name).await?.is_some()
+            } else {
+                debug!(
+                    "Backend '{}' not queryable, assuming missing.",
+                    spec.backend
+                );
+                false
+            };
+
+            if is_present {
+                continue;
+            }
+            let Some(installer) = backend_caps.as_installable() else {
+                return Err(Error::Transaction(format!(
+                    "Component {}:{} is required but the backend does not support installation.",
+                    spec.backend, spec.name
+                )));
+            };
+            info!(
+                "Auto-provisioning missing component: {}:{}",
+                spec.backend, spec.name
+            );
+            let sudo = backend_caps.sudo_for_write();
+            crate::core::journalled(
+                &self.journal,
+                vec![crate::core::JournalAction::Install(spec.clone())],
+                installer.install(std::slice::from_ref(spec), sudo),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
     /// Primary execution driver: Ensures environment is ready and spawns process.
     ///
     #[instrument(skip(self, packages, args))]
@@ -55,42 +100,14 @@ impl Runner {
             }
         }
 
-        for spec in &resolved_specs {
-            let backend_caps = self
-                .registry
-                .get(&spec.backend)
-                .ok_or_else(|| Error::BackendNotFound(spec.backend.clone()))?;
-
-            let is_present = if let Some(queryable) = backend_caps.as_queryable() {
-                queryable.info(&spec.name).await?.is_some()
-            } else {
-                debug!(
-                    "Backend '{}' not queryable, assuming missing.",
-                    spec.backend
-                );
-                false
-            };
-
-            if !is_present {
-                if let Some(installer) = backend_caps.as_installable() {
-                    info!(
-                        "Auto-provisioning missing component: {}:{}",
-                        spec.backend, spec.name
-                    );
-                    let sudo = backend_caps.sudo_for_write();
-                    crate::core::journalled(
-                        &self.journal,
-                        vec![crate::core::JournalAction::Install(spec.clone())],
-                        installer.install(std::slice::from_ref(spec), sudo),
-                    )
-                    .await?;
-                } else {
-                    return Err(Error::Transaction(format!(
-                        "Component {}:{} is required but the backend does not support installation.", 
-                        spec.backend, spec.name
-                    )));
-                }
-            }
+        // **The lock covers the provisioning, not the command** (`LockScope::Deferred`).
+        // `linix run -p X -- some-command` installs what the command needs and then runs a
+        // command LiNix neither wrote nor bounds — a server, an editor, a shell one-liner that
+        // waits on input. Held for the whole verb, the 120-second exclusive lock was held for
+        // the length of somebody else's program. The scope below ends before it is spawned.
+        {
+            let _data_lock = crate::core::datalock::DataLock::for_one_step("run").await?;
+            self.provision(&resolved_specs).await?;
         }
 
         let settings = &self.config.sandbox;

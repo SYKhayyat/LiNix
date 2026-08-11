@@ -80,8 +80,7 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
     // Here it must not: one package whose recovery cannot complete would block every other
     // package on the machine from converging, and the entry stays recorded as interrupted
     // either way, so the next run tries it again.
-    let declared: Vec<crate::core::PackageSpec> =
-        desired.values().flatten().cloned().collect();
+    let declared: Vec<crate::core::PackageSpec> = desired.values().flatten().cloned().collect();
     if let Err(e) = engine.heal(&declared).await {
         warn!("{e} Continuing with the sync.");
     }
@@ -656,7 +655,15 @@ pub async fn manifest_signature(dir: &std::path::Path) -> Vec<(String, u64, i64)
 /// One unattended reconcile pass. `watch` is unattended by definition, so it never asks —
 /// that flag is the only thing separating it from `sync`, which is why both go through the
 /// same [`reconcile`].
+///
+/// **The data lock is taken here, per tick, and released before the sleep** (`LockScope::
+/// Deferred`). `watch` is the GitOps deployment: the documented use is to leave it running. It
+/// was a whole-run writer, so for as long as the daemon was up, every writing LiNix command on
+/// that machine — `install`, `sync`, and the `hook-reconcile` a hand-typed `apt install` fires —
+/// waited 120 seconds and then failed. A user following the documentation disabled their own
+/// CLI. The tick is the mutating action; the sleep between ticks is not.
 pub async fn watch_reconcile(app: &App) -> Result<Reconciled> {
+    let _data_lock = crate::core::datalock::DataLock::for_one_step("watch").await?;
     reconcile(
         app,
         Reconcile {

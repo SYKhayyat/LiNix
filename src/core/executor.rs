@@ -230,6 +230,38 @@ fn sudo_password_timeout() -> Option<std::time::Duration> {
 /// carries `-n` and fails by name rather than blocking.
 static SUDO_PRIMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Why this process cannot escalate, once it has found out.
+///
+/// **Success was remembered and failure was not, and that asymmetry is the whole bug.** A
+/// refusal is as permanent as a success within one run — a wrong password does not become right
+/// during the same command, and a terminal with nobody at it does not grow a person — but
+/// `ensure_sudo_credentials` re-asked from scratch for every escalated invocation. The verbs
+/// that keep going after one backend fails are exactly the ones that pay for it: `update`
+/// refreshes each manager and "does not let one stop the rest", so it spent the full
+/// password bound *per manager*. Measured in the `tools` nightly, twice a night for weeks:
+///
+/// ```text
+/// FAIL  sudo: a wrong password left LiNix waiting 900s instead of reporting a failure
+/// FAIL  sudo: a terminal with nobody at it wedged LiNix for 900s
+/// ```
+///
+/// Both assertions bound the wait at 120s and both saw 900. The 120-second bound was working
+/// perfectly, once per backend.
+///
+/// Not an `AtomicBool`: the *reason* is what the second caller has to report, and re-deriving
+/// it would mean asking sudo again, which is the thing being avoided.
+static SUDO_REFUSED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Remember a refusal, and hand back the error to return.
+fn sudo_refused(why: String) -> Error {
+    if let Ok(mut slot) = SUDO_REFUSED.lock() {
+        if slot.is_none() {
+            *slot = Some(why.clone());
+        }
+    }
+    Error::command_failed_permanently(why)
+}
+
 /// Set the process-wide read bounds (called once during startup). Later calls no-op.
 pub fn set_query_bounds(idle_secs: u64, retry_attempts: u32) {
     let _ = QUERY_IDLE_TIMEOUT_SECS.set(idle_secs);
@@ -2068,6 +2100,13 @@ impl CommandExecutor {
         if SUDO_PRIMED.load(Ordering::Relaxed) {
             return Ok(());
         }
+        // **The answer is remembered in both directions** (`S89`). A refusal is as permanent
+        // within one run as a success is, and asking again costs the whole password bound again
+        // — per escalated command, on the verbs that deliberately keep going after one backend
+        // fails. That is how a 120-second bound produced a 900-second wedge.
+        if let Some(why) = SUDO_REFUSED.lock().ok().and_then(|s| s.clone()) {
+            return Err(Error::command_failed_permanently(why));
+        }
         // Warm timestamp, `NOPASSWD`, or an already-primed session: `-n` makes this instant and
         // silent, and it is the common case on every run after the first.
         let warm = Command::new("sudo")
@@ -2086,7 +2125,7 @@ impl CommandExecutor {
         // Nobody to ask. **Permanent, not transient**: a password does not arrive during a
         // backoff, and retrying spends the whole bound again to learn the same thing.
         if !(layer.shares_stdin() && std::io::stdin().is_terminal()) {
-            return Err(Error::command_failed_permanently(
+            return Err(sudo_refused(
                 "sudo needs a password and there is no terminal to ask on. Run LiNix from a \
                  terminal, give this user a NOPASSWD rule for the package managers it drives, \
                  or run it as root."
@@ -2105,7 +2144,7 @@ impl CommandExecutor {
             Some(bound) => match tokio::time::timeout(bound, ask).await {
                 Ok(status) => status,
                 Err(_) => {
-                    return Err(Error::command_failed_permanently(format!(
+                    return Err(sudo_refused(format!(
                         "sudo asked for a password and none was entered within {}s. Set \
                          `sudo_password_timeout_secs` to wait longer, or `0` to wait as long as \
                          sudo would.",
@@ -2123,12 +2162,21 @@ impl CommandExecutor {
             // sudo has already printed its own reason — a wrong password, an account that is
             // not a sudoer — on the terminal it owns. Repeating a guess at it here would be
             // narration over a message the user has already read.
-            Ok(_) => Err(Error::command_failed_permanently(
+            Ok(_) => Err(sudo_refused(
                 "sudo refused: LiNix cannot run the commands that need root.".to_string(),
             )),
-            Err(e) => Err(Error::command_failed_permanently(format!(
-                "sudo could not be run: {e}"
-            ))),
+            Err(e) => Err(sudo_refused(format!("sudo could not be run: {e}"))),
+        }
+    }
+
+    /// Forget that sudo refused, for a test that needs the next call to ask again.
+    ///
+    /// `#[cfg(test)]`-free on purpose: the integration suite is a separate crate, and a reset
+    /// that only exists in unit builds is a reset the harness cannot reach.
+    #[doc(hidden)]
+    pub fn forget_sudo_refusal() {
+        if let Ok(mut slot) = SUDO_REFUSED.lock() {
+            *slot = None;
         }
     }
 
@@ -2479,6 +2527,39 @@ mod child_process_tests {
         let env = mock.last_env.lock().await.clone();
         assert_eq!(env.get("GIT_PAGER").map(String::as_str), Some("cat"));
         assert!(env.contains_key(super::INSIDE_LINIX));
+    }
+
+    /// A sudo refusal is remembered, so the next escalated command does not pay for it again.
+    ///
+    /// **The asymmetry this closes.** `SUDO_PRIMED` cached the *success* and nothing cached the
+    /// *failure*, so every escalated invocation re-ran the probe and re-spent the 120-second
+    /// password bound. `update` refreshes each manager and deliberately does not let one stop
+    /// the rest, so it paid that bound per manager: the `tools` nightly reported a wedge of 900
+    /// seconds against an assertion whose limit was 120, twice a night, for weeks.
+    ///
+    /// The mechanism is what is asserted, not sudo: a test that needs a real password prompt on
+    /// a real tty is the container harness's job (`[16f]`), and one that shells out to `sudo`
+    /// here would answer differently on every developer's machine.
+    #[test]
+    fn a_sudo_refusal_is_remembered_and_the_first_reason_is_the_one_kept() {
+        CommandExecutor::forget_sudo_refusal();
+        assert!(
+            super::SUDO_REFUSED.lock().unwrap().is_none(),
+            "the reset did not clear the memo, so nothing below means anything"
+        );
+
+        let first = super::sudo_refused("no terminal to ask on".to_string());
+        assert!(first.to_string().contains("no terminal"));
+        // A later caller's guess must not overwrite the reason the first one established: the
+        // *first* refusal is the one that happened, and everything after it is this memo.
+        let _ = super::sudo_refused("something else entirely".to_string());
+        assert_eq!(
+            super::SUDO_REFUSED.lock().unwrap().as_deref(),
+            Some("no terminal to ask on")
+        );
+
+        CommandExecutor::forget_sudo_refusal();
+        assert!(super::SUDO_REFUSED.lock().unwrap().is_none());
     }
 
     /// A child that prints nothing and never exits. `Checkpoint-Computer` past its restore

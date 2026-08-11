@@ -6,11 +6,17 @@ ENV LINIX_IT_IMAGE=arch
 # Essential toolchain + a broad set of language package managers so the harness can sweep
 # many backends in one container (pacman + npm + yarn + pnpm + pipx + uv + bun + cargo + gem).
 RUN pacman -Syu --noconfirm \
-    && pacman -S --noconfirm --needed curl gcc make pkgconf openssl perl git rustup \
+    && pacman -S --noconfirm --needed curl gcc make pkgconf openssl perl git rustup unzip \
        nodejs npm python-pipx ruby \
     && rustup default stable
 # Extra managers via their own installers. Tolerant (`|| true`): a build-time network hiccup
 # leaves the image usable; that backend just won't be READY and is auto-skipped by the sweep.
+#
+# **The tolerance is why `unzip` is in the list above.** bun's installer needs it, none of
+# these images had it, and `|| true` turned `error: unzip is required to install bun` into a
+# successful build with one manager missing from every run afterwards. A skip the sweep
+# reports honestly is still a skip nobody reads, so the dependencies of these installers
+# belong in the package list rather than in the tolerance.
 RUN corepack enable || true
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh || true
 RUN curl -fsSL https://bun.sh/install | bash || true

@@ -45,6 +45,12 @@ compiler. Published builds are x86_64 Linux, both Apple architectures, and x86_6
 anywhere else the script falls back to building from source, which needs
 [Rust](https://rustup.rs) and takes rather longer than thirty seconds.
 
+> **No release has been tagged yet, so today every platform takes the fallback.** The scripts
+> above resolve to a release that does not exist, notice, and build from source — which needs
+> Rust and takes about fifteen minutes. Nothing is broken and nothing lies to you at the
+> prompt; the sentence above is simply a promise the repository has not kept yet. Delete this
+> note in the commit that pushes the first `v*` tag.
+
 `LINIX_REF=v0.8.0` installs an exact release instead of the newest. From a checkout:
 
 ```bash
@@ -861,6 +867,37 @@ named and skipped rather than rebuilt. It cannot be put in `schedules`.
   before it started — and a health check declared on a machine with no snapshot provider is
   refused *before* the change, because telling you the machine broke without being able to put
   it back is worse than not checking.
+
+### What has been driven, and what has only been argv-checked
+
+LiNix ships 52 backends. That is a count of the managers it knows how to drive, and it is not a
+claim that every one of them has been driven — so here is the difference, taken from the
+harnesses' own tables rather than from anybody's memory.
+
+**Most of them get a real install → list → binary-on-PATH → remove round trip**, on every
+nightly, against the actual manager: apt, dnf, pacman, apk, zypper, xbps and brew on their own
+container image or runner, and cargo, npm, pnpm, yarn, bun, pip, pipx, uv, gem, go, composer,
+opam, cabal, conda, mix, nix, spack, luarocks, nimble, helm, krew, pixi, dotnet, pub, mise,
+scoop, winget, choco, github and web on the images that carry them. btrfs, LVM and ZFS run
+against real loopback block devices on a privileged image.
+
+**These are argv-tested only** — LiNix builds the command line and a test asserts it is the
+right one, and no machine in this project's CI has ever run it:
+
+| backend | why nothing has driven it |
+|---|---|
+| `flatpak` | needs a session bus; the container matrix has none |
+| `snap` | snapd is a systemd daemon, and no image here runs systemd |
+| `macports` | a second package tree under `/opt/local`; never attempted on a runner |
+| `pkg`, `pkg_add`, `pkgin` | FreeBSD, OpenBSD and pkgsrc — no BSD host exists in this CI |
+| `eopkg`, `slackpkg` | Solus and Slackware — no image |
+| `guix` | needs its own daemon and store |
+| `yay`, `paru` | AUR helpers build from source and refuse to run as root, which every container here is |
+| `emerge`, `stack` | reached, but smoke-only: both build the package from source, which is minutes per run for ever |
+
+Two code paths are also unexecuted rather than untested: the `dpkg -i` / `rpm -U` local-file
+handoff, and storage removal (`U30`). An argv test proves a command line was constructed
+correctly. It does not prove the manager accepts it.
 
 ### Exit codes
 

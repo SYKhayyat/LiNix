@@ -931,7 +931,12 @@ impl<'a> ChangePlanner<'a> {
         // A held package that is already installed is frozen: never schedule an upgrade or
         // version change for it, even if a manifest asks for a newer version. (Hold does not
         // block a first install of an absent package.)
-        if self.state.is_held(&spec.backend, &spec.name) {
+        //
+        // **Two sources, one question.** The ledger is what `linix hold` writes; `@hold=true`
+        // on the line is what the manifest says. Only the first was ever asked, so a declared
+        // hold was accepted by the grammar, refused beside `@version` as a contradiction, and
+        // then read by nothing.
+        if self.state.is_held(&spec.backend, &spec.name) || spec.declares_hold() {
             return Ok(false);
         }
         if let Some(req_v) = spec.options.one("version") {

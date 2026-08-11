@@ -13,10 +13,16 @@ ENV LINIX_IT_IMAGE=void
 # reads like a network problem.
 RUN xbps-install -Syu xbps || true
 RUN xbps-install -yu \
-    && xbps-install -y curl gcc make pkg-config openssl-devel perl git \
+    && xbps-install -y curl gcc make pkg-config openssl-devel perl git unzip \
        nodejs ruby ruby-devel python3-pipx rust cargo
 # Extra managers via their own installers. Tolerant (`|| true`): a build-time network hiccup
 # leaves the image usable; that backend just won't be READY and is auto-skipped by the sweep.
+#
+# **The tolerance is why `unzip` is in the list above.** bun's installer needs it, none of
+# these images had it, and `|| true` turned `error: unzip is required to install bun` into a
+# successful build with one manager missing from every run afterwards. A skip the sweep
+# reports honestly is still a skip nobody reads, so the dependencies of these installers
+# belong in the package list rather than in the tolerance.
 RUN corepack enable || true
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh || true
 RUN curl -fsSL https://bun.sh/install | bash || true

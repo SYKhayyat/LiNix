@@ -868,7 +868,10 @@ impl<'a> SyncEngine<'a> {
         let mut by_backend: std::collections::BTreeMap<String, Vec<PackageSpec>> =
             std::collections::BTreeMap::new();
         for spec in unclaimed {
-            by_backend.entry(spec.backend.clone()).or_default().push(spec);
+            by_backend
+                .entry(spec.backend.clone())
+                .or_default()
+                .push(spec);
         }
 
         let mut reclaimed: Vec<PackageSpec> = Vec::new();
@@ -897,7 +900,10 @@ impl<'a> SyncEngine<'a> {
             return Ok(());
         }
 
-        let names: Vec<String> = reclaimed.iter().map(|s| format!("{}:{}", s.backend, s.name)).collect();
+        let names: Vec<String> = reclaimed
+            .iter()
+            .map(|s| format!("{}:{}", s.backend, s.name))
+            .collect();
         if self.config.dry_run {
             crate::would!(
                 "would take ownership of {} declared package(s) already installed: {}",
@@ -928,7 +934,10 @@ impl<'a> SyncEngine<'a> {
         tokio::task::spawn_blocking(move || to_write.write())
             .await
             .map_err(|e| {
-                Error::Other(format!("writing the registry after reconciling ownership: {}", e))
+                Error::Other(format!(
+                    "writing the registry after reconciling ownership: {}",
+                    e
+                ))
             })??;
         // Announced, not silent. Taking ownership is what makes a package removable when its
         // declaration goes, so a machine that quietly adopted software the user installed by

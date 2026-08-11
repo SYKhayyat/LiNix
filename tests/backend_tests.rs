@@ -124,12 +124,15 @@ async fn test_winget_backend_hermetic_logic() {
         .get("winget")
         .expect("Missing winget backend");
 
+    // The `--` is there because the probe measured winget honouring it on windows-latest, both
+    // ways identical in exit code, in output, and in how the operand is echoed. It was listed
+    // as not terminating on the shape of the parser and that was an inference, not a fact.
     kernel.mock_executor.set_response(
-        "winget install --silent --accept-source-agreements --accept-package-agreements vim",
+        "winget install --silent --accept-source-agreements --accept-package-agreements -- vim",
         Ok(DryRunOutput::default().into()),
     );
     kernel.mock_executor.set_response(
-        "winget uninstall --silent vim",
+        "winget uninstall --silent -- vim",
         Ok(DryRunOutput::default().into()),
     );
 

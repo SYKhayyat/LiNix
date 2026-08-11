@@ -3,6 +3,12 @@ name: CI
 on:
   push:
     branches: [ main ]
+    # **Without this line the `release` job below cannot ever run.** It is gated on
+    # `refs/tags/v*`, and a workflow that does not listen for tag pushes is never started by
+    # one — so the tag would be pushed, nothing would happen, and the missing release would
+    # look like a missing tag. Two releases were named in `CHANGELOG.md` and neither was
+    # published; this is the half of that nobody had looked at.
+    tags: [ 'v*' ]
   pull_request:
   workflow_dispatch:
   # The slow images and the macOS sweep are the broad half of the coverage, and coverage
@@ -11,6 +17,25 @@ on:
   # gating every push, not about running at 03:00.
   schedule:
     - cron: '0 3 * * *'
+
+# One in-flight run per ref per trigger, and the superseded one is cancelled.
+#
+# Every push fans out ~25 jobs across three macOS and two Windows runners. With nothing here,
+# six runs sat QUEUED for between fourteen and eighteen hours behind each other — including a
+# `workflow_dispatch` — so the question "is `main` green?" had no answer at all: some of main's
+# runs had never started. A queue that never drains is not a slow gate, it is an absent one.
+#
+# **The trigger is part of the group on purpose.** A push and the nightly schedule share
+# `refs/heads/main`, so grouping on the ref alone would let an afternoon push cancel the 03:00
+# run — and the nightly is where the container matrix, the macOS sweep and the argv-drift probe
+# live. That would delete the broad half of the coverage to speed up the narrow half.
+#
+# **A tag is never cancelled.** A tagged run publishes binaries; half a release is worse than no
+# release. `cancel-in-progress` is therefore true only for the two triggers where a newer commit
+# genuinely makes the older answer worthless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')) || github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -257,11 +282,11 @@ jobs:
           target/${{ matrix.target }}/release/linix.exe
         if-no-files-found: ignore
 
-  # **This job had never run.** Its only trigger is a `v*` tag and no tag has been pushed, so the
-  # one step between a green build and a user downloading a binary is the single least-tested
-  # thing in the repository — and the first time it runs will be the release. `install.sh` falls
-  # back to compiling 448 crates on a stranger's laptop precisely because there is nothing here
-  # to download yet.
+  # **This job had never run, and could not have.** Its publish step is gated on a `v*` tag, and
+  # until the `tags:` line at the top of this file was added the workflow did not start on a tag
+  # push at all — so the one step between a green build and a user downloading a binary was
+  # unreachable by the event it waits for. `install.sh` falls back to compiling 448 crates on a
+  # stranger's laptop precisely because there is nothing here to download yet.
   #
   # `workflow_dispatch` gives it a rehearsal: dispatched, it downloads the same artifacts, asserts
   # the same files are present, and stops without publishing. Tagged, it publishes. One job, one

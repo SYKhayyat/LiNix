@@ -62,15 +62,23 @@ async fn main() -> Result<()> {
     let level = log_level_from_argv(&argv);
     let filter = || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
     let verbose = level.contains("debug") || level.contains("trace");
+    // Asked, rather than left to `tracing-subscriber`'s default, which is colour-always. Without
+    // this line `linix install nosuchpkg 2>&1 | grep` came back carrying escape codes and a run
+    // redirected into a log file wrote them to disk. The question is about *stderr*, which is
+    // where this writes — `utils::style::color_enabled` answers it for stdout, and a pipe on
+    // stdout with a terminal on stderr is the ordinary arrangement, not an odd one.
+    let ansi = linix::utils::style::color_enabled_on_stderr();
     if verbose {
         tracing_subscriber::fmt()
             .with_writer(std::io::stderr)
             .with_env_filter(filter())
+            .with_ansi(ansi)
             .init();
     } else {
         tracing_subscriber::fmt()
             .with_writer(std::io::stderr)
             .with_env_filter(filter())
+            .with_ansi(ansi)
             .without_time()
             .with_target(false)
             .init();
@@ -137,12 +145,10 @@ async fn main() -> Result<()> {
     }
     apply_process_wide_config(&config);
 
-    // 4. A reconcile fired by a manager that LiNix itself is driving has nothing to add —
-    //    the run that spawned it is already recording what it installed, and it holds the
-    //    lock this process would wait two minutes for.
-    if matches!(cli.command, Commands::HookReconcile { .. })
-        && env::var_os(linix::core::executor::INSIDE_LINIX).is_some()
-    {
+    // 4. A hook fired by a manager that LiNix itself is driving has nothing to add — the run
+    //    that spawned it is already recording what it installed, and it holds the lock this
+    //    process would wait two minutes for.
+    if stands_down_inside_linix(&[&cli.command]) {
         return Ok(());
     }
 
@@ -673,6 +679,22 @@ pub(crate) fn preferences_path_from_argv(argv: &[String]) -> Option<std::path::P
         .map(|r| r.path.join(linix::config::PREFERENCES_FILE_NAME))
 }
 
+/// Does this invocation consist of hooks fired by a manager LiNix is already driving?
+///
+/// **Both doors, one rule.** The stand-down lived inline in `main` and covered a single
+/// subcommand; `run_user_verb` is the other way a `Commands` reaches a lock, and a `[verbs]`
+/// entry may name `hook-record` as a step because `plan_user_verb` admits any built-in. A guard
+/// on one entry point is a guard on nothing, which is the shape `CLAUDE.md` names and this
+/// finding is the third instance of.
+///
+/// `any`, not `all`: one hook step is enough to make the whole verb wait on a lock this
+/// process's parent is holding, and a sequence that deadlocks halfway is not better than one
+/// that stands down.
+pub(crate) fn stands_down_inside_linix(commands: &[&Commands]) -> bool {
+    env::var_os(linix::core::executor::INSIDE_LINIX).is_some()
+        && commands.iter().any(|c| c.is_manager_hook())
+}
+
 /// Take the lock for a mutating command, asking the command itself.
 ///
 /// It used to be read from argv and matched against a hand-written list of twenty-one names,
@@ -689,16 +711,7 @@ pub(crate) async fn acquire_data_lock(
         return Ok(None);
     }
     let name = linix::core::latency::subcommand_name(command);
-    // 120s: long enough to outlast the longest wait a holder can legitimately make before it
-    // starts doing work — the rate-limit ceiling, 30s by default — with room for the install
-    // it then performs. It is not meant to outlast a whole sync: past this point the honest
-    // answer is that someone else is writing, not a longer silence (S27).
-    let lock = linix::core::datalock::DataLock::acquire_async(
-        &linix::utils::safe_data_dir(),
-        &name,
-        std::time::Duration::from_secs(120),
-    )
-    .await?;
+    let lock = linix::core::datalock::DataLock::for_one_step(&name).await?;
     Ok(Some(lock))
 }
 
@@ -875,6 +888,9 @@ fn apply_process_wide_config(config: &linix::config::Config) {
 /// step syncs takes it before the first step runs rather than partway through.
 pub(crate) async fn run_user_verb(steps: Vec<Vec<String>>) -> Result<()> {
     let parsed: Vec<Cli> = steps.iter().map(Cli::parse_from).collect();
+    if stands_down_inside_linix(&parsed.iter().map(|c| &c.command).collect::<Vec<_>>()) {
+        return Ok(());
+    }
     let config = load_and_merge_config(&parsed[0]).await?;
     apply_process_wide_config(&config);
     // The lock spans the whole verb, so the question is whether any step writes — not whether
@@ -1166,7 +1182,9 @@ mod alias_tests {
 
 #[cfg(test)]
 mod log_level_tests {
-    use super::{known_subcommands, log_level_from_argv};
+    use super::log_level_from_argv;
+    use clap::Parser;
+    use linix::cli::args::Cli;
 
     fn argv(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|s| s.to_string()).collect()
@@ -1288,57 +1306,123 @@ mod log_level_tests {
     /// that costs an entry out of `registry.json` — and both were live. `history` was exempt
     /// while reaching `handle_rollback` → `handle_sync`, the entire install/remove path, and
     /// `fleet` was absent from the list while touching no local state at all.
+    ///
+    /// **Three arms now, and the third is the one that was missing.** `Reader` never takes the
+    /// lock; `Writer` holds it for the whole run; `Deferred` writes state but takes the lock at
+    /// each mutating action, because its duration is a person's or a loop's. `watch`, `shell`
+    /// and `run` were `Writer` — and `watch` never returns, so the documented GitOps deployment
+    /// held the exclusive lock for the life of the daemon.
     #[test]
     fn the_readers_are_exactly_the_commands_that_read() {
-        // The reader set, read out of `Commands::writes` itself rather than restated. A variant
-        // moving between the arms shows up here as a diff, which is what the old list could
-        // never do: it lived seventy lines from the enum and nothing compared them.
-        let src = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/cli/args.rs"),
-        )
-        .expect("args.rs");
-        let body = src
-            .split_once("pub fn writes(&self) -> bool {")
-            .expect("`Commands::writes` is gone — this test guards nothing")
-            .1;
-        // Up to the LAST `=> false,`: everything after it is the writer arm, whose variant
-        // names are spelled the same way and would otherwise be collected as readers.
-        let cut = body
-            .rfind("=> false,")
-            .expect("no reader arm — every command would take the exclusive lock");
-        let body = &body[..cut];
+        use clap::CommandFactory;
+        use linix::cli::LockScope;
 
-        let readers: std::collections::BTreeSet<String> = body
-            .split("Self::")
-            .skip(1)
-            .filter_map(|c| c.split([' ', '{']).next())
-            .filter(|c| !c.is_empty())
-            .map(|c| c.to_string())
-            .collect();
+        // **Asked of the program, not of its source text.** The first version of this scanned
+        // `args.rs` for the arms' variant names, because a subcommand with required arguments
+        // cannot be parsed from its name alone. That made the assertion depend on where rustfmt
+        // put a line break — it collapsed the four-variant arm into a block and the marker
+        // stopped matching — and a gate that a formatter can silence is not a gate.
+        //
+        // So the argv is built out of clap's own metadata instead: every required argument gets
+        // a value it will accept — the first of its `possible_values` where it has them, because
+        // `linix completions filler` is not a shell — and a subcommand that carries subcommands
+        // of its own recurses into its first child. That reaches all sixty-four, including
+        // `repo`, `hook-record` and `completions`, which no amount of positional filler does.
+        fn argv_for(sub: &clap::Command) -> Vec<String> {
+            let mut argv = vec![sub.get_name().to_string()];
+            for arg in sub.get_arguments() {
+                if !arg.is_required_set() {
+                    continue;
+                }
+                let value = arg
+                    .get_possible_values()
+                    .first()
+                    .map(|v| v.get_name().to_string())
+                    .unwrap_or_else(|| "filler".to_string());
+                match arg.get_long() {
+                    Some(long) => {
+                        argv.push(format!("--{long}"));
+                        if matches!(
+                            arg.get_action(),
+                            clap::ArgAction::Set | clap::ArgAction::Append
+                        ) {
+                            argv.push(value);
+                        }
+                    }
+                    None => argv.push(value),
+                }
+            }
+            if let Some(child) = sub.get_subcommands().next() {
+                argv.extend(argv_for(child));
+            }
+            argv
+        }
+
+        let mut readers = std::collections::BTreeSet::new();
+        let mut deferred = std::collections::BTreeSet::new();
+        let mut unparsed = Vec::new();
+        for sub in <Cli as CommandFactory>::command().get_subcommands() {
+            let name = sub.get_name().to_string();
+            let mut argv = vec!["linix".to_string()];
+            argv.extend(argv_for(sub));
+            match Cli::try_parse_from(&argv).map(|cli| cli.command.lock_scope()) {
+                Ok(LockScope::Reader) => {
+                    readers.insert(name);
+                }
+                Ok(LockScope::Deferred) => {
+                    deferred.insert(name);
+                }
+                Ok(LockScope::Writer) => {}
+                Err(e) => unparsed.push(format!(
+                    "{name} (as `{}`: {})",
+                    argv[1..].join(" "),
+                    e.kind()
+                )),
+            }
+        }
+
+        // A subcommand nothing here could parse is a subcommand this test does not classify,
+        // and an unclassified subcommand is exactly the omission the old list could not see.
+        assert!(
+            unparsed.is_empty(),
+            "{} subcommand(s) could not be driven through clap, so their lock scope was never \
+             examined:\n  {}\n\nFix the argv builder rather than leaving them out.",
+            unparsed.len(),
+            unparsed.join("\n  ")
+        );
+
+        let expected_deferred: std::collections::BTreeSet<String> =
+            ["history", "run", "shell", "watch"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+        assert_eq!(
+            deferred, expected_deferred,
+            "the set of commands that take the lock at the write rather than for the run              changed. A command belongs here when its duration is decided by a person, a loop              or a program LiNix does not own — never by the package work it performs."
+        );
 
         let expected: std::collections::BTreeSet<String> = [
-            "Adapters",
-            "Check",
-            "Completions",
-            "Config",
-            "Diff",
-            "Edit",
-            "Eval",
-            "Export",
-            "Fleet",
-            "History",
-            "Info",
-            "List",
-            "Path",
-            "Plan",
-            "Policy",
-            "Protected",
-            "Repl",
-            "Sbom",
-            "Search",
-            "Try",
-            "Vars",
-            "Why",
+            "adapters",
+            "check",
+            "completions",
+            "config",
+            "diff",
+            "edit",
+            "eval",
+            "export",
+            "fleet",
+            "info",
+            "list",
+            "path",
+            "plan",
+            "policy",
+            "protected",
+            "repl",
+            "sbom",
+            "search",
+            "try",
+            "vars",
+            "why",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -1348,40 +1432,12 @@ mod log_level_tests {
             readers, expected,
             "the set of commands exempted from the data lock changed. Adding a WRITER is free;              adding a reader means claiming it never writes under `data/`, so it has to be              claimed here too. Not locking a writer costs an entry out of `registry.json`,              which is a removal."
         );
-
-        // Invention, the half the old tests did cover: every exempted name is a real command.
-        let known = known_subcommands();
-        let ghosts: Vec<&String> = readers
-            .iter()
-            .filter(|name| !known.contains(&to_kebab(name)))
-            .collect();
-        assert!(
-            ghosts.is_empty(),
-            "these are exempt from the data lock and are not commands: {ghosts:?}"
-        );
-    }
-
-    fn to_kebab(variant: &str) -> String {
-        let mut out = String::new();
-        for (i, c) in variant.chars().enumerate() {
-            if c.is_ascii_uppercase() {
-                if i > 0 {
-                    out.push('-');
-                }
-                out.push(c.to_ascii_lowercase());
-            } else {
-                out.push(c);
-            }
-        }
-        out
     }
 
     /// The direction that matters for correctness, driven through clap rather than asserted
     /// about a list of strings: a command LiNix cannot run without writing takes the lock.
     #[test]
     fn the_commands_that_write_take_the_lock() {
-        use clap::Parser;
-        use linix::cli::args::Cli;
         for argv in [
             vec!["linix", "sync"],
             vec!["linix", "install", "apt:jq"],
@@ -1411,11 +1467,17 @@ mod log_level_tests {
             // The two the old list got wrong, in opposite directions.
             vec!["linix", "history"],
             vec!["linix", "fleet"],
+            // The three that were still wrong after those two were fixed. Each writes state
+            // and each is unbounded in time, so each takes the lock at the write instead
+            // (`LockScope::Deferred`). `watch` is the sharp one: it never returns.
+            vec!["linix", "watch"],
+            vec!["linix", "shell"],
+            vec!["linix", "run", "true"],
         ] {
             let cli = Cli::parse_from(&argv);
             assert!(
                 !cli.command.writes(),
-                "`{}` only reads and must not hold the 120-second exclusive lock",
+                "`{}` must not hold the 120-second exclusive lock for its whole run",
                 argv[1]
             );
         }

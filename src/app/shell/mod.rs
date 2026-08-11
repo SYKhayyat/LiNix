@@ -82,13 +82,22 @@ impl EphemeralShell {
         let session_id = format!("shell-{}", Uuid::new_v4().simple());
         info!("starting ephemeral shell '{}'", session_id);
 
+        // **The lock covers the provisioning, not the session** (`LockScope::Deferred`).
+        // `shell` installs packages, hands the user an interactive `$SHELL`, and removes them
+        // again when that shell exits. Held for the run, the 120-second exclusive lock was held
+        // for as long as somebody sat at a prompt — the `edit`-blocks-on-`$EDITOR` failure AU6
+        // records, with a subshell in place of vim. The scope below ends before the shell is
+        // launched; `cleanup_transient_env` takes it again for the teardown.
         {
-            let mut state_guard = self.state.lock().await;
-            state_guard.active_session_id = Some(session_id.clone());
-        }
+            let _data_lock = crate::core::datalock::DataLock::for_one_step("shell").await?;
+            {
+                let mut state_guard = self.state.lock().await;
+                state_guard.active_session_id = Some(session_id.clone());
+            }
 
-        info!("installing session packages");
-        self.provision_transient_env(packages, &session_id).await?;
+            info!("installing session packages");
+            self.provision_transient_env(packages, &session_id).await?;
+        }
 
         let mut store_paths = Vec::new();
         for pkg_req in packages {
@@ -126,6 +135,10 @@ impl EphemeralShell {
         }
 
         info!("session ended — removing session packages");
+        // The lock again, for the other half of the write. Taken *after* the session, because
+        // the whole point of the split is that nobody waits on a person's shell — and released
+        // by the end of this scope rather than by the end of `enter`.
+        let _data_lock = crate::core::datalock::DataLock::for_one_step("shell teardown").await?;
         self.cleanup_transient_env(&session_id).await?;
 
         // Restore anything the user temporarily uninstalled for the duration of this

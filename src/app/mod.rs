@@ -11,6 +11,7 @@ pub mod eval;
 pub mod events;
 pub mod export;
 pub mod fleet;
+pub mod holds;
 pub mod hooks;
 pub mod insight;
 pub mod leases;

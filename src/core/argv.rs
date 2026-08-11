@@ -237,12 +237,16 @@ const TERMINATORS: &[Terminator] = &[
     ),
     row(
         "stack",
-        true,
+        false,
         Evidence::Measured(
-            "a hand run died in an HTTP call to s3.amazonaws.com before reaching stack's own \
-             argument handling and answered nothing; the differential probe then ran its real \
-             argv both ways and the two agreed in every signal \
-             (tests/terminator_probe_tests.rs, tools image, 2026-08-04)",
+            "two platforms, two answers, and the table is keyed on the binary — so it takes the \
+             refusing one. On the tools image the differential probe ran `stack install -- \
+             <bogus>` both ways and every signal agreed. On windows-latest the same probe ran \
+             the same argv and reported `swallows`: the terminator changed what stack did with \
+             its operand. The conservative merge the probe already applies across a binary's \
+             verbs — one verb that swallows makes the terminator unsafe for the binary — is the \
+             same rule across hosts, and the cost of being wrong here is an install that names \
+             no package at all (nightly run 31458415385, 2026-08-11)",
         ),
     ),
     // ---- Conda-likes.
@@ -376,13 +380,27 @@ const TERMINATORS: &[Terminator] = &[
     // them; the ratchet counts them until someone does.
     row(
         "winget",
-        false,
-        Evidence::Unasked("takes the package id positionally and reads a bare `--` as one."),
+        true,
+        Evidence::Measured(
+            "`winget install --silent --accept-source-agreements --accept-package-agreements -- \
+             <bogus>` and the same line without the terminator are identical in every signal — \
+             exit -1978335212 both ways, `No package found matching input criteria`, and no \
+             mention of a bare `--` in either. Same for `winget uninstall --silent`. Listed \
+             false on the shape of the parser until the probe ran on windows-latest and \
+             disagreed (nightly run 31458415385, 2026-08-11)",
+        ),
     ),
     row(
         "choco",
-        false,
-        Evidence::Unasked("takes the package id positionally and reads a bare `--` as one."),
+        true,
+        Evidence::Measured(
+            "`choco install -y -- <bogus>`, `choco uninstall -y -- <bogus>` and `choco search -r \
+             -- <bogus>` are each identical to the same line without the terminator: same exit, \
+             no stray `--` in the output, the operand echoed the same way. If choco read `--` as \
+             a package id it would have had two names to fail on rather than one, and said so. \
+             Listed false on the shape of the parser until the probe asked (nightly run \
+             31458415385, 2026-08-11)",
+        ),
     ),
     row(
         "scoop",
@@ -444,8 +462,15 @@ const TERMINATORS: &[Terminator] = &[
     ),
     row(
         "launchctl",
-        false,
-        Evidence::Unasked("takes the service positionally with no option terminator."),
+        true,
+        Evidence::Measured(
+            "all four verbs LiNix drives are identical with and without the terminator on \
+             macos-latest: `load -w -- <bogus>` and `unload -w -- <bogus>` both answer `Load \
+             failed: 5: Input/output error` at exit 0, `start -- <bogus>` and `stop -- <bogus>` \
+             both exit 3 in silence, and none of the four mentions a stray `--`. Listed false on \
+             the shape of the parser — it does take the service positionally, and that turned \
+             out not to settle the question (nightly run 31458415385, 2026-08-11)",
+        ),
     ),
     row(
         "rc-service",
@@ -559,16 +584,26 @@ mod tests {
     /// Lowered 61 → 57 on 2026-08-10: `dnf`, `dnf5`, `yum` and `microdnf` stopped being
     /// inferences and became measurements, at the cost of every dnf install on Fedora until
     /// CI could run and say so.
-    const UNASKED_CEILING: usize = 57;
+    ///
+    /// Lowered 57 → 54 on 2026-08-11: `winget`, `choco` and `launchctl`. All three were listed
+    /// on the shape of their parser — *"takes the package id positionally and reads a bare `--`
+    /// as one"* — and all three were wrong, which the probe found the first two nights it ran on
+    /// a hosted macOS and a hosted Windows runner. Three of the remaining 54 are the same
+    /// sentence about a sibling of theirs (`scoop`, `mas`, `sc`); nobody has asked those, and
+    /// the ceiling counts them until somebody does.
+    const UNASKED_CEILING: usize = 54;
 
     #[test]
     fn a_gnu_style_manager_terminates_and_a_windows_one_does_not() {
         assert!(terminates_options("apt-get"));
         assert!(terminates_options("pacman"));
         assert!(terminates_options("brew"));
-        assert!(!terminates_options("winget"));
+        // `scoop` is still the unasked one of the three Windows managers: a PowerShell script
+        // dispatching on `$args[0]`. `winget` and `choco` were listed beside it on the same
+        // reasoning and the probe disproved both, which is the reason this row is the one left.
         assert!(!terminates_options("scoop"));
-        assert!(!terminates_options("choco"));
+        assert!(terminates_options("winget"));
+        assert!(terminates_options("choco"));
     }
 
     /// Measured in the `tools` container, not inferred from a family resemblance.
@@ -701,7 +736,7 @@ mod tests {
         assert_eq!(args, ["install", "-y", "--", "ripgrep"]);
 
         let mut args = vec!["install".to_string()];
-        push_names(&mut args, "winget", ["ripgrep"]);
+        push_names(&mut args, "scoop", ["ripgrep"]);
         assert_eq!(args, ["install", "ripgrep"]);
     }
 

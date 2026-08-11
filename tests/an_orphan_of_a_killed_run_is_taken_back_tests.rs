@@ -19,8 +19,8 @@
 //! Killing the same sync a tenth of a second later — after the final write — left all three
 //! removable, which is the whole of the intermittency that made this look like a race.
 
-use linix::core::journal::JournalAction;
 use linix::core::executor::DryRunOutput;
+use linix::core::journal::JournalAction;
 use linix::core::PackageSpec;
 
 use crate::mock_providers::TestKernel;
