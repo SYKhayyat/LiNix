@@ -649,7 +649,7 @@ impl SnapshotManager {
         // with both). There is no hardcoded provider `Vec` any more.
         for def in builtin_snapshot_defs(config) {
             providers.push(Box::new(ConfigSnapshotProvider {
-                executor: executor.duplicate(),
+                executor: executor.clone(),
                 def,
             }));
         }
@@ -658,7 +658,7 @@ impl SnapshotManager {
         // never shadow a built-in — the `custom_backends.toml` rule applied to the safety layer.
         for def in config_snapshot_defs(config) {
             providers.push(Box::new(ConfigSnapshotProvider {
-                executor: executor.duplicate(),
+                executor: executor.clone(),
                 def,
             }));
         }
@@ -743,6 +743,19 @@ impl SnapshotManager {
 
     /// Only ever deletes snapshots whose id contains "shall", so retention cannot reap a
     /// user's or another tool's snapshots. Inactive policy or no provider = no-op.
+    /// Apply the configured retention policy now, at this moment's clock.
+    ///
+    /// **One derivation of "which snapshots does this run keep", for two callers.** `shall
+    /// snapshot prune` and the pass `sync` runs after a successful transaction each built the
+    /// same three arguments themselves, so the policy, the clock and the meaning of
+    /// `--dry-run` were decided twice and could drift. `force` is `prune --force`: prune for
+    /// real on a run that is otherwise a preview.
+    pub async fn prune_by_policy(&self, config: &Config, force: bool) -> Result<Vec<String>> {
+        let dry_run = !force && config.dry_run;
+        self.prune_with_policy(&config.snapshot_retention(), Utc::now(), dry_run)
+            .await
+    }
+
     pub async fn prune_with_policy(
         &self,
         policy: &crate::core::RetentionPolicy,

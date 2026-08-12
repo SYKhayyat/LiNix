@@ -434,7 +434,7 @@ pub fn register(
     cfg: &crate::config::Config,
 ) {
     let core = Arc::new(WebBackendCore::new(
-        exec.duplicate(),
+        exec.clone(),
         cfg.web_dir.clone(),
         cfg.bin_dir.clone(),
         cfg.guard.confine_bin,

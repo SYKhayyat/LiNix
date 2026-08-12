@@ -29,7 +29,7 @@ use super::{base_config, with_manager_policy, BackendRegistry};
 pub(super) fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "apt".into(),
-        executor: executor.duplicate(),
+        executor: executor.clone(),
         config: ManagerConfig {
             name: "apt".into(),
             binary: None,
@@ -233,7 +233,7 @@ pub(super) fn register_pacman(reg: &mut BackendRegistry, executor: &CommandExecu
 
     let core = Arc::new(GenericBackendCore {
         name: "pacman".into(),
-        executor: executor.duplicate(),
+        executor: executor.clone(),
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: crate::parsers::pacman::parse_list,
@@ -350,7 +350,7 @@ pub(super) fn register_dnf(reg: &mut BackendRegistry, executor: &CommandExecutor
 
     let core = Arc::new(GenericBackendCore {
         name: "dnf".into(),
-        executor: executor.duplicate(),
+        executor: executor.clone(),
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::dnf::parse_rpm_qa(o, "dnf"),
@@ -426,7 +426,7 @@ pub(super) fn register_xbps(reg: &mut BackendRegistry, executor: &CommandExecuto
 
     let core = Arc::new(GenericBackendCore {
         name: "xbps".into(),
-        executor: executor.duplicate(),
+        executor: executor.clone(),
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: crate::parsers::bsd::parse_xbps_list,
@@ -486,7 +486,7 @@ pub(super) fn register_aur_helper(
     let core = Arc::new(GenericBackendCore {
         name: name.into(),
         // AUR helpers speak pacman's flags, and they speak pacman's complaints too.
-        executor: executor.duplicate(),
+        executor: executor.clone(),
         config: ManagerConfig {
             name: name.into(),
             binary: None,
@@ -555,7 +555,7 @@ pub(super) fn register_aur_helper(
 pub(super) fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "apk".into(),
-        executor: executor.duplicate(),
+        executor: executor.clone(),
         config: ManagerConfig {
             name: "apk".into(),
             binary: None,
@@ -662,7 +662,7 @@ pub(super) fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor
 pub(super) fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "zypper".into(),
-        executor: executor.duplicate(),
+        executor: executor.clone(),
         config: ManagerConfig {
             name: "zypper".into(),
             binary: None,
@@ -741,7 +741,7 @@ pub(super) fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecu
 pub(super) fn register_macports(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "macports".into(),
-        executor: executor.duplicate(),
+        executor: executor.clone(),
         config: ManagerConfig {
             name: "macports".into(),
             // The port collection is `macports`; the program it ships is `port`. Without this
@@ -812,7 +812,7 @@ pub(super) fn register_macports(reg: &mut BackendRegistry, executor: &CommandExe
 pub(super) fn register_pkgin(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "pkgin".into(),
-        executor: executor.duplicate(),
+        executor: executor.clone(),
         config: ManagerConfig {
             name: "pkgin".into(),
             binary: None,
@@ -882,7 +882,7 @@ pub(super) fn register_pkgin(reg: &mut BackendRegistry, executor: &CommandExecut
 pub(super) fn register_pkg_freebsd(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "pkg".into(),
-        executor: executor.duplicate(),
+        executor: executor.clone(),
         config: ManagerConfig {
             name: "pkg".into(),
             binary: None,
@@ -958,7 +958,7 @@ pub(super) fn register_pkg_freebsd(reg: &mut BackendRegistry, executor: &Command
 pub(super) fn register_pkg_add_openbsd(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "pkg_add".into(),
-        executor: executor.duplicate(),
+        executor: executor.clone(),
         config: ManagerConfig {
             name: "pkg_add".into(),
             binary: None,

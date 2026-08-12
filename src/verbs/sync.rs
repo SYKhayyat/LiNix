@@ -46,7 +46,7 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
     // A reconcile pass is one invocation for IX.6's purposes, and `watch` runs many of them in
     // one process. Without this a `when $hour` would freeze at whatever hour the daemon started.
     crate::app::sync::resolver::new_resolution();
-    let engine = app.sync_engine().await;
+    let engine = app.sync_engine();
     if app.journal.lock().await.needs_recovery() {
         warn!("the transaction journal records an interrupted run; healing first.");
     }
@@ -109,7 +109,7 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
 
     // Drift is scoped to the backends this host lists in `priority`: a full sync must not
     // reap a backend you have simply stopped listing.
-    let hosts = app.host_backends().await;
+    let hosts = app.resolver().await.host_backends().await;
     let mut changes = {
         let state_guard = app.state.lock().await;
         let planner = crate::app::sync::planner::ChangePlanner::new(
@@ -125,12 +125,12 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
     // undeclared, protected package it had just declined to remove — and the exit below is the
     // line it returned through (AU1).
     if opts.out.is_human() {
-        print_flight_plan(app, &changes);
+        print_flight_plan(&app.config, &app.registry, &changes);
         // W13: a `vars` edit can be the cause of a removal, so when the plan removes anything,
         // name the variables that changed since the last sync — a hundred removals should never
         // be unexplained.
         if changes.total_remove() > 0 {
-            print_vars_changed(app, &state.vars).await;
+            print_vars_changed(&app.config, &app.registry, &app.vcs(), &state.vars).await;
         }
     }
 
@@ -223,7 +223,7 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
         // than what a caller believed had been.
         let installed_by = backends_that_installed(&changes);
         engine.sync(changes, opts.scope).await?;
-        warn_about_unreachable_binaries(app, &installed_by).await;
+        warn_about_unreachable_binaries(&app.config, &app.executor, &installed_by).await;
     }
 
     let extras_undone = apply_non_package_phases(app, &state, opts.scope).await?;
@@ -252,14 +252,18 @@ fn backends_that_installed(changes: &crate::app::sync::planner::SyncChanges) -> 
 /// Here rather than in each backend, because the fact is about the ecosystem's convention and
 /// eleven copies of it is eleven chances to disagree. Once per manager, not once per package:
 /// installing forty rocks must not print the same paragraph forty times.
-async fn warn_about_unreachable_binaries(app: &App, backends: &[String]) {
+async fn warn_about_unreachable_binaries(
+    config: &Config,
+    executor: &crate::core::CommandExecutor,
+    backends: &[String],
+) {
     // Each of these runs the manager to ask where it puts binaries (`npm prefix -g`, `go env
     // GOPATH`, …) — a subprocess per backend, on the sync path, for something purely
     // informational. Ordered, so the warnings print in the order the backends were named.
     use futures::stream::StreamExt;
     let messages: Vec<Option<String>> = futures::stream::iter(backends.iter())
-        .map(|be| crate::app::reachable::unreachable_warning(be, &app.config, &app.executor))
-        .buffered(app.config.max_parallel.max(1))
+        .map(|be| crate::app::reachable::unreachable_warning(be, config, executor))
+        .buffered(config.max_parallel.max(1))
         .collect()
         .await;
     for message in messages.into_iter().flatten() {
@@ -361,10 +365,13 @@ pub async fn handle_rebuild(
 
     // Before the warning about rebuilding everything: `rebuild --backend aptt` scoped to a
     // manager that does not exist, found nothing to rebuild, and said it had succeeded (Q9).
-    app.require_known_backend(backend)?;
+    app.resolver().await.require_known_backend(backend)?;
     // The positional form of the same ruling: `rebuild nosuchbackend:foo` answered
     // "skipping — not declared in any active module" at exit 0.
-    app.require_known_spec_backends(packages).await?;
+    app.resolver()
+        .await
+        .require_known_spec_backends(packages)
+        .await?;
 
     // K2 (ruled 2026-07-24): a bare `rebuild` WARNS and rebuilds everything, rather than
     // refusing. The default is `--all`, but because the failure mode is software missing from a
@@ -403,7 +410,7 @@ pub async fn handle_rebuild(
     enforce_policy(app, &desired).await?;
     let declared: Vec<crate::core::PackageSpec> = desired.into_values().flatten().collect();
 
-    let priority = app.priority_backends().await?;
+    let priority = app.backends().await.names()?;
     let registry = app.registry.clone();
     let is_foundation = |b: &str| registry.get(b).map(|m| m.needs_root()).unwrap_or(false);
 
@@ -501,7 +508,7 @@ pub async fn handle_rebuild(
         ),
     }
 
-    let engine = app.sync_engine().await;
+    let engine = app.sync_engine();
     for batch in &plan.batches {
         info!(
             "rebuilding {} ({} package(s))",
@@ -606,7 +613,9 @@ pub async fn handle_sync(app: &App, mode: SyncMode, out: Output) -> Result<()> {
     // this the pins still name the versions it just replaced, and the next ordinary sync — which
     // converges to the lock — plans every one of them back down (Z2).
     if upgrade {
-        let moved = crate::verbs::plan::refresh_version_locks(app).await?;
+        let moved =
+            crate::verbs::plan::refresh_version_locks(&app.config, &app.registry, &app.state)
+                .await?;
         if moved > 0 && out.is_human() {
             println!("Lock: re-recorded {} version pin(s).", moved);
         }
@@ -700,7 +709,7 @@ pub async fn handle_watch(
     let mut failed: Option<anyhow::Error> = None;
     loop {
         if pull {
-            let git = app.git_manager();
+            let git = app.vcs().manager();
             if git.is_repo() {
                 match git.pull() {
                     Ok(msg) => info!("watch: git pull — {}", msg.lines().last().unwrap_or("")),
@@ -788,7 +797,7 @@ pub async fn policy_violations(
             .push("requires a snapshot provider but none is available (require_snapshot)".into());
     }
     if guard.deny_vulnerable {
-        match crate::app::insight::audit(app).await {
+        match crate::app::insight::audit(&app.config, &app.registry, &app.state).await {
             Ok(report) => {
                 for f in report.findings {
                     violations.push(format!(
@@ -822,8 +831,12 @@ pub async fn enforce_policy(
 
 /// A concise pre-flight summary of what a sync/upgrade is about to do. Real download-size
 /// and time estimates are backend-specific and deliberately not faked.
-pub fn print_flight_plan(app: &App, changes: &crate::app::sync::planner::SyncChanges) {
-    if app.config.quiet {
+pub fn print_flight_plan(
+    config: &Config,
+    registry: &Arc<BackendRegistry>,
+    changes: &crate::app::sync::planner::SyncChanges,
+) {
+    if config.quiet {
         return;
     }
     let report = changes.generate_report();
@@ -839,7 +852,7 @@ pub fn print_flight_plan(app: &App, changes: &crate::app::sync::planner::SyncCha
     let mut service_ops = 0;
     for e in report.install.iter().chain(report.remove.iter()) {
         backends.insert(e.backend.clone());
-        if let Some(b) = app.registry.get(&e.backend) {
+        if let Some(b) = registry.get(&e.backend) {
             if b.needs_root() {
                 needs_root = true;
             }
@@ -904,11 +917,15 @@ pub fn print_skipped(skipped: &[crate::app::sync::planner::Skipped]) {
 /// removal driven by a `vars` edit is explained rather than presented as a bare count. Compares
 /// this run's resolved variables to the committed baseline; silent when nothing changed or there
 /// is no baseline (a fresh repo, or a script/program provider whose values do not commit).
-pub async fn print_vars_changed(app: &App, current: &crate::model::vars::Vars) {
+pub async fn print_vars_changed(
+    config: &Config,
+    registry: &Arc<BackendRegistry>,
+    vcs: &crate::app::Vcs<'_>,
+    current: &crate::model::vars::Vars,
+) {
     let resolver =
-        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
-            .await;
-    let git = app.git_manager();
+        crate::app::sync::resolver::StateResolver::new(config, registry.clone(), false).await;
+    let git = vcs.manager();
     let prev = match resolver.vars_at_last_sync(&git).await {
         Ok(Some(p)) => p,
         _ => return,

@@ -236,7 +236,13 @@ async fn installed_but_undeclared_lists_the_dependency_closure_too() {
         );
     }
 
-    let unmanaged = kernel.app.installed_but_undeclared().await.unwrap();
+    let unmanaged = kernel
+        .app
+        .inventory()
+        .await
+        .installed_but_undeclared()
+        .await
+        .unwrap();
     assert!(
         unmanaged
             .packages
@@ -340,7 +346,7 @@ async fn floating_version_is_not_pinned() {
 // `install dnf:jq` on an image without dnf wedged `status`, `why`, `upgrade`,
 // `conflicts`, `activate` and every later install for the rest of the run.
 //
-// The family is every writer that goes through `App::declare` (install, `absent:@until`,
+// The family is every writer that goes through `Declarations::declare` (install, `absent:@until`,
 // `service enable`, hook-record, `init --interactive`'s starter packages) plus
 // `retarget` (`teleport`), which rewrites a line to a backend the same way.
 // ---------------------------------------------------------------------------
@@ -353,6 +359,7 @@ async fn declaring_an_unlisted_backend_writes_nothing() {
 
     let err = kernel
         .app
+        .declarations()
         .declare("npm:cowsay", None, shall::model::Landing::Imperative)
         .await
         .expect_err("a backend not in `priority` must be refused");
@@ -386,7 +393,12 @@ async fn no_landing_can_write_an_unlisted_backend() {
         ("npm:cowsay", shall::model::Landing::Adopted),
     ] {
         assert!(
-            kernel.app.declare(line, None, landing).await.is_err(),
+            kernel
+                .app
+                .declarations()
+                .declare(line, None, landing)
+                .await
+                .is_err(),
             "`{line}` was written despite naming a backend `priority` does not list"
         );
     }
@@ -414,6 +426,7 @@ async fn declaring_a_listed_backend_still_writes() {
 
     kernel
         .app
+        .declarations()
         .declare("cargo:ripgrep", None, shall::model::Landing::Imperative)
         .await
         .expect("cargo is in `priority`, so the line belongs in a file");
@@ -431,6 +444,7 @@ async fn a_bare_name_is_not_rejected_before_the_write() {
     let kernel = TestKernel::new().await;
     kernel
         .app
+        .declarations()
         .declare("ripgrep", None, shall::model::Landing::Imperative)
         .await
         .expect("a bare name has no backend to refuse");
@@ -452,6 +466,7 @@ async fn teleport_to_an_unlisted_backend_leaves_the_line_alone() {
 
     kernel
         .app
+        .declarations()
         .retarget("ripgrep", "npm")
         .await
         .expect_err("npm is not in `priority`, so there is nowhere to move it to");

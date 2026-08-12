@@ -534,7 +534,7 @@ pub fn register(
     exec: &CommandExecutor,
     _cfg: &crate::config::Config,
 ) {
-    let zfs = Arc::new(ZfsBackendCore::new(exec.duplicate()));
+    let zfs = Arc::new(ZfsBackendCore::new(exec.clone()));
     reg.register(Arc::new(
         crate::core::BackendCapabilities::builder(zfs.clone())
             .with_installable(Arc::new(ZfsInstallable { core: zfs.clone() }))
@@ -543,7 +543,7 @@ pub fn register(
             .build(),
     ));
 
-    let lvm = Arc::new(LvmBackendCore::new(exec.duplicate()));
+    let lvm = Arc::new(LvmBackendCore::new(exec.clone()));
     reg.register(Arc::new(
         crate::core::BackendCapabilities::builder(lvm.clone())
             .with_installable(Arc::new(LvmInstallable { core: lvm.clone() }))

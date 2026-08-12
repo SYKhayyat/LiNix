@@ -9,14 +9,19 @@
 use crate::verbs::prelude::*;
 use crate::verbs::sync::{handle_sync, SyncMode};
 
-pub async fn handle_snapshot(app: &App, cmd: &SnapshotCommand) -> Result<()> {
+pub async fn handle_snapshot(
+    config: &Config,
+    snapshots: &crate::core::SnapshotManager,
+    restore: crate::app::SnapshotRestore,
+    cmd: &SnapshotCommand,
+) -> Result<()> {
     match cmd {
         SnapshotCommand::List => {
-            let list = app.snapshot_manager.list_snapshots().await?;
+            let list = snapshots.list_snapshots().await?;
             if list.is_empty() {
                 // Two different facts print the same empty list, and the difference is the
                 // whole answer: no provider means snapshots are not available on this machine.
-                if app.snapshot_manager.has_provider() {
+                if snapshots.has_provider() {
                     println!("No snapshots yet. `sync` takes one before it changes anything.");
                 } else {
                     println!(
@@ -31,10 +36,10 @@ pub async fn handle_snapshot(app: &App, cmd: &SnapshotCommand) -> Result<()> {
             }
         }
         SnapshotCommand::Restore => {
-            return handle_snapshot_restore(app).await;
+            return handle_snapshot_restore(restore).await;
         }
         SnapshotCommand::Prune { force } => {
-            app.prune_snapshots(*force).await?;
+            snapshots.prune_by_policy(config, *force).await?;
         }
     }
     Ok(())
@@ -46,7 +51,7 @@ pub async fn handle_snapshot(app: &App, cmd: &SnapshotCommand) -> Result<()> {
 /// now". Whole-config by nature: git checkout is all-or-nothing, which is why the old
 /// per-package / with-config flags are gone.
 pub async fn handle_rollback(app: &App, reference: &str) -> Result<()> {
-    let git = app.git_manager();
+    let git = app.vcs().manager();
     if !git.is_repo() {
         anyhow::bail!(
             "Rollback needs manifest history. Run `shall git init` once to start version-\
@@ -97,8 +102,11 @@ pub async fn handle_rollback(app: &App, reference: &str) -> Result<()> {
 /// `shall diff <from> [to]` — what changed between two commits, in packages (Phase 4). The
 /// manifests are package declarations, so a diff of the manifest files IS the package-level
 /// change; git already records it. Omitting `to` compares `from` against your working tree.
-pub async fn handle_diff(app: &App, from: &str, to: Option<&str>) -> Result<()> {
-    let git = app.git_manager();
+pub async fn handle_diff(
+    git: &crate::core::GitManager,
+    from: &str,
+    to: Option<&str>,
+) -> Result<()> {
     if !git.is_repo() {
         anyhow::bail!(
             "`diff` compares commits of your manifest history, which is git. Run `shall git \
@@ -127,12 +135,11 @@ pub async fn handle_diff(app: &App, from: &str, to: Option<&str>) -> Result<()> 
     Ok(())
 }
 
-pub async fn handle_git(app: &App, cmd: &GitCommand) -> Result<()> {
+pub async fn handle_git(git: &crate::core::GitManager, cmd: &GitCommand) -> Result<()> {
     // Asked once, for every subcommand. Only `init` used to ask, so on a machine without
     // git the others answered from `.git`'s absence: `log` printed an empty history, and
     // `status` advised running `git init`, which could only refuse.
     crate::core::GitManager::require()?;
-    let git = app.git_manager();
     match cmd {
         GitCommand::Init => {
             git.init()?;
@@ -210,11 +217,8 @@ pub async fn handle_git(app: &App, cmd: &GitCommand) -> Result<()> {
     Ok(())
 }
 
-pub async fn handle_snapshot_restore(app: &App) -> Result<()> {
-    app.snapshot_restore()
-        .run_interactive()
-        .await
-        .map_err(|e| e.into())
+pub async fn handle_snapshot_restore(restore: crate::app::SnapshotRestore) -> Result<()> {
+    restore.run_interactive().await.map_err(|e| e.into())
 }
 
 pub async fn handle_history(app: &App) -> Result<()> {
@@ -236,7 +240,7 @@ pub async fn handle_history(app: &App) -> Result<()> {
         }
     }
 
-    let git = app.git_manager();
+    let git = app.vcs().manager();
     if !git.is_repo() {
         println!(
             "The history browses your manifest history, which is git. Run `shall git init` \

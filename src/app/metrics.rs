@@ -71,6 +71,25 @@ impl MetricsInner {
     }
 }
 
+/// One finished operation, as the caller saw it.
+///
+/// **Named fields because three of the eight are unsigned integers in a row.** This was eight
+/// positional arguments — `record_operation("cowsay", "apt", now, true, None, 0, 0, 1)` — where
+/// `retries`, `bytes_downloaded` and `batch_size` sit adjacent and interchangeable to the
+/// compiler. It is also, minus the two values this file derives, exactly the record it builds:
+/// a struct taken apart at the call site and put back together here.
+pub struct Recorded<'a> {
+    pub name: &'a str,
+    pub backend: &'a str,
+    /// When the operation began; the duration is measured against it here, once.
+    pub started: DateTime<Utc>,
+    pub success: bool,
+    pub error: Option<String>,
+    pub retries: u32,
+    pub bytes_downloaded: u64,
+    pub batch_size: usize,
+}
+
 #[derive(Clone)]
 pub struct MetricsCollector {
     inner: Arc<Mutex<MetricsInner>>,
@@ -89,35 +108,24 @@ impl MetricsCollector {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn record_operation(
-        &self,
-        name: &str,
-        backend: &str,
-        start_time: DateTime<Utc>,
-        success: bool,
-        error: Option<String>,
-        retry_count: u32,
-        bytes_downloaded: u64,
-        batch_size: usize,
-    ) {
+    pub fn record_operation(&self, op: Recorded<'_>) {
         let mut inner = self.inner.lock().expect("Metrics lock poisoned");
         let duration = Utc::now()
-            .signed_duration_since(start_time)
+            .signed_duration_since(op.started)
             .num_milliseconds();
 
-        inner.total_bytes_downloaded += bytes_downloaded;
+        inner.total_bytes_downloaded += op.bytes_downloaded;
 
         inner.operations.push(OperationMetrics {
-            name: name.to_string(),
-            backend: backend.to_string(),
-            started_at_unix: start_time.timestamp(),
+            name: op.name.to_string(),
+            backend: op.backend.to_string(),
+            started_at_unix: op.started.timestamp(),
             duration_ms: duration.max(0) as u64,
-            success,
-            error,
-            retry_count,
-            bytes_downloaded,
-            batch_size,
+            success: op.success,
+            error: op.error,
+            retry_count: op.retries,
+            bytes_downloaded: op.bytes_downloaded,
+            batch_size: op.batch_size,
         });
     }
 
@@ -366,22 +374,31 @@ mod tests {
         let m = MetricsCollector::new();
         assert!(!m.had_failures(), "a run with no operations has not failed");
 
-        m.record_operation("cowsay", "apt", Utc::now(), true, None, 0, 0, 1);
+        m.record_operation(Recorded {
+            name: "cowsay",
+            backend: "apt",
+            started: Utc::now(),
+            success: true,
+            error: None,
+            retries: 0,
+            bytes_downloaded: 0,
+            batch_size: 1,
+        });
         assert!(
             !m.had_failures(),
             "an operation that succeeded is not a failure"
         );
 
-        m.record_operation(
-            "shall-no-such-package-zzz",
-            "apt",
-            Utc::now(),
-            false,
-            Some("E: Unable to locate package".into()),
-            0,
-            0,
-            1,
-        );
+        m.record_operation(Recorded {
+            name: "shall-no-such-package-zzz",
+            backend: "apt",
+            started: Utc::now(),
+            success: false,
+            error: Some("E: Unable to locate package".into()),
+            retries: 0,
+            bytes_downloaded: 0,
+            batch_size: 1,
+        });
         assert!(
             m.had_failures(),
             "a package that failed to install must make the run a failed one — this is the \

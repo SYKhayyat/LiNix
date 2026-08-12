@@ -296,7 +296,7 @@ pub fn register(
     exec: &CommandExecutor,
     _cfg: &crate::config::Config,
 ) {
-    let core = Arc::new(BrewBackendCore::new(exec.duplicate()));
+    let core = Arc::new(BrewBackendCore::new(exec.clone()));
     reg.register(Arc::new(
         crate::core::BackendCapabilities::builder(core.clone())
             .with_installable(Arc::new(BrewInstallable { core: core.clone() }))

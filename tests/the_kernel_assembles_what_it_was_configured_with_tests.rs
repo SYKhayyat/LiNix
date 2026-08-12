@@ -101,18 +101,36 @@ async fn every_field_the_summary_reads_survives_the_round_trip() {
     let metrics = MetricsCollector::new();
     let start = Utc::now();
 
-    metrics.record_operation("task-hermetic-1", "apt", start, true, None, 1, 1024, 1);
-    metrics.record_operation(
-        "task-hermetic-2",
-        "apt",
-        start,
-        false,
-        Some("exit 100".into()),
-        3,
-        0,
-        4,
-    );
-    metrics.record_operation("task-hermetic-3", "brew", start, true, None, 1, 2048, 1);
+    metrics.record_operation(shall::app::metrics::Recorded {
+        name: "task-hermetic-1",
+        backend: "apt",
+        started: start,
+        success: true,
+        error: None,
+        retries: 1,
+        bytes_downloaded: 1024,
+        batch_size: 1,
+    });
+    metrics.record_operation(shall::app::metrics::Recorded {
+        name: "task-hermetic-2",
+        backend: "apt",
+        started: start,
+        success: false,
+        error: Some("exit 100".into()),
+        retries: 3,
+        bytes_downloaded: 0,
+        batch_size: 4,
+    });
+    metrics.record_operation(shall::app::metrics::Recorded {
+        name: "task-hermetic-3",
+        backend: "brew",
+        started: start,
+        success: true,
+        error: None,
+        retries: 1,
+        bytes_downloaded: 2048,
+        batch_size: 1,
+    });
     metrics.record_install(5);
     metrics.record_remove(2);
 

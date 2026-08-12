@@ -264,7 +264,7 @@ fn with_manager_policy(core: Arc<GenericBackendCore>) -> Arc<GenericBackendCore>
         name: core.name.clone(),
         executor: core
             .executor
-            .duplicate()
+            .clone()
             .with_exit_policy(crate::core::exit_policy::for_manager(&core.name)),
         config: core.config.clone(),
         parser: core.parser.clone(),

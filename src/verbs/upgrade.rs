@@ -1,3 +1,4 @@
+use crate::app::sync::resolver::StateResolver;
 use crate::verbs::perform_maintenance;
 use crate::verbs::prelude::*;
 use crate::verbs::setup::handle_canary;
@@ -45,13 +46,15 @@ pub fn upgrade_excluded(except: &[String], backend: &str, name: &str) -> bool {
 /// backends honor) — used by `--security` to land on the fixed version rather than blindly
 /// jumping to latest. `None` means "newest the backend offers".
 pub async fn upgrade_one(
-    app: &App,
+    journal: &Arc<tokio::sync::Mutex<crate::core::Journal>>,
+    registry: &Arc<BackendRegistry>,
+    resolver: &StateResolver<'_>,
     backend: &str,
     name: &str,
     version: Option<&str>,
 ) -> Result<bool> {
     let spec_str = format!("{}:{}", backend, name);
-    let resolved = app.resolve_spec(&spec_str).await?;
+    let resolved = resolver.resolve_spec(&spec_str).await?;
     let mut acted = false;
     for mut spec in resolved {
         if let Some(v) = version {
@@ -60,7 +63,7 @@ pub async fn upgrade_one(
         // II.7c: a manager this machine does not have upgrades nothing, and says so. It was a
         // bare `if let` — so `upgrade` walked past every package on an absent manager without a
         // word and reported the ones it did as the whole job.
-        let Some(b) = app.registry.get(&spec.backend).filter(|b| b.is_available()) else {
+        let Some(b) = registry.get(&spec.backend).filter(|b| b.is_available()) else {
             warn!(
                 "`{}` is not on this machine, so {}:{} cannot be upgraded here.",
                 spec.backend, spec.backend, spec.name
@@ -80,7 +83,7 @@ pub async fn upgrade_one(
             // `--security` sets is inside the spec, so the recorded action is the upgrade
             // rather than a reinstall of whatever is newest.
             crate::core::journalled(
-                &app.journal,
+                journal,
                 vec![crate::core::JournalAction::Install(spec.clone())],
                 inst.install(std::slice::from_ref(&spec), b.sudo_for_write()),
             )
@@ -207,7 +210,16 @@ pub async fn upgrade_targeted(
                 continue;
             }
         }
-        if upgrade_one(app, &b, &n, None).await? {
+        if upgrade_one(
+            &app.journal,
+            &app.registry,
+            &app.resolver().await,
+            &b,
+            &n,
+            None,
+        )
+        .await?
+        {
             upgraded += 1;
         }
     }
@@ -228,7 +240,7 @@ pub async fn upgrade_targeted(
 /// Upgrade exactly the packages `audit` reports as vulnerable, to a non-vulnerable version.
 /// Honors `--except`. This is the `audit → upgrade` bridge.
 pub async fn upgrade_security(app: &App, except: &[String], out: Output) -> Result<()> {
-    let report = crate::app::insight::audit(app).await?;
+    let report = crate::app::insight::audit(&app.config, &app.registry, &app.state).await?;
     if report.findings.is_empty() {
         if out.is_json() {
             println!("{}", serde_json::json!({ "upgraded": [], "vulnerable": 0 }));
@@ -331,7 +343,16 @@ pub async fn upgrade_security(app: &App, except: &[String], out: Output) -> Resu
     for (backend, name, fixed) in plan {
         // Pin to the fixed version when OSV reports one; pin-capable backends land exactly
         // there, and those that ignore the pin fall back to latest (still ≥ fixed).
-        match upgrade_one(app, &backend, &name, fixed.as_deref()).await {
+        match upgrade_one(
+            &app.journal,
+            &app.registry,
+            &app.resolver().await,
+            &backend,
+            &name,
+            fixed.as_deref(),
+        )
+        .await
+        {
             Ok(true) => upgraded.push(serde_json::json!({
                 "backend": backend, "name": name, "pinned_to": fixed,
             })),
@@ -372,7 +393,8 @@ pub async fn upgrade_security(app: &App, except: &[String], out: Output) -> Resu
 pub async fn handle_upgrade(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
     let out = req.out;
     upgrade_modes(app, req).await?;
-    let moved = crate::verbs::plan::refresh_version_locks(app).await?;
+    let moved =
+        crate::verbs::plan::refresh_version_locks(&app.config, &app.registry, &app.state).await?;
     if moved > 0 && out.is_human() {
         println!("Lock: re-recorded {} version pin(s).", moved);
     }
@@ -382,11 +404,17 @@ pub async fn handle_upgrade(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
 async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
     // First, before any mode: `upgrade --backend aptt` used to scope to nothing and report
     // that everything was up to date (Q9).
-    app.require_known_backend(req.backend)?;
+    app.resolver().await.require_known_backend(req.backend)?;
     // And the same ruling on the form it takes positionally, which that enumeration missed:
     // `upgrade nosuchbackend:foo` answered "not a managed package — skipping" at exit 0.
-    app.require_known_spec_backends(req.packages).await?;
-    app.require_known_spec_backends(req.except).await?;
+    app.resolver()
+        .await
+        .require_known_spec_backends(req.packages)
+        .await?;
+    app.resolver()
+        .await
+        .require_known_spec_backends(req.except)
+        .await?;
 
     // Canary keeps its own health-gated, scoped path.
     if req.canary {
@@ -471,7 +499,7 @@ async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
             );
             return Ok(());
         }
-        return app.upgrade().await.map_err(Into::into);
+        return app.managers().await.upgrade().await.map_err(Into::into);
     }
 
     // Mode 4: scoped declarative upgrade (profile/module/group) via the change planner.
@@ -515,19 +543,18 @@ async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
                 serde_json::to_string_pretty(&changes.generate_report())?
             );
         } else {
-            print_flight_plan(app, &changes);
+            print_flight_plan(&app.config, &app.registry, &changes);
             println!("(dry-run: scoped upgrade previewed; nothing applied.)");
         }
         return Ok(());
     }
 
     if out.is_human() && !changes.is_empty() {
-        print_flight_plan(app, &changes);
+        print_flight_plan(&app.config, &app.registry, &changes);
     }
 
     if !changes.is_empty() {
         app.sync_engine()
-            .await
             .sync(changes, crate::app::sync::guard::GuardScope::Upgrade)
             .await?;
         perform_maintenance(app).await?;
@@ -535,6 +562,6 @@ async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
     Ok(())
 }
 
-pub async fn handle_update(app: &App) -> Result<()> {
-    app.update().await.map_err(|e| e.into())
+pub async fn handle_update(managers: &crate::app::Managers<'_>) -> Result<()> {
+    managers.update().await.map_err(|e| e.into())
 }

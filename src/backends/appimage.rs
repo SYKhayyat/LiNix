@@ -310,7 +310,7 @@ pub fn register(
     cfg: &crate::config::Config,
 ) {
     let core = Arc::new(AppImageBackendCore::new(
-        exec.duplicate(),
+        exec.clone(),
         cfg.appimage_dir.clone(),
         cfg.bin_dir.clone(),
         cfg.guard.confine_bin,

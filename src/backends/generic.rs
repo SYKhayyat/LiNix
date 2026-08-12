@@ -1722,7 +1722,7 @@ impl Upgradable for GenericUpgradable {
             cfg.install_args = reinstall_args;
             let reinstaller = Arc::new(GenericBackendCore {
                 name: self.core.name.clone(),
-                executor: self.core.executor.duplicate(),
+                executor: self.core.executor.clone(),
                 config: cfg,
                 parser: self.core.parser.clone(),
             });

@@ -417,6 +417,19 @@ impl<'a> StateResolver<'a> {
         Vocab::new(&self.registry, self.config, priority).with_groups(groups)
     }
 
+    /// This host's backend vocabulary, for anything that reads or writes a line.
+    ///
+    /// **The only public way to get one.** `App` built its own — `Vocab::new` with no
+    /// `.with_groups()` — and handed it to `declare`, `undeclare`, `retarget` and `declares`.
+    /// So `tools:rg` expanded to its chain when `sync` parsed the file and was "not a backend"
+    /// when `install` wrote the same line: one program, two vocabularies, disagreeing about
+    /// what a name means.
+    pub async fn vocabulary(&self) -> Result<Vocab> {
+        let facts = self.facts_for_host().await?;
+        let priority = self.priority(&facts).await?;
+        Ok(self.vocab(&priority))
+    }
+
     pub async fn facts_for_host(&self) -> Result<HostFacts> {
         let facts = HostFacts::current();
         let vars = match &self.vars_override {
@@ -1315,6 +1328,66 @@ impl<'a> StateResolver<'a> {
             .map(|b| self.config.aliases.get(&b).cloned().unwrap_or(b)))
     }
 
+    /// Refuse a `--backend` name nothing claims, and say so when a real one is not installed
+    /// here. Returns `true` when the named backend can answer right now.
+    ///
+    /// `install nosuchbackend:foo` refused loudly and named the file to edit; `list -b
+    /// nosuchbackend` printed nothing and exited 0 — which is byte-identical to a real backend
+    /// with nothing installed, so a typo was reported, in the program's own voice, as "that
+    /// manager is empty". Owner ruling 2026-07-28 (Q9): `list` refuses the way `install` does.
+    ///
+    /// The second answer is the one that is easy to miss. `apt` on Windows is a real backend
+    /// that cannot run here, and it produced the same silence as the typo. Those are different
+    /// facts and they now read differently — but only the typo is an error, because a name that
+    /// is genuinely a backend is not a mistake the user made.
+    ///
+    /// The message is `install`'s, deliberately: two spellings of one refusal is how E18's
+    /// family started.
+    pub fn require_known_backend(&self, name: Option<&str>) -> Result<bool> {
+        let Some(name) = name else {
+            return Ok(true);
+        };
+        match self.registry.get(name) {
+            None => Err(Error::Config(format!(
+                "`{}` is not a backend Shall uses\n  \
+                 add `{}` to your `priority` file, or check the spelling. Not listed means \
+                 Shall does not use it at all.",
+                name, name
+            ))),
+            Some(b) => {
+                if b.is_available() {
+                    Ok(true)
+                } else {
+                    warn!(
+                        "`{}` is a manager Shall knows, but it is not installed on this \
+                         machine — so there is nothing for it to report. `shall check health` \
+                         says which managers are ready here.",
+                        name
+                    );
+                    Ok(false)
+                }
+            }
+        }
+    }
+
+    /// Refuse a `backend:name` argument whose prefix is not a backend (Q9).
+    ///
+    /// Q9 ruled that every verb taking a backend name refuses an unknown one, and listed the
+    /// four that take it as a `--backend` flag — "checked from the code rather than from the one
+    /// that was reported". The `backend:name` *spec* form was not in that enumeration, so the
+    /// ruling was applied to half its surface: `shall hold nosuchbackend:foo` recorded a hold
+    /// against a manager that does not exist and answered `Held 1 package(s).` at exit 0.
+    ///
+    /// A real backend that cannot run here is a different answer and stays exit 0 — Q9 clause 3,
+    /// and `require_known_backend` is where that distinction lives.
+    pub async fn require_known_spec_backends(&self, specs: &[String]) -> Result<()> {
+        for spec in specs {
+            let named = self.declared_backend(spec).await?;
+            self.require_known_backend(named.as_deref())?;
+        }
+        Ok(())
+    }
+
     pub async fn parse_and_probe_spec(&self, line: &str) -> Result<PackageSpec> {
         let facts = self.facts_for_host().await?;
         let priority = self.priority(&facts).await?;
@@ -1726,7 +1799,7 @@ mod tests {
             let exec =
                 CommandExecutor::with_layer(false, false, mock, vfs, Arc::new(DashMap::new()));
             let mut reg = BackendRegistry::new();
-            reg.register(manager("first", exec.duplicate()));
+            reg.register(manager("first", exec.clone()));
             reg.register(manager("second", exec));
             Arc::new(reg)
         }

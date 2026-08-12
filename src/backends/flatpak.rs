@@ -457,7 +457,7 @@ pub fn register(
             return;
         }
     };
-    let core = Arc::new(FlatpakBackendCore::new(exec.duplicate(), scope));
+    let core = Arc::new(FlatpakBackendCore::new(exec.clone(), scope));
     reg.register(Arc::new(
         crate::core::BackendCapabilities::builder(core.clone())
             .with_installable(Arc::new(FlatpakInstallable { core: core.clone() }))

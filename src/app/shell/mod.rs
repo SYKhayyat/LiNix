@@ -1,20 +1,13 @@
 // src/app/shell/mod.rs
 
-use crate::app::diagnostics::FailureDiagnosticEngine;
 use crate::app::sandbox::{Sandbox, SandboxConfig};
 use crate::app::sync::{ChangePlanner, PlanScope, StateResolver, SyncEngine};
-use crate::app::{LuaHooks, MetricsCollector};
-use crate::backends::BackendRegistry;
-use crate::config::Config;
-use crate::core::{Error, PackageSpec, Result, StateRegistry};
-use crate::core::{Journal, SnapshotManager};
-use crate::utils::progress::ProgressReporter;
+use crate::app::Machinery;
+use crate::core::{Error, PackageSpec, Result};
 
 use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
@@ -33,48 +26,14 @@ pub fn manifest_lines(content: &str) -> Vec<String> {
 }
 
 pub struct EphemeralShell {
-    registry: Arc<BackendRegistry>,
-    pub state: Arc<Mutex<StateRegistry>>,
-    config: Arc<Config>,
-    executor: crate::core::CommandExecutor,
-    metrics: MetricsCollector,
-    progress: Arc<dyn ProgressReporter>,
-    hooks: Arc<LuaHooks>,
-    snapshot_manager: Arc<SnapshotManager>,
-    journal: Arc<Mutex<Journal>>,
-    diagnostics: Arc<FailureDiagnosticEngine>,
-    /// The command's removal budget: a session teardown removes real packages.
-    reaping: Arc<crate::app::sync::guard::Reaping>,
+    /// What it takes to install a session and tear it down again — including the command's
+    /// removal budget, because a teardown removes real packages.
+    m: Machinery,
 }
 
 impl EphemeralShell {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        registry: Arc<BackendRegistry>,
-        state: Arc<Mutex<StateRegistry>>,
-        config: Arc<Config>,
-        executor: crate::core::CommandExecutor,
-        metrics: MetricsCollector,
-        progress: Arc<dyn ProgressReporter>,
-        hooks: Arc<LuaHooks>,
-        snapshot_manager: Arc<SnapshotManager>,
-        journal: Arc<Mutex<Journal>>,
-        diagnostics: Arc<FailureDiagnosticEngine>,
-        reaping: Arc<crate::app::sync::guard::Reaping>,
-    ) -> Self {
-        Self {
-            registry,
-            state,
-            config,
-            executor,
-            metrics,
-            progress,
-            hooks,
-            snapshot_manager,
-            journal,
-            diagnostics,
-            reaping,
-        }
+    pub fn new(m: Machinery) -> Self {
+        Self { m }
     }
 
     #[instrument(skip(self, packages))]
@@ -91,7 +50,7 @@ impl EphemeralShell {
         {
             let _data_lock = crate::core::datalock::DataLock::for_one_step("shell").await?;
             {
-                let mut state_guard = self.state.lock().await;
+                let mut state_guard = self.m.state.lock().await;
                 state_guard.active_session_id = Some(session_id.clone());
             }
 
@@ -101,7 +60,7 @@ impl EphemeralShell {
 
         let mut store_paths = Vec::new();
         for pkg_req in packages {
-            let resolver = StateResolver::new(&self.config, self.registry.clone(), false).await;
+            let resolver = StateResolver::new(&self.m.config, self.m.registry.clone(), false).await;
             if let Ok(spec) = resolver.parse_and_probe_spec(pkg_req).await {
                 if let Some(path) = self.locate_package_root(&spec).await? {
                     debug!("Mapping root for {}: {:?}", spec.name, path);
@@ -118,13 +77,13 @@ impl EphemeralShell {
             }
         });
 
-        let can_sandbox = Sandbox::is_available(&self.config.sandbox).await;
+        let can_sandbox = Sandbox::is_available(&self.m.config.sandbox).await;
 
         if can_sandbox {
             debug!("using sandbox isolation");
             self.launch_sandboxed_shell(&shell_bin, &session_id, &store_paths)
                 .await?;
-        } else if self.config.sandbox.fallback_allowed {
+        } else if self.m.config.sandbox.fallback_allowed {
             warn!("sandbox unavailable — falling back to PATH-only isolation");
             self.spawn_fallback_shell(&shell_bin, &session_id, &store_paths)
                 .await?;
@@ -148,7 +107,7 @@ impl EphemeralShell {
         }
 
         {
-            let mut state_guard = self.state.lock().await;
+            let mut state_guard = self.m.state.lock().await;
             state_guard.active_session_id = None;
             // Don't drop this write silently (H2): if it fails, `active_session_id` stays
             // set on disk and the next run believes an ephemeral session is still live.
@@ -191,7 +150,7 @@ impl EphemeralShell {
 
         let shell_owned = shell.to_string();
         let session_owned = session_id.to_string();
-        let settings_clone = self.config.sandbox.clone();
+        let settings_clone = self.m.config.sandbox.clone();
 
         tokio::task::spawn_blocking(move || {
             let mut bwrap = Sandbox::wrap(&shell_owned, &[], &sandbox_cfg, &settings_clone)?;
@@ -256,6 +215,7 @@ impl EphemeralShell {
 
     pub async fn locate_package_root(&self, spec: &PackageSpec) -> Result<Option<PathBuf>> {
         let backend = self
+            .m
             .registry
             .get(&spec.backend)
             .ok_or_else(|| Error::BackendNotFound(spec.backend.clone()))?;
@@ -282,7 +242,7 @@ impl EphemeralShell {
         requests: &[String],
         _session_id: &str,
     ) -> Result<()> {
-        let resolver = StateResolver::new(&self.config, self.registry.clone(), false).await;
+        let resolver = StateResolver::new(&self.m.config, self.m.registry.clone(), false).await;
 
         let mut transient_desired = HashMap::new();
         for req in requests {
@@ -301,15 +261,15 @@ impl EphemeralShell {
         // removal — `shall shell ripgrep` proposing to uninstall the machine — with `max_removals`
         // the only thing in the way, and a ceiling is not a rule.
         let changes = {
-            let state_guard = self.state.lock().await;
-            let planner = ChangePlanner::new(self.registry.clone(), &state_guard, &self.config);
+            let state_guard = self.m.state.lock().await;
+            let planner = ChangePlanner::new(self.m.registry.clone(), &state_guard, &self.m.config);
             planner
                 .plan(&transient_desired, PlanScope::JustThese)
                 .await?
         }; // <-- state_guard dropped here
 
         if !changes.is_empty() {
-            let engine = self.create_sync_engine().await;
+            let engine = self.create_sync_engine();
             engine
                 .sync(changes, crate::app::sync::guard::GuardScope::Sync)
                 .await?;
@@ -320,7 +280,7 @@ impl EphemeralShell {
 
     pub async fn cleanup_transient_env(&self, session_id: &str) -> Result<()> {
         let to_remove = {
-            let state = self.state.lock().await;
+            let state = self.m.state.lock().await;
             state.get_transient_packages(session_id)
         };
 
@@ -337,7 +297,7 @@ impl EphemeralShell {
             graph,
             ..Default::default()
         };
-        let engine = self.create_sync_engine().await;
+        let engine = self.create_sync_engine();
         engine
             .sync(changes, crate::app::sync::guard::GuardScope::ShellExit)
             .await?;
@@ -351,11 +311,11 @@ impl EphemeralShell {
     /// the timed-restore contract in `Leases::sweep_due_suspensions`.
     pub async fn restore_session_suspensions(&self, session_id: &str) -> Result<()> {
         let owned = {
-            let state = self.state.lock().await;
+            let state = self.m.state.lock().await;
             state.get_session_suspensions(session_id)
         };
         for s in owned {
-            let restored = match self.registry.get(&s.backend) {
+            let restored = match self.m.registry.get(&s.backend) {
                 Some(b) => match b.as_installable() {
                     Some(inst) => {
                         let spec = PackageSpec {
@@ -369,7 +329,7 @@ impl EphemeralShell {
                         // same reason: a shell that exits into a killed reinstall leaves the
                         // package neither suspended nor back.
                         crate::core::journalled(
-                            &self.journal,
+                            &self.m.journal,
                             vec![crate::core::JournalAction::Install(spec.clone())],
                             inst.install(std::slice::from_ref(&spec), b.sudo_for_write()),
                         )
@@ -383,7 +343,7 @@ impl EphemeralShell {
                 None => Err(Error::BackendNotFound(s.backend.clone())),
             };
 
-            let mut state = self.state.lock().await;
+            let mut state = self.m.state.lock().await;
             match restored {
                 Ok(()) => {
                     info!("restored session-suspended {}:{}", s.backend, s.name);
@@ -419,20 +379,7 @@ impl EphemeralShell {
         Ok(())
     }
 
-    async fn create_sync_engine(&self) -> SyncEngine<'_> {
-        SyncEngine::new(
-            &self.config,
-            self.registry.clone(),
-            self.executor.duplicate(),
-            self.metrics.clone(),
-            self.progress.clone(),
-            self.hooks.clone(),
-            self.snapshot_manager.clone(),
-            self.journal.clone(),
-            self.state.clone(),
-            self.diagnostics.clone(),
-            self.reaping.clone(),
-        )
-        .await
+    fn create_sync_engine(&self) -> SyncEngine {
+        SyncEngine::new(self.m.clone())
     }
 }

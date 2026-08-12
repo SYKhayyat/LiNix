@@ -540,7 +540,7 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
   (included / NOT included and why). `cargo check --lib`/`--bin` clean.
 - ~~One retention engine.~~ **DONE, 2026-07-17.** There were two: generations and the `sync`-time
   snapshot prune both used `core::RetentionPolicy` (the correct engine, with the "always keep the
-  newest" floor and the Shall-ownership filter), but `App::prune_snapshots` (the `auto_prune`
+  newest" floor and the Shall-ownership filter), but the `prune` verb's own path (the `auto_prune`
   maintenance path) used a **separate** `SnapshotManager::prune_stale_snapshots` with different
   semantics — notably **no newest-floor**, so if every snapshot was older than `max_age_days` it
   deleted them all, leaving no rollback point. Deleted that duplicate; `prune_snapshots` now goes

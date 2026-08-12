@@ -1,6 +1,6 @@
 //! GRADER round 3, 2026-07-29 — RED. `info` answers about the resolver, not about the machine.
 //!
-//! Two findings, one root. `App::get_info` (`src/app/context.rs:541`) hands `backend:name` to
+//! Two findings, one root. `Inventory::get_info` (`src/app/inventory.rs`) hands `backend:name` to
 //! `resolve_spec` and then either asks exactly the backends that came back, or — when the string
 //! does not resolve at all — falls through to asking **every** available backend for a package
 //! literally named `nosuchbackend:foo`. Neither branch ever asks the question `install` and

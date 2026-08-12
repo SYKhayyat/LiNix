@@ -1,19 +1,13 @@
-use crate::app::diagnostics::FailureDiagnosticEngine;
 use crate::app::sync::{ChangePlanner, PlanScope, StateResolver, SyncEngine};
 use crate::app::vocab::Vocab;
-use crate::app::{LuaHooks, MetricsCollector};
-use crate::backends::BackendRegistry;
+use crate::app::Machinery;
 use crate::config::grammar::Origin;
 use crate::config::parser::HostFacts;
-use crate::config::Config;
-use crate::core::{CommandExecutor, Error, Journal, Result, SnapshotManager, StateRegistry};
+use crate::core::{Error, Result};
 use crate::model::profiles::{
     blocks_in_active, describe_gate, parse_active, read_active, remove_from_active, ProfileLoader,
 };
 use crate::model::Layout;
-use crate::utils::progress::ProgressReporter;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use tracing::{info, instrument};
 
 /// Turns profiles on and off (SPEC II.6).
@@ -23,69 +17,33 @@ use tracing::{info, instrument};
 /// second place the same fact lives, and the day it disagrees with your files it wins
 /// silently (P4). The resolver reads `active` on every run and composes from there.
 pub struct ProfileManager {
-    registry: Arc<BackendRegistry>,
-    executor: CommandExecutor,
-    metrics: MetricsCollector,
-    progress: Arc<dyn ProgressReporter>,
-    hooks: Arc<LuaHooks>,
-    snapshot_manager: Arc<SnapshotManager>,
-    journal: Arc<Mutex<Journal>>,
-    state: Arc<Mutex<StateRegistry>>,
-    config: Arc<Config>,
-    diagnostics: Arc<FailureDiagnosticEngine>,
+    /// What it takes to converge: activating a profile is a full sync, and it spends the same
+    /// ceilings — including the command's removal budget — as any other.
+    m: Machinery,
     layout: Layout,
-    /// The command's removal budget. Activating a profile is a full converge, and it spends the
-    /// same ceilings as any other.
-    reaping: Arc<crate::app::sync::guard::Reaping>,
 }
 
 impl ProfileManager {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        registry: Arc<BackendRegistry>,
-        executor: CommandExecutor,
-        metrics: MetricsCollector,
-        progress: Arc<dyn ProgressReporter>,
-        hooks: Arc<LuaHooks>,
-        snapshot_manager: Arc<SnapshotManager>,
-        journal: Arc<Mutex<Journal>>,
-        state: Arc<Mutex<StateRegistry>>,
-        config: Arc<Config>,
-        diagnostics: Arc<FailureDiagnosticEngine>,
-        reaping: Arc<crate::app::sync::guard::Reaping>,
-    ) -> Self {
-        let layout = config.layout();
-        Self {
-            registry,
-            executor,
-            metrics,
-            progress,
-            hooks,
-            snapshot_manager,
-            journal,
-            state,
-            config,
-            diagnostics,
-            layout,
-            reaping,
-        }
+    pub fn new(m: Machinery) -> Self {
+        let layout = m.config.layout();
+        Self { m, layout }
     }
 
     /// What this machine is, plus this run's variables — so a `when $role == travel` block
     /// in `active` is one these verbs can read rather than an unknown key (W8).
     async fn facts(&self) -> Result<HostFacts> {
-        StateResolver::new(&self.config, self.registry.clone(), false)
+        StateResolver::new(&self.m.config, self.m.registry.clone(), false)
             .await
             .facts_for_host()
             .await
     }
 
     async fn vocab(&self) -> Result<Vocab> {
-        let priority = StateResolver::new(&self.config, self.registry.clone(), false)
+        let priority = StateResolver::new(&self.m.config, self.m.registry.clone(), false)
             .await
             .priority_for_host()
             .await?;
-        Ok(Vocab::new(&self.registry, &self.config, &priority))
+        Ok(Vocab::new(&self.m.registry, &self.m.config, &priority))
     }
 
     /// `activate NAME…` — **`active` becomes exactly this list** (II.6).
@@ -289,16 +247,17 @@ impl ProfileManager {
     pub async fn show(&self, name: &str) -> Result<Vec<String>> {
         self.must_exist(name).await?;
 
-        let mut out: Vec<String> = StateResolver::new(&self.config, self.registry.clone(), false)
-            .await
-            .as_if_active(active_body(&[name.to_string()]))
-            .resolve_desired_state()
-            .await?
-            .values()
-            .flatten()
-            .filter(|s| s.present)
-            .map(|s| format!("{}:{}", s.backend, s.name))
-            .collect();
+        let mut out: Vec<String> =
+            StateResolver::new(&self.m.config, self.m.registry.clone(), false)
+                .await
+                .as_if_active(active_body(&[name.to_string()]))
+                .resolve_desired_state()
+                .await?
+                .values()
+                .flatten()
+                .filter(|s| s.present)
+                .map(|s| format!("{}:{}", s.backend, s.name))
+                .collect();
         out.sort();
         out.dedup();
         Ok(out)
@@ -330,7 +289,7 @@ impl ProfileManager {
     /// Snapshot what this machine currently wants into a new profile.
     pub async fn save_current_as(&self, name: &str) -> Result<()> {
         self.check_name(name)?;
-        let desired = StateResolver::new(&self.config, self.registry.clone(), false)
+        let desired = StateResolver::new(&self.m.config, self.m.registry.clone(), false)
             .await
             .resolve_desired_state()
             .await?;
@@ -426,22 +385,9 @@ impl ProfileManager {
 
     /// Converge to whatever `active` now says.
     async fn sync_now(&self) -> Result<()> {
-        let engine = SyncEngine::new(
-            &self.config,
-            self.registry.clone(),
-            self.executor.duplicate(),
-            self.metrics.clone(),
-            self.progress.clone(),
-            self.hooks.clone(),
-            self.snapshot_manager.clone(),
-            self.journal.clone(),
-            self.state.clone(),
-            self.diagnostics.clone(),
-            self.reaping.clone(),
-        )
-        .await;
+        let engine = SyncEngine::new(self.m.clone());
 
-        let resolver = StateResolver::new(&self.config, self.registry.clone(), false).await;
+        let resolver = StateResolver::new(&self.m.config, self.m.registry.clone(), false).await;
         let desired = resolver.resolve_desired_state().await?;
         // Activating a profile is a full converge — the whole config is the desired set — so it
         // reaps, and reaps only what `priority` names. It used to reap every backend on the box:
@@ -450,8 +396,8 @@ impl ProfileManager {
         let hosts = resolver.host_backends().await;
 
         let changes = {
-            let state_guard = self.state.lock().await;
-            let planner = ChangePlanner::new(self.registry.clone(), &state_guard, &self.config);
+            let state_guard = self.m.state.lock().await;
+            let planner = ChangePlanner::new(self.m.registry.clone(), &state_guard, &self.m.config);
             planner.plan(&desired, PlanScope::Whole(hosts)).await?
         };
 

@@ -1,3 +1,15 @@
+//! What one invocation of Shall is made of, and nothing else.
+//!
+//! **`App` is a composition root, not a service.** It owns the collaborators a run needs, wires
+//! them once, and hands out narrow views of itself — `Inventory`, `Declarations`, `Managers`,
+//! `Leases`, the nine `apply` facets. It has no behaviour of its own, deliberately: every method
+//! here is either construction or a one-line factory, so nothing can be written *on* `App` that
+//! reaches twelve collaborators to use three.
+//!
+//! The rule that keeps it that way: **if it needs to decide something, it does not belong here.**
+//! A method that reads `config` and asks `registry` a question is a facet; give it a type that
+//! holds those two and can be built without an `App` at all.
+
 use crate::app::adopt::Adopter;
 use crate::app::diagnostics::FailureDiagnosticEngine;
 use crate::app::profile::ProfileManager;
@@ -9,39 +21,17 @@ use crate::app::snapshot_restore::SnapshotRestore;
 use crate::app::sync::resolver::StateResolver;
 use crate::app::sync::SyncEngine;
 use crate::backends::{create_default_registry, BackendRegistry};
-use crate::config::grammar::Origin;
 use crate::config::Config;
-use crate::core::{
-    CommandExecutor, Error, Journal, Package, PackageSpec, Result, SnapshotManager, StateRegistry,
-};
+use crate::core::{CommandExecutor, Error, Journal, Result, SnapshotManager, StateRegistry};
 use crate::utils::progress::{create_progress_reporter, ProgressReporter};
 
-use super::{Backends, LuaHooks, MetricsCollector, UniversalSearch};
+use super::{
+    Backends, Declarations, Inventory, LuaHooks, Machinery, Managers, MetricsCollector, Vcs,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, info, instrument, warn};
-
-/// What the unmanaged crawl found, and what it could not find out.
-///
-/// **Two fields, for the reason `OutdatedReport` has two.** A manager that could not be listed
-/// contributes nothing, which is the safe direction for `purge-undeclared` — it deletes less,
-/// never more. It is not a safe direction for the *sentence*: "nothing here is unmanaged" and
-/// "three managers never answered" produced the identical empty vector, and `shall check drift`
-/// printed *"System matches your manifests; nothing to install, no drift, nothing undeclared"*
-/// over the second one (B4).
-///
-/// The asymmetry this closes is sharper than the omission: `check drift --json` already had a
-/// `resources_unverifiable` key and no packages equivalent, so the distinction this codebase is
-/// proudest of survived into the machine-readable contract for one half of the model and was
-/// lost for the other.
-#[derive(Default)]
-pub struct UndeclaredReport {
-    /// Installed, and nothing declares it.
-    pub packages: Vec<Package>,
-    /// `backend: reason` for every manager that could not be listed. Never empty *and* silent.
-    pub unanswered: Vec<String>,
-}
+use tracing::debug;
 
 pub struct App {
     pub config: Arc<Config>,
@@ -124,12 +114,10 @@ impl App {
             }
         };
         let build_registry = async {
-            Ok::<_, Error>(
-                create_default_registry(executor.duplicate(), &config, hooks.clone()).await,
-            )
+            Ok::<_, Error>(create_default_registry(executor.clone(), &config, hooks.clone()).await)
         };
         let probe_snapshots =
-            async { Ok::<_, Error>(SnapshotManager::new(executor.duplicate(), &config).await) };
+            async { Ok::<_, Error>(SnapshotManager::new(executor.clone(), &config).await) };
 
         let (state_registry, journal, snapshot_manager, registry) =
             tokio::try_join!(load_state, open_journal, probe_snapshots, build_registry)?;
@@ -183,7 +171,7 @@ impl App {
         Self {
             config: Arc::new(config),
             registry: self.registry.clone(),
-            executor: self.executor.duplicate(),
+            executor: self.executor.clone(),
             metrics: self.metrics.clone(),
             progress: self.progress.clone(),
             hooks: self.hooks.clone(),
@@ -200,6 +188,76 @@ impl App {
         }
     }
 
+    /// The backends this run may use, in `priority` order (II.6's `priority` file).
+    ///
+    /// **Resolved once per process.** Reading `priority` costs a file read and a host-facts
+    /// resolution, and every fan-out in the program wants the answer — the accessor this
+    /// replaced was called five times per `check`.
+    ///
+    /// **And it no longer swallows.** It used to end in `.unwrap_or_default()`, so a `priority`
+    /// that would not resolve became an *empty list* — which `UniversalSearch` then read as
+    /// *every available backend*, on the stated premise that only a missing file could produce
+    /// one. Two swallowed answers composing into the exact inversion of the file's own rule.
+    /// The failure is carried into [`Backends`] and refused where the question is asked.
+    pub async fn backends(&self) -> &Backends {
+        self.backends
+            .get_or_init(|| async {
+                let resolver = StateResolver::new(&self.config, self.registry.clone(), false).await;
+                let priority = resolver
+                    .priority_for_host()
+                    .await
+                    .map_err(|e| e.to_string());
+                Backends::new(self.registry.clone(), priority)
+            })
+            .await
+    }
+
+    /// A resolver over this app's config and registry — what a name means here, which managers
+    /// this host may use, and what the manifest resolves to.
+    pub async fn resolver(&self) -> StateResolver<'_> {
+        StateResolver::new(&self.config, self.registry.clone(), false).await
+    }
+
+    /// What this machine has installed, asked of every manager the model uses.
+    pub async fn inventory(&self) -> Inventory<'_> {
+        Inventory {
+            config: &self.config,
+            registry: &self.registry,
+            state: &self.state,
+            backends: self.backends().await,
+        }
+    }
+
+    /// Writing a line into your files, and taking one back out.
+    pub fn declarations(&self) -> Declarations<'_> {
+        Declarations {
+            config: &self.config,
+            registry: &self.registry,
+        }
+    }
+
+    /// `update` and `upgrade`: the whole `priority` list at once.
+    pub async fn managers(&self) -> Managers<'_> {
+        Managers {
+            config: &self.config,
+            metrics: &self.metrics,
+            snapshot_manager: &self.snapshot_manager,
+            backends: self.backends().await,
+        }
+    }
+
+    /// Git over the manifests (II.1), never over the directory the user is standing in.
+    pub fn vcs(&self) -> Vcs<'_> {
+        Vcs {
+            config: &self.config,
+        }
+    }
+
+    /// Every package frozen against an upgrade, from the ledger **and** from the manifest.
+    pub async fn holds(&self) -> crate::app::holds::Holds {
+        crate::app::holds::Holds::assemble(&self.resolver().await, &self.state).await
+    }
+
     pub async fn adopter(&self) -> Adopter {
         Adopter::new(
             self.backends().await.clone(),
@@ -208,36 +266,33 @@ impl App {
         )
     }
 
+    /// What it takes to change this machine, as one value.
+    ///
+    /// **The three engines below take this and nothing else.** Each used to name the same
+    /// eleven collaborators in its own order, so a new field meant four signatures, six call
+    /// sites, and no way for the compiler to notice one that was missed.
+    pub fn machinery(&self) -> Machinery {
+        Machinery {
+            config: self.config.clone(),
+            registry: self.registry.clone(),
+            executor: self.executor.clone(),
+            metrics: self.metrics.clone(),
+            progress: self.progress.clone(),
+            hooks: self.hooks.clone(),
+            snapshot_manager: self.snapshot_manager.clone(),
+            journal: self.journal.clone(),
+            state: self.state.clone(),
+            diagnostics: self.diagnostics.clone(),
+            reaping: self.reaping.clone(),
+        }
+    }
+
     pub fn shell(&self) -> EphemeralShell {
-        EphemeralShell::new(
-            self.registry.clone(),
-            self.state.clone(),
-            self.config.clone(),
-            self.executor.duplicate(),
-            self.metrics.clone(),
-            self.progress.clone(),
-            self.hooks.clone(),
-            self.snapshot_manager.clone(),
-            self.journal.clone(),
-            self.diagnostics.clone(),
-            self.reaping.clone(),
-        )
+        EphemeralShell::new(self.machinery())
     }
 
     pub fn profile_manager(&self) -> ProfileManager {
-        ProfileManager::new(
-            self.registry.clone(),
-            self.executor.clone(),
-            self.metrics.clone(),
-            self.progress.clone(),
-            self.hooks.clone(),
-            self.snapshot_manager.clone(),
-            self.journal.clone(),
-            self.state.clone(),
-            self.config.clone(),
-            self.diagnostics.clone(),
-            self.reaping.clone(),
-        )
+        ProfileManager::new(self.machinery())
     }
 
     pub fn snapshot_restore(&self) -> SnapshotRestore {
@@ -340,862 +395,7 @@ impl App {
         }
     }
 
-    pub async fn sync_engine(&self) -> SyncEngine<'_> {
-        SyncEngine::new(
-            &self.config,
-            self.registry.clone(),
-            self.executor.duplicate(),
-            self.metrics.clone(),
-            self.progress.clone(),
-            self.hooks.clone(),
-            self.snapshot_manager.clone(),
-            self.journal.clone(),
-            self.state.clone(),
-            self.diagnostics.clone(),
-            self.reaping.clone(),
-        )
-        .await
-    }
-
-    /// What this machine is, plus this run's variables — the facts every `when` in your
-    /// files is evaluated against (IX.6). Anything that reads `active` needs these, not the
-    /// detected ones on their own.
-    pub async fn host_facts(&self) -> Result<crate::config::parser::HostFacts> {
-        StateResolver::new(&self.config, self.registry.clone(), false)
-            .await
-            .facts_for_host()
-            .await
-    }
-
-    /// This machine's backend vocabulary, for anything that reads or writes a line.
-    pub async fn vocabulary(&self) -> Result<crate::app::vocab::Vocab> {
-        let resolver = StateResolver::new(&self.config, self.registry.clone(), false).await;
-        let priority = resolver.priority_for_host().await?;
-        Ok(crate::app::vocab::Vocab::new(
-            &self.registry,
-            &self.config,
-            &priority,
-        ))
-    }
-
-    /// Refuse a line the model would reject on every later read, before it reaches a file.
-    ///
-    /// A backend that is not in `priority` is not a package that failed to install — it is a
-    /// line nothing will ever parse, and once written it is a hard error for `status`,
-    /// `plan`, `check` and every install after it, until a human edits the file. `install`
-    /// writes first and syncs second on purpose (S15), so this is the only place the check
-    /// can happen before the write.
-    ///
-    /// Static only: the grammar, the alias table and V.15's priority check. A bare name is
-    /// NOT probed here — that costs a search per manager, and a name nothing claims is a
-    /// different failure with a different cure (`Unresolvable`, withdrawn after the sync).
-    pub async fn reject_unusable_line(&self, line: &str) -> Result<()> {
-        StateResolver::new(&self.config, self.registry.clone(), false)
-            .await
-            .validate_line(line)
-            .await
-    }
-
-    /// "Added" when the file changed, "Would add" when a preview only says it would.
-    fn edit_verb(&self, done: &'static str, planned: &'static str) -> &'static str {
-        if self.config.dry_run {
-            planned
-        } else {
-            done
-        }
-    }
-
-    /// Write a declaration into your files (P1: an imperative command is a shortcut for
-    /// editing a file and syncing), and say which file it touched (II.8).
-    ///
-    /// `into` is II.8's `--into`: a module (lowercase) or a profile (Capitalized). Without
-    /// it, the line lands in the module named for how it arrived (V.40).
-    pub async fn declare(
-        &self,
-        line: &str,
-        into: Option<&str>,
-        landing: crate::model::Landing,
-    ) -> Result<crate::model::Edit> {
-        self.reject_unusable_line(line).await?;
-        let vocab = self.vocabulary().await?;
-        let layout = self.config.layout();
-        let target = match into {
-            Some(name) => crate::model::Target::parse(name, &Origin::argument())?,
-            None => landing.target(),
-        };
-        let edit = crate::model::Editor::new(
-            &layout,
-            &vocab,
-            self.host_facts().await?,
-            crate::model::Writes::for_run(self.config.dry_run),
-        )
-        .add(&target, line)
-        .map_err(Error::from)?;
-        info!("{}", edit.describe(self.edit_verb("Added", "Would add")));
-        Ok(edit)
-    }
-
-    /// Whether any active file declares this package.
-    ///
-    /// Asked through the resolver, so "declared" means the same thing here as it does to
-    /// `sync` — a second definition of declared is a second answer.
-    pub async fn declares(&self, target: &str) -> Result<bool> {
-        let vocab = self.vocabulary().await?;
-        let layout = self.config.layout();
-        let facts = self.host_facts().await?;
-        let files = crate::model::active_module_files(&layout, &vocab, &facts);
-        // Reads only; a `Writes` it never uses is still the honest one to hand it.
-        let editor =
-            crate::model::Editor::new(&layout, &vocab, facts, crate::model::Writes::Planned);
-        Ok(editor.declares_in(&files, target))
-    }
-
-    /// Move a declared package to `new_backend` by rewriting its line in place (II.8's
-    /// `teleport`), and say which files changed. Empty result = the package is declared in no
-    /// active file, which the caller reports rather than silently doing nothing.
-    pub async fn retarget(
-        &self,
-        target_pkg: &str,
-        new_backend: &str,
-    ) -> Result<Vec<crate::model::Edit>> {
-        // The same write-then-discover fault as `declare`: a move to a manager `priority`
-        // does not list rewrites the line into one nothing can parse, and the package it
-        // came from is already gone from the file.
-        self.reject_unusable_line(&format!("{}:{}", new_backend, target_pkg))
-            .await?;
-        let vocab = self.vocabulary().await?;
-        let layout = self.config.layout();
-        let facts = self.host_facts().await?;
-        let files = crate::model::active_module_files(&layout, &vocab, &facts);
-        let edits = crate::model::Editor::new(
-            &layout,
-            &vocab,
-            facts,
-            crate::model::Writes::for_run(self.config.dry_run),
-        )
-        .retarget_backend(&files, target_pkg, new_backend)
-        .map_err(Error::from)?;
-        for e in &edits {
-            info!("{}", e.describe(self.edit_verb("Moved", "Would move")));
-        }
-        Ok(edits)
-    }
-
-    /// Remove a package's declaration from every file the active profiles reach (II.8's
-    /// `uninstall`), and say which files changed.
-    pub async fn undeclare(&self, target_pkg: &str) -> Result<Vec<crate::model::Edit>> {
-        let vocab = self.vocabulary().await?;
-        let layout = self.config.layout();
-        let facts = self.host_facts().await?;
-        let files = crate::model::active_module_files(&layout, &vocab, &facts);
-        let edits = crate::model::Editor::new(
-            &layout,
-            &vocab,
-            facts,
-            crate::model::Writes::for_run(self.config.dry_run),
-        )
-        .remove_from(&files, target_pkg)
-        .map_err(Error::from)?;
-        for e in &edits {
-            info!("{}", e.describe(self.edit_verb("Removed", "Would remove")));
-        }
-        Ok(edits)
-    }
-
-    #[instrument(skip(self))]
-    pub async fn resolve_spec(&self, spec_str: &str) -> Result<Vec<PackageSpec>> {
-        self.resolver().await.resolve_spec(spec_str).await
-    }
-
-    /// Every package frozen against an upgrade, from the ledger **and** from the manifest.
-    ///
-    /// One construction, for the reason the resolver below is one construction: `@hold=true` was
-    /// read by nothing at all, and the first fix taught two of the four readers about it. The
-    /// other two did not contain the string anybody grepped for — one built its own closure over
-    /// `StateRegistry::held`, and `shall hold` with no arguments listed the ledger and reported
-    /// `No packages are held.` over a manifest holding three.
-    ///
-    /// A model that will not resolve is the ledger alone and a warning, never a failure: neither
-    /// `upgrade` nor `hold` is a command that needs the manifest to parse, and refusing to
-    /// upgrade anything because a module has a syntax error is a worse answer than the one they
-    /// gave before.
-    pub async fn holds(&self) -> crate::app::holds::Holds {
-        let (desired, why) = match self.resolver().await.resolve_desired_state().await {
-            Ok(desired) => (Some(desired), None),
-            Err(e) => {
-                warn!(
-                    "the manifest could not be resolved ({e}), so `@hold=true` lines are not \
-                     being honoured on this run; `shall hold` entries still are."
-                );
-                // Carried, not only warned about. The warning was correct and went to stderr,
-                // and `shall hold` then printed a clean bill on stdout at exit 0 — so a script
-                // reading the answer got "nothing is held" with no way to know better (B3).
-                (None, Some(e.to_string()))
-            }
-        };
-        let state = self.state.lock().await;
-        crate::app::holds::Holds::new(&state, desired.as_ref(), why)
-    }
-
-    /// A resolver over this app's config and registry. One construction, so a caller that needs
-    /// two answers from the model does not build two resolvers that can disagree.
-    pub async fn resolver(&self) -> StateResolver<'_> {
-        StateResolver::new(&self.config, self.registry.clone(), false).await
-    }
-
-    /// The backend a `backend:name` string names, if it names one. `None` for a bare name.
-    pub async fn declared_backend(&self, spec_str: &str) -> Result<Option<String>> {
-        self.resolver().await.declared_backend(spec_str).await
-    }
-
-    /// The `(backend, name)` a `service:`/`link:`/`setting:` string denotes — the three
-    /// prefixes that are also backends, and therefore the three `list` prints as two columns.
-    pub async fn queried_resource(&self, spec_str: &str) -> Result<Option<(String, String)>> {
-        self.resolver().await.queried_resource(spec_str).await
-    }
-
-    /// Refuse a `backend:name` argument whose prefix is not a backend (Q9).
-    ///
-    /// Q9 ruled that every verb taking a backend name refuses an unknown one, and listed the
-    /// four that take it as a `--backend` flag — "checked from the code rather than from the one
-    /// that was reported". The `backend:name` *spec* form was not in that enumeration, so the
-    /// ruling was applied to half its surface: `shall hold nosuchbackend:foo` recorded a hold
-    /// against a manager that does not exist and answered `Held 1 package(s).` at exit 0.
-    ///
-    /// A real backend that cannot run here is a different answer and stays exit 0 — Q9 clause 3,
-    /// and `require_known_backend` is where that distinction lives.
-    pub async fn require_known_spec_backends(&self, specs: &[String]) -> Result<()> {
-        for spec in specs {
-            let named = self.declared_backend(spec).await?;
-            self.require_known_backend(named.as_deref())?;
-        }
-        Ok(())
-    }
-
-    /// Refresh every backend's metadata, and do not let one stop the rest.
-    ///
-    /// `?` on the first failure meant a single manager that could not refresh — a plugin
-    /// missing, a repo down — silently skipped every backend after it, and the ones that
-    /// did refresh went unmentioned. Each failure is named and the command still reports
-    /// one, because a refresh that half-happened is not a refresh that worked.
-    pub async fn update(&self) -> Result<()> {
-        use futures::stream::{self, StreamExt};
-        info!("refreshing package metadata");
-        // Each backend's refresh is an independent network fetch (`apt update`, `brew update`,
-        // …) — seconds of waiting with nothing shared between them. Overlap the waits, capped
-        // at `max_parallel`. Unlike `upgrade`, this changes no package, so concurrent runs
-        // cannot contend on a package database.
-        let cap = self.config.max_parallel.max(1);
-        // What Shall uses: refreshing the package index of a manager `priority` does not
-        // name is work nobody asked for, on a tool this run will never call.
-        let failed: Vec<String> = stream::iter(self.backends().await.usable()?)
-            .map(|backend| async move {
-                let upgradable = backend.as_upgradable()?;
-                match upgradable.update(backend.sudo_for_write()).await {
-                    Ok(()) => None,
-                    Err(e) => {
-                        warn!("{}: could not refresh — {}", backend.name(), e);
-                        Some(format!("{} ({})", backend.name(), e))
-                    }
-                }
-            })
-            .buffer_unordered(cap)
-            .filter_map(|x| async move { x })
-            .collect()
-            .await;
-        if failed.is_empty() {
-            return Ok(());
-        }
-        Err(Error::Other(format!(
-            "{} backend(s) could not refresh their metadata; the rest were refreshed: {}",
-            failed.len(),
-            failed.join("; ")
-        )))
-    }
-
-    pub async fn upgrade(&self) -> Result<()> {
-        let _ = self
-            .snapshot_manager
-            .auto_snapshot(crate::core::snapshot::SnapshotLabel::PreUpgrade)
-            .await?;
-        use futures::stream::{self, StreamExt};
-        info!("upgrading all packages");
-        // The same rule as `update`, and for the same reason: one manager that cannot
-        // upgrade must not silently cancel every manager after it in the list.
-        //
-        // **Grouped by what they contend for, not run one at a time.** This was deliberately
-        // serial, and the reason given — "it changes packages, so concurrent sudo operations
-        // would interleave" — is true of the managers that share a system package database and
-        // false of `cargo`, `npm`, `pipx`, `uv`, `yarn`, `pnpm`, `vscode`, `emacs`, `krew` and
-        // `go`, which contend with nothing and are typically the slow ones because each
-        // rebuilds or refetches from a registry. So the root-needing set stays strictly
-        // sequential and the rest overlap. `run_exclusive`'s per-manager mutex is still
-        // underneath both, which is the safety this loop was being blunt about.
-        // What Shall uses: `upgrade` acts on the model, so a manager outside `priority` is
-        // not this command's business however installed it is.
-        let (rooted, unrooted): (Vec<_>, Vec<_>) = self
-            .backends()
-            .await
-            .usable()?
-            .into_iter()
-            .filter(|b| b.is_upgradable())
-            .partition(|b| b.needs_root());
-
-        let mut failed: Vec<String> = Vec::new();
-        for backend in rooted {
-            if let Some(upgradable) = backend.as_upgradable() {
-                if let Err(e) = upgradable.upgrade(backend.sudo_for_write()).await {
-                    warn!("{}: could not upgrade — {}", backend.name(), e);
-                    failed.push(format!("{} ({})", backend.name(), e));
-                }
-            }
-        }
-        let cap = self.config.max_parallel.max(1);
-        let user_failures: Vec<String> = stream::iter(unrooted)
-            .map(|backend| async move {
-                let upgradable = backend.as_upgradable()?;
-                match upgradable.upgrade(backend.sudo_for_write()).await {
-                    Ok(()) => None,
-                    Err(e) => {
-                        warn!("{}: could not upgrade — {}", backend.name(), e);
-                        Some(format!("{} ({})", backend.name(), e))
-                    }
-                }
-            })
-            .buffer_unordered(cap)
-            .filter_map(|x| async move { x })
-            .collect()
-            .await;
-        failed.extend(user_failures);
-        self.metrics
-            .print_summary(crate::app::metrics::Narration::Change);
-        if failed.is_empty() {
-            return Ok(());
-        }
-        Err(Error::Other(format!(
-            "{} backend(s) could not upgrade; the rest were upgraded: {}",
-            failed.len(),
-            failed.join("; ")
-        )))
-    }
-
-    /// Refuse a `--backend` name nothing claims, and say so when a real one is not installed
-    /// here. Returns `true` when the named backend can answer right now.
-    ///
-    /// `install nosuchbackend:foo` refused loudly and named the file to edit; `list -b
-    /// nosuchbackend` printed nothing and exited 0 — which is byte-identical to a real backend
-    /// with nothing installed, so a typo was reported, in the program's own voice, as "that
-    /// manager is empty". Owner ruling 2026-07-28 (Q9): `list` refuses the way `install` does.
-    ///
-    /// The second answer is the one that is easy to miss. `apt` on Windows is a real backend
-    /// that cannot run here, and it produced the same silence as the typo. Those are different
-    /// facts and they now read differently — but only the typo is an error, because a name that
-    /// is genuinely a backend is not a mistake the user made.
-    ///
-    /// The message is `install`'s, deliberately: two spellings of one refusal is how E18's
-    /// family started.
-    pub fn require_known_backend(&self, name: Option<&str>) -> Result<bool> {
-        let Some(name) = name else {
-            return Ok(true);
-        };
-        match self.registry.get(name) {
-            None => Err(Error::Config(format!(
-                "`{}` is not a backend Shall uses\n  \
-                 add `{}` to your `priority` file, or check the spelling. Not listed means \
-                 Shall does not use it at all.",
-                name, name
-            ))),
-            Some(b) => {
-                if b.is_available() {
-                    Ok(true)
-                } else {
-                    tracing::warn!(
-                        "`{}` is a manager Shall knows, but it is not installed on this \
-                         machine — so there is nothing for it to report. `shall check health` \
-                         says which managers are ready here.",
-                        name
-                    );
-                    Ok(false)
-                }
-            }
-        }
-    }
-
-    pub async fn list(&self, backend_filter: Option<&str>) -> Result<Vec<Package>> {
-        // Narrowed by the registry, not after it: filtering the result of `available()` means
-        // fifty-two PATH walks to answer a question about one manager (see `available_named`).
-        // What Shall uses, narrowed to one when `--backend` named one. `list` reports on the
-        // model's managers; a manager `priority` excludes has nothing to do with this machine's
-        // declarations, and probing it to find that out is the cost W4 is about.
-        let backends = self.backends().await.usable_named(backend_filter)?;
-        // The fan-out drops backends that cannot be queried at all, so the names have to be
-        // taken through the same filter to stay aligned with the answers.
-        let names: Vec<String> = backends
-            .iter()
-            .filter(|b| b.as_queryable().is_some())
-            .map(|b| b.name().to_string())
-            .collect();
-        // Every backend's lister is a separate process (`apt list`, `cargo install --list`,
-        // …) with nothing to share, so querying them one after another is latency the machine
-        // is not spending — it is waiting. Fan out, bounded by `max_parallel`.
-        let results = self
-            .query_backends_concurrently(backends, |q| async move { q.list_installed().await })
-            .await;
-
-        // `unwrap_or_default()` stood here, and it is how `shall list --backend winget` printed
-        // nothing and exited 0 on a machine with 280 winget packages on it: the manager fell
-        // over, its rows became an empty vector, and the empty vector became the answer.
-        // Measured 1 run in 16 under concurrent cold start. A listing missing a manager is a
-        // different thing from a machine missing its packages, and the user has to be able to
-        // tell which one they are holding.
-        let mut rows = Vec::new();
-        let mut unlisted = Vec::new();
-        for (name, result) in names.into_iter().zip(results) {
-            match result {
-                Ok(pkgs) => rows.extend(pkgs),
-                Err(e) => unlisted.push((name, e)),
-            }
-        }
-        if !unlisted.is_empty() {
-            // One manager was asked about, so its failure *is* the answer — there is no
-            // partial listing to hand back, only an empty one that would read as "you have
-            // none of these".
-            if backend_filter.is_some() {
-                let (name, e) = unlisted.remove(0);
-                return Err(Error::command_failed(format!(
-                    "`{name}` could not be listed, so Shall cannot tell you what it has: {e}"
-                )));
-            }
-            // Listing everything: one unwell manager must not take the other twenty-three
-            // with it, but it must not pass quietly either.
-            for (name, e) in &unlisted {
-                warn!(
-                    "`{name}` could not be listed — anything it has is missing from this \
-                     listing: {e}"
-                );
-            }
-        }
-        Ok(rows)
-    }
-
-    pub async fn get_info(&self, package_name: &str) -> Result<Option<Package>> {
-        // An explicit `backend:name` narrows the question to one manager. This used to hand
-        // the raw string to every backend, so `shall info cargo:ripgrep` asked each of them
-        // for a package literally named "cargo:ripgrep" — a name none of them has. That is
-        // both the wrong question and the slow one: every manager was probed, and the answer
-        // was always "not found", while `shall search ripgrep` in the same tree found it.
-        //
-        // Split by the one parser (`resolve_spec`, which goes through the grammar), never by
-        // `split_once(':')` here — a second place that decides what a prefix means is the bug
-        // CLAUDE.md names, and C13 records six parsers that had it.
-        // Does the string name a manager, and is it one? Asked first, and refused with the
-        // sentence `install` and `list --backend` already use — from the same function, so
-        // there is one answer to one question. `info nosuchbackend:foo` used to reach the
-        // fan-out below and ask every manager on the machine for a package literally named
-        // `nosuchbackend:foo`: the wrong answer ("not installed" — the *manager* does not
-        // exist), arrived at slowly, at exit 0 (N-3).
-        // Note the `?`. The grammar is what rejects an unknown prefix — `parse_prefix` writes
-        // the sentence — and every version of this bug has been someone dropping that error on
-        // the floor: `get_info` had `if let Ok(specs) = resolve_spec(…)`, and the refusal it
-        // discarded was the answer.
-        let named_backend = self.declared_backend(package_name).await?;
-        // The registry's half of the same question: a name `priority` lists and this build has
-        // no backend for.
-        self.require_known_backend(named_backend.as_deref())?;
-
-        // `service:`, `link:` and `setting:` are each a grammar prefix AND a registered
-        // backend, and `list` prints them as those two columns — so a string copied out of a
-        // listing parses as a typed resource statement rather than as `backend:name`, and
-        // everything below understands only packages. `list` reported
-        // `service:com.apple.SafariHistoryServiceAgent` and `info` about that exact name said
-        // "not installed" (R-4). A list that disagrees with the machine breaks the one thing it
-        // promises, so this is answered before the package path rather than after it.
-        if let Ok(Some((backend_name, resource))) = self.queried_resource(package_name).await {
-            // A resource name off a `list` row becomes the queried manager's argv with no
-            // package-name rule in front of it — the same hole as the bare-name fallback
-            // below, through the door `list` invites the user to copy from.
-            crate::core::Validator::refuse_command_metacharacters(&resource, "a resource name")?;
-            if let Some(backend) = self.registry.get(&backend_name) {
-                if let Some(q) = backend.as_queryable() {
-                    // A resource the backend does not have answers `None`, the same as any
-                    // other name it does not carry — the point is that it was *asked*.
-                    return q.info(&resource).await;
-                }
-            }
-        }
-
-        // A resolution failure is not fatal here — `info` answers about the machine, and a name
-        // no manager *carries* can still be installed on it — but it is not nothing either, and
-        // `unwrap_or_default()` made it nothing.
-        //
-        // The two halves of this function need opposite things from a failed resolve. A **bare**
-        // name survives it: the fan-out at the bottom asks every manager anyway and already
-        // refuses to say "absent" while any of them is unanswered. A name that **named its
-        // manager** does not: the branch below returns `Ok(None)`, which `info` prints as *"is
-        // not installed on this machine"* — a claim about the user's machine, made without
-        // asking anybody, out of an error nobody read. Thirteen lines further down sits the
-        // comment that fixed this exact class for the query; the resolve above it was still
-        // swallowing (Q36's sibling, one call earlier).
-        let (specs, resolve_failed) = match self.resolve_spec(package_name).await {
-            Ok(specs) => (specs, None),
-            Err(e) => (Vec::new(), Some(e)),
-        };
-        for spec in &specs {
-            let Some(backend) = self.registry.get(&spec.backend) else {
-                continue;
-            };
-            let Some(q) = backend.as_queryable() else {
-                continue;
-            };
-            // A manager that could not be asked has not said no. Dropping the error here made
-            // `info` print "is not installed on this machine" — a claim about the user's
-            // machine — whenever a manager fell over, and a `winget list` that fails under
-            // concurrent load does exactly that, silently (Q36's sibling). Absence and
-            // unavailability are different answers and only one of them is knowable.
-            match q.info(&spec.name).await {
-                Ok(Some(found)) => return Ok(Some(found)),
-                Ok(None) => {}
-                Err(e) => return Err(e),
-            }
-        }
-
-        // The user named the manager, and it does not have it. Asking a different one would
-        // answer a question nobody asked — `info cargo:ripgrep` must never report the choco
-        // copy.
-        if let Some(backend) = &named_backend {
-            // **Unless nobody was asked.** With a named manager, `specs` is empty only when the
-            // resolve failed — a `priority` that refuses the backend, a name the validator
-            // rejects, a `@requires` chain that could not be probed — so the loop above ran
-            // zero times and this `Ok(None)` would be `info` reporting on a manager it never
-            // spoke to. That is the same category error the loop's own comment names, one
-            // branch earlier: absence and unavailability are different answers, and only one
-            // of them is knowable.
-            if let Some(e) = resolve_failed {
-                return Err(Error::command_failed(format!(
-                    "Shall could not work out what `{package_name}` refers to, so it cannot \
-                     tell you whether `{backend}` has it: {e}"
-                )));
-            }
-            return Ok(None);
-        }
-
-        // A bare name: *which* manager has it installed is a fact about this machine, and
-        // `priority` order is not that fact. The resolver picks by priority, so `info hexyl`
-        // asked `choco` (first in `priority`, and it carries the name), choco had nothing
-        // installed, and Shall reported a package the user has under `cargo` as absent — while
-        // `list` reported it present. Two read commands must never contradict each other about
-        // the machine.
-        //
-        // Asked of every backend at once, and the first answer wins. Serial, this waited on
-        // every manager that did not have it before reaching the one that did.
-        // The fallback is the one branch of this function that asks every manager about a
-        // string nothing validated: `specs` is empty exactly when the resolve failed, and the
-        // resolve is where the character check lives. So a name refused as a name was handed
-        // to 22 managers anyway, and on Windows some of them are `.cmd` shims (B-1).
-        let name = match specs.first() {
-            Some(s) => s.name.clone(),
-            None => {
-                crate::core::Validator::refuse_command_metacharacters(
-                    package_name,
-                    "a package name",
-                )?;
-                package_name.to_string()
-            }
-        };
-        // What Shall uses. `info` answers about a package this machine is managing, and a
-        // manager outside `priority` cannot be managing one.
-        let backends = self.backends().await.usable()?;
-        let answers = self
-            .query_backends_concurrently(backends, move |q| {
-                let name = name.clone();
-                async move { q.info(&name).await }
-            })
-            .await;
-        // In registry order, so the first manager that *has* it still wins and the fan-out
-        // stays the only thing deciding that.
-        let mut unanswered = Vec::new();
-        // The bare-name path survives a failed resolve — every manager is asked below either
-        // way — but it does not get to *forget* it. If the fan-out also comes back empty, the
-        // resolve failure is part of why nobody answered, and a run that reports "absent" while
-        // holding an unread error is the shape this whole function keeps producing.
-        if let Some(e) = resolve_failed {
-            unanswered.push(format!("resolving `{package_name}`: {e}"));
-        }
-        for answer in answers {
-            match answer {
-                Ok(Some(found)) => return Ok(Some(found)),
-                Ok(None) => {}
-                Err(e) => unanswered.push(e.to_string()),
-            }
-        }
-        // Nobody has it — but "nobody has it" is only true if everybody was asked. A manager
-        // that fell over contributes silence, and silence read as a "no" is how `info` reports
-        // an installed package as absent. `.ok().flatten()` here did precisely that.
-        if !unanswered.is_empty() {
-            return Err(Error::command_failed(format!(
-                "no manager reported `{package_name}`, but {} could not be asked, so Shall \
-                 cannot tell you it is absent:\n  {}",
-                if unanswered.len() == 1 {
-                    "one of them".to_string()
-                } else {
-                    format!("{} of them", unanswered.len())
-                },
-                unanswered.join("\n  ")
-            )));
-        }
-        Ok(None)
-    }
-
-    /// Everything installed that Shall does not manage — the dependency closure included.
-    ///
-    /// **This is not `unmanaged` (II.8), which is "what `adopt` would adopt".** They are two
-    /// questions with very different answers: on a stock Ubuntu this is ~476 packages and
-    /// `adopt` is ~103. Only `purge-undeclared` wants this one, and its whole job is deleting
-    /// all of it (II.11) — which is why the ratio check exists.
-    /// Ask every ready manager what it has installed, all at once, before anything needs it.
-    ///
-    /// For a command that reports on the whole machine this changes no question and no answer —
-    /// every one of these listings is asked during the run regardless, and the memo means each
-    /// is fetched once either way. What changes is *when*: `check` plans drift, then crawls for
-    /// unmanaged packages, then probes health, and each stage asks the managers it needs at the
-    /// moment it needs them. Measured on a 298-package config, that put nine managers — gem,
-    /// pip, emacs, luarocks, dotnet, dart, nimble, bun, service — at the starting line 5.4 s
-    /// into a 9.1 s run, idle until then, because the crawl that wanted them was queued behind
-    /// a plan that did not.
-    ///
-    /// **Only for commands that already ask everyone.** A command that consults three managers
-    /// must not be made to wake twenty-four; that is why this is called by name at those call
-    /// sites rather than folded into `App::new`.
-    pub async fn warm_installed(&self) {
-        // What Shall uses — and a warm-up must not be the one thing that widens the set: it
-        // exists so the *later* fan-outs find their answers cached, so it has to ask exactly
-        // who they will ask. A priority that will not resolve warms nothing rather than
-        // everything; the command that needs the answer reports the failure itself.
-        let Ok(backends) = self.backends().await.usable() else {
-            return;
-        };
-        let _ =
-            self.query_backends_concurrently(backends, |q| async move {
-                q.list_installed().await.is_ok()
-            })
-            .await;
-    }
-
-    pub async fn installed_but_undeclared(&self) -> Result<UndeclaredReport> {
-        // What Shall uses. `purge-undeclared` deletes from this list, so widening it past
-        // `priority` would delete through managers the user told Shall not to touch.
-        let backends = self.backends().await.usable()?;
-        let names: Vec<String> = backends
-            .iter()
-            .filter(|b| b.as_queryable().is_some())
-            .map(|b| b.name().to_string())
-            .collect();
-        let answers = self
-            .query_backends_concurrently(backends, |q| async move { q.list_installed().await })
-            .await;
-        // A manager that could not be listed contributes nothing, which is the safe direction
-        // for the caller that deletes — `purge-undeclared` removes less, never more. It is not
-        // a safe direction for the *sentence*: "nothing here is unmanaged" and "one manager
-        // never answered" both come out as an empty list, and only one of them is a clean bill.
-        let mut listed = Vec::new();
-        let mut unanswered = Vec::new();
-        for (name, answer) in names.into_iter().zip(answers) {
-            match answer {
-                Ok(pkgs) => listed.push(pkgs),
-                Err(e) => {
-                    warn!(
-                        "`{name}` could not be listed, so nothing it has counts as unmanaged \
-                         here — this is not a clean bill for `{name}`: {e}"
-                    );
-                    // Returned as well as warned about. The comment above has said this since
-                    // the function was written, and the caller still printed *"System matches
-                    // your manifests; nothing to install, no drift, nothing undeclared"* over
-                    // three managers that never answered (B4). A warning on stderr is not a
-                    // field, and `check drift --json` had no key that could carry it.
-                    unanswered.push(format!("{name}: {e}"));
-                }
-            }
-        }
-        // D5: a `.deb`/`.rpm` a download backend handed to a system manager is listed by that
-        // manager as installed, but a download declaration owns it — so it is not unmanaged, and
-        // `purge-undeclared` must defer to the recorded installer rather than delete it. Match by
-        // name: the installer is `dpkg`/`rpm`, the lister is `apt`/`dnf`, and the name is the one
-        // identity they share.
-        let owned = self.owned_system_package_names().await;
-        // The managed check touches the state lock once, after the process work is done,
-        // rather than holding it across every backend's query.
-        let state = self.state.lock().await;
-        let managed = state.managed_index();
-        Ok(UndeclaredReport {
-            packages: listed
-                .into_iter()
-                .flatten()
-                .filter(|pkg| !managed.contains(&(pkg.backend.as_str(), pkg.name.as_str())))
-                .filter(|pkg| !owned.contains(&pkg.name))
-                .collect(),
-            unanswered,
-        })
-    }
-
-    /// Every system package a download backend (`github:`/`web:`) installed through a second
-    /// manager (D5), by name. Used to keep those packages out of the unmanaged crawl so they are
-    /// neither double-counted nor purged out from under the declaration that owns them.
-    pub async fn owned_system_package_names(&self) -> std::collections::HashSet<String> {
-        // What Shall uses: this answers "which system packages did a download backend of ours
-        // install", and only a backend of ours can have.
-        let Ok(backends) = self.backends().await.usable() else {
-            return std::collections::HashSet::new();
-        };
-        let owned =
-            self.query_backends_concurrently(backends, |q| async move {
-                q.owned_system_packages().await
-            })
-            .await;
-        owned
-            .into_iter()
-            .flatten()
-            .map(|(_installer, pkg)| pkg)
-            .collect()
-    }
-
-    /// Run one read-only query against every queryable backend concurrently, capped at
-    /// `max_parallel`, returning each backend's result in registry order (a failed or absent
-    /// query contributes nothing). One place for the fan-out so `list`, `info` and the
-    /// unmanaged crawl cannot drift in how they bound concurrency or swallow errors.
-    async fn query_backends_concurrently<T, F, Fut>(
-        &self,
-        backends: Vec<Arc<crate::core::BackendCapabilities>>,
-        query: F,
-    ) -> Vec<T>
-    where
-        T: Send + 'static,
-        F: Fn(Arc<dyn crate::core::Queryable>) -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = T> + Send,
-    {
-        use futures::stream::{FuturesOrdered, StreamExt};
-        let cap = self.config.max_parallel.max(1);
-        let query = Arc::new(query);
-        let mut ordered = FuturesOrdered::new();
-        let mut queued = backends.into_iter().filter_map(|b| {
-            b.as_queryable().cloned().map(|q| {
-                let query = query.clone();
-                async move { query(q).await }
-            })
-        });
-
-        let mut out = Vec::new();
-        for _ in 0..cap {
-            if let Some(fut) = queued.next() {
-                ordered.push_back(fut);
-            }
-        }
-        while let Some(res) = ordered.next().await {
-            out.push(res);
-            if let Some(fut) = queued.next() {
-                ordered.push_back(fut);
-            }
-        }
-        out
-    }
-
-    /// A [`GitManager`] scoped to the Shall repo root (II.1), which holds `modules/`,
-    /// `profiles/`, `active`, `priority` and `locks/`.
-    ///
-    /// Safety: `config_root()` never resolves to the current working directory — an empty or
-    /// relative stored root falls back to the platform config dir — so git never operates on
-    /// whatever repo the user happens to be standing in.
-    pub fn git_manager(&self) -> crate::core::GitManager {
-        crate::core::GitManager::new(self.config.config_root())
-    }
-
-    /// Auto-commit manifest/config changes IF the config dir is already a git repo. This is
-    /// opt-in: users enable manifest version control by running `shall git init` once; until
-    /// then this is a silent no-op. Never fails a command — a git hiccup is logged, not fatal.
-    pub async fn git_autocommit(&self, message: &str) {
-        if self.config.dry_run {
-            return;
-        }
-        let git = self.git_manager();
-        if !git.is_repo() {
-            return;
-        }
-        match git.commit_all(message) {
-            Ok(Some(hash)) => info!(
-                "Git: committed manifest change {} ({})",
-                &hash[..hash.len().min(8)],
-                message
-            ),
-            Ok(None) => {} // nothing changed
-            Err(e) => warn!("Git: auto-commit skipped: {}", e),
-        }
-    }
-
-    pub async fn prune_snapshots(&self, force: bool) -> Result<()> {
-        let is_dry_run = if force { false } else { self.config.dry_run };
-        let policy = self.config.snapshot_retention();
-        info!(
-            "pruning snapshots (keep_last {} / keep_days {})",
-            policy.keep_last, policy.keep_days
-        );
-        // One retention engine: the same `RetentionPolicy` + `prune_with_policy` that `sync`
-        // uses, which always keeps the most-recent snapshot (a floor the old
-        // `prune_stale_snapshots` lacked — it could delete the last rollback point) and only
-        // ever reaps Shall-owned snapshots.
-        self.snapshot_manager
-            .prune_with_policy(&policy, chrono::Utc::now(), is_dry_run)
-            .await
-            .map(|_| ())
-    }
-
-    /// The backends this host uses, in priority order (II.6's `priority` file). Empty only
-    /// when the file is missing or unreadable — a state the model refuses to resolve in
-    /// anyway — in which case a caller treats "no filter" as "every available backend".
-    ///
-    /// This is what replaced `config.enabled_backends`/`hostname_backends`: one file, with
-    /// `when` blocks for the per-host case, instead of a config section that expressed the
-    /// same fact a second way.
-    /// The registry, paired with the answer to *which of it this run may use*.
-    ///
-    /// **Resolved once per process.** Reading `priority` costs a file read and a host-facts
-    /// resolution, and every fan-out in the program wants the answer — the accessor this
-    /// replaced was called five times per `check`.
-    ///
-    /// **And it no longer swallows.** It used to end in `.unwrap_or_default()`, so a `priority`
-    /// that would not resolve became an *empty list* — which `UniversalSearch` then read as
-    /// *every available backend*, on the stated premise that only a missing file could produce
-    /// one. Two swallowed answers composing into the exact inversion of the file's own rule.
-    /// The failure is carried into [`Backends`] and refused where the question is asked.
-    pub async fn backends(&self) -> &Backends {
-        self.backends
-            .get_or_init(|| async {
-                let resolver = StateResolver::new(&self.config, self.registry.clone(), false).await;
-                let priority = resolver
-                    .priority_for_host()
-                    .await
-                    .map_err(|e| e.to_string());
-                Backends::new(self.registry.clone(), priority)
-            })
-            .await
-    }
-
-    /// The `priority` order as names — the list, for callers that want it rather than the
-    /// backends themselves.
-    pub async fn priority_backends(&self) -> Result<Vec<String>> {
-        self.backends().await.names()
-    }
-
-    /// The same list, as the thing a plan that reaps has to be handed
-    /// ([`StateResolver::host_backends`]).
-    pub async fn host_backends(&self) -> crate::app::sync::planner::HostBackends {
-        StateResolver::new(&self.config, self.registry.clone(), false)
-            .await
-            .host_backends()
-            .await
-    }
-
-    pub async fn search(&self, query: &str) -> Result<Vec<Package>> {
-        UniversalSearch::new(self.backends().await, &self.config)
-            .search(query)
-            .await
+    pub fn sync_engine(&self) -> SyncEngine {
+        SyncEngine::new(self.machinery())
     }
 }

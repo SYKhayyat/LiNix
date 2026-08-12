@@ -126,7 +126,6 @@ async fn a_declared_package_the_registry_never_recorded_is_taken_back() {
     kernel
         .app
         .sync_engine()
-        .await
         .heal(&declared)
         .await
         .expect("heal failed");
@@ -157,7 +156,6 @@ async fn the_repair_does_not_wait_for_something_to_be_interrupted() {
     kernel
         .app
         .sync_engine()
-        .await
         .heal(&declared)
         .await
         .expect("heal failed");
@@ -177,7 +175,6 @@ async fn a_declared_package_the_manager_does_not_hold_is_not_taken_back() {
     kernel
         .app
         .sync_engine()
-        .await
         .heal(&declared)
         .await
         .expect("heal failed");
@@ -204,7 +201,6 @@ async fn a_manager_that_cannot_answer_leaves_the_package_unclaimed() {
     kernel
         .app
         .sync_engine()
-        .await
         .heal(&declared)
         .await
         .expect("heal failed");
@@ -228,7 +224,6 @@ async fn a_package_this_machine_does_not_declare_is_never_claimed() {
     kernel
         .app
         .sync_engine()
-        .await
         .heal(&declared)
         .await
         .expect("heal failed");
@@ -276,7 +271,6 @@ async fn an_absent_declaration_is_not_a_claim() {
     kernel
         .app
         .sync_engine()
-        .await
         .heal(&declared)
         .await
         .expect("heal failed");
@@ -578,7 +572,6 @@ async fn a_package_the_user_told_shall_to_forget_stays_forgotten() {
     kernel
         .app
         .sync_engine()
-        .await
         .heal(&declared)
         .await
         .expect("heal failed");
@@ -631,22 +624,10 @@ async fn a_preview_takes_nothing_back() {
     declares(&kernel, "brew:orphan-pkg\n");
     brew_holds(&kernel, &["orphan-pkg"]);
 
-    let mut previewing = (*kernel.app.config).clone();
-    previewing.dry_run = true;
-    let engine = shall::app::sync::SyncEngine::new(
-        &previewing,
-        kernel.app.registry.clone(),
-        kernel.app.executor.duplicate(),
-        kernel.app.metrics.clone(),
-        kernel.app.progress.clone(),
-        kernel.app.hooks.clone(),
-        kernel.app.snapshot_manager.clone(),
-        kernel.app.journal.clone(),
-        kernel.app.state.clone(),
-        kernel.app.diagnostics.clone(),
-        kernel.app.reaping.clone(),
-    )
-    .await;
+    // `reconfigured` rather than eleven fields by hand: this literal is the thing that
+    // comment warns about, and it was still here.
+    let previewing = kernel.app.reconfigured(|c| c.dry_run = true);
+    let engine = previewing.sync_engine();
     let declared = declared(&kernel).await;
     engine.heal(&declared).await.expect("heal failed");
 

@@ -1,3 +1,4 @@
+use crate::app::sync::resolver::StateResolver;
 use crate::verbs::perform_maintenance;
 use crate::verbs::prelude::*;
 use crate::verbs::sync::{enforce_policy, print_vars_changed};
@@ -25,7 +26,7 @@ pub async fn handle_status(app: &App, out: Output) -> Result<()> {
     // This report ends with a crawl of every manager on the machine, so every manager is asked
     // either way — asked here they answer at once instead of in the order the sections below
     // happen to need them (`App::warm_installed`).
-    app.warm_installed().await;
+    app.inventory().await.warm_installed().await;
     let resolver =
         crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
@@ -44,7 +45,7 @@ pub async fn handle_status(app: &App, out: Output) -> Result<()> {
     // a converged machine (B4).
     let resources = app.extras().changes(&state).await?;
     // `status` reports what a full `sync` would do, so it scopes drift the same way.
-    let hosts = app.host_backends().await;
+    let hosts = app.resolver().await.host_backends().await;
     let changes = {
         let state_guard = app.state.lock().await;
         let planner = crate::app::sync::planner::ChangePlanner::new(
@@ -56,7 +57,7 @@ pub async fn handle_status(app: &App, out: Output) -> Result<()> {
     };
     let report = changes.generate_report();
     // Likewise `?`: the crawl failing entirely is not the same as it finding nothing.
-    let crawl = app.installed_but_undeclared().await?;
+    let crawl = app.inventory().await.installed_but_undeclared().await?;
     let undeclared = crawl.packages;
     let unanswered = crawl.unanswered;
 
@@ -228,7 +229,7 @@ pub async fn compute_full_changes(
     // this plan is written to a file and applied later. Unscoped, it froze a removal for every
     // managed package whose backend `priority` does not name, and `apply` then carried them out
     // against a machine that had never agreed to Shall touching that manager.
-    let hosts = app.host_backends().await;
+    let hosts = app.resolver().await.host_backends().await;
     let changes = {
         let state_guard = app.state.lock().await;
         let planner = crate::app::sync::planner::ChangePlanner::new(
@@ -308,7 +309,7 @@ pub async fn handle_plan(app: &App, out: &str) -> Result<()> {
         // W13, on the path where it matters most: `plan` is read before anything is touched,
         // so a removal a `vars` edit caused has to be explained here too, not only at sync.
         if !plan.removals.is_empty() {
-            print_vars_changed(app, &plan.vars).await;
+            print_vars_changed(&app.config, &app.registry, &app.vcs(), &plan.vars).await;
         }
         // Writing a plan changes nothing, so this warns rather than refuses — but say it
         // here, where there is still time to fix the manifest, rather than letting the
@@ -492,7 +493,7 @@ pub async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Result<()> {
     // duplicated: two calls to one guard is how a scope comes to disagree with itself.
     let installed = changes.total_install();
     let removed = changes.total_remove();
-    let engine = app.sync_engine().await;
+    let engine = app.sync_engine();
     engine
         .sync(changes, crate::app::sync::guard::GuardScope::Apply)
         .await?;
@@ -523,8 +524,8 @@ pub async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Result<()> {
 
 /// Where the version pins live (II.6): in the `locks/` directory beside the hook and extras
 /// ledgers, never a stray `locks.json` beside that directory.
-pub fn version_lock_path(app: &App) -> std::path::PathBuf {
-    app.config.config_root().join("locks").join("versions.json")
+pub fn version_lock_path(config: &Config) -> std::path::PathBuf {
+    config.config_root().join("locks").join("versions.json")
 }
 
 /// The pins on disk. A missing or unreadable file is an empty set of pins — the ordinary state
@@ -559,12 +560,14 @@ pub async fn write_version_locks(
 /// The live answer from the backend, falling back to recorded state. `list_installed` is memoized
 /// once per run (`Queryable::list_installed`), so asking `info` per package costs one command per
 /// manager, not one per package.
-pub(crate) async fn scan_installed_versions(app: &App) -> serde_json::Map<String, Value> {
+pub(crate) async fn scan_installed_versions(
+    state: &tokio::sync::Mutex<crate::core::StateRegistry>,
+    registry: &crate::backends::BackendRegistry,
+) -> serde_json::Map<String, Value> {
     let mut locks = serde_json::Map::new();
-    let state = app.state.lock().await;
+    let state = state.lock().await;
     for pkg in &state.packages {
-        let version = match app
-            .registry
+        let version = match registry
             .get(&pkg.backend)
             .and_then(|b| b.as_queryable().cloned())
         {
@@ -586,10 +589,14 @@ pub(crate) async fn scan_installed_versions(app: &App) -> serde_json::Map<String
 /// Build and write `locks/versions.json` from the current managed state. Returns the number of
 /// versions pinned. Shared by `shall lock versions` and by `shall heal` (which reconciles the
 /// lockfile).
-pub async fn build_and_write_locks(app: &App) -> Result<(usize, bool)> {
-    let locks = scan_installed_versions(app).await;
+pub async fn build_and_write_locks(
+    config: &Config,
+    registry: &Arc<BackendRegistry>,
+    state: &tokio::sync::Mutex<crate::core::StateRegistry>,
+) -> Result<(usize, bool)> {
+    let locks = scan_installed_versions(state, registry).await;
     let count = locks.len();
-    let written = write_version_locks(&version_lock_path(app), &locks).await?;
+    let written = write_version_locks(&version_lock_path(config), &locks).await?;
     Ok((count, written))
 }
 
@@ -602,18 +609,22 @@ pub async fn build_and_write_locks(app: &App) -> Result<(usize, bool)> {
 ///
 /// **Only entries that are already pinned are refreshed.** A package nobody pinned gains no pin
 /// here: it has no stale record to fight, and pinning it would turn every upgrade into a `lock`.
-pub async fn refresh_version_locks(app: &App) -> Result<usize> {
+pub async fn refresh_version_locks(
+    config: &Config,
+    registry: &Arc<BackendRegistry>,
+    state: &tokio::sync::Mutex<crate::core::StateRegistry>,
+) -> Result<usize> {
     // A preview moved no version, so there is nothing to re-record — and reporting a count it
     // could not write is the "would" that reads as "did".
     if crate::core::dry_run::active() {
         return Ok(0);
     }
-    let path = version_lock_path(app);
+    let path = version_lock_path(config);
     let mut locks = load_version_locks(&path);
     if locks.is_empty() {
         return Ok(0);
     }
-    let current = scan_installed_versions(app).await;
+    let current = scan_installed_versions(state, registry).await;
     let moved = move_pins_to(&mut locks, &current);
     if moved > 0 {
         write_version_locks(&path, &locks).await?;
@@ -686,29 +697,34 @@ fn quoted(names: &[String]) -> String {
 /// `shall lock [AXIS] [NAME…]` — freeze what a sync would otherwise decide again (Z2).
 pub async fn handle_lock(app: &App, axis: LockAxis, names: &[String], list: bool) -> Result<()> {
     if list {
-        return list_locks(app, axis);
+        return list_locks(&app.config, &app.registry, axis);
     }
     // Scripts before either axis that resolves the model, and generators first within scripts:
     // resolving *runs* generators, so a command that resolved first could never reach the
     // generator it exists to approve (U33).
     if axis.covers(LockAxis::Scripts) {
-        lock_scripts(app, names).await?;
+        lock_scripts(&app.config, &app.hooks, &app.registry, names).await?;
     }
     if axis.covers(LockAxis::Versions) {
-        lock_versions(app, names).await?;
+        lock_versions(&app.config, &app.registry, &app.state, names).await?;
     }
     if axis.covers(LockAxis::Backends) {
-        lock_backends(app, names).await?;
+        lock_backends(&app.config, &app.registry, names).await?;
     }
     Ok(())
 }
 
 /// Pin the installed version of every managed package, or of the ones `names` picks out.
-async fn lock_versions(app: &App, names: &[String]) -> Result<()> {
+async fn lock_versions(
+    config: &Config,
+    registry: &Arc<BackendRegistry>,
+    state: &tokio::sync::Mutex<crate::core::StateRegistry>,
+    names: &[String],
+) -> Result<()> {
     let (tag, pinned) = tense("Lock", "pinned", "would pin");
-    let path = version_lock_path(app);
+    let path = version_lock_path(config);
     if names.is_empty() {
-        let (count, _) = build_and_write_locks(app).await?;
+        let (count, _) = build_and_write_locks(config, registry, state).await?;
         println!(
             "{} {} {} package version(s) to {}",
             tag,
@@ -722,7 +738,7 @@ async fn lock_versions(app: &App, names: &[String]) -> Result<()> {
     // package would silently drop every other pin.
     let mut locks = load_version_locks(&path);
     let mut hit: Vec<String> = Vec::new();
-    for (key, version) in scan_installed_versions(app).await {
+    for (key, version) in scan_installed_versions(state, registry).await {
         if scoped_by(&key, names) {
             locks.insert(key.clone(), version);
             hit.push(key);
@@ -745,15 +761,18 @@ async fn lock_versions(app: &App, names: &[String]) -> Result<()> {
 /// Resolution is what records, so this runs one and lets the resolver write. A scope is applied
 /// afterwards: the resolver settles the whole model or none of it, and "resolve these three
 /// names only" is not a question it can be asked.
-async fn lock_backends(app: &App, names: &[String]) -> Result<()> {
+async fn lock_backends(
+    config: &Config,
+    registry: &Arc<BackendRegistry>,
+    names: &[String],
+) -> Result<()> {
     use crate::core::BareLock;
 
-    let path = BareLock::path_in(&app.config.layout().locks_dir());
+    let path = BareLock::path_in(&config.layout().locks_dir());
     let before = BareLock::load(&path)?;
-    let resolver =
-        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
-            .await
-            .recording_locks();
+    let resolver = crate::app::sync::resolver::StateResolver::new(config, registry.clone(), false)
+        .await
+        .recording_locks();
     resolver.resolve_model().await?;
     let after = BareLock::load(&path)?;
 
@@ -810,10 +829,15 @@ async fn lock_backends(app: &App, names: &[String]) -> Result<()> {
 /// A scope is applied by approving everything and then putting back every entry the names did
 /// not pick out. The seven approvers each read the files they own; a filter threaded through all
 /// seven would be seven places for a scope to be forgotten, and the ledger is one place.
-async fn lock_scripts(app: &App, names: &[String]) -> Result<()> {
+async fn lock_scripts(
+    config: &Config,
+    hooks: &Arc<crate::app::LuaHooks>,
+    registry: &Arc<BackendRegistry>,
+    names: &[String],
+) -> Result<()> {
     use crate::core::hook_lock::HookLedger;
 
-    let ledger_path = HookLedger::path_in(&app.config.layout().locks_dir());
+    let ledger_path = HookLedger::path_in(&config.layout().locks_dir());
     let before = HookLedger::load(&ledger_path)?;
     let (tag, approved) = tense("Lock", "approved", "would approve");
     // Scoped runs report from the ledger afterwards: each approver counts what it read, which is
@@ -823,7 +847,7 @@ async fn lock_scripts(app: &App, names: &[String]) -> Result<()> {
     // Generators are approved FIRST, by scanning the files — before anything calls
     // `resolve_model`, which now runs generators and would refuse an unapproved one, so the very
     // command that approves it could never resolve far enough to reach it (U33).
-    let generators = approve_generate_commands(app)?;
+    let generators = approve_generate_commands(config, registry)?;
     if generators > 0 && !scoped {
         println!(
             "{} {} {} generate command(s) at their current hash.",
@@ -833,7 +857,7 @@ async fn lock_scripts(app: &App, names: &[String]) -> Result<()> {
     // II.12: `lock` is also how you approve hooks. Record the current hash of every hook so a
     // later change to any of them stops the next sync until it is re-approved here. "Hash
     // everything, including your own scripts" — one rule, no exceptions.
-    let hooks = app.hooks.approve_all_hooks()?;
+    let hooks = hooks.approve_all_hooks()?;
     if hooks > 0 && !scoped {
         println!(
             "{} {} {} hook(s) at their current script hash ({}).",
@@ -846,7 +870,7 @@ async fn lock_scripts(app: &App, names: &[String]) -> Result<()> {
     // A hook on one of Shall's own events (XIII.13) is the same surface: a script the repo
     // carries, run without anyone watching. Both of U15's locations are approved here, and
     // separately — the shared policy's approval must not cover this machine's local file.
-    let events = crate::app::events::EventHooks::load(&app.config);
+    let events = crate::app::events::EventHooks::load(config);
     let approved_events = events.approve_all()?;
     if approved_events > 0 && !scoped {
         println!(
@@ -865,7 +889,7 @@ async fn lock_scripts(app: &App, names: &[String]) -> Result<()> {
     // A `vars` provider that executes is a script on the same ledger (V.55). Approving it
     // here is the one deliberate act that lets it run — a changed provider stops resolution,
     // which is `status` and `plan`, not just `sync`.
-    if let Some(file) = approve_vars_provider(app)? {
+    if let Some(file) = approve_vars_provider(config)? {
         if !scoped {
             println!(
                 "{} {} the vars provider `{}` at its current hash.",
@@ -875,7 +899,7 @@ async fn lock_scripts(app: &App, names: &[String]) -> Result<()> {
     }
     // And every `adapters/` file (7a/U10). They travel with the repo, and a definition is
     // argv Shall will run, so each is approved here or it does not load.
-    for name in approve_adapters(app)? {
+    for name in approve_adapters(config)? {
         if !scoped {
             println!(
                 "{} {} `adapters/{}` at its current hash.",
@@ -885,8 +909,8 @@ async fn lock_scripts(app: &App, names: &[String]) -> Result<()> {
     }
     // And every declared `exec:` script (XIII.3). II.12 admits no exceptions: a script the
     // configuration runs is approved by this command or it does not run.
-    let model = resolve_for_approval(app).await?;
-    let execs = approve_exec_scripts(app, &model).await?;
+    let model = resolve_for_approval(config, registry).await?;
+    let execs = approve_exec_scripts(config, &model).await?;
     if execs > 0 && !scoped {
         println!(
             "{} {} {} exec script(s) at their current hash.",
@@ -895,7 +919,7 @@ async fn lock_scripts(app: &App, names: &[String]) -> Result<()> {
     }
     // And every user-declared health-check COMMAND (U31). A check is argv, run after a change,
     // so it is on the same trust model — approved here or the check counts as failed.
-    let health = approve_health_checks(app, &model).await?;
+    let health = approve_health_checks(config, &model).await?;
     if health > 0 && !scoped {
         println!(
             "{} {} {} health-check command(s) at their current hash.",
@@ -953,13 +977,13 @@ async fn lock_scripts(app: &App, names: &[String]) -> Result<()> {
 }
 
 /// `shall lock --list` / `shall unlock --list` — what is locked on this axis, changing nothing.
-fn list_locks(app: &App, axis: LockAxis) -> Result<()> {
+fn list_locks(config: &Config, registry: &Arc<BackendRegistry>, axis: LockAxis) -> Result<()> {
     use crate::core::hook_lock::HookLedger;
     use crate::core::BareLock;
 
-    let locks_dir = app.config.layout().locks_dir();
+    let locks_dir = config.layout().locks_dir();
     if axis.covers(LockAxis::Versions) {
-        let locks = load_version_locks(&version_lock_path(app));
+        let locks = load_version_locks(&version_lock_path(config));
         if locks.is_empty() {
             println!("versions: nothing is pinned.");
         } else {
@@ -973,7 +997,7 @@ fn list_locks(app: &App, axis: LockAxis) -> Result<()> {
                 // shape to it would break every reader for a sentence only a person needs.
                 let replayable = key
                     .split_once(':')
-                    .is_some_and(|(backend, _)| app.registry.pins_version(backend));
+                    .is_some_and(|(backend, _)| registry.pins_version(backend));
                 println!(
                     "versions: {} -> {}{}",
                     key,
@@ -1020,12 +1044,15 @@ fn list_locks(app: &App, axis: LockAxis) -> Result<()> {
 /// directly rather than the resolved model — because resolving the model *runs* generators, and
 /// a generator cannot be approved by a command that must resolve past it first. Reads
 /// `modules/` and `profiles/`, ungated, so a generator behind a `when` is still approvable.
-pub fn approve_generate_commands(app: &App) -> Result<usize> {
+pub fn approve_generate_commands(
+    config: &Config,
+    registry: &Arc<BackendRegistry>,
+) -> Result<usize> {
     use crate::config::grammar::{parse_document, Statement};
     use crate::core::hook_lock::{generate_id, hash_script, HookLedger};
 
-    let layout = app.config.layout();
-    let known = |name: &str| app.registry.get(name).is_some();
+    let layout = config.layout();
+    let known = |name: &str| registry.get(name).is_some();
     let mut commands: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for dir in [layout.modules_dir(), layout.profiles_dir()] {
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -1061,7 +1088,7 @@ pub fn approve_generate_commands(app: &App) -> Result<usize> {
         let full = if declared.is_absolute() {
             declared.to_path_buf()
         } else {
-            app.config.config_root().join(declared)
+            config.config_root().join(declared)
         };
         let body = std::fs::read_to_string(&full).map_err(|e| {
             anyhow::anyhow!(
@@ -1080,21 +1107,27 @@ pub fn approve_generate_commands(app: &App) -> Result<usize> {
 
 /// The one resolution the approvers read. `exec:` scripts and `@health=` commands are two
 /// questions about the same model, and asking it twice is asking every manager twice.
-pub async fn resolve_for_approval(app: &App) -> Result<crate::model::DesiredState> {
-    crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+pub async fn resolve_for_approval(
+    config: &Config,
+    registry: &Arc<BackendRegistry>,
+) -> Result<crate::model::DesiredState> {
+    crate::app::sync::resolver::StateResolver::new(config, registry.clone(), false)
         .await
         .resolve_model()
         .await
         .map_err(Into::into)
 }
 
-pub async fn approve_exec_scripts(app: &App, state: &crate::model::DesiredState) -> Result<usize> {
+pub async fn approve_exec_scripts(
+    config: &Config,
+    state: &crate::model::DesiredState,
+) -> Result<usize> {
     use crate::core::hook_lock::{exec_id, hash_script, HookLedger};
 
     if !state.has_execs() {
         return Ok(0);
     }
-    let locks = app.config.layout().locks_dir();
+    let locks = config.layout().locks_dir();
     let path = HookLedger::path_in(&locks);
     let mut ledger = HookLedger::load(&path)?;
     let mut approved = 0usize;
@@ -1103,7 +1136,7 @@ pub async fn approve_exec_scripts(app: &App, state: &crate::model::DesiredState)
         let full = if declared.is_absolute() {
             declared.to_path_buf()
         } else {
-            app.config.config_root().join(declared)
+            config.config_root().join(declared)
         };
         let body = std::fs::read_to_string(&full).map_err(|e| {
             anyhow::anyhow!(
@@ -1126,7 +1159,10 @@ pub async fn approve_exec_scripts(app: &App, state: &crate::model::DesiredState)
 ///
 /// Reads the resolved model (every `@health=` line the active profiles reach) plus the
 /// machine-wide `health` list, so it approves exactly the commands a sync would run.
-pub async fn approve_health_checks(app: &App, state: &crate::model::DesiredState) -> Result<usize> {
+pub async fn approve_health_checks(
+    config: &Config,
+    state: &crate::model::DesiredState,
+) -> Result<usize> {
     use crate::core::hook_lock::{hash_script, health_id, HookLedger};
     use crate::model::health::Probe;
 
@@ -1138,7 +1174,7 @@ pub async fn approve_health_checks(app: &App, state: &crate::model::DesiredState
             }
         }
     }
-    for written in &app.config.health {
+    for written in &config.health {
         if let Some(Probe::Command(cmd)) = Probe::parse(written) {
             commands.push(cmd);
         }
@@ -1146,7 +1182,7 @@ pub async fn approve_health_checks(app: &App, state: &crate::model::DesiredState
     if commands.is_empty() {
         return Ok(0);
     }
-    let path = HookLedger::path_in(&app.config.layout().locks_dir());
+    let path = HookLedger::path_in(&config.layout().locks_dir());
     let mut ledger = HookLedger::load(&path)?;
     let mut approved = 0usize;
     for cmd in commands {
@@ -1162,10 +1198,10 @@ pub async fn approve_health_checks(app: &App, state: &crate::model::DesiredState
 /// One entry per file, not per definition: an edit that *adds* a `[[backend]]` must invalidate
 /// the approval, and a per-definition identity would let exactly that slip through.
 /// A file the repo does not carry is the ordinary case, never an error.
-pub fn approve_adapters(app: &App) -> Result<Vec<String>> {
+pub fn approve_adapters(config: &Config) -> Result<Vec<String>> {
     use crate::core::hook_lock::{adapter_id, hash_script, HookLedger};
 
-    let layout = app.config.layout();
+    let layout = config.layout();
     // Every `*.toml` in the adapters folder, not a hardcoded list. The list was the bug: it
     // named backends/settings/bootstrap and silently omitted `firewall.toml`, so a repo that
     // carried a firewall adapter could never approve it and its rows were refused on every
@@ -1209,12 +1245,12 @@ pub fn approve_adapters(app: &App) -> Result<Vec<String>> {
 /// filename if one was approved, `None` if the repo has no provider or a non-executing line
 /// file. The single source of which provider is active is `vars_provider::select`, shared
 /// with resolution so `lock` and the gate can never disagree about what runs.
-pub fn approve_vars_provider(app: &App) -> Result<Option<String>> {
+pub fn approve_vars_provider(config: &Config) -> Result<Option<String>> {
     use crate::core::hook_lock::{hash_script, vars_id, HookLedger};
     use crate::model::vars_provider::{self, Kind};
 
-    let root = app.config.config_root();
-    let Some(selected) = vars_provider::select(&root, &app.config.vars.source)? else {
+    let root = config.config_root();
+    let Some(selected) = vars_provider::select(&root, &config.vars.source)? else {
         return Ok(None);
     };
     if matches!(selected.kind, Kind::LineFile) {
@@ -1236,9 +1272,16 @@ pub fn approve_vars_provider(app: &App) -> Result<Option<String>> {
 }
 
 /// `shall unlock [AXIS] [NAME…]` — release a lock, so the next sync decides it again (Z2).
-pub async fn handle_unlock(app: &App, axis: LockAxis, names: &[String], list: bool) -> Result<()> {
+pub async fn handle_unlock(
+    config: &Config,
+    registry: &Arc<BackendRegistry>,
+    resolver: &StateResolver<'_>,
+    axis: LockAxis,
+    names: &[String],
+    list: bool,
+) -> Result<()> {
     if list {
-        return list_locks(app, axis);
+        return list_locks(config, registry, axis);
     }
     // Q9: an unknown prefix reported "was not frozen on this host — nothing to unlock", which is
     // what a real name that is not frozen also reports.
@@ -1251,23 +1294,23 @@ pub async fn handle_unlock(app: &App, axis: LockAxis, names: &[String], list: bo
     // three namespaces at once. Those rely on each axis warning when a name picks nothing out —
     // which is a louder answer than this one, because it names the ledger as well as the name.
     if axis == LockAxis::Backends {
-        app.require_known_spec_backends(names).await?;
+        resolver.require_known_spec_backends(names).await?;
     }
     if axis.covers(LockAxis::Backends) {
-        unlock_backends(app, names).await?;
+        unlock_backends(config, names).await?;
     }
     if axis.covers(LockAxis::Versions) {
-        unlock_versions(app, names).await?;
+        unlock_versions(config, names).await?;
     }
     if axis.covers(LockAxis::Scripts) {
-        unlock_scripts(app, names)?;
+        unlock_scripts(config, names)?;
     }
     Ok(())
 }
 
 /// Forget which manager an unpinned name resolved to, so the next sync asks again (II.6).
-async fn unlock_backends(app: &App, names: &[String]) -> Result<()> {
-    let path = crate::core::BareLock::path_in(&app.config.layout().locks_dir());
+async fn unlock_backends(config: &Config, names: &[String]) -> Result<()> {
+    let path = crate::core::BareLock::path_in(&config.layout().locks_dir());
     let mut lock = crate::core::BareLock::load(&path)?;
     if lock.is_empty() {
         println!("backends: nothing is frozen on this host.");
@@ -1315,8 +1358,8 @@ async fn unlock_backends(app: &App, names: &[String]) -> Result<()> {
 }
 
 /// Drop the version pins, so the next sync takes what the managers offer.
-async fn unlock_versions(app: &App, names: &[String]) -> Result<()> {
-    let path = version_lock_path(app);
+async fn unlock_versions(config: &Config, names: &[String]) -> Result<()> {
+    let path = version_lock_path(config);
     let mut locks = load_version_locks(&path);
     if locks.is_empty() {
         println!("versions: nothing is pinned.");
@@ -1347,10 +1390,10 @@ async fn unlock_versions(app: &App, names: &[String]) -> Result<()> {
 
 /// Withdraw script approvals, so a sync that reaches one refuses to run it until `lock scripts`
 /// approves it again (II.12).
-fn unlock_scripts(app: &App, names: &[String]) -> Result<()> {
+fn unlock_scripts(config: &Config, names: &[String]) -> Result<()> {
     use crate::core::hook_lock::HookLedger;
 
-    let path = HookLedger::path_in(&app.config.layout().locks_dir());
+    let path = HookLedger::path_in(&config.layout().locks_dir());
     let mut ledger = HookLedger::load(&path)?;
     if ledger.is_empty() {
         println!("scripts: nothing is approved.");

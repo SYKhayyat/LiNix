@@ -34,6 +34,37 @@ fn run_timed(dir: &Path, args: &[&str]) -> (Duration, i32) {
     (start.elapsed(), out.status.code().unwrap_or(-1))
 }
 
+/// The fastest of three runs, and the exit code of the last.
+///
+/// **A wall clock in a parallel test suite measures the suite, not the command.** Every one of
+/// these budgets is a claim about what the command *inherently* costs, and it is checked while
+/// five hundred other tests — many of them spawning processes of their own — compete for the
+/// same cores. `every_config_only_command_stays_inside_its_class_budget` crossed a five-second
+/// budget on one such run and measured **111-131 ms** on the same binary a minute later, which
+/// is the box being busy, not `shall vars` being slow.
+///
+/// The floor is the honest statistic for the question being asked. A command that got slower by
+/// the order of magnitude these budgets exist to catch is slower in *every* run, so taking the
+/// best one loses nothing the test was ever able to see — while a single sample loses the whole
+/// gate the first time a runner is loaded, and a budget that goes red for reasons nobody
+/// controls is a budget people delete. The comment at the top of this file says exactly that
+/// about the *number*; this says it about the *method*.
+fn run_timed_floor(dir: &Path, args: &[&str]) -> (Duration, i32) {
+    let mut best = Duration::MAX;
+    let mut code = -1;
+    for _ in 0..3 {
+        let (elapsed, rc) = run_timed(dir, args);
+        best = best.min(elapsed);
+        code = rc;
+        // A run already inside the budget answers the question; the other two would only
+        // confirm it, and every sample here is a whole process launch.
+        if best < Duration::from_secs(1) {
+            break;
+        }
+    }
+    (best, code)
+}
+
 /// A ceiling, and only a ceiling.
 ///
 /// Stated plainly because the first version of this comment claimed more than it could
@@ -52,7 +83,7 @@ fn a_qualified_info_stays_under_its_ceiling() {
     let (_, code) = run_timed(&dir, &["init"]);
     assert_eq!(code, 0, "init failed");
 
-    let (elapsed, _) = run_timed(&dir, &["info", "cargo:ripgrep"]);
+    let (elapsed, _) = run_timed_floor(&dir, &["info", "cargo:ripgrep"]);
     assert!(
         elapsed < Duration::from_secs(5),
         "`shall info cargo:ripgrep` took {elapsed:?}. It names the manager to ask; taking this \
@@ -74,7 +105,7 @@ fn commands_that_only_read_the_config_are_immediate() {
         vec!["module", "list"],
         vec!["path"],
     ] {
-        let (elapsed, _) = run_timed(&dir, &args);
+        let (elapsed, _) = run_timed_floor(&dir, &args);
         assert!(
             elapsed < Duration::from_secs(5),
             "`shall {}` took {elapsed:?} and reads nothing but the config directory",
@@ -127,7 +158,7 @@ go
     .await
     .expect("app");
 
-    let _ = app.get_info("cargo:ripgrep").await;
+    let _ = app.inventory().await.get_info("cargo:ripgrep").await;
 
     let calls = mock.get_calls().await;
     let strangers: Vec<&String> = calls
@@ -187,7 +218,7 @@ fn every_config_only_command_stays_inside_its_class_budget() {
         vec!["check", "config"],
         vec!["protected", "jq"],
     ] {
-        let (elapsed, code) = run_timed(&dir, &args);
+        let (elapsed, code) = run_timed_floor(&dir, &args);
         // The control: a command that failed did not do the work, so its clock says nothing.
         assert!(
             code == 0 || code == 2,

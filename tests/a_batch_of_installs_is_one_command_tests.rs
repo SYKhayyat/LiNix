@@ -117,9 +117,17 @@ async fn a_restored_bundle_resolves_to_the_set_it_was_made_from() {
 
     // Bundle (no artifacts, no archive, no git repo present → history simply not included).
     let bundle_dir = root.join("out-bundle");
-    shall::app::bundle::create_bundle(&kernel.app, &bundle_dir, false, false, None)
-        .await
-        .unwrap();
+    shall::app::bundle::create_bundle(
+        &kernel.app.config,
+        &kernel.app.state,
+        &kernel.app.vcs(),
+        &bundle_dir,
+        false,
+        false,
+        None,
+    )
+    .await
+    .unwrap();
 
     // Restore into a clean directory and resolve it.
     let clean = kernel

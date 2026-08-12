@@ -24,7 +24,7 @@ use super::{with_manager_policy, BackendRegistry};
 pub(super) fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "winget".into(),
-        executor: executor.duplicate(),
+        executor: executor.clone(),
         config: ManagerConfig {
             name: "winget".into(),
             binary: None,
@@ -133,7 +133,7 @@ pub(super) fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecu
 pub(super) fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "scoop".into(),
-        executor: executor.duplicate(),
+        executor: executor.clone(),
         config: ManagerConfig {
             name: "scoop".into(),
             binary: None,
@@ -214,7 +214,7 @@ pub(super) fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecut
 pub(super) fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "choco".into(),
-        executor: executor.duplicate(),
+        executor: executor.clone(),
         config: ManagerConfig {
             name: "choco".into(),
             binary: None,
@@ -305,7 +305,7 @@ pub(super) fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecut
 pub(super) fn register_mas(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "mas".into(),
-        executor: executor.duplicate(),
+        executor: executor.clone(),
         config: ManagerConfig {
             name: "mas".into(),
             binary: None,

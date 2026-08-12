@@ -25,7 +25,7 @@ pub(super) fn register_pip(reg: &mut BackendRegistry, executor: &CommandExecutor
     // (pip's own `search` was disabled upstream).
     let core = Arc::new(GenericBackendCore {
         name: "pip".into(),
-        executor: executor.duplicate(),
+        executor: executor.clone(),
         config: ManagerConfig {
             name: "pip".into(),
             binary: None,
@@ -98,7 +98,7 @@ pub(super) fn register_pip(reg: &mut BackendRegistry, executor: &CommandExecutor
 pub(super) fn register_gem(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "gem".into(),
-        executor: executor.duplicate(),
+        executor: executor.clone(),
         config: ManagerConfig {
             name: "gem".into(),
             binary: None,
@@ -165,7 +165,7 @@ pub(super) fn register_gem(reg: &mut BackendRegistry, executor: &CommandExecutor
 pub(super) fn register_bun(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "bun".into(),
-        executor: executor.duplicate(),
+        executor: executor.clone(),
         config: ManagerConfig {
             name: "bun".into(),
             binary: None,
@@ -231,7 +231,7 @@ pub(super) fn register_bun(reg: &mut BackendRegistry, executor: &CommandExecutor
 pub(super) fn register_dotnet(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "dotnet".into(),
-        executor: executor.duplicate(),
+        executor: executor.clone(),
         config: ManagerConfig {
             name: "dotnet".into(),
             binary: None,
@@ -391,7 +391,7 @@ pub(super) fn register_conda(
 
     let core = Arc::new(GenericBackendCore {
         name: "conda".into(),
-        executor: executor.duplicate(),
+        executor: executor.clone(),
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: crate::parsers::conda::parse_conda_list,

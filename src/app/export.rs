@@ -7,7 +7,6 @@
 // The per-format renderers are pure (state in, text out) so they are unit-tested without
 // touching the filesystem or any backend.
 
-use crate::app::App;
 use crate::core::{Error, Result};
 use std::path::{Path, PathBuf};
 
@@ -16,9 +15,12 @@ pub type Pkg = (String, String, Option<String>);
 
 /// Snapshot the managed set as `(backend, name, version)`, preferring the live installed
 /// version and falling back to the recorded one.
-pub async fn managed_pkgs(app: &App) -> Vec<Pkg> {
+pub async fn managed_pkgs(
+    state: &tokio::sync::Mutex<crate::core::StateRegistry>,
+    registry: &crate::backends::BackendRegistry,
+) -> Vec<Pkg> {
     let recorded: Vec<Pkg> = {
-        let state = app.state.lock().await;
+        let state = state.lock().await;
         state
             .packages
             .iter()
@@ -27,8 +29,7 @@ pub async fn managed_pkgs(app: &App) -> Vec<Pkg> {
     };
     let mut out = Vec::with_capacity(recorded.len());
     for (backend, name, rec) in recorded {
-        let version = match app
-            .registry
+        let version = match registry
             .get(&backend)
             .and_then(|b| b.as_queryable().cloned())
         {
@@ -204,14 +205,15 @@ async fn free_path(out_dir: &Path, name: &str) -> PathBuf {
 /// So an existing file is never replaced unless `force` says to: the export goes to a
 /// non-colliding name instead, and the caller reports where.
 pub async fn export(
-    app: &App,
+    state: &tokio::sync::Mutex<crate::core::StateRegistry>,
+    registry: &crate::backends::BackendRegistry,
     format: Option<Format>,
     out_dir: &Path,
     to_stdout: bool,
     force: bool,
     dry_run: bool,
 ) -> Result<Vec<(String, Outcome)>> {
-    let pkgs = managed_pkgs(app).await;
+    let pkgs = managed_pkgs(state, registry).await;
     let formats: Vec<Format> = match format {
         Some(f) => vec![f],
         None => Format::all().to_vec(),

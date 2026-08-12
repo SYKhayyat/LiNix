@@ -10,7 +10,7 @@
 // require a reboot to activate a restore, so this fully automates only where restore is
 // immediate (e.g. ZFS rollback); elsewhere it clearly reports the step it reached.
 
-use crate::app::App;
+use crate::config::Config;
 use crate::core::{Error, Result};
 use tracing::{info, warn};
 
@@ -71,14 +71,19 @@ pub async fn run_test(cmd: &str) -> bool {
 }
 
 /// Drive a bisect across the machine's snapshots using `test` as the good/bad oracle.
-pub async fn bisect(app: &App, test: &str, assume_yes: bool) -> Result<()> {
-    if !app.snapshot_manager.has_provider() {
+pub async fn bisect(
+    config: &Config,
+    snapshots_of: &crate::core::SnapshotManager,
+    test: &str,
+    assume_yes: bool,
+) -> Result<()> {
+    if !snapshots_of.has_provider() {
         return Err(Error::Snapshot(
             "bisect needs a snapshot provider (btrfs/zfs/timeshift/Windows Restore); none is available".into(),
         ));
     }
 
-    let mut snapshots = app.snapshot_manager.list_snapshots().await?;
+    let mut snapshots = snapshots_of.list_snapshots().await?;
     if snapshots.len() < 2 {
         println!(
             "Need at least 2 snapshots to bisect; found {}.",
@@ -100,7 +105,7 @@ pub async fn bisect(app: &App, test: &str, assume_yes: bool) -> Result<()> {
         return Ok(());
     }
 
-    if app.config.dry_run {
+    if config.dry_run {
         crate::would_print!(
             "Would binary-search snapshots (restoring + testing each) to find the culprit."
         );
@@ -123,8 +128,7 @@ pub async fn bisect(app: &App, test: &str, assume_yes: bool) -> Result<()> {
     //
     // Taken before the first restore, so it captures the state the user was in, and restored on
     // every exit from the loop including the error one.
-    let home = app
-        .snapshot_manager
+    let home = snapshots_of
         .auto_snapshot(crate::core::snapshot::SnapshotLabel::PreBisect)
         .await?;
     match &home {
@@ -143,14 +147,15 @@ pub async fn bisect(app: &App, test: &str, assume_yes: bool) -> Result<()> {
         ),
     }
 
-    // Adaptive binary search. We mirror `first_bad` but the oracle is async (restore+test).
-    let search = search_for_culprit(app, test, &snapshots).await;
+    // Adaptive binary search, through `first_bad` — the tested function, not a copy of it.
+    // The oracle is the async one: restore the snapshot, run the test.
+    let search = search_for_culprit(snapshots_of, test, &snapshots).await;
 
     if let Some(s) = &home {
         info!("Bisect: restoring {} — the state you started in.", s.id);
         // Reported, not swallowed, and not allowed to hide the search's own error: a machine
         // left on a historical snapshot is the one outcome the user must not learn about later.
-        if let Err(e) = app.snapshot_manager.restore_snapshot(&s.id).await {
+        if let Err(e) = snapshots_of.restore_snapshot(&s.id).await {
             warn!(
                 "Bisect: could not restore {}: {}. This machine is still on a snapshot the \
                  search restored.",
@@ -188,7 +193,7 @@ pub async fn bisect(app: &App, test: &str, assume_yes: bool) -> Result<()> {
 /// The narrowing itself is [`first_bad`], which is where it always should have been: this
 /// function used to carry its own copy of that loop and the copy was the one that shipped (B6).
 async fn search_for_culprit(
-    app: &App,
+    manager: &crate::core::SnapshotManager,
     test: &str,
     snapshots: &[crate::core::snapshot::Snapshot],
 ) -> Result<Option<usize>> {
@@ -198,7 +203,7 @@ async fn search_for_culprit(
             "Bisect: restoring snapshot {} ({}) and testing...",
             snap.id, snap.timestamp
         );
-        app.snapshot_manager.restore_snapshot(&snap.id).await?;
+        manager.restore_snapshot(&snap.id).await?;
         let good = run_test(test).await;
         println!(
             "  {} @ {} -> {}",

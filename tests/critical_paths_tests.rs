@@ -210,7 +210,7 @@ async fn healing_an_interrupted_install_never_uninstalls() {
     let kernel = TestKernel::new().await;
     record_interrupted(&kernel, JournalAction::Install(spec("stale-pkg", "brew"))).await;
 
-    let engine = kernel.app.sync_engine().await;
+    let engine = kernel.app.sync_engine();
     kernel.mock_executor.set_response(
         "brew install -- stale-pkg",
         Ok(DryRunOutput::default().into()),
@@ -252,7 +252,7 @@ async fn healing_an_interrupted_removal_still_removes() {
     )
     .await;
 
-    let engine = kernel.app.sync_engine().await;
+    let engine = kernel.app.sync_engine();
     kernel.mock_executor.set_response(
         // See `backend_tests.rs`: the terminator is part of the argv, so it is part of the
         // pattern. Without it the heal ran against the mock's default.
@@ -293,22 +293,10 @@ async fn a_dry_run_reports_the_recovery_and_performs_none_of_it() {
     )
     .await;
 
-    let mut previewing = (*kernel.app.config).clone();
-    previewing.dry_run = true;
-    let engine = shall::app::sync::SyncEngine::new(
-        &previewing,
-        kernel.app.registry.clone(),
-        kernel.app.executor.duplicate(),
-        kernel.app.metrics.clone(),
-        kernel.app.progress.clone(),
-        kernel.app.hooks.clone(),
-        kernel.app.snapshot_manager.clone(),
-        kernel.app.journal.clone(),
-        kernel.app.state.clone(),
-        kernel.app.diagnostics.clone(),
-        kernel.app.reaping.clone(),
-    )
-    .await;
+    // `reconfigured` rather than eleven fields by hand: this literal is the thing that
+    // comment warns about, and it was still here.
+    let previewing = kernel.app.reconfigured(|c| c.dry_run = true);
+    let engine = previewing.sync_engine();
 
     // Nothing declared: this asserts the WAL replay, and an empty declared set keeps the
     // ownership repair out of the way of it.
@@ -340,7 +328,7 @@ async fn healing_a_protected_removal_is_refused_and_the_package_kept() {
     )
     .await;
 
-    let engine = kernel.app.sync_engine().await;
+    let engine = kernel.app.sync_engine();
     // Nothing declared: this asserts the WAL replay, and an empty declared set keeps the
     // ownership repair out of the way of it.
     engine.heal(&[]).await.expect("Healing cycle crashed.");
@@ -397,6 +385,7 @@ async fn a_preview_writes_no_manifest() {
 
     kernel
         .app
+        .declarations()
         .declare("cargo:ripgrep", None, Landing::Imperative)
         .await
         .expect("the fixture's own declaration must be written for real");
@@ -406,7 +395,11 @@ async fn a_preview_writes_no_manifest() {
     let preview = kernel.previewing().await;
 
     // `uninstall`, the reported case.
-    let planned = preview.undeclare("cargo:ripgrep").await.unwrap();
+    let planned = preview
+        .declarations()
+        .undeclare("cargo:ripgrep")
+        .await
+        .unwrap();
     assert_eq!(
         std::fs::read_to_string(&manifest).unwrap(),
         before,
@@ -420,6 +413,7 @@ async fn a_preview_writes_no_manifest() {
 
     // `install`, and `uninstall --temp`, which writes an `absent:` line the same way.
     preview
+        .declarations()
         .declare("cargo:fd", None, Landing::Imperative)
         .await
         .unwrap();
@@ -430,7 +424,11 @@ async fn a_preview_writes_no_manifest() {
     );
 
     // `teleport`, which rewrites the line in place.
-    let moved = preview.retarget("ripgrep", "brew").await.unwrap();
+    let moved = preview
+        .declarations()
+        .retarget("ripgrep", "brew")
+        .await
+        .unwrap();
     assert_eq!(
         std::fs::read_to_string(&manifest).unwrap(),
         before,
@@ -441,7 +439,12 @@ async fn a_preview_writes_no_manifest() {
     // The control: without the flag, the same call on the same fixture really does remove
     // the line. Without this, every assertion above passes on a setup that never reached
     // the condition.
-    kernel.app.undeclare("cargo:ripgrep").await.unwrap();
+    kernel
+        .app
+        .declarations()
+        .undeclare("cargo:ripgrep")
+        .await
+        .unwrap();
     assert!(
         !std::fs::read_to_string(&manifest)
             .unwrap()
@@ -463,8 +466,8 @@ async fn a_previewing_editor_writes_no_file_at_all() {
 
     let kernel = TestKernel::new().await;
     let layout = kernel.app.config.layout();
-    let vocab = kernel.app.vocabulary().await.unwrap();
-    let facts = kernel.app.host_facts().await.unwrap();
+    let vocab = kernel.app.resolver().await.vocabulary().await.unwrap();
+    let facts = kernel.app.resolver().await.facts_for_host().await.unwrap();
     let adopted = layout.modules_dir().join("adopted.txt");
 
     Editor::new(&layout, &vocab, facts.clone(), Writes::ToDisk)
@@ -518,7 +521,7 @@ async fn test_dry_run_vfs_simulation() {
     );
 }
 
-/// Performance-shape regression: `App::list` fans out across backends concurrently instead of
+/// Performance-shape regression: `Inventory::list` fans out across backends concurrently instead of
 /// querying them one at a time, and still returns every backend's packages. The mock executor
 /// answers `brew` and `cargo` list commands; both sets must come back.
 #[tokio::test]
@@ -543,7 +546,13 @@ async fn list_aggregates_every_backend_that_answers() {
         .into()),
     );
 
-    let all = kernel.app.list(None).await.expect("list runs");
+    let all = kernel
+        .app
+        .inventory()
+        .await
+        .list(None)
+        .await
+        .expect("list runs");
     let names: std::collections::HashSet<&str> = all.iter().map(|p| p.name.as_str()).collect();
     assert!(
         names.contains("ripgrep"),
@@ -553,7 +562,13 @@ async fn list_aggregates_every_backend_that_answers() {
     assert!(names.contains("bat"), "cargo packages missing: {:?}", names);
 
     // A backend filter still narrows to one.
-    let brew_only = kernel.app.list(Some("brew")).await.unwrap();
+    let brew_only = kernel
+        .app
+        .inventory()
+        .await
+        .list(Some("brew"))
+        .await
+        .unwrap();
     assert!(
         brew_only.iter().all(|p| p.backend == "brew"),
         "{:?}",

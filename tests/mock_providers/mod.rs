@@ -167,7 +167,7 @@ impl TestKernel {
         config.dry_run = true;
         App::new_with_executor_and_state_path(
             config,
-            self.app.executor.duplicate(),
+            self.app.executor.clone(),
             Some(self.tmp.path().join("registry.json")),
         )
         .await

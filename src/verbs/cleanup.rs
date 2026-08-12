@@ -1,4 +1,5 @@
 use crate::app::sync::guard;
+use crate::app::sync::resolver::StateResolver;
 use crate::verbs::perform_maintenance;
 use crate::verbs::prelude::*;
 
@@ -86,7 +87,7 @@ pub async fn handle_remove_orphans(app: &App) -> Result<()> {
         return Ok(());
     }
 
-    if !confirm_orphan_removal(app)? {
+    if !confirm_orphan_removal(&app.config)? {
         println!("Nothing removed.");
         return Ok(());
     }
@@ -101,7 +102,12 @@ pub async fn handle_remove_orphans(app: &App) -> Result<()> {
     // The guard already ran above, over the whole set at once. The engine asks again — through
     // `GuardScope::RemoveOrphans`, the same scope, over the same pairs — and asking a settled
     // question twice with the same inputs is cheap and cannot disagree with itself.
-    execute_removals_through_the_engine(app, &removals, guard::GuardScope::RemoveOrphans).await?;
+    execute_removals_through_the_engine(
+        &app.sync_engine(),
+        &removals,
+        guard::GuardScope::RemoveOrphans,
+    )
+    .await?;
     for (backend_name, names) in &listed {
         println!("  {}: removed {} package(s)", backend_name, names.len());
     }
@@ -124,7 +130,7 @@ pub async fn handle_remove_orphans(app: &App) -> Result<()> {
 /// set from Shall's registry. The planner's job is deciding *what* to remove and both commands
 /// have already decided; what they were missing is the engine that carries it out.
 async fn execute_removals_through_the_engine(
-    app: &App,
+    engine: &crate::app::SyncEngine,
     removals: &[(String, String)],
     scope: guard::GuardScope,
 ) -> Result<()> {
@@ -145,12 +151,12 @@ async fn execute_removals_through_the_engine(
             .collect(),
         skipped: Vec::new(),
     };
-    Ok(app.sync_engine().await.sync(changes, scope).await?)
+    Ok(engine.sync(changes, scope).await?)
 }
 
-pub fn confirm_orphan_removal(app: &App) -> Result<bool> {
+pub fn confirm_orphan_removal(config: &Config) -> Result<bool> {
     Ok(crate::core::prompt::confirm(
-        app.config.yes,
+        config.yes,
         "Remove these packages?",
         crate::core::prompt::Unattended::Refuse(
             "Refusing to remove orphans without confirmation in a non-interactive shell. Re-run with --yes to proceed, or --dry-run to preview.",
@@ -253,7 +259,7 @@ pub const PURGE_RATIO: f64 = 0.1;
 /// The residual risk, stated plainly because the docs must state it: `adopt` is an estimate.
 /// If it missed something, this deletes it.
 pub async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Result<()> {
-    let crawl = app.installed_but_undeclared().await?;
+    let crawl = app.inventory().await.installed_but_undeclared().await?;
     let undeclared = crawl.packages;
     // A manager that could not be listed is safe for the *deletion* — nothing it has can end
     // up on the list, so this removes less and never more — and unsafe for the *sentence*.
@@ -405,7 +411,7 @@ pub async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Resul
     // one place instead of being the reason this loop could not use the engine.
     let planned = removals.len();
     let (gone, failed) = match execute_removals_through_the_engine(
-        app,
+        &app.sync_engine(),
         &removals,
         guard::GuardScope::PurgeUndeclared,
     )
@@ -435,13 +441,17 @@ pub async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Resul
 /// This is not a widening of `clean-cache`. Level 3 is a different command precisely because
 /// losing the registry loses the one distinction the removal model rests on — declared vs
 /// already-there — and after it every managed package looks unmanaged.
-pub async fn handle_reset(app: &App, force: bool) -> Result<()> {
-    let managed = app.state.lock().await.packages.len();
+pub async fn handle_reset(
+    config: &Config,
+    state: &tokio::sync::Mutex<crate::core::StateRegistry>,
+    force: bool,
+) -> Result<()> {
+    let managed = state.lock().await.packages.len();
 
     // K5: forgetting the registry while the declarations remain leaves Shall believing it
     // manages nothing and the files saying otherwise. Refuse unless the repo is gone, or the
     // user says `--force`.
-    let config_root = app.config.config_root();
+    let config_root = config.config_root();
     let repo_exists = config_root.join("modules").exists()
         || config_root.join("profiles").exists()
         || config_root.join("active").exists();
@@ -464,7 +474,7 @@ pub async fn handle_reset(app: &App, force: bool) -> Result<()> {
         managed
     );
 
-    if !app.config.yes {
+    if !config.yes {
         use std::io::IsTerminal;
         if !std::io::stdin().is_terminal() {
             return Err(crate::core::Error::Refused(
@@ -489,7 +499,7 @@ pub async fn handle_reset(app: &App, force: bool) -> Result<()> {
         }
     }
 
-    let layout = app.config.layout();
+    let layout = config.layout();
     let registry = layout.registry_file();
     let snapshots = layout.snapshots_dir();
 
@@ -532,7 +542,10 @@ pub async fn handle_unmanage(app: &App, packages: &[String], out: Output) -> Res
     // forget" at exit 0, which is what a correctly-spelled name that is genuinely unmanaged
     // also gets. `split_removal_target` below asks the registry about the prefix and falls back
     // to treating the whole string as a name, so a typo reads as a package nobody manages.
-    app.require_known_spec_backends(packages).await?;
+    app.resolver()
+        .await
+        .require_known_spec_backends(packages)
+        .await?;
     let mut results = Vec::new();
 
     for spec in packages {
@@ -565,7 +578,7 @@ pub async fn handle_unmanage(app: &App, packages: &[String], out: Output) -> Res
         // Under `--dry-run` this reports the lines and writes none of them: the editor is in
         // `Writes::Planned`, and the `forget` above stays in memory because the save below is
         // skipped.
-        let dropped = app.undeclare(spec).await?;
+        let dropped = app.declarations().undeclare(spec).await?;
 
         results.push(serde_json::json!({
             "package": spec,
@@ -629,15 +642,21 @@ pub async fn handle_unmanage(app: &App, packages: &[String], out: Output) -> Res
 /// rules are inspectable, so this reports the effective rules — and, given package names,
 /// answers the question people actually have ("will this be protected?") along with the
 /// rule that decides it.
-pub async fn handle_protected(app: &App, packages: &[String], out: Output) -> Result<()> {
-    let cfg = &app.config;
+pub async fn handle_protected(
+    config: &Config,
+    registry: &Arc<BackendRegistry>,
+    resolver: &StateResolver<'_>,
+    packages: &[String],
+    out: Output,
+) -> Result<()> {
+    let cfg = config;
 
     if !packages.is_empty() {
         // Same refusal every other spec-taking verb gives (N-3): a `nosuchbackend:` prefix is a
         // typo, and answering it as though it were a package name called `nosuchbackend:foo`
         // is the silence that family was closed to end. This verb was missed because the gate
         // deriving that family from `--help` exempted it as taking "nothing".
-        app.require_known_spec_backends(packages).await?;
+        resolver.require_known_spec_backends(packages).await?;
 
         // Query mode. This MUST reach the same answer as a real removal, so it calls the
         // guard's own decision function rather than re-implementing the rules — an
@@ -652,22 +671,20 @@ pub async fn handle_protected(app: &App, packages: &[String], out: Output) -> Re
         let named_backends: std::collections::HashSet<String> = packages
             .iter()
             .filter_map(|spec| {
-                crate::config::parser::split_removal_target(spec, |b| app.registry.get(b).is_some())
-                    .0
+                crate::config::parser::split_removal_target(spec, |b| registry.get(b).is_some()).0
             })
             .collect();
         let all_essential = crate::app::sync::guard::essential_names(
-            &app.registry,
+            registry,
             &named_backends,
-            app.config.max_parallel,
+            config.max_parallel,
         )
         .await;
 
         let mut rows = Vec::new();
         for spec in packages {
-            let (backend, name) = crate::config::parser::split_removal_target(spec, |b| {
-                app.registry.get(b).is_some()
-            });
+            let (backend, name) =
+                crate::config::parser::split_removal_target(spec, |b| registry.get(b).is_some());
             // A bare name is checked against the config rules only: the OS's list is keyed by
             // backend and there is no honest way to answer it from a name alone.
             let os_essential = match &backend {

@@ -367,10 +367,7 @@ pub fn register(
     exec: &CommandExecutor,
     cfg: &crate::config::Config,
 ) {
-    let core = Arc::new(NixBackendCore::new(
-        exec.duplicate(),
-        cfg.nix_gc_age.clone(),
-    ));
+    let core = Arc::new(NixBackendCore::new(exec.clone(), cfg.nix_gc_age.clone()));
     reg.register(Arc::new(
         crate::core::BackendCapabilities::builder(core.clone())
             .with_installable(Arc::new(NixInstallable { core: core.clone() }))

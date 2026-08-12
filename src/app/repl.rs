@@ -15,9 +15,11 @@
 //! it never touches the machine.
 
 use crate::app::sync::resolver::StateResolver;
-use crate::app::App;
+use crate::backends::BackendRegistry;
+use crate::config::Config;
 use crate::core::Result;
 use std::io::{BufRead, Write};
+use std::sync::Arc;
 
 const HELP: &str = "\
 shall repl — resolve names, evaluate `when`, and inspect the model against THIS machine.
@@ -31,8 +33,8 @@ shall repl — resolve names, evaluate `when`, and inspect the model against THI
 
 /// Run the interactive loop. Blocking stdin/stdout is deliberate — a prompt is a person at a
 /// keyboard, not a pipeline (that is what `shall eval` is for).
-pub async fn run(app: &App) -> Result<()> {
-    let resolver = StateResolver::new(&app.config, app.registry.clone(), false).await;
+pub async fn run(config: &Config, registry: &Arc<BackendRegistry>) -> Result<()> {
+    let resolver = StateResolver::new(config, registry.clone(), false).await;
 
     let stdin = std::io::stdin();
     let mut lines = stdin.lock().lines();
@@ -49,7 +51,7 @@ pub async fn run(app: &App) -> Result<()> {
         if input.is_empty() {
             continue;
         }
-        match evaluate(app, &resolver, input).await {
+        match evaluate(config, &resolver, input).await {
             Command::Continue => {}
             Command::Quit => break,
         }
@@ -62,7 +64,7 @@ enum Command {
     Quit,
 }
 
-async fn evaluate(app: &App, resolver: &StateResolver<'_>, input: &str) -> Command {
+async fn evaluate(config: &Config, resolver: &StateResolver<'_>, input: &str) -> Command {
     match input {
         ":quit" | ":q" | "quit" | "exit" => return Command::Quit,
         ":help" | "help" | "?" => {
@@ -74,7 +76,7 @@ async fn evaluate(app: &App, resolver: &StateResolver<'_>, input: &str) -> Comma
             return Command::Continue;
         }
         ":eval" => {
-            print_eval(app, resolver).await;
+            print_eval(config, resolver).await;
             return Command::Continue;
         }
         _ => {}
@@ -102,10 +104,10 @@ async fn print_vars(resolver: &StateResolver<'_>) {
     }
 }
 
-async fn print_eval(app: &App, resolver: &StateResolver<'_>) {
+async fn print_eval(config: &Config, resolver: &StateResolver<'_>) {
     match resolver.resolve_model().await {
         Ok(state) => {
-            let doc = crate::app::eval::Evaluation::of(&state, &app.config.config_root());
+            let doc = crate::app::eval::Evaluation::of(&state, &config.config_root());
             match doc.render() {
                 Ok(json) => print!("{}", json),
                 Err(e) => println!("error: {}", e),

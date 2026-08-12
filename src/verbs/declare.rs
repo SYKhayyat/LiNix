@@ -1,3 +1,4 @@
+use crate::app::sync::resolver::StateResolver;
 use crate::verbs::prelude::*;
 use crate::verbs::sync::{handle_sync, SyncMode};
 
@@ -12,8 +13,9 @@ pub async fn handle_repo(app: &App, cmd: &RepoCommand) -> Result<()> {
     let b_name = match explicit {
         Some(b) => b,
         None => app
-            .priority_backends()
-            .await?
+            .backends()
+            .await
+            .names()?
             .into_iter()
             .next()
             .unwrap_or_else(|| "apt".into()),
@@ -22,7 +24,7 @@ pub async fn handle_repo(app: &App, cmd: &RepoCommand) -> Result<()> {
     // Q9: `repo` takes its backend positionally, so a typo landed on `Backend not found` —
     // true, but it named neither the file to edit nor the spelling to check, and the same
     // question has one good answer already written for `install`.
-    app.require_known_backend(Some(&b_name))?;
+    app.resolver().await.require_known_backend(Some(&b_name))?;
     let b = app.registry.get(&b_name).context("Backend not found")?;
     let mgr = b
         .as_repo_manager()
@@ -79,14 +81,18 @@ pub fn module_name(name: &str) -> Result<crate::model::ModuleName> {
     crate::model::ModuleName::new(name).map_err(|e| anyhow::anyhow!(e))
 }
 
-pub async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
-    let layout = app.config.layout();
+pub async fn handle_module(
+    config: &Config,
+    resolver: &StateResolver<'_>,
+    cmd: &ModuleCommand,
+) -> Result<()> {
+    let layout = config.layout();
     match cmd {
         ModuleCommand::List => {
             // **The folder decides** (II.3): `modules/*.txt`, so a README.md in there costs
             // nothing. It used to list `*.module.txt`, a suffix II.1 does not have — so this
             // listed nothing on a real repo.
-            let vocab = app.vocabulary().await?;
+            let vocab = resolver.vocabulary().await?;
             let loader = crate::model::modules::ModuleLoader::new(&layout, &vocab);
             let names = loader.available();
             if names.is_empty() {
@@ -123,9 +129,14 @@ pub async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
                  # Nothing here happens until a profile reaches it: `use {}`.\n",
                 name, name
             );
-            let verb =
-                crate::verbs::write_unless_previewing(app, &path, &body, "Created", "would create")
-                    .await?;
+            let verb = crate::verbs::write_unless_previewing(
+                config,
+                &path,
+                &body,
+                "Created",
+                "would create",
+            )
+            .await?;
             println!("{} {}", verb, path.display());
             println!(
                 "  Add it to a profile with `use {}` — nothing reads a module no profile names.",
@@ -145,7 +156,7 @@ pub async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
 
             // Honour the configured value (F1); the pool raises a literal 0 to 1s, which
             // reqwest would otherwise read as an instant-fail timeout rather than "no timeout".
-            let client = crate::core::http::api("shall-module", app.config.network_timeout_secs)?;
+            let client = crate::core::http::api("shall-module", config.network_timeout_secs)?;
             info!("Fetching module from {}", url);
             let resp = client.get(&url).send().await?;
             if !resp.status().is_success() {
@@ -160,7 +171,7 @@ pub async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
             }
 
             let verb =
-                crate::verbs::write_unless_previewing(app, &path, &body, "Added", "would add")
+                crate::verbs::write_unless_previewing(config, &path, &body, "Added", "would add")
                     .await?;
             let count = module_registry::count_entries(&body);
             println!(
@@ -179,16 +190,20 @@ pub async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
 }
 
 /// Apply a service spec (`service:<name>@<opts>`) through the install path.
-pub async fn service_apply(app: &App, name: &str, opts: &str) -> Result<()> {
+pub async fn service_apply(
+    resolver: &StateResolver<'_>,
+    registry: &crate::backends::BackendRegistry,
+    name: &str,
+    opts: &str,
+) -> Result<()> {
     let spec_str = if opts.is_empty() {
         format!("service:{}", name)
     } else {
         format!("service:{}@{}", name, opts)
     };
-    let resolved = app.resolve_spec(&spec_str).await?;
+    let resolved = resolver.resolve_spec(&spec_str).await?;
     for spec in resolved {
-        let b = app
-            .registry
+        let b = registry
             .get(&spec.backend)
             .context("service backend unavailable on this host")?;
         if let Some(inst) = b.as_installable() {
@@ -225,13 +240,20 @@ pub async fn handle_service(app: &App, cmd: &ServiceCommand) -> Result<()> {
             // file) landed after the package was already installed: on the machine, in no file,
             // and drift by the next sync."* A service is the same sentence with a different noun
             // — enabled on the box, declared nowhere, and turned off again by the next `sync`.
-            app.declare(
-                &format!("service:{}@enabled=true", name),
-                None,
-                crate::model::Landing::Imperative,
+            app.declarations()
+                .declare(
+                    &format!("service:{}@enabled=true", name),
+                    None,
+                    crate::model::Landing::Imperative,
+                )
+                .await?;
+            service_apply(
+                &app.resolver().await,
+                &app.registry,
+                name,
+                "enabled=true,status=running",
             )
             .await?;
-            service_apply(app, name, "enabled=true,status=running").await?;
             println!("Service '{}' enabled and started.", name);
         }
         ServiceCommand::Disable { name } => {
@@ -239,20 +261,34 @@ pub async fn handle_service(app: &App, cmd: &ServiceCommand) -> Result<()> {
             // it goes first. An `undeclare` that failed after the service was already stopped
             // would leave a machine whose state no file explains, and the next `sync` would
             // start it again.
-            app.undeclare(&format!("service:{}", name)).await?;
-            service_apply(app, name, "enabled=false,status=stopped").await?;
+            app.declarations()
+                .undeclare(&format!("service:{}", name))
+                .await?;
+            service_apply(
+                &app.resolver().await,
+                &app.registry,
+                name,
+                "enabled=false,status=stopped",
+            )
+            .await?;
             println!("Service '{}' disabled and stopped.", name);
         }
         ServiceCommand::Start { name } => {
-            service_apply(app, name, "status=running").await?;
+            service_apply(&app.resolver().await, &app.registry, name, "status=running").await?;
             println!("Service '{}' started.", name);
         }
         ServiceCommand::Stop { name } => {
-            service_apply(app, name, "status=stopped").await?;
+            service_apply(&app.resolver().await, &app.registry, name, "status=stopped").await?;
             println!("Service '{}' stopped.", name);
         }
         ServiceCommand::Restart { name } => {
-            service_apply(app, name, "status=restarted").await?;
+            service_apply(
+                &app.resolver().await,
+                &app.registry,
+                name,
+                "status=restarted",
+            )
+            .await?;
             println!("Service '{}' restarted.", name);
         }
         ServiceCommand::Status { name } => {
@@ -297,7 +333,7 @@ pub async fn handle_service(app: &App, cmd: &ServiceCommand) -> Result<()> {
     Ok(())
 }
 
-pub async fn handle_hooks(app: &App, cmd: &HooksCommand) -> Result<()> {
+pub async fn handle_hooks(registry: &Arc<BackendRegistry>, cmd: &HooksCommand) -> Result<()> {
     use crate::app::pm_hooks;
 
     // Path to this very binary, so a hook can call back into `shall`.
@@ -314,7 +350,7 @@ pub async fn handle_hooks(app: &App, cmd: &HooksCommand) -> Result<()> {
                     continue;
                 }
                 // Only install hooks for managers actually present on this system.
-                if app.registry.get(spec.manager).is_none()
+                if registry.get(spec.manager).is_none()
                     && !managers.iter().any(|m| m == spec.manager)
                 {
                     continue;
@@ -386,7 +422,7 @@ pub async fn handle_hooks(app: &App, cmd: &HooksCommand) -> Result<()> {
             let specs = pm_hooks::hook_specs(&shall_bin);
             println!("{:<10} {:<9} {:<9} PATH", "MANAGER", "PRESENT", "HOOKED");
             for spec in &specs {
-                let present = app.registry.get(spec.manager).is_some();
+                let present = registry.get(spec.manager).is_some();
                 let hooked = tokio::fs::try_exists(&spec.path).await.unwrap_or(false);
                 println!(
                     "{:<10} {:<9} {:<9} {}",
@@ -408,7 +444,8 @@ pub async fn handle_hooks(app: &App, cmd: &HooksCommand) -> Result<()> {
 /// (recorded + appended to the active module); local-file installs are recorded imperatively
 /// and kept OUT of the modules (not reproducible), so a sync never removes them as drift.
 pub async fn record_hooked_target(
-    app: &App,
+    declarations: &crate::app::Declarations<'_>,
+    state: &tokio::sync::Mutex<crate::core::StateRegistry>,
     manager: &str,
     op: crate::app::pm_hooks::HookOp,
     target: &str,
@@ -424,17 +461,18 @@ pub async fn record_hooked_target(
                     (local_file_stem(target), "local-file".to_string(), false)
                 }
             };
-            app.state
+            state
                 .lock()
                 .await
                 .add(manager, &name, None, Default::default(), &source, false);
             if declarative {
-                app.declare(
-                    &format!("{manager}:{name}"),
-                    None,
-                    crate::model::Landing::Hooks,
-                )
-                .await?;
+                declarations
+                    .declare(
+                        &format!("{manager}:{name}"),
+                        None,
+                        crate::model::Landing::Hooks,
+                    )
+                    .await?;
             }
             info!(
                 "hook: recorded install {}:{} ({})",
@@ -448,8 +486,10 @@ pub async fn record_hooked_target(
             );
         }
         HookOp::Remove => {
-            app.state.lock().await.remove(manager, target);
-            app.undeclare(&format!("{manager}:{target}")).await?;
+            state.lock().await.remove(manager, target);
+            declarations
+                .undeclare(&format!("{manager}:{target}"))
+                .await?;
             info!("hook: recorded remove {}:{}", manager, target);
         }
     }
@@ -457,7 +497,9 @@ pub async fn record_hooked_target(
 }
 
 pub async fn handle_hook_record(
-    app: &App,
+    declarations: &crate::app::Declarations<'_>,
+    state: &tokio::sync::Mutex<crate::core::StateRegistry>,
+    vcs: &crate::app::Vcs<'_>,
     manager: &str,
     op: &str,
     targets: &[String],
@@ -465,19 +507,23 @@ pub async fn handle_hook_record(
     let op = crate::app::pm_hooks::HookOp::parse(op)
         .ok_or_else(|| anyhow::anyhow!("hook-record: --op must be 'install' or 'remove'"))?;
     for target in targets {
-        record_hooked_target(app, manager, op, target).await?;
+        record_hooked_target(declarations, state, manager, op, target).await?;
     }
-    app.state.lock().await.save()?;
-    app.git_autocommit("shall: record hooked package change")
-        .await;
+    state.lock().await.save()?;
+    vcs.autocommit("shall: record hooked package change");
     Ok(())
 }
 
-pub async fn handle_hook_reconcile(app: &App, manager: &str) -> Result<()> {
+pub async fn handle_hook_reconcile(
+    registry: &Arc<BackendRegistry>,
+    state: &tokio::sync::Mutex<crate::core::StateRegistry>,
+    vcs: &crate::app::Vcs<'_>,
+    manager: &str,
+) -> Result<()> {
     // Additive reconcile: record packages the manager reports installed that Shall isn't yet
     // tracking. We never auto-remove here — a missing package could be a transient query
     // hiccup, and destructive action from a background hook would be a nasty surprise.
-    let Some(backend) = app.registry.get(manager) else {
+    let Some(backend) = registry.get(manager) else {
         warn!(
             "hook-reconcile: backend '{}' is not available; skipping.",
             manager
@@ -503,7 +549,7 @@ pub async fn handle_hook_reconcile(app: &App, manager: &str) -> Result<()> {
     };
     let mut newly = 0usize;
     {
-        let mut state = app.state.lock().await;
+        let mut state = state.lock().await;
         for pkg in &installed {
             if !state.is_managed(manager, &pkg.name) {
                 state.add(
@@ -524,7 +570,7 @@ pub async fn handle_hook_reconcile(app: &App, manager: &str) -> Result<()> {
             "hook-reconcile: adopted {} new {}-installed package(s).",
             newly, manager
         );
-        app.git_autocommit("shall: reconcile hooked manager").await;
+        vcs.autocommit("shall: reconcile hooked manager");
     }
     Ok(())
 }
@@ -558,12 +604,12 @@ pub async fn handle_hook_observe(
 
     let targets = extract_targets(argv);
     for target in &targets {
-        record_hooked_target(app, &manager, op, target).await?;
+        record_hooked_target(&app.declarations(), &app.state, &manager, op, target).await?;
     }
     if !targets.is_empty() {
         app.state.lock().await.save()?;
-        app.git_autocommit("shall: observed manual package change")
-            .await;
+        app.vcs()
+            .autocommit("shall: observed manual package change");
     }
     Ok(())
 }
@@ -594,9 +640,14 @@ pub async fn handle_schedule(app: &App, cmd: &ScheduleCommand) -> Result<()> {
             // Parse what was just written before it is written: a bad cron or an unknown key
             // must be refused at the door, naming the line, not discovered at provision time.
             crate::config::grammar::parse_document(&file, &updated, &known)?;
-            let verb =
-                crate::verbs::write_unless_previewing(app, &file, &updated, "Added", "would add")
-                    .await?;
+            let verb = crate::verbs::write_unless_previewing(
+                &app.config,
+                &file,
+                &updated,
+                "Added",
+                "would add",
+            )
+            .await?;
             println!("{} `schedule:{}` to {}.", verb, name, file.display());
         }
         ScheduleCommand::Remove { name } => {
@@ -605,7 +656,7 @@ pub async fn handle_schedule(app: &App, cmd: &ScheduleCommand) -> Result<()> {
                 return Ok(());
             };
             let verb = crate::verbs::write_unless_previewing(
-                app,
+                &app.config,
                 &file,
                 &updated,
                 "Removed",
@@ -645,22 +696,29 @@ pub async fn handle_schedule(app: &App, cmd: &ScheduleCommand) -> Result<()> {
     handle_sync(app, SyncMode::default(), Output::Human).await
 }
 
-pub async fn handle_activate(app: &App, profiles: &[String], add: bool) -> Result<()> {
-    app.profile_manager()
+pub async fn handle_activate(
+    profiles_of: crate::app::ProfileManager,
+    profiles: &[String],
+    add: bool,
+) -> Result<()> {
+    profiles_of
         .activate(profiles, add)
         .await
         .map_err(|e| e.into())
 }
 
-pub async fn handle_deactivate(app: &App, profiles: &[String]) -> Result<()> {
-    app.profile_manager()
-        .deactivate(profiles)
-        .await
-        .map_err(|e| e.into())
+pub async fn handle_deactivate(
+    profiles_of: crate::app::ProfileManager,
+    profiles: &[String],
+) -> Result<()> {
+    profiles_of.deactivate(profiles).await.map_err(|e| e.into())
 }
 
-pub async fn handle_profile(app: &App, cmd: &ProfileCommand) -> Result<()> {
-    let pm = app.profile_manager();
+pub async fn handle_profile(
+    profiles_of: crate::app::ProfileManager,
+    cmd: &ProfileCommand,
+) -> Result<()> {
+    let pm = profiles_of;
     match cmd {
         ProfileCommand::List => {
             let names = pm.list_profiles().await?;
@@ -725,7 +783,7 @@ pub async fn handle_adopt(app: &App, backends: Vec<String>, enabled_only: bool) 
     // Through `require_known_backend` and not a message of its own: `install`'s wording is the
     // one refusal, and a second spelling of it is how E18's family started.
     for name in &backends {
-        app.require_known_backend(Some(name))?;
+        app.resolver().await.require_known_backend(Some(name))?;
     }
     let scope = crate::app::adopt::AdoptScope {
         backends,

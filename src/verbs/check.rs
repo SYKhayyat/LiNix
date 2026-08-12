@@ -8,8 +8,8 @@ use crate::verbs::prelude::*;
 /// is `undeclared`, and `purge-undeclared` is what acts on it (II.11, `Q31`). One word per
 /// question: while both wore this one, the two answers differed by a factor of four and the
 /// number printed here was not the number the delete command would act on.
-pub async fn handle_unmanaged(app: &App) -> Result<()> {
-    let found = app.adopter().await.discover().await?;
+pub async fn handle_unmanaged(adopter: &crate::app::Adopter) -> Result<()> {
+    let found = adopter.discover().await?;
 
     if found.adopt.is_empty() {
         println!("Nothing to adopt: Shall already manages everything you chose to install.");
@@ -61,15 +61,15 @@ pub async fn handle_check(app: &App, section: Option<&str>, out: Output) -> Resu
         );
     };
     match section {
-        Section::Config => check_config(app).await,
+        Section::Config => check_config(&app.config, &app.registry).await,
         Section::Drift => handle_status(app, out).await,
-        Section::Unmanaged => handle_unmanaged(app).await,
-        Section::Absent => handle_absent(app).await,
-        Section::Conflicts => handle_conflicts(app, out).await,
+        Section::Unmanaged => handle_unmanaged(&app.adopter().await).await,
+        Section::Absent => handle_absent(&app.config, &app.registry).await,
+        Section::Conflicts => handle_conflicts(&app.config, &app.registry, out).await,
         Section::Health => check_health(app, out).await,
-        Section::Security => handle_audit(app, out).await,
-        Section::Approvals => check_approvals(app, out).await,
-        Section::Adapters => check_adapters(app, out).await,
+        Section::Security => handle_audit(&app.config, &app.registry, &app.state, out).await,
+        Section::Approvals => check_approvals(&app.config, out).await,
+        Section::Adapters => check_adapters(&app.config, out).await,
     }
 }
 
@@ -77,8 +77,8 @@ pub async fn handle_check(app: &App, section: Option<&str>, out: Output) -> Resu
 ///
 /// `Absent` is not one of them: not extending Shall is the ordinary case, and a check that
 /// reported it as work would be a check every machine fails on its first run.
-fn adapters_not_in_use(app: &App) -> usize {
-    crate::app::adapters::survey(&app.config.layout())
+fn adapters_not_in_use(config: &Config) -> usize {
+    crate::app::adapters::survey(&config.layout())
         .iter()
         .filter(|e| e.standing.is_wrong())
         .count()
@@ -90,9 +90,9 @@ fn adapters_not_in_use(app: &App) -> usize {
 /// mid-`sync` (ruled: a typo in an optional file must not stop you installing a package), and a
 /// warning inside a sync is a warning nobody sees twice. This is where the same fact is a
 /// non-zero exit — free to be loud, because looking changes nothing.
-pub async fn check_adapters(app: &App, out: Output) -> Result<()> {
-    crate::verbs::setup::handle_adapters(app, None, out).await?;
-    if adapters_not_in_use(app) == 0 {
+pub async fn check_adapters(config: &Config, out: Output) -> Result<()> {
+    crate::verbs::setup::handle_adapters(config, None, out).await?;
+    if adapters_not_in_use(config) == 0 {
         return Ok(());
     }
     // U21's exit 2, as every other section uses it: a read-only command that looked and found
@@ -108,8 +108,8 @@ pub async fn check_adapters(app: &App, out: Output) -> Result<()> {
 ///
 /// An unapproved *adapter* warns and skips like a hook does — the sentence here claimed
 /// otherwise — and it has its own section, `check adapters`, because it fails the same way.
-pub async fn check_approvals(app: &App, out: Output) -> Result<()> {
-    let hooks = crate::app::events::EventHooks::load(&app.config);
+pub async fn check_approvals(config: &Config, out: Output) -> Result<()> {
+    let hooks = crate::app::events::EventHooks::load(config);
     let unapproved = hooks.unapproved();
 
     if out.is_json() {
@@ -148,12 +148,15 @@ pub async fn check_approvals(app: &App, out: Output) -> Result<()> {
 /// `check health` detail view each did their own serial pass, so a machine paid it twice. They
 /// share this one now, which is also what keeps the two views from disagreeing about the same
 /// machine.
-async fn probe_all_health(app: &App) -> Vec<(String, crate::core::HealthReport)> {
+async fn probe_all_health(
+    backends: &crate::app::Backends,
+    config: &Config,
+) -> Vec<(String, crate::core::HealthReport)> {
     use futures::stream::StreamExt;
     // **Every backend this build knows, installed or not** — the one question where that is
     // right. A manager that is absent is a report; a manager that is absent *and* named by
     // `priority` is a failure, and neither is visible from the set Shall may use.
-    futures::stream::iter(app.backends().await.registered())
+    futures::stream::iter(backends.registered())
         .map(|b| async move {
             let report = match b.core().check_health().await {
                 Ok(r) => r,
@@ -164,7 +167,7 @@ async fn probe_all_health(app: &App) -> Vec<(String, crate::core::HealthReport)>
             };
             (b.name().to_string(), report)
         })
-        .buffered(app.config.max_parallel.max(1))
+        .buffered(config.max_parallel.max(1))
         .collect()
         .await
 }
@@ -175,7 +178,7 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
     // The unmanaged section crawls every manager, so this run asks all of them whatever
     // happens; asking them together is what keeps the ones only that section wants from
     // waiting out the drift plan first (`App::warm_installed`).
-    app.warm_installed().await;
+    app.inventory().await.warm_installed().await;
 
     let mut findings: Vec<Finding> = Vec::new();
 
@@ -208,7 +211,7 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
 
     if let Some(state) = state.as_ref() {
         // drift — what a sync would change.
-        let hosts = app.host_backends().await;
+        let hosts = app.resolver().await.host_backends().await;
         let changes = {
             let guard = app.state.lock().await;
             crate::app::sync::planner::ChangePlanner::new(app.registry.clone(), &guard, &app.config)
@@ -371,7 +374,7 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
     // Concurrent: `check_health` is a real probe for several backends — `psresource` asks
     // PowerShell about its cmdlets, a `generic` backend probes its binary — and there are ~55
     // of them with nothing to say to one another.
-    for r in probe_all_health(app).await {
+    for r in probe_all_health(app.backends().await, &app.config).await {
         match r.1.status {
             crate::core::HealthStatus::Ok => ok += 1,
             crate::core::HealthStatus::Degraded => degraded += 1,
@@ -403,7 +406,7 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
     );
 
     // security — anything managed with a known advisory.
-    match crate::app::insight::audit(app).await {
+    match crate::app::insight::audit(&app.config, &app.registry, &app.state).await {
         Ok(report) if report.findings.is_empty() => findings.push(
             Finding::ok(Section::Security, "no known advisories").counting([("advisories", 0)]),
         ),
@@ -443,7 +446,7 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
 
     // adapters — extension files that are written and inert. The readers warn and carry on, so
     // this is the surface where that fact is not a line in a log nobody re-reads.
-    let inert = adapters_not_in_use(app);
+    let inert = adapters_not_in_use(&app.config);
     findings.push(
         if inert == 0 {
             Finding::ok(Section::Adapters, "nothing written that Shall cannot use")
@@ -496,10 +499,9 @@ Nothing needs you."
 }
 
 /// The `config` section: does every file the active profiles reach parse and resolve?
-pub async fn check_config(app: &App) -> Result<()> {
+pub async fn check_config(config: &Config, registry: &Arc<BackendRegistry>) -> Result<()> {
     let resolver =
-        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
-            .await;
+        crate::app::sync::resolver::StateResolver::new(config, registry.clone(), false).await;
     let state = resolver.resolve_model().await?;
     // `check` claims to parse everything the active profiles reach, and a `schedule:` line is
     // only validated where it is provisioned — so a missing `cron`, or a `run` a timer may not
@@ -509,7 +511,7 @@ pub async fn check_config(app: &App) -> Result<()> {
             name,
             opts,
             origin,
-            &app.config.guard.never_unattended,
+            &config.guard.never_unattended,
         )?;
     }
 
@@ -564,7 +566,7 @@ pub async fn check_config(app: &App) -> Result<()> {
     // leftover from a block deleted on this branch. A note, never an error — an unused default
     // breaks nothing, and on a fleet the reference may still live on another branch.
     if !state.vars.is_empty() {
-        let referenced = referenced_variable_names(&app.config.config_root());
+        let referenced = referenced_variable_names(&config.config_root());
         let mut unused: Vec<&String> = state
             .vars
             .keys()
@@ -622,20 +624,18 @@ pub fn referenced_variable_names(
 /// backend is asked what is installed, nothing is written. It answers what the configuration
 /// says, which is the half of `plan`'s question that does not depend on the machine — and the
 /// half a script can act on.
-pub async fn handle_eval(app: &App) -> Result<()> {
+pub async fn handle_eval(config: &Config, registry: &Arc<BackendRegistry>) -> Result<()> {
     let resolver =
-        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
-            .await;
+        crate::app::sync::resolver::StateResolver::new(config, registry.clone(), false).await;
     let state = resolver.resolve_model().await?;
-    let doc = crate::app::eval::Evaluation::of(&state, &app.config.config_root());
+    let doc = crate::app::eval::Evaluation::of(&state, &config.config_root());
     print!("{}", doc.render()?);
     Ok(())
 }
 
-pub async fn handle_vars(app: &App) -> Result<()> {
+pub async fn handle_vars(config: &Config, registry: &Arc<BackendRegistry>) -> Result<()> {
     let resolver =
-        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
-            .await;
+        crate::app::sync::resolver::StateResolver::new(config, registry.clone(), false).await;
     let Some(selected) = resolver.vars_provider()? else {
         println!(
             "No variable provider in this repo, so no variables.\n  \
@@ -689,10 +689,9 @@ pub fn short_origin(origin: &crate::config::grammar::Origin) -> String {
     }
 }
 
-pub async fn handle_absent(app: &App) -> Result<()> {
+pub async fn handle_absent(config: &Config, registry: &Arc<BackendRegistry>) -> Result<()> {
     let resolver =
-        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
-            .await;
+        crate::app::sync::resolver::StateResolver::new(config, registry.clone(), false).await;
     let state = resolver.resolve_model().await?;
     let mut absent: Vec<_> = state.absent().collect();
     if absent.is_empty() {
@@ -712,13 +711,16 @@ pub async fn handle_absent(app: &App) -> Result<()> {
     Ok(())
 }
 
-pub async fn handle_conflicts(app: &App, out: Output) -> Result<()> {
+pub async fn handle_conflicts(
+    config: &Config,
+    registry: &Arc<BackendRegistry>,
+    out: Output,
+) -> Result<()> {
     use crate::app::conflicts::{detect_conflicts, ConflictKind};
 
     // Resolve the full desired state (all manifests/modules/groups), flatten to specs.
     let resolver =
-        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
-            .await;
+        crate::app::sync::resolver::StateResolver::new(config, registry.clone(), false).await;
     let desired = resolver.resolve_desired_state().await?;
     let specs: Vec<crate::core::PackageSpec> = desired.into_values().flatten().collect();
     let conflicts = detect_conflicts(&specs);
@@ -824,12 +826,14 @@ pub async fn check_health(app: &App, out: Output) -> Result<()> {
     // manager can be *promoted* to broken — and `check health`'s whole subject is the machine,
     // which it can still report on. The config section reports the unreadable file itself.
     let wanted: std::collections::HashSet<String> = app
-        .priority_backends()
+        .backends()
         .await
+        .names()
         .unwrap_or_default()
         .into_iter()
         .collect();
-    let mut reports: Vec<(String, HealthReport)> = probe_all_health(app).await;
+    let mut reports: Vec<(String, HealthReport)> =
+        probe_all_health(app.backends().await, &app.config).await;
     for (name, report) in reports.iter_mut() {
         // A set, not a scan: this ran `wanted.iter().any(...)` once per backend, inside the
         // loop over every backend.
@@ -1000,7 +1004,8 @@ pub async fn check_health(app: &App, out: Output) -> Result<()> {
             // planner because the planner answers "what would a sync change", and a sync changes
             // nothing on a manager that cannot be told which version to install: brew, pacman,
             // snap and the rest would silently have no version drift at all.
-            let current = crate::verbs::plan::scan_installed_versions(app).await;
+            let current =
+                crate::verbs::plan::scan_installed_versions(&app.state, &app.registry).await;
             let moved: Vec<String> = recorded
                 .iter()
                 .filter_map(|(key, was)| {
@@ -1045,7 +1050,7 @@ pub async fn check_health(app: &App, out: Output) -> Result<()> {
     // unavailable without it is exactly the history-and-rollback set, and `doctor` is where
     // K8 says the standing notice lives — not on `sync`, which runs unattended.
     {
-        let git = app.git_manager();
+        let git = app.vcs().manager();
         if !crate::core::GitManager::git_available() {
             system.push((
                 "git".into(),

@@ -1068,7 +1068,7 @@ pub fn register(
     cfg: &crate::config::Config,
 ) {
     let core = Arc::new(GithubBackendCore::new(
-        exec.duplicate(),
+        exec.clone(),
         cfg.github_dir.clone(),
         cfg.bin_dir.clone(),
         cfg.layout().lock_file("github"),

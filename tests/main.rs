@@ -147,6 +147,7 @@ mod security_and_resiliency_tests;
 mod snapshot_restore_reaches_every_provider_tests;
 mod startup_budget_tests;
 mod terminator_probe_tests;
+mod the_composition_root_is_not_a_service_tests;
 mod the_engine_runs_the_graph_in_order_tests;
 mod the_kernel_assembles_what_it_was_configured_with_tests;
 mod the_log_covers_what_cannot_be_recomputed_tests;

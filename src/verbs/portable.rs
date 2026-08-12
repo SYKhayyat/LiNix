@@ -26,9 +26,16 @@ pub async fn handle_bundle(app: &App, out: &str, artifacts: bool, archive: bool)
         Err(_) => None,
     };
 
-    let report =
-        crate::app::bundle::create_bundle(app, &out_path, artifacts, archive, plan_json.as_deref())
-            .await?;
+    let report = crate::app::bundle::create_bundle(
+        &app.config,
+        &app.state,
+        &app.vcs(),
+        &out_path,
+        artifacts,
+        archive,
+        plan_json.as_deref(),
+    )
+    .await?;
 
     // The tense comes from the writer, not from asking the flag a second time (Q15/V.105).
     // `--dry-run bundle` wrote all nine files and said "Bundle written to X" — a preview that
@@ -100,10 +107,15 @@ pub async fn handle_bundle(app: &App, out: &str, artifacts: bool, archive: bool)
     Ok(())
 }
 
-pub async fn handle_restore(app: &App, dir: &str, force: bool) -> Result<()> {
+pub async fn handle_restore(
+    config: &Config,
+    state: &tokio::sync::Mutex<crate::core::StateRegistry>,
+    dir: &str,
+    force: bool,
+) -> Result<()> {
     let bundle_dir = std::path::PathBuf::from(dir);
-    let config_root = app.config.config_root();
-    let registry_path = { app.state.lock().await.path.clone() };
+    let config_root = config.config_root();
+    let registry_path = { state.lock().await.path.clone() };
 
     let report =
         crate::app::bundle::restore_bundle(&bundle_dir, &config_root, &registry_path, force)

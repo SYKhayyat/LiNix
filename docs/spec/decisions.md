@@ -3702,7 +3702,7 @@ What is binding:
    `uninstall` blamed the user's modules for a line they never wrote. Every one of those answers
    is byte-identical to what a correctly-spelled name gets when there is nothing to do, which is
    the same indistinguishability that made `list -b <typo>` a defect. All nine refuse now,
-   through `App::require_known_spec_backends`, with the one message.
+   through `StateResolver::require_known_spec_backends`, with the one message.
    *Enumerating a rule over "verbs that take a backend name" and then checking the four that
    take it one way is the shape this register keeps recording: the clause says "from the code",
    and the code has two spellings of the argument.*

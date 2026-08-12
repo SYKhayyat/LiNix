@@ -9,7 +9,7 @@
 // installed set without the intent produces a machine nobody can explain; `git clone` of the
 // manifests plus `shall sync` is the supported path. Do not reintroduce it here.
 
-use crate::app::App;
+use crate::config::Config;
 use crate::core::{Error, Result};
 use serde_json::{json, Value};
 use tracing::{info, warn};
@@ -148,9 +148,9 @@ fn parse_check(json: &str) -> Result<Reading> {
 /// Query each host's drift versus its manifests and report; optionally reconcile.
 /// `do_sync` reconciles only the DRIFTED machines; `do_apply` runs `shall sync -y` on EVERY
 /// reachable host regardless of drift (a deliberate fleet-wide push).
-pub async fn fleet(app: &App, hosts: &[String], do_sync: bool, do_apply: bool) -> Result<()> {
+pub async fn fleet(config: &Config, hosts: &[String], do_sync: bool, do_apply: bool) -> Result<()> {
     let hosts: Vec<String> = if hosts.is_empty() {
-        app.config.fleet_hosts.clone()
+        config.fleet_hosts.clone()
     } else {
         hosts.to_vec()
     };
@@ -196,7 +196,7 @@ pub async fn fleet(app: &App, hosts: &[String], do_sync: bool, do_apply: bool) -
                 },
             }
         })
-        .buffered(app.config.network_parallel.max(1))
+        .buffered(config.network_parallel.max(1))
         .collect()
         .await;
 
@@ -253,7 +253,7 @@ pub async fn fleet(app: &App, hosts: &[String], do_sync: bool, do_apply: bool) -
                         .map_err(|e| e.to_string());
                     (h.host.clone(), outcome)
                 })
-                .buffered(app.config.network_parallel.max(1))
+                .buffered(config.network_parallel.max(1))
                 .collect()
                 .await;
 

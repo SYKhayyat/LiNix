@@ -7,8 +7,8 @@
 
 use crate::verbs::prelude::*;
 
-pub async fn handle_shell(app: &App, packages: &[String]) -> Result<()> {
-    app.shell().enter(packages).await.map_err(|e| e.into())
+pub async fn handle_shell(shell: crate::app::EphemeralShell, packages: &[String]) -> Result<()> {
+    shell.enter(packages).await.map_err(|e| e.into())
 }
 
 /// `shall run --packages X -- cmd arg…`
@@ -19,7 +19,7 @@ pub async fn handle_shell(app: &App, packages: &[String]) -> Result<()> {
 /// `-- jq -r .name` outright — and with it `src/bin/shim.rs`, which builds exactly that argv and
 /// is the entire mechanism behind a `@shim=true` line.
 pub async fn handle_run(
-    app: &App,
+    runner: crate::app::Runner,
     packages: &[String],
     command: &str,
     trailing: &[String],
@@ -31,8 +31,5 @@ pub async fn handle_run(
             crate::core::Error::Validation("`shall run` needs a command to run".into()).into(),
         );
     };
-    app.runner()
-        .run(packages, bin, args)
-        .await
-        .map_err(|e| e.into())
+    runner.run(packages, bin, args).await.map_err(|e| e.into())
 }

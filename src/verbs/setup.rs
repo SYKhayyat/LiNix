@@ -1,3 +1,5 @@
+use crate::app::Backends;
+use crate::core::CommandExecutor;
 use crate::verbs::perform_maintenance;
 use crate::verbs::plan::{
     approve_adapters, approve_exec_scripts, approve_generate_commands, build_and_write_locks,
@@ -17,10 +19,10 @@ use crate::verbs::sync::{enforce_policy, print_flight_plan};
 /// The column that matters is the last one. A file can be present, approved and valid TOML and
 /// still be doing nothing, which is what `[[backends]]` for a `[[backend]]` reader produces:
 /// valid TOML describing a table nobody opens. Rows-in-force is the number that tells you.
-pub async fn handle_adapters(app: &App, surface: Option<&str>, out: Output) -> Result<()> {
+pub async fn handle_adapters(config: &Config, surface: Option<&str>, out: Output) -> Result<()> {
     use crate::app::adapters::{self, Standing};
 
-    let layout = app.config.layout();
+    let layout = config.layout();
     let mut found = adapters::survey(&layout);
 
     if let Some(name) = surface {
@@ -258,10 +260,10 @@ pub async fn handle_add(app: &App, source: &str, trust: bool, force: bool) -> Re
             let events = crate::app::events::EventHooks::load(&app.config);
             let _ = events.approve_all();
             let approved = app.hooks.approve_all_hooks().unwrap_or(0);
-            approve_adapters(app).ok();
-            approve_generate_commands(app).ok();
-            if let Ok(model) = resolve_for_approval(app).await {
-                approve_exec_scripts(app, &model).await.ok();
+            approve_adapters(&app.config).ok();
+            approve_generate_commands(&app.config, &app.registry).ok();
+            if let Ok(model) = resolve_for_approval(&app.config, &app.registry).await {
+                approve_exec_scripts(&app.config, &model).await.ok();
             }
             println!(
                 "--trust: approved the vendored code ({} hook set(s) + adapters/exec/generate).",
@@ -314,10 +316,14 @@ pub fn collect_relative_files(root: &std::path::Path) -> Vec<std::path::PathBuf>
 /// data lives in the container, and nothing here is consulted except the config's path. It is
 /// therefore in `READ_ONLY_COMMANDS` and takes no data lock — a rehearsal has no business
 /// blocking a real sync.
-pub async fn handle_try(app: &App, image: Option<&str>) -> Result<()> {
+pub async fn handle_try(
+    config: &Config,
+    executor: &crate::core::CommandExecutor,
+    image: Option<&str>,
+) -> Result<()> {
     use crate::model::rehearsal::{self, Verdict};
 
-    let present = |cmd: &str| app.executor.command_exists_sync(cmd);
+    let present = |cmd: &str| executor.command_exists_sync(cmd);
     let Some(runtime) = rehearsal::pick_runtime(&present) else {
         return Err(crate::core::Error::Refused(rehearsal::no_runtime_refusal()).into());
     };
@@ -327,13 +333,13 @@ pub async fn handle_try(app: &App, image: Option<&str>) -> Result<()> {
     // Asked BEFORE the run: an image that is not there is the ordinary first-run case, and
     // `docker run` reports it as a pull failure — which reads as "your config is broken" when
     // the config has not been looked at yet.
-    if !image_exists(app, runtime, image).await {
+    if !image_exists(executor, runtime, image).await {
         return Err(
             crate::core::Error::Refused(rehearsal::missing_image_refusal(runtime, image)).into(),
         );
     }
 
-    let root = app.config.config_root();
+    let root = config.config_root();
     let config_path = root.to_string_lossy().to_string();
 
     info!("rehearsing on `{}` via {}...", image, runtime);
@@ -369,8 +375,8 @@ pub async fn handle_try(app: &App, image: Option<&str>) -> Result<()> {
 /// `run`, not `run_output`: the latter tolerates a non-zero exit on purpose (an empty result
 /// is an answer for the reads it was built for), so it reports success for an image that does
 /// not exist — and `try` then blamed the config for what was a missing image.
-pub async fn image_exists(app: &App, runtime: &str, image: &str) -> bool {
-    app.executor
+pub async fn image_exists(executor: &CommandExecutor, runtime: &str, image: &str) -> bool {
+    executor
         .run(runtime, &["image", "inspect", image], false)
         .await
         .is_ok()
@@ -565,8 +571,8 @@ pub async fn handle_edit(cli: &Cli, file: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-pub async fn handle_config(app: &App, cmd: &ConfigCommand) -> Result<()> {
-    let path = app.config.preferences_file.clone();
+pub async fn handle_config(config: &Config, cmd: &ConfigCommand) -> Result<()> {
+    let path = config.preferences_file.clone();
     match cmd {
         ConfigCommand::Show => {
             let source = if path.exists() {
@@ -577,7 +583,7 @@ pub async fn handle_config(app: &App, cmd: &ConfigCommand) -> Result<()> {
             println!("# source: {}", source);
             println!(
                 "{}",
-                toml::to_string_pretty(&*app.config).context("Failed to serialize config")?
+                toml::to_string_pretty(config).context("Failed to serialize config")?
             );
         }
         ConfigCommand::Init { force } => {
@@ -614,7 +620,7 @@ pub async fn handle_heal(app: &App) -> Result<()> {
     // below runs — and `heal()` ends in a `?`, so a lock cleared *after* it is a lock cleared
     // on the runs that did not need it. First written the other way round, under a comment
     // claiming it went first.
-    for fixed in settle_manager_locks(app).await {
+    for fixed in settle_manager_locks(&app.config, &app.executor).await {
         println!("heal: {}", fixed);
     }
     // `heal` reads ownership from what this machine declares, so the model has to be resolved
@@ -642,7 +648,7 @@ pub async fn handle_heal(app: &App) -> Result<()> {
                 Vec::new()
             }
         };
-    app.sync_engine().await.heal(&declared).await?;
+    app.sync_engine().heal(&declared).await?;
     // U9: `check` looks, `heal` acts. These three repairs used to be `doctor --fix`, which
     // made one command both the diagnosis and the treatment — and a command that changes
     // things is one you cannot run to find out whether you want things changed.
@@ -677,8 +683,8 @@ pub async fn handle_heal(app: &App) -> Result<()> {
 /// the rest of the repair. Bounded by `manager_lock_wait_secs`, the same budget `sync` waits
 /// under, and announced — a silent `heal` that pauses for five minutes is a `heal` that gets
 /// killed, which is how the lock got there.
-async fn settle_manager_locks(app: &App) -> Vec<String> {
-    let budget = std::time::Duration::from_secs(app.config.manager_lock_wait_secs);
+async fn settle_manager_locks(config: &Config, executor: &CommandExecutor) -> Vec<String> {
+    let budget = std::time::Duration::from_secs(config.manager_lock_wait_secs);
     let mut said = Vec::new();
 
     for lock in crate::app::stale_lock::MANAGER_LOCKS {
@@ -719,11 +725,11 @@ async fn settle_manager_locks(app: &App) -> Vec<String> {
         }
     }
 
-    said.extend(clear_stale_manager_locks(app).await);
+    said.extend(clear_stale_manager_locks(executor).await);
     said
 }
 
-async fn clear_stale_manager_locks(app: &App) -> Vec<String> {
+async fn clear_stale_manager_locks(executor: &CommandExecutor) -> Vec<String> {
     let mut fixed = Vec::new();
     let survey = crate::app::stale_lock::find_on_this_machine();
     // Said, not skipped. A lock left in place is the likeliest reason the next command fails,
@@ -750,7 +756,7 @@ async fn clear_stale_manager_locks(app: &App) -> Vec<String> {
         // lock Shall could not remove is still a lock the user can remove, now that they have
         // been told which one and why.
         let path = stale.path.display().to_string();
-        match app.executor.run("rm", &["-f", &path], true).await {
+        match executor.run("rm", &["-f", &path], true).await {
             Ok(_) => fixed.push(format!(
                 "removed {}'s stale lock at {} — {}",
                 stale.holder, path, stale.because
@@ -784,7 +790,7 @@ pub async fn repair_environment(app: &App) -> Vec<String> {
         }
     }
 
-    match build_and_write_locks(app).await {
+    match build_and_write_locks(&app.config, &app.registry, &app.state).await {
         // Two tenses, from the writer's own answer rather than from the flag: `--dry-run heal`
         // printed `repaired: reconciled locks/versions.json` beside its own `[DRY-RUN] would
         // write` line for the same file.
@@ -798,7 +804,7 @@ pub async fn repair_environment(app: &App) -> Vec<String> {
 
     // A backend reading as "degraded, stale index" recovers from a refresh. Under a preview the
     // executor runs no manager command, so the sentence has to say so.
-    match app.update().await {
+    match app.managers().await.update().await {
         Ok(()) if crate::core::dry_run::active() => {
             fixed.push("would refresh backend metadata".into())
         }
@@ -838,7 +844,7 @@ pub async fn handle_canary(
     // Both variants are named at the call and not folded into a `scope` binding above it: the
     // enumeration gate reads this file's source, and a scope computed out of sight is a scope
     // the gate reports as unreadable — which is how it found this site in the first place.
-    let hosts = app.host_backends().await;
+    let hosts = app.resolver().await.host_backends().await;
     let changes = {
         let state_guard = app.state.lock().await;
         let planner = crate::app::sync::planner::ChangePlanner::new(
@@ -855,7 +861,7 @@ pub async fn handle_canary(
         println!("nothing to upgrade.");
         return Ok(());
     }
-    print_flight_plan(app, &changes);
+    print_flight_plan(&app.config, &app.registry, &changes);
 
     if app.config.dry_run {
         crate::would_print!(
@@ -872,7 +878,6 @@ pub async fn handle_canary(
         .ok_or_else(|| anyhow::anyhow!("failed to create pre-canary snapshot"))?;
     info!("snapshot {} taken; applying upgrade...", snap.id);
     app.sync_engine()
-        .await
         .sync(changes, crate::app::sync::guard::GuardScope::Canary)
         .await?;
 
@@ -907,7 +912,7 @@ pub async fn handle_policy(app: &App) -> Result<()> {
     let desired = resolver.resolve_desired_state().await?;
     // **The preview calls the thing it previews.** This used to re-implement `enforce_policy`
     // minus `deny_vulnerable`, then print a footnote admitting the gap — so `shall policy` could
-    // report "compliant" for a config `sync` would refuse, which is the one thing a preview must
+    // report "compliant" for a app.config `sync` would refuse, which is the one thing a preview must
     // never do. The footnote is gone because the gap is.
     let violations = crate::verbs::sync::policy_violations(app, &desired).await;
     if violations.is_empty() {
@@ -931,7 +936,7 @@ pub async fn handle_init(app: &App, force: bool, interactive: bool) -> Result<()
         return interactive_init(app, force).await;
     }
 
-    scaffold_repo(app, force).await?;
+    scaffold_repo(&app.config, app.backends().await, force).await?;
 
     println!("(Run `shall config init` to also write a commented preferences.toml, or `shall init -i` for guided setup.)");
     Ok(())
@@ -1052,12 +1057,13 @@ pub async fn interactive_init(app: &App, force: bool) -> Result<()> {
         .with_context(|| format!("Failed to write config to {}", config_path.display()))?;
     println!("\n  wrote    config     {}", config_path.display());
 
-    scaffold_repo(app, force).await?;
+    scaffold_repo(&app.config, app.backends().await, force).await?;
 
     // Starter packages go through the same door as `shall install`: one writer, so what a
     // wizard produces and what a command produces cannot be different shapes.
     for pkg in &answers.starter_packages {
-        app.declare(pkg, None, crate::model::Landing::Imperative)
+        app.declarations()
+            .declare(pkg, None, crate::model::Landing::Imperative)
             .await?;
     }
     if !answers.starter_packages.is_empty() {
@@ -1075,17 +1081,15 @@ pub async fn interactive_init(app: &App, force: bool) -> Result<()> {
 /// ask you to maintain a list by hand on every machine forever), ordered by the one rule
 /// that decides anything — a system manager beats a language manager (V.14). The file says
 /// why, because a default nobody can explain is a default nobody can safely change (P5).
-pub async fn scaffold_repo(app: &App, force: bool) -> Result<()> {
-    let layout = app.config.layout();
+pub async fn scaffold_repo(config: &Config, backends: &Backends, force: bool) -> Result<()> {
+    let layout = config.layout();
 
     // **What is on this machine, not what `priority` allows** — and this is the call site that
     // makes the distinction necessary rather than tidy. `init` *writes* the priority file from
     // what it detects, so asking "what does priority allow" here would read a file that does
     // not exist yet, or gate the answer on the very list it is about to produce. The result
     // would be an empty priority file and a repo that can do nothing.
-    let detected: Vec<String> = app
-        .backends()
-        .await
+    let detected: Vec<String> = backends
         .present_on_this_machine()
         .iter()
         .map(|b| b.name().to_string())

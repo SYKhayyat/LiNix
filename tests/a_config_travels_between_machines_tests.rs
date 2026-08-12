@@ -186,7 +186,7 @@ async fn a_package_that_fails_still_fails_the_command() {
         Err(shall::core::Error::Other("no such formula".into())),
     );
 
-    let engine = kernel.app.sync_engine().await;
+    let engine = kernel.app.sync_engine();
     let result = engine
         .sync(changes, shall::app::sync::guard::GuardScope::Sync)
         .await;

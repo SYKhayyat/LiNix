@@ -292,7 +292,7 @@ impl ServiceBackendCore {
         }
         Cow::Owned(
             self.executor
-                .duplicate()
+                .clone()
                 .with_exit_policy(crate::core::ExitPolicy {
                     benign_exits: benign.to_vec(),
                     ..Default::default()
@@ -550,7 +550,7 @@ pub fn register(
     .unwrap_or_default();
 
     let core = Arc::new(ServiceBackendCore::with_providers(
-        exec.duplicate(),
+        exec.clone(),
         providers(user_rows),
     ));
     reg.register(Arc::new(

@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use shall::app::App;
 use shall::cli::{Cli, Commands};
+use shall::config::Config;
 use shall::core::Output;
 use std::collections::HashMap;
 use std::env;
@@ -181,7 +182,7 @@ async fn main() -> Result<()> {
     // Before `finish`, which maps a refusal or a failure onto an exit code and leaves: a run
     // that ended badly is the one whose timing a user most wants to see.
     shall::core::timing::report(shall::core::timing::elapsed());
-    finish(&app, outcome).await
+    finish(&app.config, outcome).await
 }
 
 /// Which of the four published codes a clap outcome is (Q3, II.8, V.92).
@@ -218,7 +219,7 @@ fn parse_or_exit(parsed: Result<Cli, clap::Error>) -> Cli {
 ///
 /// A refusal and a difference are printed as themselves — plainly, with no `Error:` prefix —
 /// because neither is a malfunction. Only a real failure is reported as one.
-pub(crate) async fn finish(app: &App, outcome: Result<()>) -> Result<()> {
+pub(crate) async fn finish(config: &Config, outcome: Result<()>) -> Result<()> {
     use shall::core::Exit;
     match outcome {
         Ok(()) => Ok(()),
@@ -240,7 +241,7 @@ pub(crate) async fn finish(app: &App, outcome: Result<()>) -> Result<()> {
                     // message says it is refusing and fails on one not built as
                     // `Error::Refused`, and fires a real hook through a real refusal. A
                     // sentence that quantifies over paths belongs in a test, not in a comment.
-                    shall::app::events::EventHooks::load(&app.config)
+                    shall::app::events::EventHooks::load(config)
                         .fire(
                             shall::model::event::Event::OnGuardRefusal,
                             serde_json::json!({ "message": msg }),
@@ -432,27 +433,48 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
             )
             .await
         }
-        Commands::Shell { packages } => handle_shell(app, packages).await,
-        Commands::Module(args) => handle_module(app, &args.command).await,
+        Commands::Shell { packages } => handle_shell(app.shell(), packages).await,
+        Commands::Module(args) => {
+            handle_module(&app.config, &app.resolver().await, &args.command).await
+        }
         Commands::Schedule(args) => handle_schedule(app, &args.command).await,
-        Commands::Snapshot(args) => handle_snapshot(app, &args.command).await,
+        Commands::Snapshot(args) => {
+            handle_snapshot(
+                &app.config,
+                &app.snapshot_manager,
+                app.snapshot_restore(),
+                &args.command,
+            )
+            .await
+        }
         Commands::Rollback { reference } => handle_rollback(app, reference).await,
-        Commands::Diff { from, to } => handle_diff(app, from, to.as_deref()).await,
-        Commands::Eval => handle_eval(app).await,
-        Commands::Repl => shall::app::repl::run(app).await.map_err(Into::into),
-        Commands::Try { image } => handle_try(app, image.as_deref()).await,
+        Commands::Diff { from, to } => handle_diff(&app.vcs().manager(), from, to.as_deref()).await,
+        Commands::Eval => handle_eval(&app.config, &app.registry).await,
+        Commands::Repl => shall::app::repl::run(&app.config, &app.registry)
+            .await
+            .map_err(Into::into),
+        Commands::Try { image } => handle_try(&app.config, &app.executor, image.as_deref()).await,
         Commands::Add {
             source,
             trust,
             force,
         } => handle_add(app, source, *trust, *force).await,
-        Commands::Git(args) => handle_git(app, &args.command).await,
+        Commands::Git(args) => handle_git(&app.vcs().manager(), &args.command).await,
         Commands::Repo(args) => handle_repo(app, &args.command).await,
         Commands::Search {
             query,
             json,
             installed,
-        } => handle_search(app, query, Output::from_json_flag(*json), *installed).await,
+        } => {
+            handle_search(
+                &app.inventory().await,
+                &app.state,
+                query,
+                Output::from_json_flag(*json),
+                *installed,
+            )
+            .await
+        }
         Commands::Teleport { package, backend } => handle_teleport(app, package, backend).await,
         Commands::List {
             backend,
@@ -467,7 +489,9 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
             )
             .await
         }
-        Commands::Info { package } => handle_info(app, package).await,
+        Commands::Info { package } => {
+            handle_info(&app.inventory().await, &app.registry, package).await
+        }
         Commands::RemoveOrphans => handle_remove_orphans(app).await,
         Commands::CleanCache { all } => handle_clean_cache(app, *all).await,
         Commands::Heal => handle_heal(app).await,
@@ -476,32 +500,58 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
             enabled_only,
         } => handle_adopt(app, backends.clone(), *enabled_only).await,
         Commands::History => handle_history(app).await,
-        Commands::Activate { profiles, add } => handle_activate(app, profiles, *add).await,
-        Commands::Deactivate { profiles } => handle_deactivate(app, profiles).await,
-        Commands::Profile(args) => handle_profile(app, &args.command).await,
+        Commands::Activate { profiles, add } => {
+            handle_activate(app.profile_manager(), profiles, *add).await
+        }
+        Commands::Deactivate { profiles } => {
+            handle_deactivate(app.profile_manager(), profiles).await
+        }
+        Commands::Profile(args) => handle_profile(app.profile_manager(), &args.command).await,
         Commands::Run {
             packages,
             command,
             args,
-        } => handle_run(app, packages, command, args).await,
+        } => handle_run(app.runner(), packages, command, args).await,
         Commands::Lock { axis, names, list } => handle_lock(app, *axis, names, *list).await,
-        Commands::Unlock { axis, names, list } => handle_unlock(app, *axis, names, *list).await,
+        Commands::Unlock { axis, names, list } => {
+            handle_unlock(
+                &app.config,
+                &app.registry,
+                &app.resolver().await,
+                *axis,
+                names,
+                *list,
+            )
+            .await
+        }
         Commands::Plan { out } => handle_plan(app, out).await,
         Commands::Apply { plan, yes } => handle_apply(app, plan, *yes).await,
-        Commands::Update => handle_update(app).await,
-        Commands::Reset { force } => handle_reset(app, *force).await,
+        Commands::Update => handle_update(&app.managers().await).await,
+        Commands::Reset { force } => handle_reset(&app.config, &app.state, *force).await,
         Commands::Check { section, json } => {
             handle_check(app, section.as_deref(), Output::from_json_flag(*json)).await
         }
-        Commands::Vars => handle_vars(app).await,
+        Commands::Vars => handle_vars(&app.config, &app.registry).await,
         Commands::PurgeUndeclared { allow_mass_purge } => {
             handle_purge_undeclared(app, *allow_mass_purge).await
         }
         Commands::Adapters { surface, json } => {
-            handle_adapters(app, surface.as_deref(), Output::from_json_flag(*json)).await
+            handle_adapters(
+                &app.config,
+                surface.as_deref(),
+                Output::from_json_flag(*json),
+            )
+            .await
         }
         Commands::Protected { packages, json } => {
-            handle_protected(app, packages, Output::from_json_flag(*json)).await
+            handle_protected(
+                &app.config,
+                &app.registry,
+                &app.resolver().await,
+                packages,
+                Output::from_json_flag(*json),
+            )
+            .await
         }
         Commands::Unmanage { packages, json } => {
             handle_unmanage(app, packages, Output::from_json_flag(*json)).await
@@ -511,47 +561,86 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
             backend,
             all,
         } => handle_rebuild(app, packages, backend.as_deref(), *all).await,
-        Commands::Config(args) => handle_config(app, &args.command).await,
+        Commands::Config(args) => handle_config(&app.config, &args.command).await,
         Commands::Path { explain, set } => handle_path(cli, *explain, set.as_deref()).await,
         Commands::Edit { file } => handle_edit(cli, file.as_deref()).await,
         Commands::Init { force, interactive } => handle_init(app, *force, *interactive).await,
-        Commands::Sbom => handle_sbom(app).await,
+        Commands::Sbom => handle_sbom(&app.registry, &app.state).await,
         Commands::Export {
             format,
             out,
             stdout,
             force,
-        } => handle_export(app, format.as_deref(), out, *stdout, *force).await,
+        } => {
+            handle_export(
+                &app.config,
+                &app.registry,
+                &app.state,
+                format.as_deref(),
+                out,
+                *stdout,
+                *force,
+            )
+            .await
+        }
         Commands::Bundle {
             out,
             artifacts,
             archive,
         } => handle_bundle(app, out, *artifacts, *archive).await,
-        Commands::Restore { dir, force } => handle_restore(app, dir, *force).await,
+        Commands::Restore { dir, force } => {
+            handle_restore(&app.config, &app.state, dir, *force).await
+        }
         Commands::Why { package, json } => {
             handle_why(app, package, Output::from_json_flag(*json)).await
         }
         Commands::Service(args) => handle_service(app, &args.command).await,
-        Commands::Bisect { test, yes } => shall::app::bisect::bisect(app, test, *yes)
-            .await
-            .map_err(|e| e.into()),
-        Commands::Fleet(args) => shall::app::fleet::fleet(app, &args.hosts, args.sync, args.apply)
-            .await
-            .map_err(|e| e.into()),
-        Commands::Hooks(args) => handle_hooks(app, &args.command).await,
+        Commands::Bisect { test, yes } => {
+            shall::app::bisect::bisect(&app.config, &app.snapshot_manager, test, *yes)
+                .await
+                .map_err(|e| e.into())
+        }
+        Commands::Fleet(args) => {
+            shall::app::fleet::fleet(&app.config, &args.hosts, args.sync, args.apply)
+                .await
+                .map_err(|e| e.into())
+        }
+        Commands::Hooks(args) => handle_hooks(&app.registry, &args.command).await,
         Commands::HookRecord {
             manager,
             op,
             targets,
-        } => handle_hook_record(app, manager, op, targets).await,
-        Commands::HookReconcile { manager } => handle_hook_reconcile(app, manager).await,
+        } => {
+            handle_hook_record(
+                &app.declarations(),
+                &app.state,
+                &app.vcs(),
+                manager,
+                op,
+                targets,
+            )
+            .await
+        }
+        Commands::HookReconcile { manager } => {
+            handle_hook_reconcile(&app.registry, &app.state, &app.vcs(), manager).await
+        }
         Commands::HookObserve {
             manager,
             learn,
             argv,
         } => handle_hook_observe(app, manager.as_deref(), *learn, argv).await,
-        Commands::Hold { packages } => handle_hold(app, packages).await,
-        Commands::Unhold { packages } => handle_unhold(app, packages).await,
+        Commands::Hold { packages } => {
+            handle_hold(
+                app.holds().await,
+                &app.resolver().await,
+                &app.state,
+                packages,
+            )
+            .await
+        }
+        Commands::Unhold { packages } => {
+            handle_unhold(&app.resolver().await, &app.state, packages).await
+        }
         Commands::Policy => handle_policy(app).await,
         Commands::Completions { shell } => {
             let mut cmd = <Cli as clap::CommandFactory>::command();
@@ -944,10 +1033,10 @@ pub(crate) async fn run_user_verb(steps: Vec<Vec<String>>) -> Result<()> {
         let cli = Cli::parse_from(step);
         let outcome = dispatch(&app, &cli).await;
         if outcome.is_err() {
-            return finish(&app, outcome).await;
+            return finish(&app.config, outcome).await;
         }
     }
-    finish(&app, Ok(())).await
+    finish(&app.config, Ok(())).await
 }
 
 // ============================================================================

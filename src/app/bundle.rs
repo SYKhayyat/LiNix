@@ -6,7 +6,7 @@
 // it additionally tries to pre-download package files for the backends that support an
 // offline fetch — honestly reporting which backends it cannot bundle.
 
-use crate::app::App;
+use crate::config::Config;
 use crate::core::{Error, Result};
 use crate::model::Writes;
 use crate::utils::file::copy_over;
@@ -119,13 +119,15 @@ async fn run_in_dir(prog: &str, args: &[&str], dir: &Path) -> bool {
 /// the bundle (a frozen plan the target can review/apply offline). With `archive`, the finished
 /// directory is also packed into a single portable `<out>.tar.gz` (kept alongside the dir).
 pub async fn create_bundle(
-    app: &App,
+    config: &Config,
+    state: &tokio::sync::Mutex<crate::core::StateRegistry>,
+    vcs: &crate::app::Vcs<'_>,
     out: &Path,
     include_artifacts: bool,
     archive: bool,
     plan_json: Option<&str>,
 ) -> Result<BundleReport> {
-    let writes = Writes::for_run(app.config.dry_run);
+    let writes = Writes::for_run(config.dry_run);
     writes.mkdir(out).await?;
     let mut report = BundleReport {
         out: out.to_path_buf(),
@@ -137,7 +139,7 @@ pub async fn create_bundle(
     // `active`, `priority`, `locks/`, `preferences.toml` — so copying two named folders
     // out of it silently left the rest behind, and a bundle that restores half your
     // declarations is worse than one that fails.
-    let root = app.config.config_root();
+    let root = config.config_root();
     report.files_copied += copy_dir_recursive(&root, out, Some(out), writes).await?;
 
     // The manifest HISTORY, not just the current files: a `git bundle` carries every commit,
@@ -148,12 +150,9 @@ pub async fn create_bundle(
     // carry without producing the file. `has_commits` is the same question `bundle` answers
     // with its `Ok(true)`, asked without the side effect.
     let history = if writes.previewing() {
-        app.git_manager().has_commits()
+        vcs.manager().has_commits()
     } else {
-        matches!(
-            app.git_manager().bundle(&out.join("config.bundle")),
-            Ok(true)
-        )
+        matches!(vcs.manager().bundle(&out.join("config.bundle")), Ok(true))
     };
     if history {
         report.git_history_included = true;
@@ -165,7 +164,7 @@ pub async fn create_bundle(
     // knows what to install but not what Shall considers *its own* to manage.
     {
         let registry_path = {
-            let state = app.state.lock().await;
+            let state = state.lock().await;
             state.path.clone()
         };
         if tokio::fs::try_exists(&registry_path).await.unwrap_or(false)
@@ -180,7 +179,7 @@ pub async fn create_bundle(
     }
 
     let managed: Vec<(String, String, Option<String>)> = {
-        let state = app.state.lock().await;
+        let state = state.lock().await;
         state
             .packages
             .iter()

@@ -94,7 +94,7 @@ async fn vars_change_is_measured_against_the_committed_baseline() {
     fs::write(root.join("vars"), "role = travel\n")
         .await
         .unwrap();
-    let git = kernel.app.git_manager();
+    let git = kernel.app.vcs().manager();
     git.init().unwrap();
     git.commit_all("baseline").unwrap();
 

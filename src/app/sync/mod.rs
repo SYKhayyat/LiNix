@@ -49,8 +49,8 @@ pub trait Planner: Send + Sync {
     ) -> Result<SyncChanges>;
 }
 
-pub struct SyncEngine<'a> {
-    pub config: &'a Config,
+pub struct SyncEngine {
+    pub config: Arc<Config>,
     pub registry: Arc<BackendRegistry>,
     pub executor: CommandExecutor,
     pub metrics: MetricsCollector,
@@ -65,33 +65,23 @@ pub struct SyncEngine<'a> {
     pub reaping: Arc<guard::Reaping>,
 }
 
-impl<'a> SyncEngine<'a> {
-    #[allow(clippy::too_many_arguments)]
-    pub async fn new(
-        config: &'a Config,
-        registry: Arc<BackendRegistry>,
-        executor: CommandExecutor,
-        metrics: MetricsCollector,
-        progress: Arc<dyn ProgressReporter>,
-        hooks: Arc<LuaHooks>,
-        snapshot_manager: Arc<SnapshotManager>,
-        journal: Arc<Mutex<Journal>>,
-        state: Arc<Mutex<StateRegistry>>,
-        diagnostics: Arc<FailureDiagnosticEngine>,
-        reaping: Arc<guard::Reaping>,
-    ) -> Self {
+impl SyncEngine {
+    /// **One parameter, not eleven.** The list this destructures was written out three times
+    /// in three different orders (`Machinery`), which is a positional-argument hazard and a
+    /// four-file edit every time a collaborator is added.
+    pub fn new(m: crate::app::Machinery) -> Self {
         Self {
-            config,
-            registry,
-            executor,
-            metrics,
-            progress,
-            hooks,
-            snapshot_manager,
-            journal,
-            state,
-            diagnostics,
-            reaping,
+            config: m.config,
+            registry: m.registry,
+            executor: m.executor,
+            metrics: m.metrics,
+            progress: m.progress,
+            hooks: m.hooks,
+            snapshot_manager: m.snapshot_manager,
+            journal: m.journal,
+            state: m.state,
+            diagnostics: m.diagnostics,
+            reaping: m.reaping,
         }
     }
 
@@ -126,7 +116,7 @@ impl<'a> SyncEngine<'a> {
     /// sent the notification would be a preview that changed something. `plan` and `check` are
     /// the commands for looking.
     fn events(&self) -> crate::app::events::EventHooks {
-        crate::app::events::EventHooks::load(self.config)
+        crate::app::events::EventHooks::load(&self.config)
     }
 
     /// `scope` names the command that asked, so the removal guard can be enforced here —
@@ -213,7 +203,7 @@ impl<'a> SyncEngine<'a> {
             let reaped = match scope {
                 guard::GuardScope::PurgeUndeclared => {
                     guard::enforce_deliberate(
-                        self.config,
+                        &self.config,
                         &self.registry,
                         &removals,
                         &self.reaping,
@@ -222,15 +212,21 @@ impl<'a> SyncEngine<'a> {
                     .await?
                 }
                 _ => {
-                    guard::enforce(self.config, &self.registry, &removals, &self.reaping, scope)
-                        .await?
+                    guard::enforce(
+                        &self.config,
+                        &self.registry,
+                        &removals,
+                        &self.reaping,
+                        scope,
+                    )
+                    .await?
                 }
             };
 
             // The install-side ceiling (II.10): a mis-globbed manifest schedules a flood of
             // installs, and the count is the fact that explains it. Off by default; when set,
             // only `--allow-mass-install` clears it.
-            guard::enforce_installs(self.config, changes.total_install(), &self.reaping, scope)
+            guard::enforce_installs(&self.config, changes.total_install(), &self.reaping, scope)
                 .await?;
 
             // 7f: a declared health check with no way to revert is refused here, before the
@@ -647,10 +643,9 @@ impl<'a> SyncEngine<'a> {
         if self.config.dry_run {
             return;
         }
-        let ts = chrono::Utc::now();
         match self
             .snapshot_manager
-            .prune_with_policy(&self.config.snapshot_retention(), ts, false)
+            .prune_by_policy(&self.config, false)
             .await
         {
             Ok(r) if !r.is_empty() => debug!("pruned {} snapshot(s).", r.len()),
@@ -675,7 +670,7 @@ impl<'a> SyncEngine<'a> {
         state: &mut StateRegistry,
         reaped: guard::Reaped,
     ) -> Result<Vec<String>> {
-        let tx_config = TransactionConfig::from_config(self.config);
+        let tx_config = TransactionConfig::from_config(&self.config);
 
         // The engine gets the configuration because its rollback removes, and a removal is
         // guarded wherever it is issued (V.64) — including here, where the plan-time gate
@@ -685,7 +680,7 @@ impl<'a> SyncEngine<'a> {
             self.registry.clone(),
             self.journal.clone(),
             self.diagnostics.clone(),
-            Arc::new(self.config.clone()),
+            self.config.clone(),
             tx_config,
         );
         // **What this plan intends the machine to end up holding**, for rollback (`U41`). Every
@@ -745,16 +740,17 @@ impl<'a> SyncEngine<'a> {
                 failed_nodes.insert(res.node_index);
                 failed_names.push(format!("{}:{}", res.backend_name, res.package_name));
             }
-            self.metrics.record_operation(
-                &res.package_name,
-                &res.backend_name,
-                res.start_time,
-                res.result.is_ok(),
-                res.result.err().map(|e| e.to_string()),
-                res.retries,
-                res.bytes_downloaded,
-                res.batch_size,
-            );
+            self.metrics
+                .record_operation(crate::app::metrics::Recorded {
+                    name: &res.package_name,
+                    backend: &res.backend_name,
+                    started: res.start_time,
+                    success: res.result.is_ok(),
+                    error: res.result.err().map(|e| e.to_string()),
+                    retries: res.retries,
+                    bytes_downloaded: res.bytes_downloaded,
+                    batch_size: res.batch_size,
+                });
         }
 
         // **Counted here, from the nodes that survived**, and not from the plan. These two used
@@ -1143,7 +1139,7 @@ impl<'a> SyncEngine<'a> {
             if !is_install {
                 let removal = [(backend.clone(), package.clone())];
                 if let Err(objection) = guard::enforce(
-                    self.config,
+                    &self.config,
                     &self.registry,
                     &removal,
                     &self.reaping,
@@ -1249,7 +1245,7 @@ impl<'a> SyncEngine<'a> {
                 self.registry.clone(),
                 self.journal.clone(),
                 self.diagnostics.clone(),
-                Arc::new(self.config.clone()),
+                self.config.clone(),
                 TransactionConfig {
                     max_concurrent: self.config.max_parallel.max(1),
                     auto_rollback: false,
@@ -1263,16 +1259,17 @@ impl<'a> SyncEngine<'a> {
             let mut outcome: std::collections::HashMap<NodeIndex, Result<()>> =
                 std::collections::HashMap::new();
             for res in results {
-                self.metrics.record_operation(
-                    &res.package_name,
-                    &res.backend_name,
-                    res.start_time,
-                    res.result.is_ok(),
-                    res.result.as_ref().err().map(|e| e.to_string()),
-                    res.retries,
-                    res.bytes_downloaded,
-                    res.batch_size,
-                );
+                self.metrics
+                    .record_operation(crate::app::metrics::Recorded {
+                        name: &res.package_name,
+                        backend: &res.backend_name,
+                        started: res.start_time,
+                        success: res.result.is_ok(),
+                        error: res.result.as_ref().err().map(|e| e.to_string()),
+                        retries: res.retries,
+                        bytes_downloaded: res.bytes_downloaded,
+                        batch_size: res.batch_size,
+                    });
                 outcome.insert(res.node_index, res.result);
             }
 

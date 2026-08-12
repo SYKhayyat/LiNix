@@ -320,7 +320,7 @@ impl Upgradable for PsResourceUpgradable {
 }
 
 pub fn register(reg: &mut crate::backends::BackendRegistry, exec: &CommandExecutor, _cfg: &Config) {
-    let core = Arc::new(PsResourceCore::new(exec.duplicate()));
+    let core = Arc::new(PsResourceCore::new(exec.clone()));
     reg.register(Arc::new(
         BackendCapabilities::builder(core.clone())
             .with_installable(Arc::new(PsResourceInstallable { core: core.clone() }))

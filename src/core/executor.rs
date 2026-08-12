@@ -928,6 +928,12 @@ impl Drop for MockExecutor {
     }
 }
 
+/// **Cloning shares the run, it does not fork it.** Every field below is an `Arc`, so a clone
+/// is another handle on one invocation's execution layer, dry-run filesystem, per-manager lock
+/// map and installed-listing memo — which is what lets ~48 backends each hold one and still
+/// contend on the same locks and answer from the same memo. There used to be a `duplicate()`
+/// beside this that was `self.clone()` and nothing else, so the codebase said both; the two
+/// names carried one meaning and neither carried this note.
 #[derive(Clone)]
 pub struct CommandExecutor {
     pub dry_run: bool,
@@ -995,10 +1001,6 @@ impl CommandExecutor {
 
             installed: Arc::new(crate::core::installed::InstalledListings::new()),
         }
-    }
-
-    pub fn duplicate(&self) -> Self {
-        self.clone()
     }
 
     /// Let this run reuse installed listings written by earlier runs, for `secs` (0 = never).

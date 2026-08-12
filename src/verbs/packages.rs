@@ -1,3 +1,4 @@
+use crate::app::sync::resolver::StateResolver;
 use crate::model::Edit;
 use crate::verbs::prelude::*;
 use crate::verbs::sync::{handle_sync, SyncMode};
@@ -22,7 +23,7 @@ pub async fn handle_teleport(app: &App, package: &str, backend: &str) -> Result<
         return Ok(());
     }
 
-    let edits = app.retarget(package, backend).await?;
+    let edits = app.declarations().retarget(package, backend).await?;
     if edits.is_empty() {
         anyhow::bail!(
             "`{}` is not declared in any active file, so there is no line to move. \
@@ -75,7 +76,7 @@ pub async fn handle_install(
     if app.config.dry_run {
         let mut planned = Vec::new();
         for line in &lines {
-            for spec in app.resolve_spec(line).await? {
+            for spec in app.resolver().await.resolve_spec(line).await? {
                 planned.push(serde_json::json!({
                     "action": "install", "backend": spec.backend, "name": spec.name,
                     "temporary": temp.is_some(),
@@ -100,7 +101,8 @@ pub async fn handle_install(
     let mut edits: Vec<Edit> = Vec::with_capacity(lines.len());
     for line in &lines {
         edits.push(
-            app.declare(line, into, crate::model::Landing::Imperative)
+            app.declarations()
+                .declare(line, into, crate::model::Landing::Imperative)
                 .await?,
         );
     }
@@ -110,11 +112,12 @@ pub async fn handle_install(
     let synced = handle_sync(app, SyncMode::default(), out).await;
 
     if let Err(e) = &synced {
-        withdraw_what_can_never_succeed(app, e, &edits).await;
+        withdraw_what_can_never_succeed(&app.declarations(), &app.resolver().await, e, &edits)
+            .await;
         // Only where the advice above has not already said it. `NameAbsentElsewhere` names the
         // other declaration in its own words; adding this after it is the same paragraph twice.
         if why_kept(e) != WhyKept::NameAbsentElsewhere {
-            say_if_the_failure_was_not_yours(app, e, &lines).await;
+            say_if_the_failure_was_not_yours(&app.resolver().await, e, &lines).await;
         }
     }
     synced
@@ -136,11 +139,15 @@ pub async fn handle_install(
 /// now carries `backend:name`, so this asks whether any spec the user named appears in it. A
 /// wrong guess costs one extra paragraph of explanation and never changes what happened — which
 /// is the only reason a substring test is acceptable here.
-async fn say_if_the_failure_was_not_yours(app: &App, e: &anyhow::Error, lines: &[String]) {
+async fn say_if_the_failure_was_not_yours(
+    resolver: &StateResolver<'_>,
+    e: &anyhow::Error,
+    lines: &[String],
+) {
     let said = e.to_string();
     let mut asked_for: Vec<String> = Vec::new();
     for line in lines {
-        for spec in app.resolve_spec(line).await.unwrap_or_default() {
+        for spec in resolver.resolve_spec(line).await.unwrap_or_default() {
             asked_for.push(format!("{}:{}", spec.backend, spec.name));
         }
     }
@@ -226,13 +233,22 @@ fn unresolvable_name(e: &anyhow::Error) -> Option<&str> {
 /// other half is that a line kept on purpose — because the network dropped, or a lock was
 /// held, and retrying is right — now names the file it is in and the command that removes it.
 /// A wedge with an exit is not a wedge.
-async fn withdraw_what_can_never_succeed(app: &App, e: &anyhow::Error, edits: &[Edit]) {
+async fn withdraw_what_can_never_succeed(
+    declarations: &crate::app::Declarations<'_>,
+    resolver: &StateResolver<'_>,
+    e: &anyhow::Error,
+    edits: &[Edit],
+) {
     let mut withdrawn: Vec<&Edit> = Vec::new();
 
     if let Some(name) = unresolvable_name(e) {
         // `Unresolvable` carries the name as the user wrote it, so the model takes it back
         // directly and no line has to be identified.
-        if app.undeclare(name).await.is_ok_and(|es| !es.is_empty()) {
+        if declarations
+            .undeclare(name)
+            .await
+            .is_ok_and(|es| !es.is_empty())
+        {
             warn!(
                 "`{}` was taken back out of your files — nothing can install it.",
                 name
@@ -251,7 +267,7 @@ async fn withdraw_what_can_never_succeed(app: &App, e: &anyhow::Error, edits: &[
         let named = backend_absent_name(e);
         let message = absent_command_message(e);
         for edit in edits {
-            let Ok(specs) = app.resolve_spec(&edit.line).await else {
+            let Ok(specs) = resolver.resolve_spec(&edit.line).await else {
                 continue;
             };
             let is_this_line = match (named, message) {
@@ -260,7 +276,7 @@ async fn withdraw_what_can_never_succeed(app: &App, e: &anyhow::Error, edits: &[
                 (None, None) => false,
             };
             if is_this_line
-                && app
+                && declarations
                     .undeclare(&edit.line)
                     .await
                     .is_ok_and(|es| !es.is_empty())
@@ -408,7 +424,10 @@ pub async fn handle_uninstall(
     // Q9: `uninstall nosuchbackend:foo` warned that it "is not declared in any active file" —
     // true, and it names the wrong thing. The manager is what does not exist, and the message
     // sent the user looking through their modules for a line they never wrote.
-    app.require_known_spec_backends(packages).await?;
+    app.resolver()
+        .await
+        .require_known_spec_backends(packages)
+        .await?;
     // Bare `--temp` restores when a `shall shell` session ends. That is the ephemeral shell's
     // business and it is outside the model by design (II.8), so it never touches a file.
     if let Some(None) = temp {
@@ -434,14 +453,15 @@ pub async fn handle_uninstall(
         return uninstall_as_absent(app, packages, out).await;
     }
 
-    let vocab = app.vocabulary().await?;
+    let vocab = app.resolver().await.vocabulary().await?;
     let layout = app.config.layout();
     let facts = crate::config::parser::HostFacts::current();
 
     // Asked BEFORE the sync, because the sync is what empties the registry entry for
     // everything it removes — afterwards every name here reads as unmanaged and the check
     // below could not tell a package that went from one that was never Shall's.
-    let unmanaged_before = unmanaged_targets(app, packages).await?;
+    let unmanaged_before =
+        unmanaged_targets(app.backends().await, &app.registry, &app.state, packages).await?;
 
     let mut never_declared: Vec<&str> = Vec::new();
 
@@ -449,7 +469,7 @@ pub async fn handle_uninstall(
         // II.8: a `--temp` uninstall of something undeclared has nothing to come back to.
         if let Some(Some(dur)) = temp {
             let declared = !crate::model::active_module_files(&layout, &vocab, &facts).is_empty()
-                && app.declares(pkg).await?;
+                && app.declarations().declares(pkg).await?;
             if !declared {
                 anyhow::bail!(
                     "{} isn't declared, so there's nothing for it to come back to. \
@@ -471,17 +491,20 @@ pub async fn handle_uninstall(
                 },
             )?;
             let spec = app
+                .resolver()
+                .await
                 .resolve_spec(pkg)
                 .await?
                 .into_iter()
                 .next()
                 .with_context(|| format!("no package `{}` in any backend you use", pkg))?;
-            app.declare(
-                &format!("absent:{}:{}@until={}", spec.backend, spec.name, at),
-                None,
-                crate::model::Landing::Imperative,
-            )
-            .await?;
+            app.declarations()
+                .declare(
+                    &format!("absent:{}:{}@until={}", spec.backend, spec.name, at),
+                    None,
+                    crate::model::Landing::Imperative,
+                )
+                .await?;
             continue;
         }
 
@@ -495,7 +518,7 @@ pub async fn handle_uninstall(
             );
         }
 
-        let edits = app.undeclare(pkg).await?;
+        let edits = app.declarations().undeclare(pkg).await?;
         if edits.is_empty() {
             warn!("{} is not declared in any active file.", pkg);
             never_declared.push(pkg.as_str());
@@ -531,7 +554,7 @@ pub async fn handle_uninstall(
     // is fixed. This is the other half, and it holds for every way a package can be on the
     // machine without being Shall's: say plainly that it is still installed and that Shall
     // has no record of installing it, rather than reporting a removal that did not happen.
-    let survivors = still_installed(app, &unmanaged_before).await;
+    let survivors = still_installed(&app.registry, &unmanaged_before).await;
     if !survivors.is_empty() {
         anyhow::bail!(
             "nothing was uninstalled: {} still installed, and Shall has no record of \
@@ -564,21 +587,22 @@ pub async fn handle_uninstall(
 /// line in a module you forgot brings the package back on the next profile switch; an
 /// `absent:` line beats the module that wants it (II.7 rule 6), so it does not.
 async fn uninstall_as_absent(app: &App, packages: &[String], out: Output) -> Result<()> {
-    let targets = absent_targets(app, packages).await?;
+    let targets = absent_targets(app.backends().await, &app.registry, packages).await?;
 
     // The declaration goes first, and the module line goes with it. A package both declared
     // and declared absent is a contradiction the reader resolves on every sync, and `--absent`
     // is the case where the user has said which way it should come out.
     for pkg in packages {
-        app.undeclare(pkg).await?;
+        app.declarations().undeclare(pkg).await?;
     }
     for (backend, name) in &targets {
-        app.declare(
-            &format!("absent:{}:{}", backend, name),
-            None,
-            crate::model::Landing::Imperative,
-        )
-        .await?;
+        app.declarations()
+            .declare(
+                &format!("absent:{}:{}", backend, name),
+                None,
+                crate::model::Landing::Imperative,
+            )
+            .await?;
     }
 
     handle_sync(app, SyncMode::default(), out).await?;
@@ -587,7 +611,7 @@ async fn uninstall_as_absent(app: &App, packages: &[String], out: Output) -> Res
     // it could not remove. Here it is asked of every target: `--absent` claims to remove them
     // all, so any survivor is a failed removal rather than a refused one, and the advice that
     // fits a refusal — adopt it, or use the manager — would be the wrong answer to it.
-    let survivors = still_installed(app, &targets).await;
+    let survivors = still_installed(&app.registry, &targets).await;
     if !survivors.is_empty() {
         anyhow::bail!(
             "declared absent, and still installed: {}. The `absent:` line is written, so the \
@@ -604,14 +628,18 @@ async fn uninstall_as_absent(app: &App, packages: &[String], out: Output) -> Res
 /// them holds it — `--absent` is aimed at software that is on this machine, so resolving it
 /// the way `install` does would name a manager that *could* supply the package rather than
 /// the one that has it. Every holder is named, because `uninstall jq` means the jq I have.
-async fn absent_targets(app: &App, packages: &[String]) -> Result<Vec<(String, String)>> {
+async fn absent_targets(
+    backends: &crate::app::Backends,
+    registry: &Arc<BackendRegistry>,
+    packages: &[String],
+) -> Result<Vec<(String, String)>> {
     let mut out: Vec<(String, String)> = Vec::new();
     let mut listings: std::collections::HashMap<String, std::collections::HashSet<String>> =
         std::collections::HashMap::new();
 
     for pkg in packages {
         let (scoped, name) =
-            crate::config::parser::split_removal_target(pkg, |b| app.registry.get(b).is_some());
+            crate::config::parser::split_removal_target(pkg, |b| registry.get(b).is_some());
         if let Some(backend) = scoped {
             out.push((backend, name));
             continue;
@@ -621,13 +649,13 @@ async fn absent_targets(app: &App, packages: &[String]) -> Result<Vec<(String, S
         let mut unasked: Vec<String> = Vec::new();
         // What Shall uses: this writes `absent:` lines, and a line naming a manager outside
         // `priority` is one the next read refuses.
-        for b in app.backends().await.usable()? {
+        for b in backends.usable()? {
             let backend = b.name().to_string();
             if !listings.contains_key(&backend) {
                 // A manager that cannot be asked contributes no holders. Assuming it holds the
                 // package would write an `absent:` line naming a manager that never had it,
                 // and that line outlives the run that guessed.
-                let b_cap = app.registry.get(&backend);
+                let b_cap = registry.get(&backend);
                 let listed = match b_cap.as_ref().and_then(|b| b.as_queryable()) {
                     Some(q) => q.list_installed().await,
                     None => continue,
@@ -690,12 +718,17 @@ async fn absent_targets(app: &App, packages: &[String]) -> Result<Vec<(String, S
 /// managers Shall may use, and a `priority` that will not resolve makes the expansion — and so
 /// the refusal built on it — unanswerable. Returning an empty list instead would report every
 /// name as managed and take `Q54`'s refusal off the table silently.
-async fn unmanaged_targets(app: &App, packages: &[String]) -> Result<Vec<(String, String)>> {
-    let state = app.state.lock().await;
+async fn unmanaged_targets(
+    backends: &crate::app::Backends,
+    registry: &Arc<BackendRegistry>,
+    state: &tokio::sync::Mutex<crate::core::StateRegistry>,
+    packages: &[String],
+) -> Result<Vec<(String, String)>> {
+    let state = state.lock().await;
     let mut out: Vec<(String, String)> = Vec::new();
     for pkg in packages {
         let (scoped, name) =
-            crate::config::parser::split_removal_target(pkg, |b| app.registry.get(b).is_some());
+            crate::config::parser::split_removal_target(pkg, |b| registry.get(b).is_some());
         match scoped {
             Some(backend) => {
                 if !state.is_managed(&backend, &name) {
@@ -711,7 +744,7 @@ async fn unmanaged_targets(app: &App, packages: &[String]) -> Result<Vec<(String
                 // What Shall uses, both times — and asked once rather than twice, which the
                 // two calls here were not: the same fan-out ran to decide whether to widen and
                 // again to widen, and after W4 each of those is a PATH walk per manager.
-                let usable = app.backends().await.usable()?;
+                let usable = backends.usable()?;
                 if !usable.iter().any(|b| state.is_managed(b.name(), &name)) {
                     out.extend(usable.iter().map(|b| (b.name().to_string(), name.clone())));
                 }
@@ -726,7 +759,10 @@ async fn unmanaged_targets(app: &App, packages: &[String]) -> Result<Vec<(String
 ///
 /// One listing per manager and no more. The list is empty on every ordinary uninstall (the
 /// package being removed is one Shall manages), so the common path pays for nothing.
-async fn still_installed(app: &App, targets: &[(String, String)]) -> Vec<String> {
+async fn still_installed(
+    registry: &crate::backends::BackendRegistry,
+    targets: &[(String, String)],
+) -> Vec<String> {
     if targets.is_empty() {
         return Vec::new();
     }
@@ -735,7 +771,7 @@ async fn still_installed(app: &App, targets: &[(String, String)]) -> Vec<String>
         std::collections::HashMap::new();
     for (backend, name) in targets {
         if !consulted.contains_key(backend) {
-            let b_cap = app.registry.get(backend);
+            let b_cap = registry.get(backend);
             let listed = match b_cap.as_ref().and_then(|b| b.as_queryable()) {
                 Some(q) => q.list_installed().await.ok(),
                 None => None,
@@ -777,7 +813,7 @@ async fn preview_uninstall(
     // exactly as it fails the run — a preview that plans a line the run refuses to write is
     // the two halves of this command describing different machines.
     let absent_lines = if absent {
-        absent_targets(app, packages).await?
+        absent_targets(app.backends().await, &app.registry, packages).await?
     } else {
         Vec::new()
     };
@@ -797,7 +833,7 @@ async fn preview_uninstall(
             }));
             continue;
         }
-        for edit in app.undeclare(pkg).await? {
+        for edit in app.declarations().undeclare(pkg).await? {
             planned.push(serde_json::json!({
                 "action": "undeclare",
                 "package": pkg,
@@ -837,7 +873,11 @@ async fn preview_uninstall(
     // Not asked under `--absent`: that flag's whole business is removing what Shall has no
     // record of installing, so the answer is never "would remove nothing".
     if temp.is_none() && !absent {
-        let survivors = still_installed(app, &unmanaged_targets(app, packages).await?).await;
+        let survivors = still_installed(
+            &app.registry,
+            &unmanaged_targets(app.backends().await, &app.registry, &app.state, packages).await?,
+        )
+        .await;
         if !survivors.is_empty() {
             crate::would_print!(
                 "would remove nothing from the machine: {} installed, and Shall has no record \
@@ -951,17 +991,21 @@ pub async fn suspend_for_session(app: &App, packages: &[String]) -> Result<()> {
     Ok(())
 }
 
-pub async fn handle_hold(app: &App, packages: &[String]) -> Result<()> {
+pub async fn handle_hold(
+    holds: crate::app::holds::Holds,
+    resolver: &StateResolver<'_>,
+    state: &tokio::sync::Mutex<crate::core::StateRegistry>,
+    packages: &[String],
+) -> Result<()> {
     // Q9, before a hold is recorded: `hold nosuchbackend:foo` wrote the hold and answered
     // `Held 1 package(s).` at exit 0, against a manager that does not exist.
-    app.require_known_spec_backends(packages).await?;
+    resolver.require_known_spec_backends(packages).await?;
     if packages.is_empty() {
         // **Both sources.** This listed the ledger alone, so the command whose entire job is
         // *tell me what is held* answered `No packages are held.` over a manifest holding
         // three — a read command disagreeing with the machine, which is the defect this
         // repository grades itself against. The source is printed beside each one because the
         // two are released by different commands.
-        let holds = app.holds().await;
         // The ledger's half is still worth printing — it is true, and it is what the user has
         // — but the answer is incomplete and the exit code is the only part of it a script
         // reads. `upgrade` carries on over an unresolvable manifest because acting on the
@@ -992,7 +1036,7 @@ pub async fn handle_hold(app: &App, packages: &[String]) -> Result<()> {
     }
     let mut n = 0usize;
     let recorded = {
-        let mut state = app.state.lock().await;
+        let mut state = state.lock().await;
         for p in packages {
             if state.hold(p) {
                 n += 1;
@@ -1011,11 +1055,15 @@ pub async fn handle_hold(app: &App, packages: &[String]) -> Result<()> {
     Ok(())
 }
 
-pub async fn handle_unhold(app: &App, packages: &[String]) -> Result<()> {
-    app.require_known_spec_backends(packages).await?;
+pub async fn handle_unhold(
+    resolver: &StateResolver<'_>,
+    state: &tokio::sync::Mutex<crate::core::StateRegistry>,
+    packages: &[String],
+) -> Result<()> {
+    resolver.require_known_spec_backends(packages).await?;
     let mut n = 0usize;
     let recorded = {
-        let mut state = app.state.lock().await;
+        let mut state = state.lock().await;
         for p in packages {
             if state.unhold(p) {
                 n += 1;
@@ -1041,13 +1089,19 @@ pub fn print_package_row(p: &crate::core::Package) {
     );
 }
 
-pub async fn handle_search(app: &App, query: &str, out: Output, installed: bool) -> Result<()> {
-    let mut results = app.search(query).await?;
+pub async fn handle_search(
+    inventory: &crate::app::Inventory<'_>,
+    state: &tokio::sync::Mutex<crate::core::StateRegistry>,
+    query: &str,
+    out: Output,
+    installed: bool,
+) -> Result<()> {
+    let mut results = inventory.search(query).await?;
     if installed {
         // Keep only results Shall already manages, so `search --installed foo` answers
         // "which of my packages match" without a second command.
         let managed: std::collections::HashSet<(String, String)> = {
-            let state = app.state.lock().await;
+            let state = state.lock().await;
             state
                 .packages
                 .iter()
@@ -1095,7 +1149,11 @@ pub struct OutdatedReport {
 
 /// Find managed packages whose backend reports a newer version than what's installed. Backends
 /// without a `Searchable` capability (no "latest" source) are honestly skipped, not guessed at.
-pub async fn compute_outdated(app: &App, list: &[crate::core::Package]) -> OutdatedReport {
+pub async fn compute_outdated(
+    config: &Config,
+    registry: &Arc<BackendRegistry>,
+    list: &[crate::core::Package],
+) -> OutdatedReport {
     use futures::stream::{self, StreamExt};
     use std::collections::HashMap;
 
@@ -1110,10 +1168,10 @@ pub async fn compute_outdated(app: &App, list: &[crate::core::Package]) -> Outda
         }
     }
 
-    let cap = app.config.max_parallel.max(1);
+    let cap = config.max_parallel.max(1);
     let per_backend = stream::iter(by_backend)
         .map(|(backend, installed)| async move {
-            let b = app.registry.get(&backend)?;
+            let b = registry.get(&backend)?;
             // No `Searchable` means no source for "latest" at all — honestly skipped, never
             // guessed at. This one really is a capability and not a failure, which is why it
             // does not join `unanswered` below.
@@ -1226,10 +1284,10 @@ pub async fn handle_list(
 ) -> Result<()> {
     // A name nothing claims is a typo, and a typo that prints zero rows and exits 0 reads as
     // "that manager is empty" (Q9).
-    app.require_known_backend(backend)?;
-    let list = app.list(backend).await?;
+    app.resolver().await.require_known_backend(backend)?;
+    let list = app.inventory().await.list(backend).await?;
     if outdated {
-        let report = compute_outdated(app, &list).await;
+        let report = compute_outdated(&app.config, &app.registry, &list).await;
         if out.is_json() {
             println!("{}", serde_json::to_string_pretty(&report.rows)?);
         } else if report.rows.is_empty() {
@@ -1273,8 +1331,12 @@ pub async fn handle_list(
     Ok(())
 }
 
-pub async fn handle_info(app: &App, package: &str) -> Result<()> {
-    let Some(p) = app.get_info(package).await? else {
+pub async fn handle_info(
+    inventory: &crate::app::Inventory<'_>,
+    registry: &Arc<BackendRegistry>,
+    package: &str,
+) -> Result<()> {
+    let Some(p) = inventory.get_info(package).await? else {
         // `info` reports on what is INSTALLED. "not found in any available backend" reads as
         // "no such package", which is a different and usually false claim — `shall search
         // ripgrep` finds it on crates.io while `info cargo:ripgrep` says this. Say which
@@ -1284,7 +1346,7 @@ pub async fn handle_info(app: &App, package: &str) -> Result<()> {
         // `web:https://example/x.deb` has three colons and the last of them is inside the URL,
         // so the suffix after it is `//example/x.deb` — a `shall search` line nobody can use.
         let (_, bare) =
-            crate::config::parser::split_removal_target(package, |b| app.registry.get(b).is_some());
+            crate::config::parser::split_removal_target(package, |b| registry.get(b).is_some());
         println!(
             "'{}' is not installed on this machine, so there is nothing to describe.\n  \
              `shall search {}` looks for it in the managers you use.",
@@ -1349,7 +1411,7 @@ pub async fn handle_info(app: &App, package: &str) -> Result<()> {
         }
     }
     // Dependencies via the backend's MetadataProvider, if it has one.
-    if let Some(b) = app.registry.get(&p.backend) {
+    if let Some(b) = registry.get(&p.backend) {
         if let Some(mp) = b.as_metadata_provider() {
             if let Ok(deps) = mp.get_dependencies(&p.name).await {
                 if !deps.is_empty() {

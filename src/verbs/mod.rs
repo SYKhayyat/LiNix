@@ -22,13 +22,13 @@ pub mod upgrade;
 /// place for them too. Returns the word to print, because a message that says "Added" after a
 /// write that did not happen is the bug wearing different clothes.
 pub async fn write_unless_previewing(
-    app: &crate::app::App,
+    config: &crate::config::Config,
     path: &std::path::Path,
     body: &str,
     done: &'static str,
     planned: &'static str,
 ) -> anyhow::Result<String> {
-    if app.config.dry_run {
+    if config.dry_run {
         return Ok(format!("{} {}", crate::core::dry_run::MARKER, planned));
     }
     if let Some(parent) = path.parent() {
@@ -60,9 +60,11 @@ pub async fn perform_maintenance(app: &App) -> Result<()> {
         warn!("Maintenance: suspension sweep failed: {}", e);
     }
     // Version-control the manifests/config if the user opted in via `shall git init`.
-    app.git_autocommit("shall: sync manifest state").await;
+    app.vcs().autocommit("shall: sync manifest state");
     if app.config.snapshot_retention().prunes() {
-        app.prune_snapshots(false).await?;
+        app.snapshot_manager
+            .prune_by_policy(&app.config, false)
+            .await?;
     }
     Ok(())
 }
@@ -72,6 +74,12 @@ pub mod prelude {
     pub use crate::app::sync::planner::Scope as PlannerScope;
     pub use crate::app::{ui::TuiPreview, App};
     pub use anyhow::{Context, Result};
+    // A handler that only reads settings says so in its signature, so `&Config` appears in
+    // this file's signatures as often as `&App` used to.
+    pub use crate::config::Config;
+    // Same reason: a handler that asks the backends says `&Arc<BackendRegistry>`, not `&App`.
+    pub use crate::backends::BackendRegistry;
+    pub use std::sync::Arc;
     // The ledger file rules are a trait, so `HookLedger::load` needs it in scope. In the
     // prelude rather than per verb for the reason the prelude exists.
     pub use crate::cli::{

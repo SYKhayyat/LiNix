@@ -44,6 +44,33 @@ pub struct Holds {
 }
 
 impl Holds {
+    /// Both sources, read through one resolver and one lock acquisition.
+    ///
+    /// A model that will not resolve is the ledger alone and a warning, never a failure: neither
+    /// `upgrade` nor `hold` is a command that needs the manifest to parse, and refusing to
+    /// upgrade anything because a module has a syntax error is a worse answer than the one they
+    /// gave before.
+    pub async fn assemble(
+        resolver: &crate::app::sync::resolver::StateResolver<'_>,
+        state: &tokio::sync::Mutex<StateRegistry>,
+    ) -> Self {
+        let (desired, why) = match resolver.resolve_desired_state().await {
+            Ok(desired) => (Some(desired), None),
+            Err(e) => {
+                tracing::warn!(
+                    "the manifest could not be resolved ({e}), so `@hold=true` lines are not \
+                     being honoured on this run; `shall hold` entries still are."
+                );
+                // Carried, not only warned about. The warning was correct and went to stderr,
+                // and `shall hold` then printed a clean bill on stdout at exit 0 — so a script
+                // reading the answer got "nothing is held" with no way to know better (B3).
+                (None, Some(e.to_string()))
+            }
+        };
+        let state = state.lock().await;
+        Self::new(&state, desired.as_ref(), why)
+    }
+
     /// Read both sources, and remember when only one of them could be read.
     ///
     /// The desired state is optional: `upgrade` and `hold` must not fail because a module has a

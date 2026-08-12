@@ -6,18 +6,28 @@
 
 use crate::verbs::prelude::*;
 
-pub async fn handle_audit(app: &App, out: Output) -> Result<()> {
-    let report = crate::app::insight::audit(app).await?;
+pub async fn handle_audit(
+    config: &Config,
+    registry: &Arc<BackendRegistry>,
+    state: &tokio::sync::Mutex<crate::core::StateRegistry>,
+    out: Output,
+) -> Result<()> {
+    let report = crate::app::insight::audit(config, registry, state).await?;
     crate::app::insight::print_audit(&report, out).map_err(|e| e.into())
 }
 
-pub async fn handle_sbom(app: &App) -> Result<()> {
-    println!("{}", crate::app::insight::sbom(app).await?);
+pub async fn handle_sbom(
+    registry: &Arc<BackendRegistry>,
+    state: &tokio::sync::Mutex<crate::core::StateRegistry>,
+) -> Result<()> {
+    println!("{}", crate::app::insight::sbom(registry, state).await?);
     Ok(())
 }
 
 pub async fn handle_export(
-    app: &App,
+    config: &Config,
+    registry: &Arc<BackendRegistry>,
+    state: &tokio::sync::Mutex<crate::core::StateRegistry>,
     format: Option<&str>,
     out: &str,
     stdout: bool,
@@ -35,7 +45,16 @@ pub async fn handle_export(
         anyhow::bail!("--stdout needs a single --format (brew|pip|npm|apt).");
     }
     let out_dir = std::path::PathBuf::from(out);
-    let results = export(app, fmt, &out_dir, stdout, force, app.config.dry_run).await?;
+    let results = export(
+        state,
+        registry,
+        fmt,
+        &out_dir,
+        stdout,
+        force,
+        config.dry_run,
+    )
+    .await?;
     for (file, outcome) in &results {
         match outcome {
             Outcome::NoPackages => println!("  skipped {} (no matching packages)", file),
@@ -62,9 +81,18 @@ pub async fn handle_export(
 pub async fn handle_why(app: &App, package: &str, out: Output) -> Result<()> {
     // Q9: `why nosuchbackend:foo` reported it "not under Shall management" at exit 0 — true of
     // the string and useless, because the manager is the part that does not exist.
-    app.require_known_spec_backends(std::slice::from_ref(&package.to_string()))
-        .await?;
-    crate::app::insight::why(app, package, out)
+    app.resolver()
         .await
-        .map_err(|e| e.into())
+        .require_known_spec_backends(std::slice::from_ref(&package.to_string()))
+        .await?;
+    crate::app::insight::why(
+        &app.config,
+        &app.registry,
+        &app.state,
+        &app.executor,
+        package,
+        out,
+    )
+    .await
+    .map_err(|e| e.into())
 }

@@ -95,7 +95,7 @@ async fn sync_run(kernel: &TestKernel) -> (usize, usize) {
     };
     let counts = (changes.total_install(), changes.total_remove());
 
-    let engine = app.sync_engine().await;
+    let engine = app.sync_engine();
     engine
         .sync(changes, shall::app::sync::guard::GuardScope::Sync)
         .await
@@ -270,7 +270,7 @@ async fn a_failed_plan_does_not_undo_the_part_that_worked_and_is_still_declared(
         2,
         "both lines are new to this machine"
     );
-    let engine = app.sync_engine().await;
+    let engine = app.sync_engine();
     let outcome = engine
         .sync(changes, shall::app::sync::guard::GuardScope::Sync)
         .await;

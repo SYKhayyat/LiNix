@@ -1254,7 +1254,7 @@ pub(crate) fn build_capabilities(
         // does not know — so a row for `apt` gets apt's, and a row for something new gets the
         // default rather than nothing.
         executor: exec
-            .duplicate()
+            .clone()
             .with_exit_policy(crate::core::exit_policy::for_manager(&def.name)),
         config,
         parser,

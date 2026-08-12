@@ -441,7 +441,7 @@ pub fn register(
     cfg: &crate::config::Config,
 ) {
     let core = Arc::new(SettingBackendCore::new(
-        exec.duplicate(),
+        exec.clone(),
         adapters(user_adapters(cfg)),
     ));
     reg.register(Arc::new(

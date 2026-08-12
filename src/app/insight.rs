@@ -7,11 +7,13 @@
 //   * `why`   — provenance (which manifest/module/imperative action pulled a package in)
 //               plus cross-package reverse dependencies.
 
-use crate::app::App;
+use crate::backends::BackendRegistry;
+use crate::config::Config;
 use crate::core::LockFile;
 use crate::core::{Error, Output, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::debug;
 
 /// A managed package with its best-known concrete version resolved from the live backend.
@@ -24,9 +26,12 @@ pub struct ResolvedPkg {
 
 /// Resolve every managed package to its live installed version (falling back to the
 /// version recorded in the state registry). Shared by `audit` and `sbom`.
-async fn resolve_managed(app: &App) -> Vec<ResolvedPkg> {
+async fn resolve_managed(
+    state: &tokio::sync::Mutex<crate::core::StateRegistry>,
+    registry: &crate::backends::BackendRegistry,
+) -> Vec<ResolvedPkg> {
     let managed: Vec<(String, String, Option<String>)> = {
-        let state = app.state.lock().await;
+        let state = state.lock().await;
         state
             .packages
             .iter()
@@ -36,8 +41,7 @@ async fn resolve_managed(app: &App) -> Vec<ResolvedPkg> {
 
     let mut out = Vec::with_capacity(managed.len());
     for (backend, name, recorded) in managed {
-        let version = match app
-            .registry
+        let version = match registry
             .get(&backend)
             .and_then(|b| b.as_queryable().cloned())
         {
@@ -140,8 +144,11 @@ fn build_cyclonedx(pkgs: &[ResolvedPkg]) -> Value {
 }
 
 /// Emit a CycloneDX SBOM of every managed package, across all backends, as pretty JSON.
-pub async fn sbom(app: &App) -> Result<String> {
-    let pkgs = resolve_managed(app).await;
+pub async fn sbom(
+    registry: &Arc<BackendRegistry>,
+    state: &tokio::sync::Mutex<crate::core::StateRegistry>,
+) -> Result<String> {
+    let pkgs = resolve_managed(state, registry).await;
     let doc = build_cyclonedx(&pkgs);
     serde_json::to_string_pretty(&doc).map_err(|e| Error::Json(e.to_string()))
 }
@@ -248,8 +255,12 @@ fn summarize(detail: &Value) -> Option<String> {
 }
 
 /// Scan every managed package against OSV.dev and report known-vulnerable ones.
-pub async fn audit(app: &App) -> Result<AuditReport> {
-    let pkgs = resolve_managed(app).await;
+pub async fn audit(
+    config: &Config,
+    registry: &Arc<BackendRegistry>,
+    state: &tokio::sync::Mutex<crate::core::StateRegistry>,
+) -> Result<AuditReport> {
+    let pkgs = resolve_managed(state, registry).await;
     let (body, index_map) = build_querybatch(&pkgs);
 
     let mut report = AuditReport {
@@ -263,7 +274,7 @@ pub async fn audit(app: &App) -> Result<AuditReport> {
 
     // Honour the configured value (F1); the pool raises a literal 0 to 1s, because reqwest
     // reads a zero-second timeout as "fail instantly" rather than "no timeout".
-    let client = crate::core::http::api("shall-audit", app.config.network_timeout_secs)
+    let client = crate::core::http::api("shall-audit", config.network_timeout_secs)
         .map_err(|e| Error::Http(e.to_string()))?;
 
     let resp = client.post(OSV_BATCH_URL).json(&body).send().await?;
@@ -312,7 +323,7 @@ pub async fn audit(app: &App) -> Result<AuditReport> {
                     }
                 }
             })
-            .buffer_unordered(app.config.network_parallel.max(1))
+            .buffer_unordered(config.network_parallel.max(1))
             .filter_map(|r| async move { r })
             .collect()
             .await
@@ -560,13 +571,9 @@ struct ResolvedConfig {
 impl ResolvedConfig {
     /// An error is returned, never swallowed into "declared nowhere": a `why` that cannot read
     /// your files must say so, or it reports a broken config as an absent declaration.
-    async fn read(app: &App) -> Result<Self> {
-        let resolver = crate::app::sync::resolver::StateResolver::new(
-            &app.config,
-            app.registry.clone(),
-            false,
-        )
-        .await;
+    async fn read(config: &Config, registry: &Arc<BackendRegistry>) -> Result<Self> {
+        let resolver =
+            crate::app::sync::resolver::StateResolver::new(config, registry.clone(), false).await;
         let state = resolver.resolve_model().await?;
         let (vars, var_origins) = resolver.resolve_vars_with_origins().await?;
         Ok(Self {
@@ -621,12 +628,11 @@ fn declarations_of(config: &ResolvedConfig, backend: &str, name: &str) -> Declar
 /// `None` for a backend that does not select artifacts, or a package with no lock yet. When a
 /// declaration installed several files (`@asset=all`), the first is shown — they were all
 /// chosen by the same rule, which is the thing being explained.
-fn artifact_selection(app: &App, backend: &str, name: &str) -> Option<(String, String)> {
+fn artifact_selection(config: &Config, backend: &str, name: &str) -> Option<(String, String)> {
     if !crate::backends::capability::selects_artifacts(backend) {
         return None;
     }
-    let path = app
-        .config
+    let path = config
         .config_root()
         .join("locks")
         .join(format!("{}.toml", backend));
@@ -645,10 +651,14 @@ fn artifact_selection(app: &App, backend: &str, name: &str) -> Option<(String, S
 ///
 /// Never an error: a config repo that is not under git, or a package declared only since the
 /// last commit, simply has no answer, and `why` is still worth reading without it.
-async fn introduced_in_git(app: &App, name: &str) -> Option<crate::model::introduced::Introduced> {
+async fn introduced_in_git(
+    config: &Config,
+    executor: &crate::core::CommandExecutor,
+    name: &str,
+) -> Option<crate::model::introduced::Introduced> {
     use crate::model::introduced;
 
-    let root = app.config.config_root();
+    let root = config.config_root();
     if !root.join(".git").exists() {
         return None;
     }
@@ -659,7 +669,7 @@ async fn introduced_in_git(app: &App, name: &str) -> Option<crate::model::introd
     argv.extend(args);
     let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
 
-    let out = app.executor.run_output("git", &refs, false).await.ok()?;
+    let out = executor.run_output("git", &refs, false).await.ok()?;
     introduced::introduced_in(&out)
 }
 
@@ -682,14 +692,21 @@ fn provenance(source: &str) -> String {
     }
 }
 
-pub async fn why(app: &App, query: &str, out: Output) -> Result<()> {
+pub async fn why(
+    config: &Config,
+    registry: &Arc<BackendRegistry>,
+    state: &tokio::sync::Mutex<crate::core::StateRegistry>,
+    executor: &crate::core::CommandExecutor,
+    query: &str,
+    out: Output,
+) -> Result<()> {
     // Snapshot the state we need, then release the lock before doing async backend queries.
     #[allow(clippy::type_complexity)]
     let (matches, all_managed): (
         Vec<(String, String, Option<String>, String, Option<u64>)>,
         Vec<(String, String)>,
     ) = {
-        let state = app.state.lock().await;
+        let state = state.lock().await;
         let matches = state
             .packages
             .iter()
@@ -724,11 +741,11 @@ pub async fn why(app: &App, query: &str, out: Output) -> Result<()> {
     let mut json_matches: Vec<serde_json::Value> = Vec::new();
     // Once, before the loop. Two backends carrying one name is an ordinary answer and used to
     // cost two full resolutions of every file you own.
-    let config = ResolvedConfig::read(app).await?;
+    let resolved = ResolvedConfig::read(config, registry).await?;
 
     for (backend, name, version, source, expires) in matches {
         // Where your files declare it, from the resolver — the same answer `sync` acts on.
-        let found = declarations_of(&config, &backend, &name);
+        let found = declarations_of(&resolved, &backend, &name);
         let formats = found.formats.clone();
         let declarations: Vec<String> = found.declarations.iter().map(|d| d.describe()).collect();
         let gating: Vec<String> = found.gating.iter().map(|g| g.describe()).collect();
@@ -756,8 +773,7 @@ pub async fn why(app: &App, query: &str, out: Output) -> Result<()> {
         // One subprocess per managed package in the same backend, so they run at once rather
         // than end to end. Ordered, so `why` prints the same list every time.
         let mut dependents = Vec::new();
-        if let Some(mp) = app
-            .registry
+        if let Some(mp) = registry
             .get(&backend)
             .and_then(|b| b.as_metadata_provider().cloned())
         {
@@ -778,7 +794,7 @@ pub async fn why(app: &App, query: &str, out: Output) -> Result<()> {
                     }
                 }
             })
-            .buffered(app.config.max_parallel.max(1))
+            .buffered(config.max_parallel.max(1))
             .filter_map(|r| async move { r })
             .collect()
             .await;
@@ -787,12 +803,12 @@ pub async fn why(app: &App, query: &str, out: Output) -> Result<()> {
         // XIII.19: when this declaration first appeared, asked of git rather than of a store
         // Shall writes at sync time. The config repo is a git repo and every sync commits, so
         // the fact already exists — and a copy of it could only ever disagree.
-        let introduced = introduced_in_git(app, &name).await;
+        let introduced = introduced_in_git(config, executor, &name).await;
 
         // D14: for an artifact backend, which rule chose the installed file — read from the
         // lock, so `why` answers "why this `.tar.gz` and not the `.deb`" without a network
         // re-selection. `(asset, reason)`.
-        let selected = artifact_selection(app, &backend, &name);
+        let selected = artifact_selection(config, &backend, &name);
 
         if out.is_json() {
             json_matches.push(serde_json::json!({

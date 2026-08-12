@@ -697,7 +697,7 @@ pub fn register(
     .unwrap_or_default();
 
     let core = Arc::new(
-        LinkBackendCore::new(exec.duplicate(), Arc::new(cfg.clone()))
+        LinkBackendCore::new(exec.clone(), Arc::new(cfg.clone()))
             .with_secret_providers(secret_providers),
     );
     reg.register(Arc::new(
