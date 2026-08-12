@@ -243,4 +243,46 @@ Three suspicions did not survive scrutiny:
   stubs.
 
 ---
+## VI.4 The first security bug, and the comment that hid it
 
+**FIXED 2026-08-12.** `docs/GRADE-2026-08-12.md` B-1. Kept here because the *mechanism* by which
+it stayed hidden is worth more than the fix, and the fix is four lines.
+
+**A crafted package name ran an arbitrary program on Windows.** `shall search 'q&calc.exe&rem'`,
+with any `.cmd`-shim manager in `priority`, launched `calc.exe` — measured, with a benign control
+that did not. A bare unprefixed name in a shared module wrote arbitrary files by redirection, so
+one line in a config somebody `shall add`s wrote files on every Windows machine that so much as
+evaluated it.
+
+**Two comments, each true on its own, and the pair of them false.**
+
+`windows_shim_wrap` had two arms. The `.ps1` arm single-quote-escaped every argument and said so:
+*"a crafted package name cannot break out of the string — no command-injection surface."* Correct.
+The `.cmd`/`.bat` arm handed the arguments to `cmd /C` raw, under the comment *"Batch scripts are
+plain-text; `cmd /C` runs them and forwards args cleanly."* `cmd` does not forward args cleanly —
+it applies its own parsing to `>`, `<`, `|`, `&` and `^` before the batch file sees anything.
+
+Meanwhile the validator's own doc comment carried the safety argument for the whole program:
+*"no package-manager command is ever a shell string — every one is argv."* True everywhere except
+the arm above, which is the counter-example that makes it false. **The two facts never met.** One
+comment asserted a property; another comment, in another file, was the exception to it; and
+neither had a reason to be read beside the other.
+
+**The fix is a deletion.** `std` has recognised `.bat`/`.cmd` since 1.77.2 and spawns them through
+`cmd.exe /e:ON /v:OFF /d /c` with per-argument escaping — returning an error rather than
+mis-escaping an argument it cannot express. So the arm does not need to be fixed, it needs to not
+exist: the resolved shim is handed to `std` as the program, and the escaping lives in one audited
+place that is not this one.
+
+**And the second layer, which is not the fix and must not be described as one.** Two strings
+reached a manager before anything knew what kind of string they were — a bare name, probed
+against each candidate manager to find out who owns it, and a `search` query, which is free text.
+Both now pass a metacharacter gate. It is defence in depth. A comment calling a validator *the*
+thing that stands between a crafted name and a command line is what let the first layer stay
+broken for a year, so the gate's own doc comment says which layer it is.
+
+**The habit, which is the part that is not fixed by a commit.** Every one of the three comments
+was written by someone who had checked the thing they were writing about. The defect was in the
+seam between them, and no seam has a comment.
+
+---

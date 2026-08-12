@@ -17,7 +17,9 @@ pub async fn handle_remove_orphans(app: &App) -> Result<()> {
     // Read-only and independent per manager; ordered so the report is stable.
     use futures::stream::StreamExt;
     let answers: Vec<(String, crate::core::Result<Vec<String>>)> =
-        futures::stream::iter(app.registry.available())
+        // What Shall uses: `remove-orphans` deletes, and a manager `priority` excludes is one
+        // Shall must not be deleting through.
+        futures::stream::iter(app.backends().await.usable()?)
             .filter_map(|backend| async move {
                 let up = backend.as_upgradable()?.clone();
                 Some((backend.name().to_string(), up))
@@ -185,9 +187,12 @@ pub async fn handle_clean_cache(app: &App, all: bool) -> Result<()> {
     // Independent per manager — each clears its own cache directory and they contend for
     // nothing. `run_exclusive` still serialises anything that shares a manager lock.
     use futures::stream::StreamExt;
+    // What Shall uses: clearing the download cache of a manager the user told Shall not to
+    // touch is touching it.
     let cleanable: Vec<(String, bool, std::sync::Arc<dyn crate::core::Upgradable>)> = app
-        .registry
-        .available()
+        .backends()
+        .await
+        .usable()?
         .into_iter()
         .filter_map(|b| {
             Some((
@@ -248,9 +253,29 @@ pub const PURGE_RATIO: f64 = 0.1;
 /// The residual risk, stated plainly because the docs must state it: `adopt` is an estimate.
 /// If it missed something, this deletes it.
 pub async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Result<()> {
-    let undeclared = app.installed_but_undeclared().await?;
+    let crawl = app.installed_but_undeclared().await?;
+    let undeclared = crawl.packages;
+    // A manager that could not be listed is safe for the *deletion* — nothing it has can end
+    // up on the list, so this removes less and never more — and unsafe for the *sentence*.
+    // Said before the list either way, because a user about to delete on the strength of it is
+    // entitled to know the survey has a hole in it (B4's sibling).
+    if !crawl.unanswered.is_empty() {
+        println!(
+            "! {} manager(s) could not be listed, so nothing they have appears below:",
+            crawl.unanswered.len()
+        );
+        for who in &crawl.unanswered {
+            println!("    {}", who);
+        }
+    }
     if undeclared.is_empty() {
-        println!("Nothing to do: Shall manages every installed package.");
+        match crawl.unanswered.is_empty() {
+            true => println!("Nothing to do: Shall manages every installed package."),
+            false => println!(
+                "Nothing to delete from the managers that answered. Whether Shall manages \
+                 every installed package is not known — see above."
+            ),
+        }
         return Ok(());
     }
 

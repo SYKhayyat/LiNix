@@ -344,7 +344,7 @@ pub async fn handle_try(app: &App, image: Option<&str>) -> Result<()> {
     command.args(args);
     // The terminal-handoff door: a container rehearsal prints as it goes and the person is
     // watching it — but owned, so abandoning the rehearsal does not leave the container running.
-    let status = crate::core::executor::supervised_status(command, runtime)
+    let status = crate::core::supervise::supervised_status(command, runtime)
         .await
         .map_err(|e| crate::core::Error::Other(format!("could not run `{}`: {}", runtime, e)))?;
 
@@ -540,7 +540,7 @@ pub async fn handle_edit(cli: &Cli, file: Option<&str>) -> Result<()> {
     // The terminal-handoff door: `$EDITOR` owns the terminal for as long as somebody is typing
     // in it, so no bound — but owned, because an editor still holding the config file after
     // Shall has gone is the state AU6 is about.
-    let status = crate::core::executor::supervised_status(command, &editor)
+    let status = crate::core::supervise::supervised_status(command, &editor)
         .await
         .with_context(|| format!("launching editor '{}'", editor))?;
 
@@ -1078,9 +1078,15 @@ pub async fn interactive_init(app: &App, force: bool) -> Result<()> {
 pub async fn scaffold_repo(app: &App, force: bool) -> Result<()> {
     let layout = app.config.layout();
 
+    // **What is on this machine, not what `priority` allows** — and this is the call site that
+    // makes the distinction necessary rather than tidy. `init` *writes* the priority file from
+    // what it detects, so asking "what does priority allow" here would read a file that does
+    // not exist yet, or gate the answer on the very list it is about to produce. The result
+    // would be an empty priority file and a repo that can do nothing.
     let detected: Vec<String> = app
-        .registry
-        .available()
+        .backends()
+        .await
+        .present_on_this_machine()
         .iter()
         .map(|b| b.name().to_string())
         .collect();

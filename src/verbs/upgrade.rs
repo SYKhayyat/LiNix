@@ -11,6 +11,8 @@ pub struct UpgradeRequest<'a> {
     pub all: bool,
     pub security: bool,
     pub except: &'a [String],
+    /// Run the native whole-system upgrade knowing it cannot honour holds (B9).
+    pub ignore_holds: bool,
     pub profile: &'a Option<String>,
     pub module: &'a Option<String>,
     pub out: Output,
@@ -411,17 +413,43 @@ async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
                  pass package names or use --backend/--security to scope exclusions."
             );
         }
-        // Native batch upgrades (`apt upgrade`, `brew upgrade`, …) run inside each manager and
-        // can't be told to skip individual packages, so Shall holds aren't enforced here. Be
-        // honest about it rather than pretend the hold was respected.
-        // Both sources again. This counted the ledger, so somebody whose holds were all
-        // declared got no warning at all — and their holds were exactly as unenforced.
-        let held_count = app.holds().await.len();
-        if held_count > 0 {
+        // **Native batch upgrades cannot honour a hold, so this run is refused rather than
+        // noted.** `apt upgrade` and its siblings run inside each manager and cannot be told to
+        // skip a package: `upgrade` filters its own plan against the holds, correctly, and then
+        // hands the whole-system path to a manager that never sees the filtered plan.
+        //
+        // It used to print a `note:` and carry on at exit 0, under a summary reading
+        // `Status: SUCCESS  Installs: 0` while a held package moved two major versions. The
+        // observation existed on the path the user runs — which is more than B0 or B1 managed —
+        // and it was a note, so a weekly `shall upgrade` bumped the version somebody had pinned
+        // precisely to stop that, and nothing in the exit code said so (B9).
+        //
+        // Refused, not removed: `--ignore-holds` is the explicit opt-in for "yes, upgrade the
+        // whole machine anyway", and every scoped form of the verb honours holds and needs no
+        // flag. Both hold sources are counted — the ledger's and the manifest's — because
+        // counting only the ledger left somebody whose holds were all declared with no warning
+        // at all and holds exactly as unenforced.
+        let holds = app.holds().await;
+        if !holds.is_empty() && !req.ignore_holds {
+            return Err(anyhow::anyhow!(
+                "{} package(s) are held, and the native whole-system upgrade cannot skip \
+                 them:\n{}\n\nNothing was upgraded. Either scope the upgrade so the holds \
+                 bind — `shall upgrade --backend <b>`, or name the packages — or run \
+                 `shall upgrade --ignore-holds` to upgrade the whole machine anyway.",
+                holds.len(),
+                holds
+                    .describe()
+                    .iter()
+                    .map(|l| format!("  {l}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ));
+        }
+        if !holds.is_empty() {
             eprintln!(
-                "note: {} package hold(s) are NOT enforced by the native whole-system upgrade. \
-                 Use `shall upgrade --backend <b>` or per-package upgrades to honor holds.",
-                held_count
+                "note: --ignore-holds — {} package hold(s) are not enforced by the native \
+                 whole-system upgrade and may be bumped by it.",
+                holds.len()
             );
         }
         // `apt upgrade` is a change path, so it passes the `[guard]` gate like every other

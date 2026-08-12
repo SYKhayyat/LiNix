@@ -109,7 +109,7 @@ async fn run_in_dir(prog: &str, args: &[&str], dir: &Path) -> bool {
     // curl and wget both ask for credentials on a 401. `supervised_output` closes stdin, so the
     // question is captured rather than asked, and the bound is what ends it.
     cmd.args(args).current_dir(dir);
-    crate::core::executor::supervised_output(cmd, prog, false)
+    crate::core::supervise::supervised_output(cmd, prog, false)
         .await
         .map(|o| o.status.success())
         .unwrap_or(false)

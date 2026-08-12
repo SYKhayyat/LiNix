@@ -139,32 +139,28 @@ fn output_the_parser_did_not_understand_is_reported_as_such() {
     assert_eq!(e.backend, "dnf");
 }
 
-/// **A sibling this gate found on its first run, recorded rather than quietly fixed.**
+/// **A sibling this gate found on its first run, recorded rather than quietly fixed — and now
+/// closed by a change made for a different reason.**
 ///
-/// `apt::parse_list` reads `${Package} ${Version}` by splitting on the first space, so apt's own
-/// error output — `E: Could not open lock file` — parses as a package named `E:` at version
-/// *"Could not open lock file"*. That is the *junk* failure mode, not the empty one, and it is
-/// therefore outside what `LX-1` changed: this file is about the two kinds of nothing, and no
-/// return type distinguishes a wrong package from a right one.
+/// `apt::parse_list` used to read `${Package} ${Version}` by splitting on the first space, so
+/// apt's own error output — `E: Could not open lock file` — parsed as a package named `E:` at
+/// version *"Could not open lock file"*. That is the *junk* failure mode rather than the empty
+/// one, and the note here said fixing it meant constraining the name to what dpkg can emit,
+/// which was a different argument with a different blast radius.
 ///
-/// It is asserted here as it actually behaves, so the finding cannot be lost and cannot be
-/// mistaken for something this change already covered. Fixing it means constraining the name to
-/// what dpkg can emit, which is a different argument with a different blast radius — every
-/// backend sharing the shape, and multi-arch names that legitimately carry a colon.
+/// B0 made that argument for its own reasons. The lister now asks for `${db:Status-Status}`,
+/// because `dpkg-query -W` alone reports packages `apt remove` left behind as installed — and a
+/// row that has to open with a status word dpkg can emit is exactly the constraint this note
+/// was waiting for. `E:` is not one, so the whole listing is unreadable rather than believed.
+///
+/// Kept, inverted, because the finding is what makes the assertion mean anything.
 #[test]
-fn junk_is_a_different_failure_from_emptiness_and_this_change_does_not_address_it() {
-    let pkgs = parsers::apt::parse_list("E: Could not open lock file\nE: Are you root?\n")
-        .expect("this is not the empty-vs-unread failure; it produces packages");
-    assert_eq!(pkgs.len(), 2, "{pkgs:?}");
-    assert_eq!(
-        pkgs[0].name, "E:",
-        "apt's error prefix reads as a package name"
-    );
-    assert_eq!(
-        pkgs[0].version.as_deref(),
-        Some("Could not open lock file"),
-        "and the rest of the sentence reads as its version"
-    );
+fn junk_that_used_to_read_as_packages_is_now_an_unread_listing() {
+    let e = parsers::apt::parse_list("E: Could not open lock file\nE: Are you root?\n")
+        .expect_err("apt's error prefix must no longer read as a package named `E:`");
+    assert_eq!(e.backend, "apt");
+    assert_eq!(e.data_lines, 2);
+    assert!(e.sample.starts_with("E:"), "{e:?}");
 }
 
 /// A backend nobody wired a reader for is a question that cannot be answered, not an answer.

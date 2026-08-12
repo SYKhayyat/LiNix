@@ -1,6 +1,7 @@
 pub mod adapters;
 pub mod adopt;
 pub mod apply;
+pub mod backends;
 pub mod bisect;
 pub mod bundle;
 pub mod check;
@@ -41,6 +42,7 @@ pub use self::adopt::Adopter;
 pub use self::apply::{
     Bootstrap, Dependents, Dotfiles, Execs, Extras, Firewall, Prereqs, Repositories, Schedules,
 };
+pub use self::backends::Backends;
 pub use self::context::App;
 pub use self::hooks::LuaHooks;
 pub use self::leases::Leases;

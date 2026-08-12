@@ -115,8 +115,7 @@ fn ledger_reason(key: &str) -> Option<&'static str> {
 /// `version_pin` and took `Default`'s `None` in silence. A scan that only looked for the literal
 /// `version_pin: None` would have reported `xbps` clean.
 fn registrars_and_their_pins() -> BTreeMap<String, bool> {
-    let src = std::fs::read_to_string(root().join("src/backends/registry.rs"))
-        .expect("registry.rs is in this repo");
+    let src = crate::harness::registry_source();
     let mut out: BTreeMap<String, bool> = BTreeMap::new();
     let mut builds_a_config: BTreeMap<String, bool> = BTreeMap::new();
     let mut current = String::new();

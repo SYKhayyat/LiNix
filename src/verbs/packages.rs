@@ -441,7 +441,7 @@ pub async fn handle_uninstall(
     // Asked BEFORE the sync, because the sync is what empties the registry entry for
     // everything it removes — afterwards every name here reads as unmanaged and the check
     // below could not tell a package that went from one that was never Shall's.
-    let unmanaged_before = unmanaged_targets(app, packages).await;
+    let unmanaged_before = unmanaged_targets(app, packages).await?;
 
     let mut never_declared: Vec<&str> = Vec::new();
 
@@ -619,7 +619,9 @@ async fn absent_targets(app: &App, packages: &[String]) -> Result<Vec<(String, S
 
         let mut holders: Vec<String> = Vec::new();
         let mut unasked: Vec<String> = Vec::new();
-        for b in app.registry.available() {
+        // What Shall uses: this writes `absent:` lines, and a line naming a manager outside
+        // `priority` is one the next read refuses.
+        for b in app.backends().await.usable()? {
             let backend = b.name().to_string();
             if !listings.contains_key(&backend) {
                 // A manager that cannot be asked contributes no holders. Assuming it holds the
@@ -684,7 +686,11 @@ async fn absent_targets(app: &App, packages: &[String]) -> Result<Vec<(String, S
 /// A bare name is expanded across the managers that could hold it, through the one parser for
 /// `backend:name` — a caller that split on `:` itself would take `github:owner/repo` apart in
 /// a way no other reader of that string does.
-async fn unmanaged_targets(app: &App, packages: &[String]) -> Vec<(String, String)> {
+/// Fallible since W4, and that is not incidental: expanding a bare name needs to know which
+/// managers Shall may use, and a `priority` that will not resolve makes the expansion — and so
+/// the refusal built on it — unanswerable. Returning an empty list instead would report every
+/// name as managed and take `Q54`'s refusal off the table silently.
+async fn unmanaged_targets(app: &App, packages: &[String]) -> Result<Vec<(String, String)>> {
     let state = app.state.lock().await;
     let mut out: Vec<(String, String)> = Vec::new();
     for pkg in packages {
@@ -702,23 +708,17 @@ async fn unmanaged_targets(app: &App, packages: &[String]) -> Vec<(String, Strin
             // does, so widening here on an ordinary `shall uninstall jq` would turn one
             // removal into a listing from every package manager on the box.
             None => {
-                if !app
-                    .registry
-                    .available()
-                    .iter()
-                    .any(|b| state.is_managed(b.name(), &name))
-                {
-                    out.extend(
-                        app.registry
-                            .available()
-                            .iter()
-                            .map(|b| (b.name().to_string(), name.clone())),
-                    );
+                // What Shall uses, both times — and asked once rather than twice, which the
+                // two calls here were not: the same fan-out ran to decide whether to widen and
+                // again to widen, and after W4 each of those is a PATH walk per manager.
+                let usable = app.backends().await.usable()?;
+                if !usable.iter().any(|b| state.is_managed(b.name(), &name)) {
+                    out.extend(usable.iter().map(|b| (b.name().to_string(), name.clone())));
                 }
             }
         }
     }
-    out
+    Ok(out)
 }
 
 /// Which of those are nevertheless on the machine — the packages a removal named, did not
@@ -837,7 +837,7 @@ async fn preview_uninstall(
     // Not asked under `--absent`: that flag's whole business is removing what Shall has no
     // record of installing, so the answer is never "would remove nothing".
     if temp.is_none() && !absent {
-        let survivors = still_installed(app, &unmanaged_targets(app, packages).await).await;
+        let survivors = still_installed(app, &unmanaged_targets(app, packages).await?).await;
         if !survivors.is_empty() {
             crate::would_print!(
                 "would remove nothing from the machine: {} installed, and Shall has no record \
@@ -883,7 +883,9 @@ pub async fn suspend_for_session(app: &App, packages: &[String]) -> Result<()> {
             crate::config::parser::split_removal_target(pkg_str, |b| app.registry.get(b).is_some());
 
         let mut done = false;
-        for b in app.registry.available() {
+        // What Shall uses: a session suspension acts on the machine through a manager, so it
+        // is the same set every other acting verb takes.
+        for b in app.backends().await.usable()? {
             if scoped_backend.as_deref().is_some_and(|sb| sb != b.name()) {
                 continue;
             }
@@ -960,6 +962,24 @@ pub async fn handle_hold(app: &App, packages: &[String]) -> Result<()> {
         // repository grades itself against. The source is printed beside each one because the
         // two are released by different commands.
         let holds = app.holds().await;
+        // The ledger's half is still worth printing — it is true, and it is what the user has
+        // — but the answer is incomplete and the exit code is the only part of it a script
+        // reads. `upgrade` carries on over an unresolvable manifest because acting on the
+        // holds it can see is better than acting on none; *reporting* over one is a different
+        // question with a different right answer, and this verb was giving upgrade's (B3).
+        if let Some(why) = holds.unresolved() {
+            if !holds.is_empty() {
+                println!("Held packages recorded by `shall hold` ({}):", holds.len());
+                for line in holds.describe() {
+                    println!("  {}", line);
+                }
+            }
+            anyhow::bail!(
+                "Shall cannot tell you what is held: your manifest did not resolve ({why}), so \
+                 no `@hold=true` line could be read. The `shall hold` entries above are the \
+                 whole of what it can see, and there may be more."
+            );
+        }
         if holds.is_empty() {
             println!("No packages are held.");
         } else {

@@ -189,7 +189,7 @@ impl LuaHooks {
         // Supervised: a hook is arbitrary code, and plenty of them run a package manager. Left
         // unowned it outlived the node that fired it — still holding dpkg's lock while the
         // rollback that abandoned it tried to take the same one.
-        let out = crate::core::executor::supervised_output(cmd, "the hook", true)
+        let out = crate::core::supervise::supervised_output(cmd, "the hook", true)
             .await
             .map_err(|e| Error::Other(format!("Polyglot execution failed: {}", e)))?;
 
@@ -445,7 +445,7 @@ mod tests {
     async fn a_python_hook_runs_wherever_python_is_installed() {
         let installed = ["python3", "python", "py"]
             .iter()
-            .any(|name| crate::core::executor::resolve_program(name).is_some());
+            .any(|name| crate::core::launch::resolve_program(name).is_some());
         if !installed {
             // Not silent: a skipped test that reads as a pass is how a dead path survives.
             eprintln!("skipped: no python on this machine (tried python3, python, py)");

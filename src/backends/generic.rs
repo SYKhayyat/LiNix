@@ -2427,7 +2427,10 @@ mod tests {
     ) -> GenericQueryable {
         let mut core = apt_like_core(mock, vfs);
         core.config.list_binary = Some("dpkg-query".into());
-        core.config.list_args = vec!["-W".into(), "-f=${Package} ${Version}\\n".into()];
+        core.config.list_args = vec![
+            "-W".into(),
+            "-f=${db:Status-Status} ${Package} ${Version}\\n".into(),
+        ];
         core.config.manual = manual;
         core.parser = Arc::new(crate::parsers::apt::AptParser);
         GenericQueryable {
@@ -2457,10 +2460,10 @@ mod tests {
         );
         // ...and the listing it does understand still answers.
         mock.set_response(
-            "dpkg-query -W -f=${Package} ${Version}\n",
+            "dpkg-query -W -f=${db:Status-Status} ${Package} ${Version}\n",
             Ok(DryRunOutput {
-                stdout: b"jq 1.7.1
-ripgrep 15.2.0
+                stdout: b"installed jq 1.7.1
+installed ripgrep 15.2.0
 "
                 .to_vec(),
                 stderr: vec![],
@@ -2470,7 +2473,10 @@ ripgrep 15.2.0
 
         let mut core = apt_like_core(mock.clone(), vfs);
         core.config.list_binary = Some("dpkg-query".into());
-        core.config.list_args = vec!["-W".into(), "-f=${Package} ${Version}\n".into()];
+        core.config.list_args = vec![
+            "-W".into(),
+            "-f=${db:Status-Status} ${Package} ${Version}\n".into(),
+        ];
         core.config.machine_list = Some(MachineListing {
             binary: None,
             args: vec!["--format".into(), "json".into()],
@@ -2550,7 +2556,7 @@ ripgrep 15.2.0
         let vfs = Arc::new(DashMap::new());
         let mock = Arc::new(MockExecutor::new(vfs.clone()));
         mock.set_response(
-            "dpkg-query -W -f=${Package} ${Version}\\n",
+            "dpkg-query -W -f=${db:Status-Status} ${Package} ${Version}\\n",
             Ok(crate::core::executor::silent_failure(1)),
         );
         let q = queryable_with(ManualListing::AllInstalled, mock.clone(), vfs);
@@ -2572,7 +2578,7 @@ ripgrep 15.2.0
         let vfs = Arc::new(DashMap::new());
         let mock = Arc::new(MockExecutor::new(vfs.clone()));
         mock.set_response(
-            "dpkg-query -W -f=${Package} ${Version}\\n",
+            "dpkg-query -W -f=${db:Status-Status} ${Package} ${Version}\\n",
             Ok(DryRunOutput {
                 stdout: vec![],
                 stderr: vec![],
@@ -2609,9 +2615,11 @@ ripgrep 15.2.0
         // must not be used, nothing checked it: the stub sat dead, and a product wired to the
         // wrong listing would have been caught only by the overlap between the two answers.
         mock.set_response_that_must_not_be_used(
-            "dpkg-query -W -f=${Package} ${Version}\\n",
+            "dpkg-query -W -f=${db:Status-Status} ${Package} ${Version}\\n",
             Ok(DryRunOutput {
-                stdout: b"apt 2.7.14\njq 1.7.1\nlibperl5.38t64 5.38.2\n".to_vec(),
+                stdout:
+                    b"installed apt 2.7.14\ninstalled jq 1.7.1\ninstalled libperl5.38t64 5.38.2\n"
+                        .to_vec(),
                 stderr: vec![],
             }
             .into()),
@@ -2657,9 +2665,9 @@ ripgrep 15.2.0
         let vfs = Arc::new(DashMap::new());
         let mock = Arc::new(MockExecutor::new(vfs.clone()));
         mock.set_response(
-            "dpkg-query -W -f=${Package} ${Version}\\n",
+            "dpkg-query -W -f=${db:Status-Status} ${Package} ${Version}\\n",
             Ok(DryRunOutput {
-                stdout: b"apt 2.7.14\nlibperl5.38t64 5.38.2\n".to_vec(),
+                stdout: b"installed apt 2.7.14\ninstalled libperl5.38t64 5.38.2\n".to_vec(),
                 stderr: vec![],
             }
             .into()),
@@ -2682,9 +2690,9 @@ ripgrep 15.2.0
         let vfs = Arc::new(DashMap::new());
         let mock = Arc::new(MockExecutor::new(vfs.clone()));
         mock.set_response(
-            "dpkg-query -W -f=${Package} ${Version}\\n",
+            "dpkg-query -W -f=${db:Status-Status} ${Package} ${Version}\\n",
             Ok(DryRunOutput {
-                stdout: b"jq 1.7.1\n".to_vec(),
+                stdout: b"installed jq 1.7.1\n".to_vec(),
                 stderr: vec![],
             }
             .into()),

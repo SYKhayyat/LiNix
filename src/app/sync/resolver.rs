@@ -238,6 +238,29 @@ impl<'a> StateResolver<'a> {
             }
             Err(e) => return Err(Error::from(e)),
         };
+        // **A file that names no backend is the same state as no file, and got the opposite
+        // treatment.** A *missing* `priority` produced the message above — the file, the fix,
+        // and an example. An *empty* one was accepted without a word, and empty does not mean
+        // "no backends": `UniversalSearch` reads an empty enabled set as *every available
+        // backend*, on the stated premise that only a missing file can produce one. That
+        // premise was false, so emptying the file quietly inverted the sentence the file's own
+        // header prints — "Not listed = Shall does not use it at all" (B8).
+        //
+        // Asked of the parser rather than of the text, so a file of nothing but comments, and
+        // one holding only an empty `when` block, are the same answer as a file of nothing. A
+        // body that will not parse falls through untouched: the real parser below reports that
+        // far better than a guess here could.
+        if Priority::every_backend(&file, &body).is_ok_and(|p| p.is_empty()) {
+            return Err(Error::Config(format!(
+                "the `priority` file at {} names no package manager.\n  \
+                 Shall does not fall back to whatever is installed — that is the point of the \
+                 file — so there is nothing it may use and every declaration would be \
+                 refused.\n\n  \
+                 Run `shall init` to have it written from the managers on this machine, or \
+                 list them one per line, best first:\n\n    apt\n    cargo\n",
+                file.display()
+            )));
+        }
         Ok((file, body))
     }
 
@@ -630,7 +653,7 @@ impl<'a> StateResolver<'a> {
                 command.current_dir(self.config.config_root());
                 let label = format!("generate:{cmd}");
                 async move {
-                    crate::core::executor::supervised_output(command, &label, false)
+                    crate::core::supervise::supervised_output(command, &label, false)
                         .await
                         .map_err(|e| std::io::Error::other(e.to_string()))
                 }
@@ -909,6 +932,18 @@ impl<'a> StateResolver<'a> {
                 }
                 continue;
             }
+            // The character check the model runs after `collect` cannot help here: this probe
+            // is what hands the name to each candidate manager, so it happens *before* that
+            // check has anything to look at. On Windows a manager that ships as a `.cmd` shim
+            // reaches `cmd`, and one crafted bare name in a shared module wrote files on every
+            // machine that so much as evaluated it (B-1). Located, because a name that came
+            // from a file is answerable only by its line.
+            Validator::refuse_command_metacharacters(&name, "a package name").map_err(|e| {
+                Error::from(GrammarError::new(origin.clone(), e.to_string()).with_hint(
+                    "a bare name is asked of every manager that could own it, so it becomes \
+                     a command line before Shall knows whose it is.",
+                ))
+            })?;
             let constraint = decl.options.one("version").map(str::to_string);
             asked.insert(name.clone(), questions.len());
             questions.push(Question {

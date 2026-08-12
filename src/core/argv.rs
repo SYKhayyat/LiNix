@@ -208,15 +208,6 @@ const TERMINATORS: &[Terminator] = &[
         ),
     ),
     row(
-        "composer",
-        true,
-        Evidence::Measured(
-            "`composer global require -- <bogus>` is byte-identical to the same line without the \
-             terminator, both answering `Could not find a matching version of package <bogus>`; \
-             its own usage line documents `[--] [<packages>...]` (tools image, 2026-08-04)",
-        ),
-    ),
-    row(
         "luarocks",
         true,
         Evidence::Measured(
@@ -349,6 +340,25 @@ const TERMINATORS: &[Terminator] = &[
     row("sops", true, GETOPT),
     // ---- Measured NOT to terminate. Every one of these was in the terminating set at some
     // point, put there by family resemblance, and every one of them broke something.
+    //
+    // **`composer` is the newest, and it got in on a reading of its own usage line.** The row
+    // claimed `--` was honoured because `composer global require -- <bogus>` was byte-identical
+    // to the same line without it, and because `[--] [<packages>...]` appears in composer's
+    // usage. Byte-identical is exactly as consistent with *ignoring* the terminator as with
+    // honouring it, and the differential probe in the tools image has reported it swallowing on
+    // three consecutive nightlies. The nightly is a measurement and the usage line is a
+    // document, so the nightly wins.
+    row(
+        "composer",
+        false,
+        Evidence::Measured(
+            "the differential probe reports `composer global require -- <bogus>` swallowing the \
+             terminator, on three consecutive nightly runs of the tools image. The row that \
+             claimed otherwise read `[--] [<packages>...]` in composer's usage and a pair of \
+             byte-identical runs — neither of which distinguishes honouring `--` from ignoring \
+             it (nightly Integration (tools), 2026-08-10 onwards)",
+        ),
+    ),
     row(
         "asdf",
         false,

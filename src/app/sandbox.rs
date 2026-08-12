@@ -25,20 +25,6 @@ pub struct SandboxConfig {
 pub struct Sandbox;
 
 impl Sandbox {
-    /// Whether this platform has a sandbox mechanism at all — NOT whether one is usable
-    /// here. Windows answers yes unconditionally: the Windows Sandbox feature is optional
-    /// and can only be detected by an async PowerShell query this sync fn cannot make. A
-    /// caller that needs to know a sandbox will actually run must use `is_available`.
-    pub fn is_supported() -> bool {
-        if cfg!(target_os = "linux") {
-            Self::bwrap_available()
-        } else if cfg!(target_os = "macos") {
-            Self::sandbox_exec_available()
-        } else {
-            cfg!(target_os = "windows")
-        }
-    }
-
     pub async fn is_available(settings: &SandboxSettings) -> bool {
         if cfg!(target_os = "linux") {
             Self::bwrap_available() || settings.fallback_allowed
@@ -52,13 +38,13 @@ impl Sandbox {
     }
 
     fn bwrap_available() -> bool {
-        crate::core::executor::program_exists("bwrap")
+        crate::core::launch::program_exists("bwrap")
     }
 
     fn sandbox_exec_available() -> bool {
         #[cfg(target_os = "macos")]
         {
-            return crate::core::executor::program_exists("sandbox-exec");
+            return crate::core::launch::program_exists("sandbox-exec");
         }
         #[allow(unreachable_code)]
         false
@@ -73,7 +59,7 @@ impl Sandbox {
             // Supervised: `Get-WindowsOptionalFeature` talks to the servicing stack, which is
             // the component most likely on a Windows box to answer in its own time or not at all.
             let output =
-                crate::core::executor::supervised_output(command, "powershell", false).await;
+                crate::core::supervise::supervised_output(command, "powershell", false).await;
 
             if let Ok(out) = output {
                 return crate::utils::text::sanitize(&String::from_utf8_lossy(&out.stdout))

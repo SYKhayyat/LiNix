@@ -13,7 +13,7 @@ pub async fn handle_repo(app: &App, cmd: &RepoCommand) -> Result<()> {
         Some(b) => b,
         None => app
             .priority_backends()
-            .await
+            .await?
             .into_iter()
             .next()
             .unwrap_or_else(|| "apt".into()),
@@ -711,4 +711,29 @@ pub async fn handle_profile(app: &App, cmd: &ProfileCommand) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// `adopt` — take what is already installed into the manifest.
+///
+/// Here rather than in `history`, where it sat: this writes declarations, which is what
+/// every other verb in this file does.
+pub async fn handle_adopt(app: &App, backends: Vec<String>, enabled_only: bool) -> Result<()> {
+    // A name that reaches no backend is refused rather than silently adopting nothing: `shall
+    // adopt srvice` answering "Adopted 0 declaration(s)" is byte-identical to a correct name
+    // with nothing to take, so a typo cannot be told from a no-op (Q9).
+    //
+    // Through `require_known_backend` and not a message of its own: `install`'s wording is the
+    // one refusal, and a second spelling of it is how E18's family started.
+    for name in &backends {
+        app.require_known_backend(Some(name))?;
+    }
+    let scope = crate::app::adopt::AdoptScope {
+        backends,
+        enabled_only,
+    };
+    app.adopter()
+        .await
+        .adopt_scoped(&scope)
+        .await
+        .map_err(|e| e.into())
 }

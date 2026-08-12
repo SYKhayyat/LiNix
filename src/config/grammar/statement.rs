@@ -462,11 +462,6 @@ impl Phase {
     pub fn after_packages() -> impl Iterator<Item = Phase> {
         Phase::all().filter(|p| *p > Phase::Packages)
     }
-
-    /// Whether this phase puts something on the machine at all.
-    pub fn is_work(self) -> bool {
-        self != Phase::Resolution
-    }
 }
 
 /// Decides whether a `prefix:` names a real backend. Injected rather than hardcoded: the

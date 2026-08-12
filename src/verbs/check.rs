@@ -1,4 +1,4 @@
-use crate::verbs::history::handle_audit;
+use crate::verbs::inventory::handle_audit;
 use crate::verbs::plan::handle_status;
 use crate::verbs::prelude::*;
 
@@ -9,7 +9,7 @@ use crate::verbs::prelude::*;
 /// question: while both wore this one, the two answers differed by a factor of four and the
 /// number printed here was not the number the delete command would act on.
 pub async fn handle_unmanaged(app: &App) -> Result<()> {
-    let found = app.adopter().discover().await?;
+    let found = app.adopter().await.discover().await?;
 
     if found.adopt.is_empty() {
         println!("Nothing to adopt: Shall already manages everything you chose to install.");
@@ -150,7 +150,10 @@ pub async fn check_approvals(app: &App, out: Output) -> Result<()> {
 /// machine.
 async fn probe_all_health(app: &App) -> Vec<(String, crate::core::HealthReport)> {
     use futures::stream::StreamExt;
-    futures::stream::iter(app.registry.all())
+    // **Every backend this build knows, installed or not** — the one question where that is
+    // right. A manager that is absent is a report; a manager that is absent *and* named by
+    // `priority` is a failure, and neither is visible from the set Shall may use.
+    futures::stream::iter(app.backends().await.registered())
         .map(|b| async move {
             let report = match b.core().check_health().await {
                 Ok(r) => r,
@@ -244,26 +247,34 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
                 ]),
             ),
             (Ok(c), Ok(r)) if c.is_empty() && r.is_empty() => {
-                findings.push(
-                    Finding::ok(
+                // **`ok` is the word that made this invisible.** The sentence below has always
+                // been scrupulously honest — Shall says it cannot read these back, and names
+                // them — and it was filed under the one marker that means "nothing to see",
+                // which is also the marker that decides the exit code. A dotfile that no
+                // program could open printed as a green row and exited 0, repeatedly (B0b).
+                //
+                // Absence and unavailability are different answers and only one of them is
+                // knowable: that rule is the reason this codebase distinguishes them at all,
+                // and reporting the unknowable one under the marker for the good answer throws
+                // the distinction away at the last step.
+                let finding = match r.unverifiable.len() {
+                    0 => Finding::ok(Section::Drift, "the machine matches your files"),
+                    n => Finding::attention(
                         Section::Drift,
-                        match r.unverifiable.len() {
-                            0 => "the machine matches your files".to_string(),
-                            // Not "it matches": Shall looked at the packages and at every
-                            // resource it can read back, and these it cannot. Saying so is the
-                            // difference between a converged machine and an unexamined one.
-                            n => format!(
-                                "the machine matches your files, except {} resource(s) Shall \
-                                 cannot read back ({})",
-                                n,
-                                r.unverifiable.join(", ")
-                            ),
-                        },
-                    )
+                        format!(
+                            "the packages and every resource Shall can read back match your \
+                             files; {} resource(s) it cannot read back ({})",
+                            n,
+                            r.unverifiable.join(", ")
+                        ),
+                        "shall sync",
+                    ),
+                };
+                findings.push(
                     // Zeroes, spelled out. A consumer that has to treat "the key is absent" and
                     // "the count is nought" as the same thing will one day be handed a real
                     // absence and call the machine converged.
-                    .counting([
+                    finding.counting([
                         ("install", 0),
                         ("remove", 0),
                         ("skipped", 0),
@@ -326,7 +337,7 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
     }
 
     // unmanaged — what adopt would take.
-    match app.adopter().discover().await {
+    match app.adopter().await.discover().await {
         Ok(found) if found.adopt.is_empty() => findings.push(
             Finding::ok(Section::Unmanaged, "everything you chose is managed")
                 .counting([("unmanaged", 0)]),
@@ -808,8 +819,16 @@ pub async fn check_health(app: &App, out: Output) -> Result<()> {
     // `priority` is not absent, it is broken. The user named it; Shall cannot use it. That
     // second half is what keeps Q2 from being a way to hide real failures: the state depends
     // on whether the machine was asked for the manager, not only on whether it is there.
-    let wanted: std::collections::HashSet<String> =
-        app.priority_backends().await.into_iter().collect();
+    // Unwrapped to empty on purpose, and this is the one place that is right: a `priority`
+    // that will not resolve means Shall was told to use nothing it can name, so no absent
+    // manager can be *promoted* to broken — and `check health`'s whole subject is the machine,
+    // which it can still report on. The config section reports the unreadable file itself.
+    let wanted: std::collections::HashSet<String> = app
+        .priority_backends()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
     let mut reports: Vec<(String, HealthReport)> = probe_all_health(app).await;
     for (name, report) in reports.iter_mut() {
         // A set, not a scan: this ran `wanted.iter().any(...)` once per backend, inside the

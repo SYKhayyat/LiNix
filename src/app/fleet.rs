@@ -42,7 +42,7 @@ async fn ssh_capture(host: &str, remote_cmd: &str) -> Result<String> {
     // Supervised: `BatchMode` stops ssh asking for a password, but nothing stopped it hanging on
     // a host that accepts the connection and never answers — and a fleet query abandoned midway
     // left one ssh per host behind it.
-    let out = crate::core::executor::supervised_output(command, "ssh", false)
+    let out = crate::core::supervise::supervised_output(command, "ssh", false)
         .await
         .map_err(|e| Error::Other(format!("failed to launch ssh for {}: {}", host, e)))?;
     if !out.status.success() {

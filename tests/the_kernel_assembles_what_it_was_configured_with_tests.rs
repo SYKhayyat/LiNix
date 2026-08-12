@@ -24,7 +24,7 @@ use crate::mock_providers::TestKernel;
 #[tokio::test]
 async fn the_registry_holds_the_backends_the_config_named() {
     let kernel = TestKernel::new().await;
-    let backends = kernel.app.registry.available();
+    let backends = kernel.app.registry.present_on_this_machine();
 
     assert!(
         !backends.is_empty(),

@@ -1,4 +1,4 @@
-use crate::backends::BackendRegistry;
+use crate::app::Backends;
 use crate::config::Config;
 use crate::core::{Error, Package, Result};
 use std::collections::HashSet;
@@ -7,34 +7,42 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tracing::{debug, error, info, instrument, trace, warn};
 pub struct UniversalSearch<'a> {
-    registry: &'a BackendRegistry,
+    /// **The registry paired with `priority`, rather than the registry and a name list.**
+    ///
+    /// The two fields this replaces were `registry` and `enabled: Vec<String>`, and the join
+    /// between them was written here: *"Empty = every available backend (the file is missing,
+    /// which the resolver already refuses elsewhere)"*. That premise was false in two ways at
+    /// once — an *empty* `priority` file produced an empty list and was accepted (B8), and the
+    /// accessor that filled the list ended in `.unwrap_or_default()`, so a file that would not
+    /// resolve produced one too. Either way the fallback searched every manager on the box,
+    /// which is the exact inversion of what the file says. A type that cannot express "empty"
+    /// and "unreadable" as the same value is the fix.
+    backends: &'a Backends,
     config: &'a Config,
-    /// The backends to search, from the `priority` file (II.6). Empty = every available
-    /// backend (the file is missing, which the resolver already refuses elsewhere).
-    enabled: Vec<String>,
 }
 
 impl<'a> UniversalSearch<'a> {
-    pub fn new(registry: &'a BackendRegistry, config: &'a Config, enabled: Vec<String>) -> Self {
-        Self {
-            registry,
-            config,
-            enabled,
-        }
+    pub fn new(backends: &'a Backends, config: &'a Config) -> Self {
+        Self { backends, config }
     }
 
     #[instrument(skip(self, query))]
     pub async fn search(&self, query: &str) -> Result<Vec<Package>> {
+        // The query is free text that becomes every searchable manager's argv, and it passes
+        // no package-name rule on the way — so it was the one string a user could hand Shall
+        // that reached a Windows `.cmd` shim untouched. Refused before the fan-out, because a
+        // fan-out is 22 chances rather than one.
+        crate::core::Validator::refuse_command_metacharacters(query, "a search query")?;
         info!("searching all backends for '{}'", query);
 
-        let searchable_backends: Vec<_> = if self.enabled.is_empty() {
-            self.registry.available()
-        } else {
-            self.registry.get_filtered(&self.enabled)
-        }
-        .into_iter()
-        .filter(|b| b.as_searchable().is_some())
-        .collect();
+        // What Shall uses. Searching a manager `priority` excludes offers the user a package
+        // they cannot then declare, which is a worse answer than no answer.
+        let searchable_backends: Vec<_> = self
+            .backends
+            .usable()?
+            .into_iter()
+            .filter(|b| b.as_searchable().is_some())
+            .collect();
 
         if searchable_backends.is_empty() {
             debug!("No searchable backends are currently available.");

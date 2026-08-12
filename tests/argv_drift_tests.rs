@@ -24,7 +24,7 @@
 //! read", because this file launched them with a raw `Command` while Shall launches them
 //! through an interpreter — they are `.cmd`/`.ps1` shims and `Command::new` cannot execute one.
 //! Five installed managers, silently uncovered, in the gate written to stop exactly that.
-//! Everything here now goes through [`shall::core::executor::effective_command`], the same
+//! Everything here now goes through [`shall::core::launch::effective_command`], the same
 //! function the product uses.
 
 use std::collections::BTreeSet;
@@ -183,7 +183,7 @@ fn on_path(program: &str) -> bool {
 /// executor has always wrapped shims; the gate did not, so it launched a different program
 /// from the one that ships and covered four installed managers less than it claimed.
 fn run(program: &str, args: &[String]) -> Option<String> {
-    let (prog, argv) = shall::core::executor::effective_command(program, args);
+    let (prog, argv) = shall::core::launch::effective_command(program, args);
     let out = Command::new(prog).args(&argv).output().ok()?;
     Some(format!(
         "{}{}",
@@ -242,7 +242,7 @@ async fn every_subcommand_shall_invokes_still_exists_upstream() {
     // `available()`, not `all()`. A backend whose program is not on this machine cannot have
     // its subcommands checked against anything, and asking anyway is how `kubectl krew` got
     // reported as drift when krew simply is not installed here.
-    for backend in registry.available() {
+    for backend in registry.present_on_this_machine() {
         let spec = PackageSpec {
             name: "jq".into(),
             backend: backend.name().into(),

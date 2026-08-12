@@ -31,13 +31,31 @@ pub struct Holds {
     /// `(backend, name)` for every present declaration carrying `@hold=true`, with the file and
     /// line it came from so a listing can name it.
     declared: BTreeSet<(String, String, String)>,
+    /// Why the manifest half is missing, when it is.
+    ///
+    /// **`declared` is empty for two reasons and only one of them is an answer.** Either no line
+    /// carries `@hold=true`, or the model would not resolve and nobody could look. Acting on the
+    /// first is right; acting on the second is right too — `upgrade` must not stop over a syntax
+    /// error in an unrelated module. *Reporting* on the second is not: `shall hold` with no
+    /// arguments printed `No packages are held.` on stdout at exit 0, having written a correct
+    /// warning to stderr, so anything scripting it got a confident falsehood and no way to know
+    /// better (B3).
+    unresolved: Option<String>,
 }
 
 impl Holds {
-    /// Read both sources. The desired state is optional: `upgrade` and `hold` must not fail
-    /// because a module has a syntax error, so a model that will not resolve yields the ledger
-    /// alone — and the caller says so out loud rather than silently honouring half the holds.
-    pub fn new(state: &StateRegistry, desired: Option<&HashMap<String, Vec<PackageSpec>>>) -> Self {
+    /// Read both sources, and remember when only one of them could be read.
+    ///
+    /// The desired state is optional: `upgrade` and `hold` must not fail because a module has a
+    /// syntax error, so a model that will not resolve yields the ledger alone. `why` is the
+    /// resolution failure when there was one — carried rather than discarded, so a caller whose
+    /// job is to *report* holds can refuse to answer while a caller whose job is to *act* on
+    /// them carries on.
+    pub fn new(
+        state: &StateRegistry,
+        desired: Option<&HashMap<String, Vec<PackageSpec>>>,
+        why: Option<String>,
+    ) -> Self {
         let declared = desired
             .map(|d| {
                 d.values()
@@ -59,7 +77,17 @@ impl Holds {
         Self {
             ledger: state.list_held().to_vec(),
             declared,
+            unresolved: why,
         }
+    }
+
+    /// Why the manifest half of the answer is missing, when it is.
+    ///
+    /// `Some` means this listing is the ledger alone and cannot be complete. A caller that
+    /// prints holds must not print an empty list over it, and must not exit 0 having done so:
+    /// absence and unavailability are different answers and only one of them is knowable.
+    pub fn unresolved(&self) -> Option<&str> {
+        self.unresolved.as_deref()
     }
 
     /// Is this package frozen, by either source?
@@ -144,6 +172,34 @@ mod tests {
         out
     }
 
+    /// **An empty `declared` set means two different things and the type now says which.**
+    ///
+    /// `shall hold` with an unresolvable manifest wrote a correct warning to stderr and then
+    /// printed `No packages are held.` to stdout at exit 0 — so the one consumer that matters,
+    /// a script reading the answer, got a confident falsehood (B3). `upgrade` keeping the same
+    /// tolerance is right, which is why this is a fact the caller reads rather than a failure
+    /// the constructor raises.
+    #[test]
+    fn a_manifest_that_would_not_resolve_is_not_a_manifest_with_no_holds() {
+        let state = StateRegistry::default();
+
+        let answered = Holds::new(&state, Some(&desired(vec![])), None);
+        assert!(answered.is_empty());
+        assert_eq!(
+            answered.unresolved(),
+            None,
+            "a model that resolved and held nothing is an answer"
+        );
+
+        let could_not_look = Holds::new(&state, None, Some("modules/dev.txt:3: bad line".into()));
+        assert!(could_not_look.is_empty());
+        assert_eq!(
+            could_not_look.unresolved(),
+            Some("modules/dev.txt:3: bad line"),
+            "the two produce an identical empty list and only one of them is a clean bill"
+        );
+    }
+
     #[test]
     fn a_declared_hold_counts_and_so_does_a_ledger_one() {
         let mut state = StateRegistry::default();
@@ -152,7 +208,7 @@ mod tests {
             spec("npm", "typescript", true),
             spec("npm", "eslint", false),
         ]);
-        let holds = Holds::new(&state, Some(&d));
+        let holds = Holds::new(&state, Some(&d), None);
 
         assert!(holds.contains("cargo", "ripgrep"), "the ledger entry");
         assert!(holds.contains("npm", "typescript"), "the declared one");
@@ -166,7 +222,7 @@ mod tests {
         let mut state = StateRegistry::default();
         state.hold("cargo:ripgrep");
         let d = desired(vec![spec("npm", "typescript", true)]);
-        let holds = Holds::new(&state, Some(&d));
+        let holds = Holds::new(&state, Some(&d), None);
 
         assert_eq!(holds.release("cargo", "ripgrep"), "`shall unhold`");
         assert_eq!(
@@ -181,7 +237,7 @@ mod tests {
     fn a_bare_ledger_entry_still_matches_any_backend() {
         let mut state = StateRegistry::default();
         state.hold("curl");
-        let holds = Holds::new(&state, None);
+        let holds = Holds::new(&state, None, None);
         assert!(holds.contains("apt", "curl"));
         assert!(holds.contains("brew", "curl"));
         assert!(!holds.contains("apt", "wget"));
@@ -193,7 +249,7 @@ mod tests {
     fn an_unresolvable_model_leaves_the_ledger_holds_working() {
         let mut state = StateRegistry::default();
         state.hold("cargo:ripgrep");
-        let holds = Holds::new(&state, None);
+        let holds = Holds::new(&state, None, None);
         assert!(holds.contains("cargo", "ripgrep"));
         assert_eq!(holds.len(), 1);
     }
@@ -204,7 +260,7 @@ mod tests {
     fn an_absent_declaration_holds_nothing() {
         let mut s = spec("npm", "typescript", true);
         s.present = false;
-        let holds = Holds::new(&StateRegistry::default(), Some(&desired(vec![s])));
+        let holds = Holds::new(&StateRegistry::default(), Some(&desired(vec![s])), None);
         assert!(holds.is_empty());
     }
 }

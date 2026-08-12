@@ -70,7 +70,7 @@ pub fn launch_for(path: &Path, contents: &str) -> Result<Launch> {
     // An interpreter on Windows can itself be a `.cmd`/`.bat`/`.ps1` shim, which `CreateProcess`
     // cannot launch at all. Everything else Shall runs goes through this; an interpreter chosen
     // here is not the one thing exempt from it.
-    let (program, args) = crate::core::executor::effective_command(&program, &args);
+    let (program, args) = crate::core::launch::effective_command(&program, &args);
     Ok(Launch { program, args })
 }
 
@@ -164,7 +164,7 @@ pub fn interpreter_named(interpreter: &str) -> Option<String> {
     let name = program_name(interpreter);
     candidates(name)
         .iter()
-        .find_map(|candidate| crate::core::executor::resolve_program(candidate))
+        .find_map(|candidate| crate::core::launch::resolve_program(candidate))
         .map(|found| found.to_string_lossy().into_owned())
 }
 

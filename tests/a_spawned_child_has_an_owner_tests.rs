@@ -1,6 +1,6 @@
 //! **Every process Shall starts belongs to Shall.**
 //!
-//! There are three doors. `core::executor::supervised_output` (and its `_fed` sibling)
+//! There are three doors. `core::supervise::supervised_output` (and its `_fed` sibling)
 //! captures the streams, bounds the silence, and stops the child on the way out.
 //! `supervised_status` hands the terminal over for a program a person is watching, unbounded
 //! because a shell at a prompt is not a hung command — but still owned. The third,
@@ -159,7 +159,7 @@ fn every_spawned_child_goes_through_a_door_or_says_why_not() {
         // Well under the ~250 files in `src/`, and far above the handful a broken walk reads.
         .scanning_at_least(120)
         .remedy(
-            "Route it through `core::executor::supervised_output` (captured, bounded, stopped) \
+            "Route it through `core::supervise::supervised_output` (captured, bounded, stopped) \
              or `supervised_status` (terminal handed over, unbounded, still stopped). A \
              `std::process::Command` goes through `core::blocking::command_output` instead: it \
              cannot be abandoned, but it holds a runtime worker until the child exits.",
@@ -173,8 +173,7 @@ fn every_spawned_child_goes_through_a_door_or_says_why_not() {
 /// nothing, and a vacuous pass looks exactly like a clean one.
 #[test]
 fn the_doors_exist_and_own_what_they_start() {
-    let executor = std::fs::read_to_string(repo_root().join("src/core/executor.rs"))
-        .expect("the executor is where the doors live");
+    let executor = crate::harness::executor_source();
     for door in [
         "pub async fn supervised_output",
         "pub async fn supervised_output_fed",
@@ -212,8 +211,7 @@ fn the_doors_exist_and_own_what_they_start() {
 /// order is what is pinned.
 #[test]
 fn a_child_is_asked_to_stop_before_it_is_killed() {
-    let executor =
-        std::fs::read_to_string(repo_root().join("src/core/executor.rs")).expect("the executor");
+    let executor = crate::harness::executor_source();
     // The ordering that matters is inside `stop`, not across the file: the grace constant is
     // declared far above it, so comparing first-occurrences in the whole file would pass or
     // fail on where a `const` happens to sit.

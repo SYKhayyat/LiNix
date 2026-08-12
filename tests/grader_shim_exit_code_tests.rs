@@ -19,7 +19,7 @@
 
 /// Which interpreter Shall would really launch this manager through.
 fn branch_for(mgr: &str) -> String {
-    let (prog, argv) = shall::core::executor::effective_command(mgr, &["--version".to_string()]);
+    let (prog, argv) = shall::core::launch::effective_command(mgr, &["--version".to_string()]);
     format!("{} {}", prog, argv.join(" "))
 }
 
@@ -58,7 +58,7 @@ fn a_manager_with_both_shims_is_launched_through_the_one_that_keeps_the_exit_cod
     // So: run a command that genuinely fails, the way Shall runs it, and require the failure
     // to survive. `scoop info <name>` is read-only and changes nothing on the machine.
     let probe: Vec<String> = ["info".to_string(), "shall-no-such-pkg-zzz".to_string()].into();
-    let (prog, argv) = shall::core::executor::effective_command("scoop", &probe);
+    let (prog, argv) = shall::core::launch::effective_command("scoop", &probe);
     let code = std::process::Command::new(&prog)
         .args(&argv)
         .output()
@@ -83,7 +83,7 @@ fn a_manager_with_both_shims_is_launched_through_the_one_that_keeps_the_exit_cod
     // And the control for the assertion above: a command that succeeds must still say so, or
     // "non-zero" would be satisfied by a launch that is simply broken.
     let ok_probe: Vec<String> = ["--version".to_string()].into();
-    let (prog, argv) = shall::core::executor::effective_command("scoop", &ok_probe);
+    let (prog, argv) = shall::core::launch::effective_command("scoop", &ok_probe);
     let ok_code = std::process::Command::new(&prog)
         .args(&argv)
         .output()
@@ -139,7 +139,7 @@ fn no_manager_loses_a_failure_that_its_sibling_shim_would_have_reported() {
         let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
 
         // What Shall really launches.
-        let (prog, argv) = shall::core::executor::effective_command(mgr, &owned);
+        let (prog, argv) = shall::core::launch::effective_command(mgr, &owned);
         let Some(theirs) = run(&prog, &argv) else {
             continue;
         };

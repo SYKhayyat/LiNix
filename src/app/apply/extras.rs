@@ -401,6 +401,12 @@ pub(crate) async fn in_effect(
             let Statement::Link(source, opts) = stmt else {
                 return None;
             };
+            // Through the same resolution the installer uses. Read verbatim, a relative source
+            // resolved against the process's working directory, `read` failed, and this
+            // returned `None` — *unverifiable*, which prints as "Shall cannot read back" and
+            // is then filed under `ok`. So the reporting half agreed the link was fine because
+            // it was looking somewhere the link was never written (B0b).
+            let source = crate::backends::link::resolve_source(config, source).ok()?;
             let want: Vec<u8> = match (
                 opts.one("content"),
                 opts.one("decrypt"),
@@ -410,15 +416,31 @@ pub(crate) async fn in_effect(
                 (Some(content), None, None) => content.as_bytes().to_vec(),
                 // A rendered template or a decrypted secret is not its source, and comparing
                 // them would need the transform run; both are `unverifiable`, which places.
-                (_, None, None) => std::fs::read(source).ok()?,
+                // **Not in effect, and not "cannot say".** A source that is not on disk is
+                // precisely the state that produced a dangling symlink: the destination
+                // exists, an `-L` test passes, and reading it back failed — which arrived as
+                // `None`, printed as "Shall cannot read back", and was filed under `ok` (B0b).
+                // The true answer is that nothing is placed, so `check` counts it as work and
+                // the installer refuses by name when it comes to do it. Reported here rather
+                // than refused, because the source may be a file a package installed in an
+                // earlier phase of this very sync.
+                (_, None, None) => match std::fs::read(&source) {
+                    Ok(bytes) => bytes,
+                    Err(_) => return Some(false),
+                },
                 _ => return None,
             };
+            // The source is known readable by now, so a link pointing at it is genuinely in
+            // effect — the comparison could not say that before, and a dangling one would have
+            // passed it.
             if let Ok(link) = std::fs::read_link(dest) {
-                if link == std::path::Path::new(source) {
+                if link == source {
                     return Some(true);
                 }
             }
-            Some(std::fs::read(dest).ok()? == want)
+            // A destination that cannot be read does not match the source. `.ok()?` said
+            // *unverifiable* here, which places every sync for ever and reads as `ok`.
+            Some(std::fs::read(dest).is_ok_and(|got| got == want))
         }
         K::Shim => Some(
             crate::app::ShimManager::with_bin_dir(config.bin_dir.clone())

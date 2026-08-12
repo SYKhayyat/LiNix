@@ -65,7 +65,7 @@ struct Run {
 /// working tree, because `cabal install <name>` writes its build cache wherever it is standing.
 /// A test that alters the tree it is testing is a test nobody should have to think about.
 fn run(program: &str, args: &[String], cwd: &std::path::Path) -> Option<Run> {
-    let (prog, argv) = shall::core::executor::effective_command(program, args);
+    let (prog, argv) = shall::core::launch::effective_command(program, args);
     // stdin closed: `mix` prompts `Shall I install Hex? [Yn]` and will read whatever is on the
     // handle. During development it read the rest of the probe script and the remaining
     // measurements silently never ran (II.12c, one layer out).
@@ -125,9 +125,14 @@ fn echoes_operand(text: &str) -> bool {
 ///
 /// **Every signal is differential**, including the bare-`--` one. A tool that dumps its own
 /// usage on failure prints `--` either way, and reading that as "the tool is complaining about
-/// the terminator" made composer — which honours `--`, names the operand, and produces
-/// byte-identical output both ways — come back as a violation. The question is never "does this
+/// the terminator" made composer — which names the operand and produces byte-identical output
+/// both ways — come back as a violation for the wrong reason. The question is never "does this
 /// output contain X", always "did adding the terminator change X".
+///
+/// *(Composer's row has since been measured to swallow, on a signal this function does read,
+/// and now says so. The lesson here is unchanged and is worth more than the row: byte-identical
+/// output is exactly as consistent with a tool ignoring `--` as with a tool honouring it, and
+/// only a signal that moves distinguishes them.)*
 ///
 /// The answer names the signal because the failure report is the only thing a nightly leaves
 /// behind. A report that says "swallows" and prints one line of each run cannot be acted on:
@@ -293,7 +298,7 @@ async fn every_terminator_claim_still_holds_where_the_tool_is_installed() {
     // Drive the three verbs that carry an operand. `available()`, not `all()`: a backend whose
     // program is absent cannot answer, and asking anyway is how a missing manager gets reported
     // as a defect.
-    for backend in registry.available() {
+    for backend in registry.present_on_this_machine() {
         let spec = PackageSpec {
             name: SENTINEL.into(),
             backend: backend.name().into(),
@@ -544,7 +549,9 @@ fn each_signal_is_named_when_it_is_the_one_that_moved() {
 #[test]
 fn a_usage_line_printed_both_ways_is_not_a_complaint_about_the_terminator() {
     // composer dumps its own synopsis on failure, and it contains `[--]`. Reading that as the
-    // tool objecting to the terminator is what made a row that honours `--` come back red.
+    // tool objecting to the terminator is a finding manufactured out of a document rather than
+    // out of a difference — the same mistake the composer row itself was built on, from the
+    // other side.
     let usage = format!(
         "Could not find a matching version of package {SENTINEL}.\n\
          require [--dev] [--no-install] [--] [<packages>...]"

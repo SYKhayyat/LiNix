@@ -579,6 +579,14 @@ const BUILTIN_SNAPSHOT_DEFS: &str = include_str!("snapshot_builtins.toml");
 /// The auto-detected zfs root dataset, when `zfs_dataset` is not configured. Empty when zfs is
 /// absent or the query fails — which drops the row rather than shipping a source-less one.
 fn detect_zfs_root() -> String {
+    // **Asked before it is spawned.** This ran on every process that built the provider table,
+    // on every machine, whatever `priority` said — a `zfs` probe on a container where nothing
+    // else is, which is how it was noticed. Spawning a program to find out it is not installed
+    // is the expensive way to ask a question `resolve_program` answers from a memo, and on a
+    // host with no `zfs` it is a process launch that can only fail.
+    if crate::core::launch::resolve_program("zfs").is_none() {
+        return String::new();
+    }
     let mut cmd = StdCommand::new("zfs");
     cmd.args(["list", "-H", "-o", "name", "-r", "/"])
         .stdin(std::process::Stdio::null());

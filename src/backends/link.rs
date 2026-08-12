@@ -29,6 +29,63 @@ pub fn resolve_target(target: &str) -> Result<PathBuf> {
     }
 }
 
+/// Where a declared source file lives on disk — the `link:` name, or a `dotfiles:` tree.
+///
+/// **A relative source is relative to the config repo.** Not to the process's working
+/// directory, and emphatically not to the directory holding the link: a symlink stores its
+/// destination as a string and resolves it against its own location on every open, so
+/// `link:./dotfiles/vimrc@target=/root/.vimrc` written verbatim produced `/root/.vimrc ->
+/// ./dotfiles/vimrc`, which means `/root/dotfiles/vimrc`. That file does not exist. The dotfile
+/// could not be read at all, by anything, and `check` filed the whole state under `ok` (B0b).
+///
+/// The config repo is the only reading that makes the declaration portable, and it is what
+/// `dotfiles:` has always done with the identical string — which is why this is one function
+/// and not two. **Every caller that touches a declared source must come through here**: the
+/// installer, the readback that decides whether a resource is in effect, and the tree walk.
+/// A source resolved one way when it is written and another way when it is read is how a
+/// dangling link comes to look verified.
+pub fn resolve_source(config: &Config, declared: &str) -> Result<PathBuf> {
+    let expanded = resolve_target(declared)?;
+    Ok(match expanded.is_absolute() {
+        true => expanded,
+        false => config.config_root().join(expanded),
+    })
+}
+
+/// Whether a `link:` line reads its source file at all.
+///
+/// `@content=` declares the bytes inline and never opens the name; every other mode — a plain
+/// symlink, `@template=true`, `@decrypt=` — needs the file to be there.
+pub fn reads_its_source(opts: &crate::config::grammar::Options) -> bool {
+    opts.one("content").is_none()
+}
+
+/// [`resolve_source`], refusing when the file is not on disk.
+///
+/// **A `link:` whose source does not exist cannot be placed, and placing it anyway is worse
+/// than refusing.** `symlink` happily writes a pointer to nothing: the result exists, satisfies
+/// an `-L` test, and reads back as *"Shall cannot read back"* — a sentence `check` then filed
+/// under `ok`. So the failure mode of not asking this question is a green health check over a
+/// dotfile that no program can open (B0b).
+///
+/// `dotfiles:` has refused the same way since it was written — *"is not a directory"* — on the
+/// identical string. This is its twin answering the same question the same way, which is the
+/// whole of what went wrong: one idea, two implementations, one of them right.
+pub fn resolve_existing_source(config: &Config, declared: &str) -> Result<PathBuf> {
+    let resolved = resolve_source(config, declared)?;
+    if resolved.exists() {
+        return Ok(resolved);
+    }
+    Err(Error::Validation(format!(
+        "`link:{}` names a file that is not there ({}). A relative source is read from your \
+         config repo at {} — check the path, or make it absolute. Shall will not place a link \
+         to nothing: it would exist, and nothing could open it.",
+        declared,
+        resolved.display(),
+        config.config_root().display()
+    )))
+}
+
 /// Where the pre-existing file at `target` is kept while Shall owns that path. One function,
 /// because the write path and the undo path must agree on the name or a restore looks for a
 /// file nothing wrote.
@@ -222,7 +279,7 @@ impl LinkBackendCore {
         // would not do. `supervised_output` owns the child, so the timeout below reaches it.
         let output = match tokio::time::timeout(
             crate::model::secret::DECRYPT_TIMEOUT,
-            crate::core::executor::supervised_output(cmd, &program, false),
+            crate::core::supervise::supervised_output(cmd, &program, false),
         )
         .await
         {
@@ -427,7 +484,12 @@ impl Installable for LinkInstallable {
                 continue;
             }
 
-            let source = PathBuf::from(&spec.name);
+            // Resolved, not stored verbatim. The symlink written below keeps whatever string it
+            // is given and resolves it against the *link's* directory, so a relative source is
+            // a dangling link at a path nobody in the config repo named (B0b). Refused rather
+            // than resolved when the file is not there, because the three modes below all read
+            // it and a link to nothing is the failure this whole path exists to prevent.
+            let source = resolve_existing_source(&self.core.config, &spec.name)?;
 
             // Mode D: Secret — decrypt the source with age/sops and place the plaintext.
             if let Some(tool) = spec.options.one("decrypt") {
@@ -660,6 +722,63 @@ mod tests {
         LinkInstallable { core }
     }
 
+    fn installer_rooted_at(cfg: &Config) -> LinkInstallable {
+        let exec = CommandExecutor::new(false, false);
+        let core = Arc::new(LinkBackendCore::new(exec, Arc::new(cfg.clone())));
+        LinkInstallable { core }
+    }
+
+    /// **Placed is not the same as working, and only one of them is the promise.**
+    ///
+    /// The check that passed over a dangling dotfile was "does the target exist" — `-L` is true
+    /// of a symlink whose destination is not there. So this asserts the target can be *read*,
+    /// through the link, byte for byte. That is the property a user has when they declare a
+    /// dotfile, and it is the one that was false (B0b).
+    #[tokio::test]
+    async fn a_link_declared_the_way_the_readme_writes_it_can_actually_be_read() {
+        let dir = tempdir().unwrap();
+        let cfg = Config::sandboxed(dir.path());
+        let src = cfg.config_root().join("dotfiles");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("vimrc"), b"set nocompatible\n").unwrap();
+
+        // Somewhere that is not the config repo and not the process's working directory —
+        // which is exactly the pair the verbatim source accidentally worked under.
+        let target = dir.path().join("home").join(".vimrc");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+
+        let mut options = crate::config::grammar::Options::default();
+        options.set("target", target.to_string_lossy().to_string());
+        let spec = PackageSpec {
+            name: "./dotfiles/vimrc".into(),
+            backend: "link".into(),
+            options,
+            requires: vec![],
+            present: true,
+        };
+
+        installer_rooted_at(&cfg)
+            .install(std::slice::from_ref(&spec), false)
+            .await
+            .expect("a link whose source is in the config repo must place");
+
+        assert_eq!(
+            std::fs::read(&target).expect(
+                "the dotfile could not be opened — the link points at a path nothing wrote, \
+                 which is the whole of B0b"
+            ),
+            b"set nocompatible\n"
+        );
+
+        // Idempotent for the same reason it is readable: the second run compares the link
+        // against the resolved source, so it must recognise its own work.
+        installer_rooted_at(&cfg)
+            .install(std::slice::from_ref(&spec), false)
+            .await
+            .expect("re-placing an already-correct link is a no-op, not an error");
+        assert_eq!(std::fs::read(&target).unwrap(), b"set nocompatible\n");
+    }
+
     fn inline_spec(target: &Path, content: &str) -> PackageSpec {
         let mut options = crate::config::grammar::Options::default();
         options.set("target", target.to_string_lossy().to_string());
@@ -682,6 +801,96 @@ mod tests {
             home.join(".gitconfig")
         );
         assert!(!is_outside_home(&resolve_target("~/.config/nvim").unwrap()));
+    }
+
+    /// **The finding, in the two lines that differed.** `link:` stored its source verbatim and
+    /// `dotfiles:` resolved the identical string against the config repo, so one worked and one
+    /// produced a symlink to a path nobody had named — `/root/.vimrc -> ./dotfiles/vimrc`,
+    /// which a symlink resolves against `/root`, not against the repo (B0b).
+    ///
+    /// Asserted as *the same answer for the same string*, because the bug was never in either
+    /// rule on its own. It was in there being two of them.
+    #[test]
+    fn a_relative_source_is_read_from_the_config_repo_whichever_declaration_names_it() {
+        let dir = tempdir().unwrap();
+        let cfg = Config::sandboxed(dir.path());
+        let root = cfg.config_root();
+
+        for declared in ["./dotfiles/vimrc", "dotfiles/vimrc"] {
+            assert_eq!(
+                resolve_source(&cfg, declared).unwrap(),
+                root.join(declared),
+                "`{declared}` must be read from the config repo, not from the process's \
+                 working directory and not from the directory holding the link"
+            );
+        }
+
+        // An absolute source is already an answer and must not be re-rooted.
+        #[cfg(windows)]
+        let absolute = r"C:\cfg\dotfiles\vimrc";
+        #[cfg(not(windows))]
+        let absolute = "/cfg/dotfiles/vimrc";
+        assert_eq!(
+            resolve_source(&cfg, absolute).unwrap(),
+            PathBuf::from(absolute)
+        );
+
+        // And `~` means the same thing on a source as it does on a target — one expansion,
+        // not two spellings of home.
+        assert_eq!(
+            resolve_source(&cfg, "~/.vimrc").unwrap(),
+            dirs::home_dir().unwrap().join(".vimrc")
+        );
+    }
+
+    /// A source that is not there is refused, rather than placed as a link to nothing.
+    ///
+    /// This is the half that let B0b ship. A dangling symlink *exists*: it satisfies an `-L`
+    /// test, it survives a teardown check, and reading it back fails in a way that reported as
+    /// "Shall cannot read back" — which `check` then filed under `ok`. `dotfiles:` has always
+    /// refused its missing tree in the same position and with the same shape of message.
+    #[test]
+    fn a_link_to_a_file_that_is_not_there_is_refused_and_the_message_says_where_it_looked() {
+        let dir = tempdir().unwrap();
+        let cfg = Config::sandboxed(dir.path());
+
+        let e = resolve_existing_source(&cfg, "./dotfiles/vimrc")
+            .expect_err("a link to a file that does not exist must not be placed");
+        let msg = e.to_string();
+        assert!(msg.contains("dotfiles/vimrc"), "{msg}");
+        assert!(
+            msg.contains(&cfg.config_root().display().to_string()),
+            "the refusal must name where a relative source is read from, or it is unactionable: \
+             {msg}"
+        );
+
+        // The control: once the file is there, the same declaration resolves.
+        let src = cfg.config_root().join("dotfiles");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("vimrc"), b"set nocompatible\n").unwrap();
+        assert_eq!(
+            resolve_existing_source(&cfg, "./dotfiles/vimrc").unwrap(),
+            cfg.config_root().join("./dotfiles/vimrc")
+        );
+    }
+
+    /// Only the modes that open the file are subject to that refusal. `@content=` carries the
+    /// bytes in the line and never reads the name, so requiring the name to exist would refuse
+    /// a declaration that is complete.
+    #[test]
+    fn a_content_link_names_no_source_and_is_not_asked_for_one() {
+        let mut opts = crate::config::grammar::Options::default();
+        assert!(reads_its_source(&opts));
+        opts.set("content", "hello\n".to_string());
+        assert!(!reads_its_source(&opts));
+
+        // A template and a secret both read their source, so both keep the check.
+        let mut template = crate::config::grammar::Options::default();
+        template.set("template", "true".to_string());
+        assert!(reads_its_source(&template));
+        let mut secret = crate::config::grammar::Options::default();
+        secret.set("decrypt", "age".to_string());
+        assert!(reads_its_source(&secret));
     }
 
     #[test]

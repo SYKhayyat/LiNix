@@ -71,12 +71,27 @@ fn assert_reads(label: &str, result: ParseResult, floor: usize, expect_name: &st
 fn apt_reads_its_own_dpkg_query_output() {
     const F: &str = include_str!("fixtures/apt/dpkg-query-installed.txt");
     assert_reads("apt (dpkg-query -W)", apt::parse_list(F), 90, "apt");
-    // Versions are the point of this argv — `dpkg-query -W -f='${Package} ${Version}'` exists
-    // so the planner can compare one. A read that dropped them would still pass a name check.
+    // Versions are the point of this argv — `dpkg-query -W -f='${db:Status-Status} ${Package}
+    // ${Version}'` exists so the planner can compare one. A read that dropped them would still
+    // pass a name check.
     let pkgs = apt::parse_list(F).expect("captured output");
     assert!(
         pkgs.iter().all(|p| p.version.is_some()),
-        "every dpkg-query row carries a version; some were read without one"
+        "every installed dpkg-query row carries a version; some were read without one"
+    );
+    // **This capture is from a container where `figlet` was installed and then removed**, so it
+    // carries the row the old lister got wrong: `config-files figlet 2.2.5-3`. The fixture is
+    // the finding — a listing with no such row cannot show that B0 is fixed.
+    assert!(
+        F.contains("config-files figlet"),
+        "the fixture was recaptured from a machine that has never removed a conffile-carrying \
+         package, so it can no longer demonstrate what it exists to demonstrate"
+    );
+    assert!(
+        !pkgs.iter().any(|p| p.name == "figlet"),
+        "dpkg still knows `figlet` and `apt remove` is what left it in `config-files`; reading \
+         it as installed is B0 — `list` names software that is gone and `sync` will not \
+         reinstall it"
     );
 }
 
@@ -218,32 +233,27 @@ fn the_fixture_check_can_fail() {
         crossed.iter().take(5).map(|p| &p.name).collect::<Vec<_>>()
     );
 
-    // **And the case that makes `ecosystem.rs:633`'s rule concrete.** `bsd::parse_pkg` fed apt's
-    // listing does not fail and does not come back empty. It reads 7 of the 92 lines — every one
-    // of them a name that happens to contain a dash followed by a digit — and every one of the
-    // seven is *wrong*: `libbz2-1.0` becomes the package `libbz2` at version `1.0`, `gcc-14-base`
-    // becomes `gcc` at version `14-base`.
+    // **And the case that makes `ecosystem.rs:633`'s rule concrete — recorded as it now
+    // behaves, and it changed for a reason worth keeping.**
     //
-    // That is what a parser tested against another tool's output looks like. It passes, it is
-    // silent, and the packages it names cannot be removed because no such package exists. No
-    // return type catches this; only a fixture from the right tool does.
-    let wrong = bsd::parse_pkg(APT).expect("it parses — that is the finding");
-    assert!(
-        !wrong.is_empty() && wrong.len() < 10,
-        "expected a handful of confidently wrong rows, got {}",
-        wrong.len()
-    );
-    assert!(
-        wrong.iter().any(|p| p.name == "libbz2"),
-        "`libbz2-1.0` should be mangled into `libbz2`: {:?}",
-        wrong
-            .iter()
-            .map(|p| (&p.name, &p.version))
-            .collect::<Vec<_>>()
-    );
+    // `bsd::parse_pkg` fed apt's listing used to *succeed*: it read 7 of the 92 lines — every
+    // one a name containing a dash followed by a digit — and every one of the seven was wrong.
+    // `libbz2-1.0` became the package `libbz2` at version `1.0`; `gcc-14-base` became `gcc` at
+    // `14-base`. It passed, it was silent, and the packages it named could not be removed
+    // because no such package exists.
+    //
+    // It now refuses, and nobody set out to fix it. apt's lister gained a leading
+    // `${db:Status-Status}` field so that a package `apt remove` left in `config-files` stops
+    // reading as installed (B0) — and a line that opens with a status word is a line the BSD
+    // reader cannot get a `name-version` out of. **A format that carries a field only its own
+    // tool emits is a format another tool's parser cannot silently half-read**, which is worth
+    // more than the specific bug it was bought for.
+    let e =
+        bsd::parse_pkg(APT).expect_err("apt's listing must not read as a BSD one, however wrongly");
+    assert_eq!(e.backend, "pkg");
     let real = apt::parse_list(APT).expect("captured output");
     assert!(
-        !real.iter().any(|p| p.name == "libbz2"),
-        "and apt's own parser reads it whole, which is the difference the rule is about"
+        real.iter().any(|p| p.name == "libbz2-1.0"),
+        "and apt's own parser reads the whole name, which is the difference the rule is about"
     );
 }

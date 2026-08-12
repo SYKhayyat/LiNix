@@ -115,7 +115,7 @@ async fn a_capability_flag_is_sent_exactly_when_the_tool_documents_it() {
     let mut verdicts: Vec<String> = Vec::new();
     let mut wrong: Vec<String> = Vec::new();
 
-    for backend in registry.available() {
+    for backend in registry.present_on_this_machine() {
         let name = backend.name().to_string();
         let Some(flag) = shall::backends::capability::unverified_arg(&name) else {
             continue;

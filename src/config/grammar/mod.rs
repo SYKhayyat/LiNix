@@ -312,17 +312,6 @@ impl Document {
         }
         Ok(())
     }
-
-    /// Every `module NAME { }` block in the file, by name.
-    pub fn module_blocks(&self) -> Vec<(&str, &[Item])> {
-        self.items
-            .iter()
-            .filter_map(|i| match i {
-                Item::Block(Block::Module(n, body), _) => Some((n.as_str(), body.as_slice())),
-                _ => None,
-            })
-            .collect()
-    }
 }
 
 /// Strip a trailing comment from a statement line.

@@ -4,9 +4,12 @@
 pub mod check;
 pub mod cleanup;
 pub mod declare;
+pub mod ephemeral;
 pub mod history;
+pub mod inventory;
 pub mod packages;
 pub mod plan;
+pub mod portable;
 pub mod setup;
 pub mod sync;
 pub mod upgrade;

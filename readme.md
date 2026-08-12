@@ -363,7 +363,9 @@ an error — `brwe:ripgrep` is caught when the file is read, because a config th
 its own typos would describe a machine nobody has.
 
 None of this applies to a package that genuinely fails to install: that stops the command, on
-every machine. Pass `--keep-going` if you would rather have the rest of the run.
+every machine. Pass `--keep-going` if you would rather have the rest of the run — it installs
+each package on its own command line so a bad name cannot take the good ones with it, and it
+**still exits non-zero**, naming what failed. Continuing past a failure is not reporting success.
 
 ## Profiles
 

@@ -60,22 +60,10 @@ async fn manages(kernel: &TestKernel, name: &str) -> bool {
 /// terminal to answer it — and the case this file exists for never reaches that gate, because
 /// its plan is the empty one.
 fn confirming(kernel: &TestKernel) -> shall::app::App {
-    let mut config = (*kernel.app.config).clone();
-    config.yes = true;
-    shall::app::App {
-        config: std::sync::Arc::new(config),
-        registry: kernel.app.registry.clone(),
-        executor: kernel.app.executor.duplicate(),
-        metrics: kernel.app.metrics.clone(),
-        progress: kernel.app.progress.clone(),
-        hooks: kernel.app.hooks.clone(),
-        state: kernel.app.state.clone(),
-        snapshot_manager: kernel.app.snapshot_manager.clone(),
-        journal: kernel.app.journal.clone(),
-        diagnostics: kernel.app.diagnostics.clone(),
-        scheduler: kernel.app.scheduler.clone(),
-        reaping: kernel.app.reaping.clone(),
-    }
+    // Twelve fields copied by hand stood here, which is what a struct with no narrower
+    // constructor costs its callers: every field added to `App` had to be added here too, and
+    // forgetting one silently shared the wrong state.
+    kernel.app.reconfigured(|c| c.yes = true)
 }
 
 /// This machine's resolved package set — what ownership is read from. Resolved for real rather

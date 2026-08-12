@@ -8,7 +8,7 @@ use std::env;
 use tracing::warn;
 use tracing_subscriber::EnvFilter;
 
-// The dispatcher does reference every handler, so it globs the nine modules — and that is a
+// The dispatcher does reference every handler, so it globs them all — and that is a
 // different relationship from the one `LX-11` was about. What was deleted is `verbs::prelude`
 // re-exporting all nine into *each other*, which left no module boundary inside `verbs/` at
 // all: 8,587 lines in one namespace stored in nine files, where moving a function between them
@@ -16,11 +16,15 @@ use tracing_subscriber::EnvFilter;
 // src/verbs/*.rs` is the map, and it is short), which is what makes a rule about where a
 // handler belongs something a person can state and a compiler can check.
 //
-// This glob stays honest only while it is the dispatcher's. If a *tenth* consumer appears, it
-// is a sibling and it should import by name.
+// This glob stays honest only while it is the dispatcher's. A *second* consumer is a sibling
+// and should import by name.
+//
+// There are twelve modules now, not nine: `history` held fifteen handlers of which seven had
+// nothing to do with history, so it became `history`, `ephemeral`, `inventory` and `portable`,
+// and `adopt` went to `declare` where the other declaration-writing verbs are.
 use shall::verbs::{
-    check::*, cleanup::*, declare::*, history::*, packages::*, plan::*, setup::*, sync::*,
-    upgrade::*,
+    check::*, cleanup::*, declare::*, ephemeral::*, history::*, inventory::*, packages::*, plan::*,
+    portable::*, setup::*, sync::*, upgrade::*,
 };
 
 #[tokio::main]
@@ -310,7 +314,40 @@ fn print_failure_class(e: &anyhow::Error) {
     eprintln!("shall-failure-class: {class}");
 }
 
+/// The three `--json` flags whose help says "(requires --dry-run)", enforced.
+///
+/// **Clap cannot express this one, and the attempt is worse than the omission.** `requires` is
+/// resolved against the subcommand's own arguments and `--dry-run` is global, so
+/// `requires = "dry_run"` compiles, never fires for the case it is meant to catch, and turns
+/// `sync --dry-run --json` — the documented, working combination — into a usage error with an
+/// empty stdout. Measured: it broke the two tests that exist because a fleet reads that document
+/// over SSH.
+///
+/// So the constraint lives here, where both halves are in scope. Without it, `shall sync --json`
+/// printed the human summary or nothing at all and exited 0, and a script that forgot the pair
+/// got a success code with no document to parse (B7).
+///
+/// `upgrade --json` is deliberately absent: it prints what `--security` actually remediated
+/// *after* remediating it, so it is not a preview-only flag and its help no longer says it is.
+fn refuse_json_without_dry_run(cli: &Cli) -> Result<()> {
+    let verb = match &cli.command {
+        Commands::Sync { json: true, .. } => "sync",
+        Commands::Install { json: true, .. } => "install",
+        Commands::Uninstall { json: true, .. } => "uninstall",
+        _ => return Ok(()),
+    };
+    if cli.dry_run {
+        return Ok(());
+    }
+    Err(anyhow::anyhow!(
+        "`shall {verb} --json` writes the plan, so it only has one to write in a preview. Add \
+         `--dry-run`.\n  Without it there is no document, and a script reading one would get a \
+         success code and an empty answer."
+    ))
+}
+
 pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
+    refuse_json_without_dry_run(cli)?;
     match &cli.command {
         Commands::Sync {
             locked,
@@ -339,6 +376,7 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
             all,
             security,
             except,
+            ignore_holds,
             profile,
             module,
             json,
@@ -353,6 +391,7 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
                     all: *all,
                     security: *security,
                     except,
+                    ignore_holds: *ignore_holds,
                     profile,
                     module,
                     out: Output::from_json_flag(*json),
@@ -543,7 +582,7 @@ pub(crate) async fn cargo_install_from(
     // The terminal-handoff door: a `cargo install --git` compiles for minutes and the person is
     // reading its progress, so it is inherited and unbounded — but owned, because a compile left
     // running after Shall has gone still writes to `~/.cargo/bin` when it finishes.
-    shall::core::executor::supervised_status(cmd, "cargo install")
+    shall::core::supervise::supervised_status(cmd, "cargo install")
         .await
         .map_err(std::io::Error::other)
 }

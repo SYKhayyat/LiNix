@@ -42,14 +42,33 @@ fn summary_labels(narration: Narration) -> (&'static str, &'static str) {
     }
 }
 
+/// **There is no `errors` field, and its absence is the finding.**
+///
+/// There used to be one, written by a `record_error` with zero callers anywhere in the tree.
+/// Since nothing wrote it, `errors.is_empty()` was permanently true — so the summary's `Status:`
+/// line was the constant `SUCCESS`, `DEGRADED` was unreachable, and `print_summary_quiet`, whose
+/// entire body printed that unreachable block, printed nothing under any circumstances. A sync
+/// where every package failed reported `Status: SUCCESS`, and the same run under `--quiet`
+/// printed zero bytes (B1).
+///
+/// It was also a second copy of a fact this struct already held: `OperationMetrics::success` and
+/// `::error` record per operation exactly what `errors` recorded per run. So the fix is the
+/// deletion rather than the missing call — one record of whether the run failed, written by the
+/// path that already writes every other fact about it.
 #[derive(Default)]
 struct MetricsInner {
     operations: Vec<OperationMetrics>,
     packages_installed: u64,
     packages_removed: u64,
     total_bytes_downloaded: u64,
-    errors: Vec<(String, String)>,
     start_time: Option<Instant>,
+}
+
+impl MetricsInner {
+    /// The operations that failed, in the order they were recorded.
+    fn failures(&self) -> Vec<&OperationMetrics> {
+        self.operations.iter().filter(|op| !op.success).collect()
+    }
 }
 
 #[derive(Clone)]
@@ -65,7 +84,6 @@ impl MetricsCollector {
                 packages_installed: 0,
                 packages_removed: 0,
                 total_bytes_downloaded: 0,
-                errors: Vec::new(),
                 start_time: Some(Instant::now()),
             })),
         }
@@ -113,11 +131,15 @@ impl MetricsCollector {
         inner.packages_removed += count;
     }
 
-    pub fn record_error(&self, context: &str, message: &str) {
-        let mut inner = self.inner.lock().expect("Metrics lock poisoned");
-        inner
-            .errors
-            .push((context.to_string(), message.to_string()));
+    /// Whether any recorded operation failed — the fact `Status:` reports and the exit code
+    /// owes its non-zero to.
+    pub fn had_failures(&self) -> bool {
+        !self
+            .inner
+            .lock()
+            .expect("Metrics lock poisoned")
+            .failures()
+            .is_empty()
     }
 
     /// Everything recorded so far.
@@ -157,12 +179,20 @@ impl MetricsCollector {
 
     fn print_summary_opts(&self, verbose: bool, narration: Narration) {
         if !verbose {
-            // Quiet mode: say nothing on success, but never swallow errors.
+            // Quiet mode: say nothing on success, but never swallow errors. That second half
+            // was a dead letter for as long as this read a field nothing wrote — `--quiet`
+            // printed zero bytes over a run where every package failed.
             let inner = self.inner.lock().expect("Metrics lock poisoned");
-            if !inner.errors.is_empty() {
-                eprintln!("Transaction DEGRADED — {} error(s):", inner.errors.len());
-                for (ctx, err) in &inner.errors {
-                    eprintln!("  - [{}]: {}", ctx, err);
+            let failures = inner.failures();
+            if !failures.is_empty() {
+                eprintln!("Transaction DEGRADED — {} error(s):", failures.len());
+                for op in failures {
+                    eprintln!(
+                        "  - [{}:{}]: {}",
+                        op.backend,
+                        op.name,
+                        op.error.as_deref().unwrap_or("failed without a message")
+                    );
                 }
             }
             return;
@@ -177,10 +207,11 @@ impl MetricsCollector {
             .map(|s| s.elapsed().as_secs_f64())
             .unwrap_or(0.0);
 
+        let failures = inner.failures();
         println!("\n=== Transaction Summary ===");
         println!(
             "Status:       {}",
-            if inner.errors.is_empty() {
+            if failures.is_empty() {
                 "SUCCESS"
             } else {
                 "DEGRADED"
@@ -244,10 +275,15 @@ impl MetricsCollector {
             }
         }
 
-        if !inner.errors.is_empty() {
+        if !failures.is_empty() {
             println!("\nErrors Encountered:");
-            for (ctx, err) in &inner.errors {
-                println!("  - [{}]: {}", ctx, err);
+            for op in &failures {
+                println!(
+                    "  - [{}:{}]: {}",
+                    op.backend,
+                    op.name,
+                    op.error.as_deref().unwrap_or("failed without a message")
+                );
             }
         }
         println!("===========================\n");
@@ -316,5 +352,51 @@ mod tests {
     #[test]
     fn rollup_of_nothing_is_empty() {
         assert!(backend_rollup(&[]).is_empty());
+    }
+
+    /// **The assertion nothing in the tree could make, because the only writer had no callers.**
+    ///
+    /// `Status:` read a field nobody wrote, so it was the constant `SUCCESS` and `DEGRADED` was
+    /// unreachable code. A run where every package failed printed `Status: SUCCESS` with a
+    /// failure mark under each task line, and the same run under `--quiet` printed nothing at
+    /// all (B1). The state is now derived from the operations that were actually recorded, so a
+    /// recorded failure is a degraded run by construction.
+    #[test]
+    fn a_recorded_failure_is_a_failed_run_and_nothing_has_to_be_told_twice() {
+        let m = MetricsCollector::new();
+        assert!(!m.had_failures(), "a run with no operations has not failed");
+
+        m.record_operation("cowsay", "apt", Utc::now(), true, None, 0, 0, 1);
+        assert!(
+            !m.had_failures(),
+            "an operation that succeeded is not a failure"
+        );
+
+        m.record_operation(
+            "shall-no-such-package-zzz",
+            "apt",
+            Utc::now(),
+            false,
+            Some("E: Unable to locate package".into()),
+            0,
+            0,
+            1,
+        );
+        assert!(
+            m.had_failures(),
+            "a package that failed to install must make the run a failed one — this is the \
+             fact `Status: DEGRADED` and the exit code both read"
+        );
+    }
+
+    /// The other half of B1: the counters are the *outcome*, so a caller cannot report the size
+    /// of its plan. They are only ever handed achieved work now, and nothing here invents any.
+    #[test]
+    fn the_counters_hold_only_what_they_were_given() {
+        let m = MetricsCollector::new();
+        assert_eq!(m.totals(), (0, 0, 0));
+        m.record_install(2);
+        m.record_remove(1);
+        assert_eq!(m.totals(), (2, 1, 0));
     }
 }

@@ -754,11 +754,6 @@ pub fn active_module_files(
     out
 }
 
-/// Where a package should land when nobody said (II.8's three landing modules).
-pub fn landing_target(landing: Landing) -> Target {
-    landing.target()
-}
-
 /// Modules that declare `target_pkg` but that no active profile reaches (II.8).
 ///
 /// What `uninstall` warns about: *"jq is still declared in module `gaming`, which isn't

@@ -207,10 +207,6 @@ impl ShimManager {
         }
         Ok(shims)
     }
-
-    pub fn get_bin_dir(&self) -> &Path {
-        &self.bin_dir
-    }
 }
 
 #[cfg(test)]

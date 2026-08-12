@@ -45,20 +45,83 @@ pub fn parse_essential(output: &str) -> Vec<String> {
         .collect()
 }
 
+/// Every status word dpkg can put on a package, and whether it means the software is on the
+/// machine.
+///
+/// The list is exhaustive on purpose: it is what tells a real row from a line of apt's error
+/// output, and a status dpkg grows tomorrow should be an unreadable line rather than a silent
+/// "absent".
+const DPKG_STATUS_WORDS: [(&str, bool); 8] = [
+    ("installed", true),
+    // Installed, with a trigger deferred — not a partial install. Reading these as absent
+    // would report a working package as missing and make `sync` reinstall it, which is B0's
+    // mistake pointed the other way.
+    ("triggers-awaited", true),
+    ("triggers-pending", true),
+    // The software is not usable. `config-files` is what `apt remove` leaves behind.
+    ("not-installed", false),
+    ("config-files", false),
+    ("half-installed", false),
+    ("unpacked", false),
+    ("half-configured", false),
+];
+
+/// One row of `dpkg-query -W -f='${db:Status-Status} ${Package} ${Version}\n'`, as
+/// `(is_installed, name, version)`. `None` is a line this format cannot have produced.
+///
+/// A removed package's `${Version}` is empty, so the version is optional and its absence is
+/// not a parse failure.
+fn read_row(line: &str) -> Option<(bool, &str, &str)> {
+    let mut parts = line.split_whitespace();
+    let status = parts.next()?;
+    let installed = DPKG_STATUS_WORDS
+        .iter()
+        .find_map(|(word, present)| (*word == status).then_some(*present))?;
+    let name = parts.next()?;
+    Some((installed, name, parts.next().unwrap_or("")))
+}
+
 /// Parses output from the debian/ubuntu package database query.
-/// Command: dpkg-query -W -f='${Package} ${Version}\n'
-/// Expected input format: "curl 7.81.0-1ubuntu1.16"
+/// Command: dpkg-query -W -f='${db:Status-Status} ${Package} ${Version}\n'
+/// Expected input format: "installed curl 7.81.0-1ubuntu1.16"
+///
+/// **The status field is what this argv exists for.** `dpkg-query -W` alone lists every package
+/// dpkg knows about, and dpkg keeps knowing about one after `apt remove`: it enters
+/// `deinstall ok config-files`, meaning the software is gone and its configuration was kept.
+/// Shall removes with `remove` and not `purge`, which is the correct and safe choice — so every
+/// conffile-carrying package Shall removed was minted into a state the old listing reported as
+/// installed. `list` named a package that was not there, `check` saw no drift, and `sync`
+/// refused to put it back, permanently (B0). The lister was the bug, not the remover.
+///
+/// **It also settles what a line that is not a package looks like.** apt's own error output
+/// (`E: Could not open lock file`) used to read as a package named `E:` at version *"Could not
+/// open lock file"*, because any line with a space in it was a package. A row now has to open
+/// with a status word dpkg can actually emit, so junk is unreadable rather than believed.
 pub fn parse_list(output: &str) -> ParseResult {
     let clean = sanitize(output);
     let candidates = crate::parsers::data_lines(&clean);
     let found = candidates
         .iter()
         .filter_map(|line| {
-            let (name, ver) = line.split_once(' ')?;
-            Some(Package::with_version(name.trim(), ver.trim(), "apt"))
+            let (installed, name, ver) = read_row(line)?;
+            installed.then(|| match ver.is_empty() {
+                // An installed package always carries a version, but `Some("")` compares as a
+                // version and would make every plan see a change it cannot explain.
+                true => Package::new(name, "apt"),
+                false => Package::with_version(name, ver, "apt"),
+            })
         })
         .collect();
-    or_unrecognised("apt", found, &candidates)
+    // Only the lines this format could not have produced count towards "the parser did not
+    // understand this". A row read correctly and dropped for saying `config-files` is an
+    // answer, and a machine whose every known package has been removed is a real machine —
+    // reporting that as unrecognised would refuse to run on it.
+    let unreadable: Vec<&str> = candidates
+        .iter()
+        .copied()
+        .filter(|line| read_row(line).is_none())
+        .collect();
+    or_unrecognised("apt", found, &unreadable)
 }
 
 /// Parses the output of 'apt-cache search' for remote package discovery.
@@ -83,11 +146,30 @@ mod tests {
 
     #[test]
     fn test_apt_list_parsing() {
-        let input = "bash 5.1-6ubuntu1\ncoreutils 8.32-4.1ubuntu1\n";
+        let input = "installed bash 5.1-6ubuntu1\ninstalled coreutils 8.32-4.1ubuntu1\n";
         let res = parse_list(input).expect("this fixture parses");
         assert_eq!(res.len(), 2);
         assert_eq!(res[0].name, "bash");
         assert_eq!(res[0].version, Some("5.1-6ubuntu1".into()));
+    }
+
+    /// A machine dpkg knows only removed packages on is a machine with nothing installed — not
+    /// a listing the parser failed to read. The two are different answers and reading the first
+    /// as the second would refuse to run on it.
+    #[test]
+    fn every_row_removed_is_an_empty_machine_and_not_an_unread_one() {
+        let res = parse_list("config-files figlet 2.2.5-3\nnot-installed sl \n")
+            .expect("rows that were read and dropped are an answer");
+        assert!(res.is_empty());
+    }
+
+    /// The bug in one assertion: the row `apt remove` leaves behind is not an installed package.
+    #[test]
+    fn a_package_apt_remove_left_behind_is_not_installed() {
+        let res = parse_list("installed bash 5.1-6ubuntu1\nconfig-files figlet 2.2.5-3\n")
+            .expect("this fixture parses");
+        assert_eq!(res.len(), 1, "{res:?}");
+        assert_eq!(res[0].name, "bash");
     }
 
     #[test]

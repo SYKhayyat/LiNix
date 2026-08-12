@@ -1,4 +1,3 @@
-use crate::backends::BackendRegistry;
 use crate::config::Config;
 use crate::core::{Error, Package, Result, StateRegistry};
 use chrono::Local;
@@ -20,7 +19,10 @@ use tracing::{debug, info, instrument, trace, warn};
 ///    registry, and anything in that registry is a removal candidate on the next sync. An
 ///    over-broad adoption is not a cosmetic mistake; it is a queued mass removal.
 pub struct Adopter {
-    registry: Arc<BackendRegistry>,
+    /// The registry **and** `priority`, not the registry alone. `adopt` writes declarations,
+    /// and a declaration naming a manager the file excludes is refused on the next read — so
+    /// crawling outside `priority` produces a manifest the user cannot sync.
+    backends: crate::app::Backends,
     state: Arc<Mutex<StateRegistry>>,
     config: Arc<Config>,
 }
@@ -114,12 +116,12 @@ impl AdoptScope {
 
 impl Adopter {
     pub fn new(
-        registry: Arc<BackendRegistry>,
+        backends: crate::app::Backends,
         state: Arc<Mutex<StateRegistry>>,
         config: &Config,
     ) -> Self {
         Self {
-            registry,
+            backends,
             state,
             config: Arc::new(config.clone()),
         }
@@ -249,7 +251,9 @@ impl Adopter {
         // backend serially, twice, while the identical first question already had a concurrent
         // implementation twenty lines away in `AppContext::owned_system_package_names`. There
         // is nothing shared between one backend's answer and another's.
-        let backends = self.registry.available();
+        // What Shall uses. An adopted line naming a manager outside `priority` is a line the
+        // next command refuses, so offering it would be offering a wedge.
+        let backends = self.backends.usable()?;
         let (owned_system, manual) = tokio::join!(
             self.owned_system_names(&backends),
             self.manual_listings(&backends, scope)
@@ -332,7 +336,7 @@ impl Adopter {
     async fn declared_outside_the_adoption_manifest(&self) -> HashMap<String, String> {
         let resolver = crate::app::sync::resolver::StateResolver::new(
             &self.config,
-            self.registry.clone(),
+            self.backends.registry().clone(),
             false,
         )
         .await;
@@ -387,13 +391,14 @@ impl Adopter {
         // (II.7 rule 5).
         let priority = crate::app::sync::resolver::StateResolver::new(
             &self.config,
-            self.registry.clone(),
+            self.backends.registry().clone(),
             false,
         )
         .await
         .priority_for_host()
         .await?;
-        let vocab = crate::app::vocab::Vocab::new(&self.registry, &self.config, &priority);
+        let vocab =
+            crate::app::vocab::Vocab::new(self.backends.registry(), &self.config, &priority);
         let options = self.adoption_options();
         Self::hold_back_what_cannot_be_written(&mut found, &options);
 
@@ -413,11 +418,14 @@ impl Adopter {
 
         let layout = self.config.layout();
         let manifest = self.render_manifest(&found, &options);
-        let facts =
-            crate::app::sync::StateResolver::new(&self.config, self.registry.clone(), false)
-                .await
-                .facts_for_host()
-                .await?;
+        let facts = crate::app::sync::StateResolver::new(
+            &self.config,
+            self.backends.registry().clone(),
+            false,
+        )
+        .await
+        .facts_for_host()
+        .await?;
         let edit = crate::model::Editor::new(
             &layout,
             &vocab,
@@ -526,9 +534,27 @@ impl Adopter {
             // "a name no package line can hold" — a sentence that was false of all 155 of
             // them, and that only sounded like a policy because it was a parser answer.
             let reason = match Self::declared_for(options, &pkg) {
+                // **V.113 has two halves and this function only ever asked one of them.** A
+                // name is admitted by a grammar **and** a validator, and the two must agree —
+                // so a name the grammar can write and the validator refuses gets adopted into
+                // `adopted.txt` and wedges the model on the next read. That is what happened to
+                // 340 winget rows when the grammar was widened and the validator was not.
+                //
+                // Asked *after* the grammar, not before it: a name no line can hold has a
+                // better sentence already, and the gap this closes is specifically the one
+                // between the two gates.
                 Declared::Package(_) | Declared::Resource(_) => {
-                    kept.push(pkg);
-                    continue;
+                    match crate::core::Validator::validate_package_name_for(&pkg.name, &pkg.backend)
+                    {
+                        Ok(()) => {
+                            kept.push(pkg);
+                            continue;
+                        }
+                        Err(e) => {
+                            warn!("`{}:{}` cannot be declared: {}", pkg.backend, pkg.name, e);
+                            format!("its manager reports a name Shall refuses to declare: {e}")
+                        }
+                    }
                 }
                 Declared::Nothing => {
                     warn!(
@@ -552,8 +578,12 @@ impl Adopter {
     /// Each backend's `adoption_options`, by backend name. Asked once: it is a constant per
     /// backend, and the crawl calls it for every candidate.
     fn adoption_options(&self) -> HashMap<String, Vec<(String, String)>> {
-        self.registry
-            .available()
+        // Unwrapped to empty on purpose: this is a *decoration* pass over candidates the crawl
+        // already produced, and the crawl above refuses first if `priority` will not resolve.
+        // A second refusal here would report the same failure twice.
+        self.backends
+            .usable()
+            .unwrap_or_default()
             .iter()
             .filter_map(|b| {
                 let opts = b.as_queryable()?.adoption_options();
@@ -679,6 +709,22 @@ impl Adopter {
 mod tests {
     use super::*;
     use crate::backends::generic::SearchSource;
+    use crate::backends::BackendRegistry;
+
+    /// A [`Backends`](crate::app::Backends) over every backend the fixture registered, so these
+    /// tests are about *adoption* and not about `priority`.
+    ///
+    /// Spelled out here rather than shipped as a `Backends::everything()` constructor: a type
+    /// whose whole job is the priority gate must not offer a way to open it, or the day someone
+    /// needs one in production there will be one to reach for.
+    fn over(reg: Arc<BackendRegistry>) -> crate::app::Backends {
+        let names = reg.all().iter().map(|b| b.name().to_string()).collect();
+        crate::app::Backends::new(
+            reg,
+            Ok(crate::model::priority::Priority::from_backends(names)),
+        )
+    }
+
     use crate::backends::generic::{
         GenericBackendCore, GenericQueryable, ManagerConfig, ManualFormat, ManualListing,
     };
@@ -764,7 +810,7 @@ mod tests {
             ..Config::default()
         };
         let state = Arc::new(Mutex::new(StateRegistry::default()));
-        Adopter::new(reg, state, &config)
+        Adopter::new(over(reg), state, &config)
     }
 
     #[tokio::test]
@@ -875,7 +921,11 @@ mod tests {
             },
             ..Config::default()
         };
-        let m = Adopter::new(reg, Arc::new(Mutex::new(StateRegistry::default())), &config);
+        let m = Adopter::new(
+            over(reg),
+            Arc::new(Mutex::new(StateRegistry::default())),
+            &config,
+        );
         let names: Vec<String> = m
             .audit()
             .await
@@ -928,7 +978,7 @@ mod tests {
             mock,
         );
         let m = Adopter::new(
-            reg,
+            over(reg),
             Arc::new(Mutex::new(StateRegistry::default())),
             &Config::default(),
         );
@@ -972,7 +1022,7 @@ mod tests {
         // No `protected_packages` here: protection has nothing to say about the manifest
         // (E7/II.9). What is commented out is what the OS calls essential.
         let m = Adopter::new(
-            reg,
+            over(reg),
             Arc::new(Mutex::new(StateRegistry::default())),
             &Config::default(),
         );
@@ -1061,7 +1111,7 @@ mod tests {
             ..Default::default()
         };
         let m = Adopter::new(
-            Arc::new(BackendRegistry::default()),
+            over(Arc::new(BackendRegistry::default())),
             Arc::new(Mutex::new(StateRegistry::default())),
             &Config::default(),
         );
@@ -1114,7 +1164,7 @@ mod tests {
             mock,
         );
         let m = Adopter::new(
-            reg,
+            over(reg),
             Arc::new(Mutex::new(StateRegistry::default())),
             &Config::default(),
         );

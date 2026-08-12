@@ -364,7 +364,13 @@ impl Transaction {
                 return Err(Error::Transaction("Transaction cancelled.".into()));
             }
 
-            for batch in Self::batches(&self.graph, std::mem::take(&mut ready)) {
+            // One package per command under `--keep-going`, so a name no repository carries
+            // cannot take the installable packages beside it down with it.
+            let max_batch = match self.config.continue_on_error {
+                true => 1,
+                false => Self::MAX_BATCH,
+            };
+            for batch in Self::batches(&self.graph, std::mem::take(&mut ready), max_batch) {
                 let permit = match semaphore.clone().acquire_owned().await {
                     Ok(p) => p,
                     Err(e) => return Err(Error::Transaction(format!("Semaphore failure: {}", e))),
@@ -585,7 +591,20 @@ impl Transaction {
     /// **Every edge in this graph is an `@requires` somebody wrote** (`Y9`). The planner used
     /// to add one per native dependency it discovered, which split this batch for a
     /// relationship the manager was going to resolve by itself anyway.
-    fn batches(graph: &StableDiGraph<GraphAction, ()>, mut ready: Vec<NodeIndex>) -> Vec<Batch> {
+    ///
+    /// `max_batch` is a cap the caller chooses rather than [`Self::MAX_BATCH`] outright,
+    /// because **batching and `--keep-going` are in direct contradiction and batching used to
+    /// win silently.** One name no repository carries fails the whole `apt install`, so a run
+    /// with `--keep-going` — whose help promises to "finish the packages that still can" —
+    /// installed none of the good packages sharing that command line (B1). A flag whose entire
+    /// purpose is taking what it can get does not want them on one command line; it wants each
+    /// package to succeed or fail on its own. That costs invocations, and invocations are what
+    /// this flag is explicitly willing to spend.
+    fn batches(
+        graph: &StableDiGraph<GraphAction, ()>,
+        mut ready: Vec<NodeIndex>,
+        max_batch: usize,
+    ) -> Vec<Batch> {
         ready.sort();
         /// One manager, one kind of change, and the nodes gathered for it so far.
         struct Group {
@@ -623,7 +642,7 @@ impl Transaction {
                     GraphAction::Remove { name, .. } => name.len() + 1,
                 };
                 if !current.is_empty()
-                    && (current.len() >= Self::MAX_BATCH || bytes + cost > Self::MAX_BATCH_BYTES)
+                    && (current.len() >= max_batch.max(1) || bytes + cost > Self::MAX_BATCH_BYTES)
                 {
                     out.push(std::mem::take(&mut current));
                     bytes = 0;
@@ -656,8 +675,14 @@ impl Transaction {
     ///
     /// The returned vector has one `TaskResult` per node, so rollback, the journal and the
     /// telemetry all still work per package: `Prior` is captured per package before the command
-    /// runs, and a batch that fails fails every package in it — which is the same outcome a
-    /// single failure had before, since any node failure rolls the whole transaction back.
+    /// runs, and a batch that fails fails every package in it.
+    ///
+    /// **That last clause is only harmless because of who is allowed to batch.** Without
+    /// `--keep-going` any node failure rolls the whole transaction back, so the packages
+    /// sharing a failed command line were going to be undone regardless. With it, they were
+    /// not — and batching quietly took the good packages down with the bad name, under a flag
+    /// promising the opposite (B1). `batches` caps at one package per command in that mode, so
+    /// nothing reaching here shares a fate it did not have to.
     #[allow(clippy::too_many_arguments)]
     async fn execute_batch_with_retry(
         batch: Batch,

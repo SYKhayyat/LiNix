@@ -25,7 +25,6 @@
 //! a row is not one. `every_row_has_an_argv_row` below is that gate's other half.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
 
 use shall::backends::capability;
 use shall::backends::onboarder::{builtin_rows, CustomBackendDef};
@@ -44,13 +43,6 @@ fn rows() -> Vec<CustomBackendDef> {
         rows.len()
     );
     rows
-}
-
-fn read(rel: &str) -> String {
-    let p: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel);
-    std::fs::read_to_string(&p)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", p.display()))
-        .replace("\r\n", "\n")
 }
 
 /// Every named reader a row asks for, paired with the resolver that will actually be asked.
@@ -227,7 +219,7 @@ fn hand_written_registrations(src: &str) -> BTreeSet<String> {
 
 #[test]
 fn no_backend_is_both_a_row_and_a_registrar() {
-    let src = read("src/backends/registry.rs");
+    let src = crate::harness::registry_source();
     let hand = hand_written_registrations(&src);
     assert!(
         hand.len() > 10,
@@ -253,14 +245,7 @@ fn no_backend_is_both_a_row_and_a_registrar() {
 /// registrars and therefore stopped seeing these twenty-three the moment they became rows.
 #[test]
 fn every_row_has_an_argv_row() {
-    let src = read("src/backends/registry.rs");
-    let table = src
-        .split_once("    fn argv_cases() -> Vec<ArgvCase> {")
-        .expect("the argv table moved or was renamed")
-        .1
-        .split_once("\n    }")
-        .expect("the argv table has no end")
-        .0;
+    let table = crate::harness::registry_argv_table();
     let cases =
         table.matches("ArgvCase::pkg(").count() + table.matches("ArgvCase::shaped(").count();
     assert!(

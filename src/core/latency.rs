@@ -70,6 +70,17 @@ pub enum Class {
 pub struct Shape {
     /// Summed child time over wall clock. A collapse to serial is ~1.0; the lowest legitimate
     /// reading seen on any host is 2.0, so this sits between them.
+    ///
+    /// **A floor only, and a floor on this number can be satisfied by making things worse.**
+    /// The ratio is `sum(child time) / wall`, and contention inflates the numerator: measured
+    /// over the same 23 children, width 20 spent 676.6s of child time against width 4's
+    /// 182.5s — 3.7× the total work — and the ratio *rose* from 1.6× to 8.3× for it. Wall clock
+    /// improved monotonically, so the parallelism earns its keep and this is not a budget on
+    /// the design. It does mean the floor cannot be the only thing read: the gate pairs it with
+    /// an arithmetic ceiling (a run cannot average more children in flight than it has) and
+    /// prints the numerator, so the one regression neither catches — every child getting slower
+    /// at constant concurrency, which moves `sum` and `wall` together — is at least visible in
+    /// a diff of two runs.
     pub min_overlap: f64,
     /// The wave ceiling as a fraction of the child count: waves may not exceed
     /// `children / waves_per_child`. A serial run has one wave per child, so the ceiling scales

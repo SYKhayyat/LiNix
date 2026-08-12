@@ -1,3 +1,7 @@
+#[cfg(windows)]
+use crate::core::launch::windows_effective_command;
+use crate::core::launch::{describe, forget_path_lookups, program_exists};
+use crate::core::supervise::{Stopping, LOCK_DIRS};
 use crate::core::{Error, ExitPolicy, Result, Retryability};
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -174,7 +178,7 @@ pub fn set_command_idle_timeout(secs: u64) {
     let _ = COMMAND_IDLE_TIMEOUT_SECS.set(secs);
 }
 
-fn command_idle_timeout() -> Option<std::time::Duration> {
+pub(crate) fn command_idle_timeout() -> Option<std::time::Duration> {
     match *COMMAND_IDLE_TIMEOUT_SECS
         .get()
         .unwrap_or(&DEFAULT_COMMAND_IDLE_TIMEOUT_SECS)
@@ -292,274 +296,6 @@ fn read_retry_attempts() -> u32 {
     .max(1)
 }
 
-/// Where a program lives, answered once per name per process.
-///
-/// `is_available()` on nearly every backend is a PATH lookup, `registry.available()` calls it
-/// for all ~45 of them, and `available()` itself is called at 20+ sites — six times in
-/// `AppContext` alone. On Windows a *miss* walks every PATH entry × every `PATHEXT` extension,
-/// and a miss is the common case, because most registered backends are not installed on any
-/// given host. The same lookup runs again on every spawn to decide how to launch the program.
-///
-/// One backend had already cached its own probe and the other forty-four had not; a memo here
-/// closes all of them at once and dedupes across backends that probe the same program (`krew`
-/// probes `kubectl`; `yay`/`paru`/`pacman` overlap).
-static PATH_LOOKUP: once_cell::sync::Lazy<DashMap<String, Option<PathBuf>>> =
-    once_cell::sync::Lazy::new(DashMap::new);
-
-/// Resolve a program on PATH, from the memo.
-///
-/// Uses the `which` *crate* — an in-process PATH/PATHEXT search — rather than spawning the
-/// external `which`/`where` program: minimal fedora/arch/alpine images do not ship `which`,
-/// which made every backend read as OFFLINE there.
-pub fn resolve_program(cmd: &str) -> Option<PathBuf> {
-    if let Some(hit) = PATH_LOOKUP.get(cmd) {
-        return hit.clone();
-    }
-    let found = first_runnable(cmd);
-    PATH_LOOKUP.insert(cmd.to_string(), found.clone());
-    found
-}
-
-/// The first candidate on PATH with bytes in it, falling back to the first candidate at all.
-///
-/// A Windows *app execution alias* — `%LOCALAPPDATA%\Microsoft\WindowsApps\python3.exe` — is a
-/// zero-length reparse point. A configured one launches the real program; an unconfigured one
-/// opens the Microsoft Store and runs nothing at all. **The two cannot be told apart by
-/// inspection:** measured on this host, the *working* `python3.exe` alias is also zero bytes, and
-/// it is what `which` returns first. So the rule is not "detect the dead alias" but "prefer a
-/// candidate that is unambiguously a program" — which finds the real `python3` two PATH entries
-/// later, and still leaves the alias in place for `winget`, which has no other form.
-fn first_runnable(cmd: &str) -> Option<PathBuf> {
-    let first = which::which(cmd).ok()?;
-    if has_bytes(&first) {
-        return Some(first);
-    }
-    which::which_all(cmd)
-        .ok()
-        .and_then(|mut all| all.find(|candidate| has_bytes(candidate)))
-        .or(Some(first))
-}
-
-fn has_bytes(path: &Path) -> bool {
-    std::fs::metadata(path)
-        .map(|m| m.len() > 0)
-        .unwrap_or(false)
-}
-
-pub fn program_exists(cmd: &str) -> bool {
-    resolve_program(cmd).is_some()
-}
-
-/// Drop the memo, for the one case where PATH really does change mid-run: Shall has just
-/// installed the program it is about to ask about.
-///
-/// Without this, `shall setup` would install a manager and then keep answering from the
-/// lookup it took before the installer ran.
-pub fn forget_path_lookups() {
-    PATH_LOOKUP.clear();
-    #[cfg(windows)]
-    LAUNCH_PATH.clear();
-}
-
-/// Windows: the path a program is actually launched through, memoised.
-///
-/// Resolving it means a PATH scan *and* a `.ps1` stat beside the resolved shim, and it ran on
-/// every single spawn — synchronously, inside an `async fn`, on the same task the planner's
-/// `buffer_unordered` relies on to interleave.
-#[cfg(windows)]
-static LAUNCH_PATH: once_cell::sync::Lazy<DashMap<String, Option<PathBuf>>> =
-    once_cell::sync::Lazy::new(DashMap::new);
-
-#[cfg(windows)]
-fn launch_path(cmd: &str) -> Option<PathBuf> {
-    if let Some(hit) = LAUNCH_PATH.get(cmd) {
-        return hit.clone();
-    }
-    let plan = resolve_program(cmd).map(|resolved| preferred_shim(&resolved));
-    LAUNCH_PATH.insert(cmd.to_string(), plan.clone());
-    plan
-}
-
-/// Lock directories already created, so `create_dir_all` runs once per directory per process
-/// instead of once per exclusive command.
-static LOCK_DIRS: once_cell::sync::Lazy<dashmap::DashSet<PathBuf>> =
-    once_cell::sync::Lazy::new(dashmap::DashSet::new);
-
-/// A spawned child that is **asked** to stop before it is made to.
-///
-/// **SIGKILL is not a way to stop a package manager.** It cannot be caught, so nothing gets to
-/// run: `dpkg`'s database is left mid-write, `pacman`'s `db.lck` is left on disk, and the next
-/// Shall run on that machine — and every `apt` the user types afterwards — fails on a lock whose
-/// owner is dead. That is the wedged machine `shall heal` exists to unwedge, and Shall was
-/// creating it itself. SIGTERM *is* caught: apt rolls the transaction back, pacman unlinks its
-/// lock, and the machine is left usable.
-///
-/// **And Shall's child is usually `sudo`, not the manager.** `sudo` forwards a SIGTERM to the
-/// command it runs; a SIGKILL kills `sudo` alone and leaves the manager running as root with its
-/// parent gone — an orphan still holding the lock, which is precisely the state that makes the
-/// next run fail with a lock nobody appears to hold.
-///
-/// Windows has no catchable termination signal for a console process, so there `kill_on_drop`
-/// keeps the job and this type only carries the child.
-struct Stopping {
-    child: tokio::process::Child,
-}
-
-impl Stopping {
-    fn new(child: tokio::process::Child) -> Self {
-        Self { child }
-    }
-
-    /// SIGTERM, then wait, then SIGKILL only if it is still there.
-    ///
-    /// The grace is the point: a manager that is cleaning up is doing the thing that keeps the
-    /// machine usable, and hurrying it undoes the whole exercise.
-    async fn stop(&mut self) {
-        #[cfg(unix)]
-        {
-            if self.request_stop()
-                && tokio::time::timeout(RawExecutor::TERMINATION_GRACE, Box::pin(self.child.wait()))
-                    .await
-                    .is_ok()
-            {
-                return;
-            }
-        }
-        let _ = self.child.start_kill();
-        let _ = self.child.wait().await;
-    }
-
-    /// Send SIGTERM. `false` when there is nothing to send it to — the child has already exited,
-    /// or this is not Unix.
-    #[cfg(unix)]
-    fn request_stop(&mut self) -> bool {
-        match self.child.id() {
-            Some(pid) => {
-                // SAFETY: `kill(2)` with a pid tokio still owns. The child has not been reaped —
-                // this type owns it and no `wait` has returned — so the pid cannot have been
-                // reused by another process.
-                unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) == 0 }
-            }
-            None => false,
-        }
-    }
-}
-
-/// The abort path — a worker whose task was cancelled, the global timeout — reaches the child
-/// only through `Drop`, which cannot wait for anything. It sends the signal that lets a manager
-/// clean up and does not stay to watch: a package manager finishing its own transaction after
-/// Shall has stopped caring is the *good* outcome, and the run after it now waits for that
-/// manager rather than failing on its lock.
-#[cfg(unix)]
-impl Drop for Stopping {
-    fn drop(&mut self) {
-        if self.child.try_wait().is_ok_and(|s| s.is_some()) {
-            return;
-        }
-        self.request_stop();
-    }
-}
-
-/// Run an outside tool Shall does not otherwise supervise, under the same ownership and the same
-/// bound as everything else it spawns.
-///
-/// **A child spawned outside `RawExecutor` used to have neither.** Awaiting `Command::output()`
-/// and then dropping that future does not kill the process — tokio detaches it — so every
-/// abandoned operation left a program running with nothing watching it: a `generate:` command
-/// after the sync that asked for it failed, a hook after the node that fired it was rolled back,
-/// a secret decrypt after its own timeout expired, under a comment promising the process would
-/// not be left hung. And none of them was bounded at all, so a `generate:` command that blocks
-/// on a prompt blocks every sync on that machine, forever, with no message.
-///
-/// `stdin` is closed unless `feed` gives it something. A tool that needs one otherwise is a tool
-/// asking a question nobody will answer, and a child sharing Shall's stdin eats input meant for
-/// Shall.
-///
-/// `mirror` echoes the tool's output to stderr as it arrives, for the callers whose tool used to
-/// inherit the terminal — a hook and the bisect oracle both printed as they ran, and capturing
-/// that silently would be a regression dressed as a fix. Never stdout: that carries Shall's own
-/// answer, and a child's chatter interleaved with it is not parseable by whoever piped us.
-pub async fn supervised_output(command: Command, what: &str, mirror: bool) -> Result<StdOutput> {
-    supervise(command, what, mirror, None).await
-}
-
-/// The same, for a tool that is handed something on stdin and then sees it close.
-///
-/// The payload is written before the output is drained, so it must be small enough for the pipe
-/// buffer — every caller here sends a JSON fact sheet of a few hundred bytes. A large one would
-/// deadlock against a child that will not read until it has written.
-pub async fn supervised_output_fed(
-    command: Command,
-    what: &str,
-    mirror: bool,
-    feed: &str,
-) -> Result<StdOutput> {
-    supervise(command, what, mirror, Some(feed)).await
-}
-
-/// The other door: a child that **takes the terminal**, run to completion and owned all the same.
-///
-/// `shall run`, the ephemeral shell, an interpreter a user is watching. Its streams are inherited
-/// rather than captured, because the point is that the person is looking at it, and there is no
-/// idle bound for the same reason — a shell sitting at a prompt is not a hung command. What it
-/// does get is an owner: abandoning the future used to leave the child holding the terminal after
-/// Shall was gone, which is a mess nobody can attribute to anything.
-pub async fn supervised_status(
-    mut command: Command,
-    what: &str,
-) -> Result<std::process::ExitStatus> {
-    #[cfg(windows)]
-    command.kill_on_drop(true);
-    #[cfg(unix)]
-    command.kill_on_drop(false);
-    let child = command
-        .spawn()
-        .map_err(|e| Error::command_failed(format!("could not start {what}: {e}")))?;
-    let mut child = Stopping::new(child);
-    child
-        .child
-        .wait()
-        .await
-        .map_err(|e| Error::command_failed(format!("waiting for {what}: {e}")))
-}
-
-async fn supervise(
-    mut command: Command,
-    what: &str,
-    mirror: bool,
-    feed: Option<&str>,
-) -> Result<StdOutput> {
-    command
-        .stdin(if feed.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(windows)]
-    command.kill_on_drop(true);
-    #[cfg(unix)]
-    command.kill_on_drop(false);
-    let mut child = command
-        .spawn()
-        .map_err(|e| Error::command_failed(format!("could not start {what}: {e}")))?;
-    if let (Some(feed), Some(mut pipe)) = (feed, child.stdin.take()) {
-        use tokio::io::AsyncWriteExt;
-        // A tool that ignores stdin closes the pipe, and writing to a closed pipe is that tool's
-        // choice rather than an error: it was told, and it may not care.
-        let _ = pipe.write_all(feed.as_bytes()).await;
-        let _ = pipe.shutdown().await;
-    }
-    RawExecutor::wait_watched(
-        child,
-        what,
-        mirror && std::io::stderr().is_terminal(),
-        command_idle_timeout(),
-    )
-    .await
-}
-
 pub struct RawExecutor {
     stdin: ChildStdin,
     idle: Option<std::time::Duration>,
@@ -627,7 +363,7 @@ impl RawExecutor {
     /// The child is stopped through [`Stopping`], never with a bare kill: what Shall spawns is
     /// usually a package manager, and how you stop one of those decides whether the machine is
     /// usable afterwards.
-    async fn wait_watched(
+    pub(crate) async fn wait_watched(
         mut child: tokio::process::Child,
         cmd: &str,
         mirror: bool,
@@ -771,143 +507,6 @@ impl RawExecutor {
             }
         }
     }
-}
-
-/// Windows only: some tools on PATH are not `.exe` files but shim scripts —
-/// e.g. scoop ships as `scoop.ps1`. `where`/`which` find them (so availability checks
-/// pass), but `CreateProcess` can't launch a `.ps1`/`.cmd`/`.bat` directly, so a plain
-/// spawn fails with "program not found". Given the resolved path, return the interpreter
-/// and argv to run it through. Args are forwarded as *separate* process arguments (via
-/// PowerShell `-File` / `cmd /C`), never interpolated into a string, so there is no
-/// command-injection surface.
-#[cfg(windows)]
-fn windows_shim_wrap(cmd: &str, resolved: &Path, args: &[String]) -> Option<(String, Vec<String>)> {
-    let ext = resolved.extension()?.to_str()?.to_ascii_lowercase();
-    match ext.as_str() {
-        "ps1" => {
-            // PowerShell tools like scoop emit *objects*, which only render when PowerShell
-            // formats them. `-File`, `& 'path'`, and a trailing `; exit` all cause the
-            // buffered table to be dropped when stdout is captured. The form that reliably
-            // yields text AND propagates the exit code: invoke by bare name (so the tool's
-            // own output formatting kicks in), pipe through Out-String into a variable,
-            // emit it, then exit with the tool's last exit code. Each argument is wrapped
-            // in a single-quoted literal (with `'` doubled), so a crafted package name
-            // cannot break out of the string — no command-injection surface.
-            let esc = |s: &str| format!("'{}'", s.replace('\'', "''"));
-            let mut invocation = cmd.to_string();
-            for a in args {
-                invocation.push(' ');
-                invocation.push_str(&esc(a));
-            }
-            let command = format!(
-                "$o = ({} | Out-String -Width 4096); Write-Output $o; exit $LASTEXITCODE",
-                invocation
-            );
-            Some((
-                "powershell".to_string(),
-                vec![
-                    "-NoProfile".to_string(),
-                    "-ExecutionPolicy".to_string(),
-                    "Bypass".to_string(),
-                    "-Command".to_string(),
-                    command,
-                ],
-            ))
-        }
-        "cmd" | "bat" => {
-            // Batch scripts are plain-text; `cmd /C` runs them and forwards args cleanly.
-            let mut a = vec!["/C".to_string(), resolved.to_string_lossy().to_string()];
-            a.extend(args.iter().cloned());
-            Some(("cmd".to_string(), a))
-        }
-        _ => None,
-    }
-}
-
-/// Resolve the actual (program, args) to spawn on Windows, wrapping shim scripts. Bare
-/// `.exe`/native commands pass through unchanged.
-#[cfg(windows)]
-fn windows_effective_command(cmd: &str, args: &[String]) -> (String, Vec<String>) {
-    if let Some(resolved) = launch_path(cmd) {
-        if let Some(wrapped) = windows_shim_wrap(cmd, &resolved, args) {
-            return wrapped;
-        }
-    }
-    (cmd.to_string(), args.to_vec())
-}
-
-/// The shim to actually launch, when a manager ships more than one.
-///
-/// `which::which` honours `PATHEXT`, and the Windows default `PATHEXT` does not list `.PS1`.
-/// scoop ships `scoop.cmd` and `scoop.ps1` side by side, so on a default box `which` returns
-/// the `.cmd`, the `cmd /C` arm below runs it — and **`cmd /C` does not propagate the child's
-/// exit code**. Measured on this host, the same failing install:
-///
-/// ```text
-/// cmd /C ...\scoop.cmd install <bad>   -> exit 0
-/// the `.ps1` branch                    -> exit 1
-/// ```
-///
-/// So the careful PowerShell arm that already knew how to return `$LASTEXITCODE` was dead code
-/// on every default installation, and every scoop verdict fell back to string-matching stdout —
-/// one upstream wording change away from reporting a failed install as a success.
-///
-/// The choice is made on what is on disk, never on `PATHEXT`: a machine's `PATHEXT` is a user
-/// setting, and a correctness property that depends on one is a property that holds on the
-/// developer's box and not the user's.
-#[cfg(windows)]
-fn preferred_shim(resolved: &Path) -> std::path::PathBuf {
-    let ext = resolved
-        .extension()
-        .map(|e| e.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
-    if ext == "cmd" || ext == "bat" {
-        let ps1 = resolved.with_extension("ps1");
-        if ps1.is_file() {
-            return ps1;
-        }
-    }
-    resolved.to_path_buf()
-}
-
-/// How Shall actually launches `cmd` on this platform.
-///
-/// On Windows a manager is usually a `.cmd`/`.ps1` shim that `Command::new` cannot execute at
-/// all, so the real launch goes through an interpreter. Anything that runs a manager the way
-/// Shall runs it must come through here — including the argv-drift gate, which asks each
-/// manager about its own subcommands and was skipping every shimmed one on this platform as
-/// "its help could not be read". A gate that launches programs differently from the product is
-/// testing a different program from the one that ships.
-pub fn effective_command(cmd: &str, args: &[String]) -> (String, Vec<String>) {
-    #[cfg(windows)]
-    {
-        windows_effective_command(cmd, args)
-    }
-    #[cfg(not(windows))]
-    {
-        (cmd.to_string(), args.to_vec())
-    }
-}
-
-/// Name a spawned command well enough to find it again, in one line.
-///
-/// `powershell` alone does not identify a hang on a host running six of them; the argv is what
-/// says which. Truncated from the right because the discriminating part is the front — the
-/// cmdlet, the subcommand, the package name.
-fn describe(cmd: &str, args: &[String]) -> String {
-    const CAP: usize = 160;
-    let mut s = String::from(cmd);
-    for a in args {
-        s.push(' ');
-        s.push_str(a);
-        if s.len() >= CAP {
-            break;
-        }
-    }
-    if s.chars().count() > CAP {
-        s = s.chars().take(CAP).collect::<String>() + "…";
-    }
-    s
 }
 
 #[async_trait]
@@ -1177,13 +776,6 @@ impl MockExecutor {
         out
     }
 
-    /// Commands that ran with no registration, so the empty-success default answered them.
-    pub fn unstubbed_commands(&self) -> Vec<String> {
-        let mut out: Vec<String> = self.unstubbed.iter().map(|e| e.key().clone()).collect();
-        out.sort();
-        out
-    }
-
     /// For a test that registers a stub for a path it knows may not be taken — a fallback the
     /// product only reaches on another platform, or the second half of an either/or.
     ///
@@ -1432,15 +1024,6 @@ impl CommandExecutor {
     /// the 2026-08-04 conversion with every argv assertion green.
     pub fn classifies_absent_names(&self) -> bool {
         !self.exit_policy.absent_markers.is_empty()
-    }
-
-    /// Whether this executor's manager means `code` as an outcome that is not a failure.
-    ///
-    /// Exposed for the reason [`classifies_absent_names`](Self::classifies_absent_names) is: a
-    /// backend that never attached its policy runs identical argv, so nothing else can observe
-    /// the loss.
-    pub fn forgives_exit(&self, code: i32) -> bool {
-        self.exit_policy.is_benign(Some(code))
     }
 
     pub fn with_exit_policy(mut self, policy: ExitPolicy) -> Self {
@@ -1981,15 +1564,6 @@ impl CommandExecutor {
         tokio::fs::read_to_string(path).await.map_err(Error::from)
     }
 
-    pub fn read_file_sync(&self, path: &Path) -> Result<String> {
-        if self.dry_run {
-            if let Some(content) = self.vfs.get(path) {
-                return Ok(content.clone());
-            }
-        }
-        std::fs::read_to_string(path).map_err(Error::from)
-    }
-
     /// Write a file the *machine* owns — a systemd unit, a `link:` target, a backend's state
     /// file — atomically and durably.
     ///
@@ -2232,7 +1806,7 @@ impl Drop for SudoKeepalive {
 
 #[cfg(test)]
 mod path_lookup_tests {
-    use super::has_bytes;
+    use crate::core::launch::has_bytes;
 
     /// The predicate that steps over a Windows app execution alias.
     ///
@@ -2255,53 +1829,6 @@ mod path_lookup_tests {
         // A candidate that is not there at all is not a program either — `metadata` fails, and
         // the fallback must read that as "no", never panic.
         assert!(!has_bytes(&dir.path().join("absent.exe")));
-    }
-}
-
-#[cfg(all(test, windows))]
-mod windows_shim_tests {
-    use super::windows_shim_wrap;
-    use std::path::Path;
-
-    #[test]
-    fn wraps_ps1_via_command_with_out_string() {
-        let (prog, args) = windows_shim_wrap(
-            "scoop",
-            Path::new(r"C:\tools\scoop\shims\scoop.ps1"),
-            &["search".to_string(), "ripgrep".to_string()],
-        )
-        .expect("ps1 should be wrapped");
-        assert_eq!(prog, "powershell");
-        assert!(args.contains(&"-Command".to_string()));
-        let command = args.last().unwrap();
-        assert!(command.starts_with("$o = (scoop 'search' 'ripgrep' | Out-String"));
-        assert!(command.contains("exit $LASTEXITCODE"));
-    }
-
-    #[test]
-    fn ps1_args_are_single_quote_escaped_no_injection() {
-        let (_prog, args) = windows_shim_wrap(
-            "scoop",
-            Path::new(r"C:\s.ps1"),
-            &["install".to_string(), "evil'; rm x; '".to_string()],
-        )
-        .unwrap();
-        // The embedded quote is doubled so the whole thing stays one literal string.
-        assert!(args.last().unwrap().contains("'evil''; rm x; '''"));
-    }
-
-    #[test]
-    fn wraps_cmd_via_cmd_c() {
-        let (prog, args) =
-            windows_shim_wrap("foo", Path::new(r"C:\x\foo.cmd"), &["list".to_string()]).unwrap();
-        assert_eq!(prog, "cmd");
-        assert_eq!(args[0], "/C");
-        assert_eq!(args.last().unwrap(), "list");
-    }
-
-    #[test]
-    fn leaves_exe_alone() {
-        assert!(windows_shim_wrap("winget", Path::new(r"C:\x\winget.exe"), &[]).is_none());
     }
 }
 

@@ -250,7 +250,7 @@ impl EphemeralShell {
         // The terminal-handoff door: the person is *in* this shell, so it is inherited and
         // unbounded — but owned, because a shell left holding the terminal after Shall has gone
         // is a session nobody can account for.
-        let _ = crate::core::executor::supervised_status(child, "the ephemeral shell").await?;
+        let _ = crate::core::supervise::supervised_status(child, "the ephemeral shell").await?;
         Ok(())
     }
 

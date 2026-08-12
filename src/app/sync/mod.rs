@@ -334,10 +334,15 @@ impl<'a> SyncEngine<'a> {
             events
                 .fire(
                     crate::model::event::Event::AfterSync,
-                    serde_json::json!({
-                        "installed": changes.total_install(),
-                        "removed": changes.total_remove(),
-                    }),
+                    // Achieved, like the summary beside it. These were `changes.total_*()` —
+                    // the size of the plan — so a partial run under `--keep-going` told every
+                    // subscribed hook that everything it intended had happened. Same defect as
+                    // the summary's counters, one path over, and worse for being a fact
+                    // somebody else's script acts on (B1).
+                    {
+                        let (installed, removed, _) = self.metrics.totals();
+                        serde_json::json!({ "installed": installed, "removed": removed })
+                    },
                 )
                 .await;
 
@@ -350,9 +355,31 @@ impl<'a> SyncEngine<'a> {
             let _ = j.cleanup();
         }
 
+        // **`--keep-going` continues past a failure. It does not turn one into a success.**
+        //
+        // Its own help calls it "the per-run opt-in for a fleet rollout that would rather take
+        // what it can get" — and a fleet rollout is precisely the context where the exit code
+        // is the only thing anybody reads. Without the flag a failed sync exits 1; with it, the
+        // same failure exited 0 under `Status: SUCCESS`, so a GitOps pipeline running
+        // `shall sync --keep-going` was green while installing nothing (B1).
+        //
+        // Raised here and not inside the transaction because everything above it must still
+        // happen: the packages that did install are on the machine, and the registry entry, the
+        // summary and the hooks that record them are what make a partial run recoverable rather
+        // than merely failed.
+        let kept_going: Result<()> = match result.as_deref() {
+            Ok([]) | Err(_) => Ok(()),
+            Ok(failed) => Err(Error::command_failed(format!(
+                "{} operation(s) failed and `--keep-going` carried on past them: {}. What \
+                 succeeded is on the machine and recorded; nothing was rolled back.",
+                failed.len(),
+                failed.join(", ")
+            ))),
+        };
+
         // The transaction's own failure comes first: it is the more fundamental one, and a
         // kernel-module failure is only reachable when the transaction succeeded anyway.
-        result.and(kernel_outcome)
+        result.map(|_| ()).and(kernel_outcome).and(kept_going)
     }
 
     /// Rebuild the out-of-tree kernel modules, when this sync changed a kernel (XIII.1).
@@ -632,12 +659,22 @@ impl<'a> SyncEngine<'a> {
         }
     }
 
+    /// Run the plan, record what happened, and **return what did not**.
+    ///
+    /// The returned names are the operations the engine reported an outright failure for. They
+    /// are empty on every run without `--keep-going`, because a failure there aborts the
+    /// transaction and this returns `Err` — but with it, the run continues and the caller is
+    /// the only thing left that can notice. It did not, and `shall sync --keep-going` exited 0
+    /// with `Status: SUCCESS` over a run that installed nothing (B1).
+    ///
+    /// Returned rather than raised here, because the successful half of a partial run is real:
+    /// the caller has to persist the registry and print the summary before it fails.
     async fn execute_transaction(
         &self,
         changes: &SyncChanges,
         state: &mut StateRegistry,
         reaped: guard::Reaped,
-    ) -> Result<()> {
+    ) -> Result<Vec<String>> {
         let tx_config = TransactionConfig::from_config(self.config);
 
         // The engine gets the configuration because its rollback removes, and a removal is
@@ -702,9 +739,11 @@ impl<'a> SyncEngine<'a> {
         // record for a package that did install, which is the bug this whole change is about.
         let mut failed_nodes: std::collections::HashSet<petgraph::graph::NodeIndex> =
             std::collections::HashSet::new();
+        let mut failed_names: Vec<String> = Vec::new();
         for res in results {
             if res.result.is_err() {
                 failed_nodes.insert(res.node_index);
+                failed_names.push(format!("{}:{}", res.backend_name, res.package_name));
             }
             self.metrics.record_operation(
                 &res.package_name,
@@ -718,12 +757,19 @@ impl<'a> SyncEngine<'a> {
             );
         }
 
+        // **Counted here, from the nodes that survived**, and not from the plan. These two used
+        // to be `record_install(changes.total_install())` — the size of what was *intended* —
+        // called unconditionally after the loop, so the summary read `Installs: 2` over a run
+        // in which both packages were absent from the machine afterwards (B1). This loop is
+        // already the authority on what happened; the counters now read from it.
+        let (mut installed, mut removed) = (0u64, 0u64);
         for idx in changes.graph.node_indices() {
             if failed_nodes.contains(&idx) {
                 continue;
             }
             match &changes.graph[idx] {
                 GraphAction::Install(spec) => {
+                    installed += 1;
                     let source = spec.options.one("__source").unwrap_or("sync");
                     state.add(
                         &spec.backend,
@@ -741,14 +787,15 @@ impl<'a> SyncEngine<'a> {
                     // `locks/<backend>.toml` in Phase 4, not in your module.
                 }
                 GraphAction::Remove { name, backend } => {
+                    removed += 1;
                     state.remove(backend, name);
                 }
             }
         }
 
-        self.metrics.record_install(changes.total_install() as u64);
-        self.metrics.record_remove(changes.total_remove() as u64);
-        Ok(())
+        self.metrics.record_install(installed);
+        self.metrics.record_remove(removed);
+        Ok(failed_names)
     }
 
     /// Collapse the journal's unresolved entries to one recovery per operation, carrying every

@@ -16,11 +16,32 @@ use crate::core::{
 };
 use crate::utils::progress::{create_progress_reporter, ProgressReporter};
 
-use super::{LuaHooks, MetricsCollector, UniversalSearch};
+use super::{Backends, LuaHooks, MetricsCollector, UniversalSearch};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info, instrument, warn};
+
+/// What the unmanaged crawl found, and what it could not find out.
+///
+/// **Two fields, for the reason `OutdatedReport` has two.** A manager that could not be listed
+/// contributes nothing, which is the safe direction for `purge-undeclared` — it deletes less,
+/// never more. It is not a safe direction for the *sentence*: "nothing here is unmanaged" and
+/// "three managers never answered" produced the identical empty vector, and `shall check drift`
+/// printed *"System matches your manifests; nothing to install, no drift, nothing undeclared"*
+/// over the second one (B4).
+///
+/// The asymmetry this closes is sharper than the omission: `check drift --json` already had a
+/// `resources_unverifiable` key and no packages equivalent, so the distinction this codebase is
+/// proudest of survived into the machine-readable contract for one half of the model and was
+/// lost for the other.
+#[derive(Default)]
+pub struct UndeclaredReport {
+    /// Installed, and nothing declares it.
+    pub packages: Vec<Package>,
+    /// `backend: reason` for every manager that could not be listed. Never empty *and* silent.
+    pub unanswered: Vec<String>,
+}
 
 pub struct App {
     pub config: Arc<Config>,
@@ -38,6 +59,13 @@ pub struct App {
     /// not for each of its four removal phases. One `App` is one invocation, which is what makes
     /// this the right owner.
     pub reaping: Arc<crate::app::sync::guard::Reaping>,
+    /// The registry paired with `priority`, resolved on first use.
+    ///
+    /// Private, and the only private field here — deliberately. While `registry` is reachable,
+    /// any code can fan out to every backend on the machine and bypass the file that says which
+    /// ones Shall may use; this is the accessor that cannot be bypassed, and it is one lazily
+    /// resolved answer rather than five identical file reads per command.
+    backends: tokio::sync::OnceCell<Backends>,
 }
 
 impl App {
@@ -132,11 +160,8 @@ impl App {
             diagnostics,
             scheduler,
             reaping: Arc::new(crate::app::sync::guard::Reaping::new()),
+            backends: tokio::sync::OnceCell::new(),
         })
-    }
-
-    pub async fn new_with_executor(config: Config, executor: CommandExecutor) -> Result<Self> {
-        Self::new_with_executor_and_state_path(config, executor, None).await
     }
 
     pub async fn new(config: Config) -> Result<Self> {
@@ -145,8 +170,42 @@ impl App {
         Self::new_with_executor_and_state_path(config, executor, None).await
     }
 
-    pub fn adopter(&self) -> Adopter {
-        Adopter::new(self.registry.clone(), self.state.clone(), &self.config)
+    /// The same app with one setting changed, sharing everything a run has already paid for.
+    ///
+    /// **Written here because a caller could not write it.** The one place that needed it —
+    /// a test wanting `--yes` — rebuilt `App` field by field, twelve of them, which is the god
+    /// object charging rent: every field added to the struct had to be added there too, and
+    /// forgetting one silently shares the wrong state. Now the struct has a private field and
+    /// that literal does not compile at all, which is the point of the private field.
+    pub fn reconfigured(&self, edit: impl FnOnce(&mut Config)) -> Self {
+        let mut config = (*self.config).clone();
+        edit(&mut config);
+        Self {
+            config: Arc::new(config),
+            registry: self.registry.clone(),
+            executor: self.executor.duplicate(),
+            metrics: self.metrics.clone(),
+            progress: self.progress.clone(),
+            hooks: self.hooks.clone(),
+            state: self.state.clone(),
+            snapshot_manager: self.snapshot_manager.clone(),
+            journal: self.journal.clone(),
+            diagnostics: self.diagnostics.clone(),
+            scheduler: self.scheduler.clone(),
+            reaping: self.reaping.clone(),
+            // **Deliberately not carried over.** The edit may name a different config repo, and
+            // a resolved `priority` is an answer about the repo it was read from — reusing it
+            // would answer the new run's question with the old run's file.
+            backends: tokio::sync::OnceCell::new(),
+        }
+    }
+
+    pub async fn adopter(&self) -> Adopter {
+        Adopter::new(
+            self.backends().await.clone(),
+            self.state.clone(),
+            &self.config,
+        )
     }
 
     pub fn shell(&self) -> EphemeralShell {
@@ -461,18 +520,21 @@ impl App {
     /// upgrade anything because a module has a syntax error is a worse answer than the one they
     /// gave before.
     pub async fn holds(&self) -> crate::app::holds::Holds {
-        let desired = match self.resolver().await.resolve_desired_state().await {
-            Ok(desired) => Some(desired),
+        let (desired, why) = match self.resolver().await.resolve_desired_state().await {
+            Ok(desired) => (Some(desired), None),
             Err(e) => {
                 warn!(
                     "the manifest could not be resolved ({e}), so `@hold=true` lines are not \
                      being honoured on this run; `shall hold` entries still are."
                 );
-                None
+                // Carried, not only warned about. The warning was correct and went to stderr,
+                // and `shall hold` then printed a clean bill on stdout at exit 0 — so a script
+                // reading the answer got "nothing is held" with no way to know better (B3).
+                (None, Some(e.to_string()))
             }
         };
         let state = self.state.lock().await;
-        crate::app::holds::Holds::new(&state, desired.as_ref())
+        crate::app::holds::Holds::new(&state, desired.as_ref(), why)
     }
 
     /// A resolver over this app's config and registry. One construction, so a caller that needs
@@ -524,7 +586,9 @@ impl App {
         // at `max_parallel`. Unlike `upgrade`, this changes no package, so concurrent runs
         // cannot contend on a package database.
         let cap = self.config.max_parallel.max(1);
-        let failed: Vec<String> = stream::iter(self.registry.available())
+        // What Shall uses: refreshing the package index of a manager `priority` does not
+        // name is work nobody asked for, on a tool this run will never call.
+        let failed: Vec<String> = stream::iter(self.backends().await.usable()?)
             .map(|backend| async move {
                 let upgradable = backend.as_upgradable()?;
                 match upgradable.update(backend.sudo_for_write()).await {
@@ -567,9 +631,12 @@ impl App {
         // rebuilds or refetches from a registry. So the root-needing set stays strictly
         // sequential and the rest overlap. `run_exclusive`'s per-manager mutex is still
         // underneath both, which is the safety this loop was being blunt about.
+        // What Shall uses: `upgrade` acts on the model, so a manager outside `priority` is
+        // not this command's business however installed it is.
         let (rooted, unrooted): (Vec<_>, Vec<_>) = self
-            .registry
-            .available()
+            .backends()
+            .await
+            .usable()?
             .into_iter()
             .filter(|b| b.is_upgradable())
             .partition(|b| b.needs_root());
@@ -655,12 +722,12 @@ impl App {
     }
 
     pub async fn list(&self, backend_filter: Option<&str>) -> Result<Vec<Package>> {
-        let backends: Vec<_> = self
-            .registry
-            .available()
-            .into_iter()
-            .filter(|b| backend_filter.is_none_or(|f| b.name() == f))
-            .collect();
+        // Narrowed by the registry, not after it: filtering the result of `available()` means
+        // fifty-two PATH walks to answer a question about one manager (see `available_named`).
+        // What Shall uses, narrowed to one when `--backend` named one. `list` reports on the
+        // model's managers; a manager `priority` excludes has nothing to do with this machine's
+        // declarations, and probing it to find that out is the cost W4 is about.
+        let backends = self.backends().await.usable_named(backend_filter)?;
         // The fan-out drops backends that cannot be queried at all, so the names have to be
         // taken through the same filter to stay aligned with the answers.
         let names: Vec<String> = backends
@@ -744,6 +811,10 @@ impl App {
         // "not installed" (R-4). A list that disagrees with the machine breaks the one thing it
         // promises, so this is answered before the package path rather than after it.
         if let Ok(Some((backend_name, resource))) = self.queried_resource(package_name).await {
+            // A resource name off a `list` row becomes the queried manager's argv with no
+            // package-name rule in front of it — the same hole as the bare-name fallback
+            // below, through the door `list` invites the user to copy from.
+            crate::core::Validator::refuse_command_metacharacters(&resource, "a resource name")?;
             if let Some(backend) = self.registry.get(&backend_name) {
                 if let Some(q) = backend.as_queryable() {
                     // A resource the backend does not have answers `None`, the same as any
@@ -817,11 +888,23 @@ impl App {
         //
         // Asked of every backend at once, and the first answer wins. Serial, this waited on
         // every manager that did not have it before reaching the one that did.
-        let name = specs
-            .first()
-            .map(|s| s.name.clone())
-            .unwrap_or_else(|| package_name.to_string());
-        let backends = self.registry.available();
+        // The fallback is the one branch of this function that asks every manager about a
+        // string nothing validated: `specs` is empty exactly when the resolve failed, and the
+        // resolve is where the character check lives. So a name refused as a name was handed
+        // to 22 managers anyway, and on Windows some of them are `.cmd` shims (B-1).
+        let name = match specs.first() {
+            Some(s) => s.name.clone(),
+            None => {
+                crate::core::Validator::refuse_command_metacharacters(
+                    package_name,
+                    "a package name",
+                )?;
+                package_name.to_string()
+            }
+        };
+        // What Shall uses. `info` answers about a package this machine is managing, and a
+        // manager outside `priority` cannot be managing one.
+        let backends = self.backends().await.usable()?;
         let answers = self
             .query_backends_concurrently(backends, move |q| {
                 let name = name.clone();
@@ -884,7 +967,13 @@ impl App {
     /// must not be made to wake twenty-four; that is why this is called by name at those call
     /// sites rather than folded into `App::new`.
     pub async fn warm_installed(&self) {
-        let backends = self.registry.available();
+        // What Shall uses — and a warm-up must not be the one thing that widens the set: it
+        // exists so the *later* fan-outs find their answers cached, so it has to ask exactly
+        // who they will ask. A priority that will not resolve warms nothing rather than
+        // everything; the command that needs the answer reports the failure itself.
+        let Ok(backends) = self.backends().await.usable() else {
+            return;
+        };
         let _ =
             self.query_backends_concurrently(backends, |q| async move {
                 q.list_installed().await.is_ok()
@@ -892,8 +981,10 @@ impl App {
             .await;
     }
 
-    pub async fn installed_but_undeclared(&self) -> Result<Vec<Package>> {
-        let backends = self.registry.available();
+    pub async fn installed_but_undeclared(&self) -> Result<UndeclaredReport> {
+        // What Shall uses. `purge-undeclared` deletes from this list, so widening it past
+        // `priority` would delete through managers the user told Shall not to touch.
+        let backends = self.backends().await.usable()?;
         let names: Vec<String> = backends
             .iter()
             .filter(|b| b.as_queryable().is_some())
@@ -907,13 +998,22 @@ impl App {
         // a safe direction for the *sentence*: "nothing here is unmanaged" and "one manager
         // never answered" both come out as an empty list, and only one of them is a clean bill.
         let mut listed = Vec::new();
+        let mut unanswered = Vec::new();
         for (name, answer) in names.into_iter().zip(answers) {
             match answer {
                 Ok(pkgs) => listed.push(pkgs),
-                Err(e) => warn!(
-                    "`{name}` could not be listed, so nothing it has counts as unmanaged here \
-                     — this is not a clean bill for `{name}`: {e}"
-                ),
+                Err(e) => {
+                    warn!(
+                        "`{name}` could not be listed, so nothing it has counts as unmanaged \
+                         here — this is not a clean bill for `{name}`: {e}"
+                    );
+                    // Returned as well as warned about. The comment above has said this since
+                    // the function was written, and the caller still printed *"System matches
+                    // your manifests; nothing to install, no drift, nothing undeclared"* over
+                    // three managers that never answered (B4). A warning on stderr is not a
+                    // field, and `check drift --json` had no key that could carry it.
+                    unanswered.push(format!("{name}: {e}"));
+                }
             }
         }
         // D5: a `.deb`/`.rpm` a download backend handed to a system manager is listed by that
@@ -926,19 +1026,26 @@ impl App {
         // rather than holding it across every backend's query.
         let state = self.state.lock().await;
         let managed = state.managed_index();
-        Ok(listed
-            .into_iter()
-            .flatten()
-            .filter(|pkg| !managed.contains(&(pkg.backend.as_str(), pkg.name.as_str())))
-            .filter(|pkg| !owned.contains(&pkg.name))
-            .collect())
+        Ok(UndeclaredReport {
+            packages: listed
+                .into_iter()
+                .flatten()
+                .filter(|pkg| !managed.contains(&(pkg.backend.as_str(), pkg.name.as_str())))
+                .filter(|pkg| !owned.contains(&pkg.name))
+                .collect(),
+            unanswered,
+        })
     }
 
     /// Every system package a download backend (`github:`/`web:`) installed through a second
     /// manager (D5), by name. Used to keep those packages out of the unmanaged crawl so they are
     /// neither double-counted nor purged out from under the declaration that owns them.
     pub async fn owned_system_package_names(&self) -> std::collections::HashSet<String> {
-        let backends = self.registry.available();
+        // What Shall uses: this answers "which system packages did a download backend of ours
+        // install", and only a backend of ours can have.
+        let Ok(backends) = self.backends().await.usable() else {
+            return std::collections::HashSet::new();
+        };
         let owned =
             self.query_backends_concurrently(backends, |q| async move {
                 q.owned_system_packages().await
@@ -1047,13 +1154,34 @@ impl App {
     /// This is what replaced `config.enabled_backends`/`hostname_backends`: one file, with
     /// `when` blocks for the per-host case, instead of a config section that expressed the
     /// same fact a second way.
-    pub async fn priority_backends(&self) -> Vec<String> {
-        let resolver = StateResolver::new(&self.config, self.registry.clone(), false).await;
-        resolver
-            .priority_for_host()
+    /// The registry, paired with the answer to *which of it this run may use*.
+    ///
+    /// **Resolved once per process.** Reading `priority` costs a file read and a host-facts
+    /// resolution, and every fan-out in the program wants the answer — the accessor this
+    /// replaced was called five times per `check`.
+    ///
+    /// **And it no longer swallows.** It used to end in `.unwrap_or_default()`, so a `priority`
+    /// that would not resolve became an *empty list* — which `UniversalSearch` then read as
+    /// *every available backend*, on the stated premise that only a missing file could produce
+    /// one. Two swallowed answers composing into the exact inversion of the file's own rule.
+    /// The failure is carried into [`Backends`] and refused where the question is asked.
+    pub async fn backends(&self) -> &Backends {
+        self.backends
+            .get_or_init(|| async {
+                let resolver = StateResolver::new(&self.config, self.registry.clone(), false).await;
+                let priority = resolver
+                    .priority_for_host()
+                    .await
+                    .map_err(|e| e.to_string());
+                Backends::new(self.registry.clone(), priority)
+            })
             .await
-            .map(|p| p.order().to_vec())
-            .unwrap_or_default()
+    }
+
+    /// The `priority` order as names — the list, for callers that want it rather than the
+    /// backends themselves.
+    pub async fn priority_backends(&self) -> Result<Vec<String>> {
+        self.backends().await.names()
     }
 
     /// The same list, as the thing a plan that reaps has to be handed
@@ -1066,8 +1194,8 @@ impl App {
     }
 
     pub async fn search(&self, query: &str) -> Result<Vec<Package>> {
-        let enabled = self.priority_backends().await;
-        let searcher = UniversalSearch::new(&self.registry, &self.config, enabled);
-        searcher.search(query).await
+        UniversalSearch::new(self.backends().await, &self.config)
+            .search(query)
+            .await
     }
 }

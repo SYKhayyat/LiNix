@@ -95,11 +95,7 @@ fn losses(src: &str) -> BTreeSet<String> {
 }
 
 fn registry_source() -> String {
-    std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/backends/registry.rs"
-    ))
-    .expect("registry.rs is readable")
+    crate::harness::registry_source()
 }
 
 #[test]

@@ -114,12 +114,10 @@ impl Dotfiles<'_> {
         ))?;
         let mut out = Vec::new();
         for (tree, opts, origin) in state.dotfile_trees() {
-            let declared = std::path::Path::new(tree);
-            let root = if declared.is_absolute() {
-                declared.to_path_buf()
-            } else {
-                self.config.config_root().join(declared)
-            };
+            // The same resolution `link:` uses. It was written twice, one copy resolved
+            // against the config root and the other stored the string verbatim — so the
+            // identical declaration worked here and produced a dangling link there (B0b).
+            let root = crate::backends::link::resolve_source(self.config, tree)?;
             if !root.is_dir() {
                 return Err(Error::Validation(format!(
                     "{}: `dotfiles:{}` is not a directory ({}). It names a folder to mirror, \

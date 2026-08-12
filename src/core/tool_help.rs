@@ -40,7 +40,7 @@ fn help_text(program: &str, chain: &[String]) -> Option<String> {
     args.push("--help".to_string());
     // Through the executor's launcher, or a shimmed manager on Windows cannot be run at all —
     // the mistake the argv-drift gate made for four installed managers before it was fixed.
-    let (prog, argv) = crate::core::executor::effective_command(program, &args);
+    let (prog, argv) = crate::core::launch::effective_command(program, &args);
     let mut cmd = std::process::Command::new(prog);
     cmd.args(&argv).stdin(std::process::Stdio::null());
     let answer = crate::core::blocking::command_output(&mut cmd)

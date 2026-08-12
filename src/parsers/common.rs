@@ -70,30 +70,6 @@ pub(crate) fn split_trailing_version(token: &str) -> Option<(&str, String)> {
     None
 }
 
-/// A strict CSV-style parser for backends that support delimited output.
-pub fn parse_delimited(output: &str, delimiter: char, backend: &str) -> ParseResult {
-    let clean = sanitize(output);
-    let candidates = crate::parsers::data_lines(&clean);
-    let found = candidates
-        .iter()
-        .filter_map(|line| {
-            let parts: Vec<&str> = line.split(delimiter).collect();
-            if parts.len() >= 2 {
-                Some(Package::with_version(
-                    parts[0].trim(),
-                    parts[1].trim(),
-                    backend,
-                ))
-            } else if !parts[0].is_empty() {
-                Some(Package::new(parts[0].trim(), backend))
-            } else {
-                None
-            }
-        })
-        .collect();
-    or_unrecognised(backend, found, &candidates)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

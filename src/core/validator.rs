@@ -47,6 +47,21 @@ static SHELL_INJECTION_REGEX_WINDOWS_ID: Lazy<Regex> =
 static SHELL_INJECTION_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"[;&|><`$\(\)\[\]\{\}\*\?\!\\]").unwrap());
 
+/// The characters that let a string stop being one argument and start being a second command.
+///
+/// Deliberately narrower than [`SHELL_INJECTION_REGEX`], which is the metacharacter half of a
+/// package-*name* rule and also bans `\`, `{}`, `*` and `?`. A winget identifier carries the
+/// first two and an ordinary search query carries the last two, so that rule cannot be applied
+/// to a string whose kind is not yet known. This one refuses the separators and nothing else:
+///
+/// - `& | < > ^` — `cmd` parses these out of its own command line before a `.cmd` shim sees
+///   them. A package name of `q&calc.exe&rem` reaching a `.cmd` shim ran `calc.exe`.
+/// - ``; $ ` ( )`` — the POSIX separators and substitutions. Shall never builds a shell string,
+///   and the point of a second layer is to survive the day one of its callers does.
+/// - `"` and the line terminators, which end an argument inside whatever is quoting it.
+static COMMAND_METACHARACTER_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new("[;&|<>^`$()\"\r\n]").unwrap());
+
 /// Sensitive system paths that Shall is prohibited from accessing.
 static FORBIDDEN_PATHS: &[&str] = &[
     "/etc/shadow",
@@ -117,6 +132,33 @@ impl Validator {
         backend == "winget"
     }
 
+    /// Refuse a string that reaches a manager's argv *before* it is known to be a package name.
+    ///
+    /// Two strings do that, and both were live. A **bare** (unprefixed) name is handed to each
+    /// candidate manager to find out which one owns it — that probe runs before the model is
+    /// collected and therefore before [`Validator::validate_package_name_for`] ever sees the
+    /// name. A **search query** is free text by definition and passes no name rule at all. On
+    /// Windows both reach managers that ship as `.cmd` shims: `shall search 'q&calc.exe&rem'`
+    /// launched `calc.exe`, and one crafted bare name in a shared module wrote files on every
+    /// machine that evaluated it.
+    ///
+    /// **This is the second layer, not the fix.** The fix is that a `.cmd` shim is spawned as
+    /// itself so the standard library escapes its arguments (`core/executor.rs`). A comment
+    /// calling this validator the thing that stands between a crafted name and a command line
+    /// is what let the first layer stay broken.
+    pub fn refuse_command_metacharacters(text: &str, what: &str) -> Result<()> {
+        if let Some(m) = COMMAND_METACHARACTER_REGEX.find(text) {
+            return Err(Error::Validation(format!(
+                "`{}` is not usable as {}: it contains `{}`, which a command interpreter reads \
+                 as the end of one command and the start of another.",
+                printable(text),
+                what,
+                printable(m.as_str())
+            )));
+        }
+        Ok(())
+    }
+
     /// Validates package names against injection and traversal, with no knowledge of the
     /// backend — the strict rule (a leading path separator is rejected). Prefer
     /// [`Validator::validate_package_name_for`] when the backend is known.
@@ -145,6 +187,26 @@ impl Validator {
                 printable(name)
             )));
         }
+        // **A name that opens with `-` is a flag, and no manager has a package called one.**
+        //
+        // This is what makes a wrong row in the terminator table exploitable rather than merely
+        // wrong: `composer:--version` passed every check here and reached composer's argv, on a
+        // manager Shall believed `--` would protect and which ignores it (B5). The terminator
+        // table stays — it is the mechanism — but it is one boolean per binary measured on one
+        // image, and a guard that depends on fifty of those being right is a guard with fifty
+        // ways to be wrong.
+        //
+        // Refused for every backend, including the path-oriented ones: a path may begin with
+        // `/` or `~`, and a leading `-` is a flag there too (`rm -rf` reads `-rf` no differently
+        // for having come out of a `link:` line).
+        if name.starts_with('-') {
+            return Err(Error::Validation(format!(
+                "`{}` starts with `-`, so a package manager reads it as an option rather than \
+                 as a name. No manager has a package called that.",
+                printable(name)
+            )));
+        }
+
         // A leading path separator normally signals an absolute-path injection attempt — but
         // for a path/URL-oriented backend (e.g. `link`, whose name IS a path) it is valid.
         if !Self::is_path_oriented_backend(backend)
@@ -229,20 +291,6 @@ impl Validator {
         }
         Ok(())
     }
-
-    pub fn validate_backend_name(name: &str) -> Result<()> {
-        if name.is_empty()
-            || !name
-                .chars()
-                .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
-        {
-            return Err(Error::Validation(format!(
-                "Invalid backend identifier: {}",
-                printable(name)
-            )));
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -314,6 +362,96 @@ mod tests {
                 Validator::validate_package_name_for(name, backend).is_err(),
                 "`{backend}:` names {name} with no leading separator; allowing one would widen \
                  the guard for nothing"
+            );
+        }
+    }
+
+    /// A name that opens with `-` is an option, whatever the terminator table believes.
+    ///
+    /// `--` is the mechanism that keeps a name out of a manager's option parser, and the table
+    /// recording which managers honour it is fifty booleans measured on one image. `composer`
+    /// was in the honouring set and is not — so `composer:--version` reached composer's argv as
+    /// a flag (B5). One wrong row should not be the whole of the defence.
+    #[test]
+    fn a_name_that_opens_with_a_hyphen_is_an_option_and_is_refused_everywhere() {
+        for (name, backend) in [
+            ("--version", "composer"),
+            ("-rf", "apt"),
+            ("--force", "npm"),
+            ("-", "cargo"),
+            // Including the backends whose names are legitimately paths: a leading `-` is a
+            // flag to the program being run, whatever the string is a name *of*.
+            ("--no-preserve-root", "link"),
+            ("-x", "winget"),
+        ] {
+            assert!(
+                Validator::validate_package_name_for(name, backend).is_err(),
+                "`{backend}:{name}` reaches the manager's argv as an option"
+            );
+        }
+
+        // A hyphen anywhere else is ordinary, and most package names have one.
+        for (name, backend) in [
+            ("python3-dev", "apt"),
+            ("gcc-14-base", "apt"),
+            ("left-pad", "npm"),
+            ("ripgrep-all", "cargo"),
+            ("/etc/x-y", "link"),
+            (r"ARP\Machine\X64\7-Zip", "winget"),
+        ] {
+            assert!(
+                Validator::validate_package_name_for(name, backend).is_ok(),
+                "`{backend}:{name}` is an ordinary name and was refused"
+            );
+        }
+    }
+
+    /// The strings that reach a manager before anything knows what kind of string they are.
+    ///
+    /// The proof of concept was `shall search 'q&calc.exe&rem'` launching `calc.exe` through a
+    /// `.cmd` shim, and a bare `q>PROOF` in a module writing a file. Both are asserted here
+    /// alongside the shapes that must keep working, because a gate that refuses an ordinary
+    /// search query is a gate somebody removes.
+    #[test]
+    fn a_string_that_becomes_argv_may_not_carry_a_command_separator() {
+        for hostile in [
+            "q&calc.exe&rem",
+            "q>MANIFEST-REDIR.txt",
+            "q|whoami",
+            "q<in.txt",
+            "q^&calc",
+            "jq; rm -rf /",
+            "jq$(id)",
+            "jq`id`",
+            "jq\nsecond-line",
+            "say \"hi\"",
+        ] {
+            assert!(
+                Validator::refuse_command_metacharacters(hostile, "a search query").is_err(),
+                "`{hostile}` reaches a `.cmd` shim as part of a command line"
+            );
+        }
+
+        // What must still pass. A query is free text — spaces, globs and regex anchors are how
+        // people search — and a winget identifier carries backslashes and braces. Refusing
+        // these would move the cost of the fix onto every ordinary user.
+        for ordinary in [
+            "ripgrep",
+            "json parser",
+            "rip*",
+            "ri?grep",
+            "@angular/cli",
+            "sharkdp/fd",
+            r"ARP\Machine\X64\{8BD2A40D-67A6-45F5-877D-6D9D04C9D5A2}",
+            r"ARP\Machine\X64\Mozilla Firefox",
+            "python3.11-dev",
+            "libssl-dev:amd64",
+            "[tool]",
+            "!important",
+        ] {
+            assert!(
+                Validator::refuse_command_metacharacters(ordinary, "a search query").is_ok(),
+                "`{ordinary}` is something a person types and it was refused"
             );
         }
     }

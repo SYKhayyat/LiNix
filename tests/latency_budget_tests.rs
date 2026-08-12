@@ -361,6 +361,14 @@ fn the_fan_out_commands_still_fan_out() {
 
     let overlap = number_before("x overlap").expect("the summary line prints an overlap ratio");
     let waves = number_before(" wave(s)").expect("the summary line prints a wave count") as usize;
+    // The numerator, read so the gate below can be two-sided and so a human diffing two CI runs
+    // can see it move. `… 23 child command(s) summing to 23.67s · …`
+    let summed: Option<f64> = line.split_once("summing to ").and_then(|(_, rest)| {
+        rest.split(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .find(|t| !t.is_empty())?
+            .parse()
+            .ok()
+    });
 
     // **The bounds come from `Shape`, not from a second copy of them here.** The first draft
     // wrote `>= 2.0` and `<= 2` in both places, taken from one host, and ubuntu-latest reported
@@ -378,6 +386,33 @@ fn the_fan_out_commands_still_fan_out() {
          belong to the host; the scheduling does not.\n  {line}",
         shape.min_overlap
     );
+    // **The other side of the same number, because a floor alone can be satisfied by making
+    // things worse.** The ratio is `sum(child time) / wall` and contention inflates the
+    // numerator: measured over the same 23 children, width 20 spent 676.6s of child time
+    // against width 4's 182.5s — 3.7× the total work — and the ratio *rose* from 1.6× to 8.3×
+    // for it. Wall clock genuinely improved, so the design is sound and this is not a budget on
+    // the design; it is a check that the instrument is measuring concurrency at all.
+    //
+    // The ceiling is arithmetic rather than tuned: `sum/wall` is the mean number of children in
+    // flight, and a run cannot average more children in flight than it has. A reading above
+    // that is not a fast run, it is a numerator counting something that is not overlap —
+    // queued time, a retry, a child recorded twice. A tighter ceiling would have to know each
+    // command's concurrency cap, and a guessed one is a flaky gate, which is worse than none.
+    //
+    // The summed child time is in the message either way, so a human diffing two CI runs can
+    // see the numerator move even where no assertion fires — the regression this pair still
+    // cannot catch is every child getting slower at constant concurrency, which moves `sum` and
+    // `wall` together and leaves the ratio exactly where it was.
+    assert!(
+        overlap <= children as f64,
+        "`shall list` reports {overlap:.1}x overlap over {children} child command(s)\
+         {}. A run cannot average more children in flight than it has, so the numerator is \
+         counting something that is not concurrency.\n  {line}",
+        summed
+            .map(|s| format!(" summing to {s:.2}s"))
+            .unwrap_or_default()
+    );
+
     assert!(
         waves <= ceiling,
         "`shall list` went quiet {} time(s) mid-run ({waves} waves over {children} children, \

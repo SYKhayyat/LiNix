@@ -87,13 +87,12 @@ fn no_backend_module_is_compiled_on_one_os_only() {
 }
 
 /// The text of the argv table, so a registrar named in a comment elsewhere does not count.
-fn argv_table(src: &str) -> &str {
-    src.split_once("    fn argv_cases() -> Vec<ArgvCase> {")
-        .expect("the argv table moved or was renamed")
-        .1
-        .split_once("\n    }")
-        .expect("the argv table has no end")
-        .0
+///
+/// Read through the harness because the table lives inside `#[cfg(test)]`, which the production
+/// registry reader strips — two questions about one directory, and two functions rather than one
+/// that answers whichever the caller happened to mean.
+fn argv_table(_src: &str) -> String {
+    crate::harness::registry_argv_table()
 }
 
 /// A row satisfies `needle` only when the match is not part of a longer identifier —
@@ -156,7 +155,7 @@ fn registrars(src: &str) -> Vec<String> {
 
 #[test]
 fn every_registrar_has_an_argv_row_or_a_written_reason() {
-    let src = read("src/backends/registry.rs");
+    let src = crate::harness::registry_source();
     let defined = registrars(&src);
 
     // Floors on the SCAN, not counts of the backends. A parse that finds nothing passes every
@@ -192,7 +191,7 @@ fn every_registrar_has_an_argv_row_or_a_written_reason() {
     // which stopped being true the moment rows could carry options, and nothing said so.
     let contradicted: Vec<&str> = NO_ROW
         .iter()
-        .filter(|n| mentions(table, n.registrar))
+        .filter(|n| mentions(&table, n.registrar))
         .map(|n| n.registrar)
         .collect();
     assert!(
@@ -205,7 +204,7 @@ fn every_registrar_has_an_argv_row_or_a_written_reason() {
 
     let rowless: BTreeSet<String> = defined
         .iter()
-        .filter(|r| !mentions(table, r))
+        .filter(|r| !mentions(&table, r))
         .cloned()
         .collect();
 
@@ -225,7 +224,7 @@ fn every_registrar_has_an_argv_row_or_a_written_reason() {
 /// A gate that has never failed is a claim, not a check.
 #[test]
 fn the_registrar_scan_can_actually_fail() {
-    let src = read("src/backends/registry.rs");
+    let src = crate::harness::registry_source();
 
     // Both shapes are found in the real file.
     let found = registrars(&src);
@@ -242,7 +241,7 @@ fn the_registrar_scan_can_actually_fail() {
     // A registrar with no row is reported rather than passed over.
     let table = argv_table(&src);
     assert!(
-        !mentions(table, "backends::shall_nonexistent::register"),
+        !mentions(&table, "backends::shall_nonexistent::register"),
         "the table cannot mention a module that does not exist"
     );
 

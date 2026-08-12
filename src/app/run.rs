@@ -176,7 +176,7 @@ impl Runner {
         // The terminal-handoff door: streams inherited because the user is looking at it, no idle
         // bound because a program waiting for them to type is not a hung one — but owned, so it
         // does not keep the terminal after Shall has gone.
-        crate::core::executor::supervised_status(child, &command).await
+        crate::core::supervise::supervised_status(child, &command).await
     }
 
     /// What a `shim:` line says to provision and run under this name, or the bare name when the

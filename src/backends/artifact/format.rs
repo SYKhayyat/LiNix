@@ -322,11 +322,6 @@ impl FormatOrder {
             user_specified: self.user_specified,
         }
     }
-
-    /// What was dropped by `retaining`, so an empty result can say why.
-    pub fn rejected_by(&self, keep: impl Fn(Format) -> bool) -> Vec<Format> {
-        self.order.iter().copied().filter(|f| !keep(*f)).collect()
-    }
 }
 
 impl fmt::Display for FormatOrder {

@@ -275,7 +275,7 @@ async fn rebuild_puts_every_root_backend_before_every_user_backend() {
     let registry = kernel.app.registry.clone();
 
     let names: Vec<String> = registry
-        .available()
+        .present_on_this_machine()
         .iter()
         .map(|b| b.name().to_string())
         .collect();

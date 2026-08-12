@@ -403,7 +403,7 @@ pub async fn handle_rebuild(
     enforce_policy(app, &desired).await?;
     let declared: Vec<crate::core::PackageSpec> = desired.into_values().flatten().collect();
 
-    let priority = app.priority_backends().await;
+    let priority = app.priority_backends().await?;
     let registry = app.registry.clone();
     let is_foundation = |b: &str| registry.get(b).map(|m| m.needs_root()).unwrap_or(false);
 

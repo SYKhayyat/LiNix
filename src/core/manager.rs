@@ -473,13 +473,6 @@ impl BackendCapabilities {
         self.core.needs_root()
     }
 
-    /// Privilege policy for **read-only** queries (list/info/search/dependency probes):
-    /// never escalate. Provided as a named constant so read sites document intent
-    /// rather than passing a bare `false`.
-    pub fn sudo_for_read(&self) -> bool {
-        false
-    }
-
     pub fn is_installable(&self) -> bool {
         self.installable.is_some()
     }

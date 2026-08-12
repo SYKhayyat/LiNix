@@ -38,7 +38,11 @@ pub async fn handle_status(app: &App, out: Output) -> Result<()> {
     // reading as `check`'s summary (N-2). A declared resource that has never been applied is
     // work `sync` will do, and `status` calling that "nothing to do" is the identical defect
     // one command over.
-    let resources = app.extras().changes(&state).await.unwrap_or_default();
+    // `?`, not `unwrap_or_default()`. A resource plan that could not be built came back as an
+    // empty one, and an empty one is indistinguishable from "no resource work" — so a `link:`
+    // whose source is not on disk, which this now refuses to plan, would have been reported as
+    // a converged machine (B4).
+    let resources = app.extras().changes(&state).await?;
     // `status` reports what a full `sync` would do, so it scopes drift the same way.
     let hosts = app.host_backends().await;
     let changes = {
@@ -51,7 +55,10 @@ pub async fn handle_status(app: &App, out: Output) -> Result<()> {
         planner.plan(&desired, PlanScope::Whole(hosts)).await?
     };
     let report = changes.generate_report();
-    let undeclared = app.installed_but_undeclared().await.unwrap_or_default();
+    // Likewise `?`: the crawl failing entirely is not the same as it finding nothing.
+    let crawl = app.installed_but_undeclared().await?;
+    let undeclared = crawl.packages;
+    let unanswered = crawl.unanswered;
 
     let unverified: Vec<(String, String)> = {
         let state = app.state.lock().await;
@@ -67,6 +74,11 @@ pub async fn handle_status(app: &App, out: Output) -> Result<()> {
             "resources_to_place": resources.place,
             "resources_to_undo": resources.undo,
             "resources_unverifiable": resources.unverifiable,
+            // The packages half of `resources_unverifiable`, which had no counterpart. Without
+            // it a script consuming this document could not tell "no drift" from "three
+            // managers never answered" — the distinction this codebase exists to make, lost at
+            // the last step and only for packages (B4).
+            "packages_unverifiable": unanswered,
             "left_in_place": report.skipped,
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
@@ -79,11 +91,24 @@ pub async fn handle_status(app: &App, out: Output) -> Result<()> {
         && undeclared.is_empty()
         && unverified.is_empty()
         && resources.is_empty()
+        // **The clean bill requires that every question was answered.** Without this, a run in
+        // which three managers fell over printed the same sentence as a converged machine —
+        // both produce an empty list, and only one of them is a clean bill (B4).
+        && unanswered.is_empty()
     {
         println!(
             "System matches your manifests; nothing to install, no drift, nothing undeclared."
         );
         return Ok(());
+    }
+    if !unanswered.is_empty() {
+        println!(
+            "! could not be asked — nothing these managers have is counted below ({}):",
+            unanswered.len()
+        );
+        for who in &unanswered {
+            println!("    {}", who);
+        }
     }
     if !report.install.is_empty() {
         println!("+ to install ({}):", report.install.len());

@@ -1,4 +1,4 @@
-use crate::config::grammar::{Options, PackageDecl};
+use crate::config::grammar::Options;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 
 /// Whether a dated line is counting right now (SPEC II.7 rule 6).
@@ -65,11 +65,6 @@ pub fn parse_absolute(raw: &str) -> Option<DateTime<Utc>> {
         return Some(Utc.from_utc_datetime(&d.and_hms_opt(0, 0, 0)?));
     }
     None
-}
-
-/// Whether `decl` still has an opinion at `now`.
-pub fn still_counts(decl: &PackageDecl, now: DateTime<Utc>) -> bool {
-    dating_of(&decl.options, now).counts()
 }
 
 /// Turn a duration someone typed into the absolute time a file can hold (V.38).

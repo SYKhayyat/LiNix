@@ -36,14 +36,7 @@ fn read(rel: &str) -> String {
 
 /// Backends the build contains, counted from the argv table's rows.
 fn backends_in_the_build() -> usize {
-    let src = read("src/backends/registry.rs");
-    let table = src
-        .split_once("    fn argv_cases() -> Vec<ArgvCase> {")
-        .expect("the argv table moved or was renamed")
-        .1
-        .split_once("\n    }")
-        .expect("the argv table has no end")
-        .0;
+    let table = crate::harness::registry_argv_table();
     let n = table.matches("ArgvCase::pkg(").count() + table.matches("ArgvCase::shaped(").count();
     assert!(
         n > 40,

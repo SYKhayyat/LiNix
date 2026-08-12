@@ -176,6 +176,12 @@ pub enum Commands {
         upgrade: bool,
 
         /// Output the transition plan as JSON (requires --dry-run)
+        //
+        // Enforced by `dispatch`, not by `requires = "dry_run"`. Clap resolves `requires`
+        // against the subcommand's own arguments and `--dry-run` is global, so the constraint
+        // compiles, never fires, and takes the flag's whole document with it when it does —
+        // measured: it turned `sync --dry-run --json` into a usage error. See
+        // `refuse_json_without_dry_run` (B7).
         #[arg(long)]
         json: bool,
     },
@@ -465,6 +471,15 @@ pub enum Commands {
         #[arg(long, value_name = "PACKAGE")]
         except: Vec<String>,
 
+        /// Run the native whole-system upgrade even though it cannot honour holds
+        ///
+        /// The whole-system path runs each manager's own upgrade-all (`apt upgrade`,
+        /// `npm install -g`), which Shall cannot tell to skip a package — so a held package is
+        /// bumped by it. Without this flag that run is refused and names what would have moved;
+        /// per-package and `--backend` upgrades honour holds and need no opt-in.
+        #[arg(long)]
+        ignore_holds: bool,
+
         /// Limit upgrade to a specific profile
         #[arg(long)]
         profile: Option<String>,
@@ -473,7 +488,14 @@ pub enum Commands {
         #[arg(long)]
         module: Option<String>,
 
-        /// Output potential changes as JSON (requires --dry-run)
+        /// Output the plan, or what was actually upgraded, as JSON
+        //
+        // **The one of the four that must NOT gain `requires = "dry_run"`.** All four carried
+        // the sentence "(requires --dry-run)" and none enforced it (B7); three of them are
+        // genuinely dry-run-only and now say so to clap. This one is not: `upgrade --security
+        // --json` prints what it remediated *after* remediating it, so enforcing the sentence
+        // would have deleted a working answer to make a wrong help string true. The help was
+        // the thing that was wrong.
         #[arg(long)]
         json: bool,
 
@@ -514,6 +536,12 @@ pub enum Commands {
         packages: Vec<String>,
 
         /// Output the resulting changes as JSON (requires --dry-run)
+        //
+        // Enforced by `dispatch`, not by `requires = "dry_run"`. Clap resolves `requires`
+        // against the subcommand's own arguments and `--dry-run` is global, so the constraint
+        // compiles, never fires, and takes the flag's whole document with it when it does —
+        // measured: it turned `sync --dry-run --json` into a usage error. See
+        // `refuse_json_without_dry_run` (B7).
         #[arg(long)]
         json: bool,
 
@@ -534,6 +562,12 @@ pub enum Commands {
         packages: Vec<String>,
 
         /// Output the resulting changes as JSON (requires --dry-run)
+        //
+        // Enforced by `dispatch`, not by `requires = "dry_run"`. Clap resolves `requires`
+        // against the subcommand's own arguments and `--dry-run` is global, so the constraint
+        // compiles, never fires, and takes the flag's whole document with it when it does —
+        // measured: it turned `sync --dry-run --json` into a usage error. See
+        // `refuse_json_without_dry_run` (B7).
         #[arg(long)]
         json: bool,
 
@@ -865,9 +899,19 @@ pub enum Commands {
         argv: Vec<String>,
     },
 
-    /// Hold packages so `upgrade` never bumps them (like `apt-mark hold` / dnf versionlock).
-    /// Run with no names to list current holds. Naming a held package explicitly in
-    /// `upgrade <pkg>` still upgrades it (with a warning) — hold guards bulk/auto upgrades.
+    /// Hold packages so `upgrade` does not bump them. Run with no names to list current holds.
+    ///
+    /// Honoured by per-package and `--backend` upgrades. The native whole-system upgrade runs
+    /// each manager's own upgrade-all, which cannot be told to skip a package, so that run is
+    /// refused while anything is held — `--ignore-holds` does it anyway. Naming a held package
+    /// explicitly in `upgrade <pkg>` still upgrades it, with a warning.
+    //
+    // The claim that used to be here was *"like `apt-mark hold` / dnf versionlock"*, and both
+    // of those hold across a bulk upgrade — that is the entire reason they exist. Shall's does
+    // not, because it filters its own plan and then hands the whole-system path to a manager
+    // that never sees the filtered plan. A `note:` on stderr under exit 0 was the only thing
+    // between a user who pinned a known-good version and a weekly `shall upgrade` that moved
+    // it two major versions (B9). The comparison is gone and the run is refused.
     Hold {
         /// Package(s) to hold (`name` or `backend:name`). Empty = list current holds.
         packages: Vec<String>,

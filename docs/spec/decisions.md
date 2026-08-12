@@ -1,5 +1,5 @@
-# The decision register — all 190, one of them open
-**One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
+# The decision register — all 200, ten of them built and never ruled
+**One file, six features, ten entries waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
 already settled in code could be re-opened by anyone reading the register instead of the tree.
@@ -16,14 +16,14 @@ not in this paragraph.
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
-| **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
+| **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **10** |
 | **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **186** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
-**Three of these five statuses now describe nothing, and they stay.** The categories are not
+**Two of these five statuses now describe nothing, and they stay.** The categories are not
 decoration: *OPEN — blocking* refills the moment a new feature is proposed, and *BUILT, NEVER
-RULED* refills the moment somebody implements a recommendation before it is put to the owner.
-Deleting an empty category is how the next one goes unnoticed.
+RULED* refilled — with ten entries — the moment somebody implemented a work order before it
+was put to the owner. Deleting an empty category is how the next one goes unnoticed.
 
 **`PARKED` needs nothing *until the thing it named arrives*.** D15 sat parked on D5 for a week
 after D5 was ruled and built, because "needs nothing" was read as a permanent property of the
@@ -73,10 +73,11 @@ status loses that, so it is kept here:
 
 ## Index
 
-**Nothing is open.** `Q53` — what a version pin means on a manager that cannot express one — was
-raised, measured and ruled on 2026-08-10, and the two entries that had run ahead of a ruling were
-ruled the same day: `Q24`'s idle bound and `Y19`'s unreadable-parser failure. All 190 are accounted
-for: **186 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN** — and this line
+**Nothing is open, and nine entries are waiting.** `Q53` — what a version pin means on a manager
+that cannot express one — was raised, measured and ruled on 2026-08-10. The `G` round then ran the
+other way round: `docs/GRADE-2026-08-12.md`'s work order was implemented in one pass, and the nine
+changes in it that a user would notice shipped ahead of any ruling. All 200 are accounted
+for: **186 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 10 BUILT NEVER RULED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -350,6 +351,28 @@ II.19 and the reasons in V.115–V.118.*
 | **Y17** | The dialect `Y16` kept was dead on Windows: `CreateProcess` answers *"not a valid application for this OS platform"* for any script file, because Windows has no shebang mechanism — so a `#!` hook that worked on the author's Linux box failed on a teammate's machine with a message blaming the script. Refuse there, or make it work? — RULED: **read the shebang ourselves**, on every platform. `python3` finds a Windows `python` (then `py`); an absolute interpreter that exists is used as written, so Unix launches what the kernel would have; a missing one is named. `exec:` and event hooks read it too — they had been ignoring it on *both* platforms. | 2026-08-07 |
 | **Y18** | `named_commands_exist_tests` was built around the property rather than the artifact, and then its roots were drawn around `src/`-and-friends — so 2.5 MB of specification went unscanned, and a **CLOSED** owner ruling (`bugs.md` F4) rested its whole justification on `shall doctor`, a command `S38` folded into `check <section>`. Pointed at `docs/` under the weaker property a record can satisfy — *a dead command named here is one II.17 says is dead* — 62 raw hits reduce to three, and all three are Part II: the sync nudge says `shall clean` where the verb is `remove-orphans`; the `adopt` header says `shall forget` where the code already writes `shall unmanage`; and II.17's register never recorded `shim`, which leaves a **verified open bug against a command that does not exist**. **RULED 2026-08-09** — the first three corrected in Part II on the 8th; the fourth ruled *make `@source=` work*, and built: the shim reads the provider off its own line, and the `PATH` lookup that would have found the shim again is closed. | 2026-08-09 |
 | **Y23** | `@channel` on a `flatpak:` line reaches the machine and is never read back — the listing asked for `application,version`, so D13's drift check had nothing to compare and a channel edit did nothing for ever. Ruled *make it visible and make the repair real*: flatpak has no channel switch, so the declared ref is installed and `make-current` points the app at it, the old branch is left alone, and an app on two branches reports no channel rather than a guess. | 2026-08-09 |
+
+### G — the release-adversarial round (GRADE-2026-08-12) — 10
+
+*Not a proposal part. `docs/GRADE-2026-08-12.md` measured this tree for release and produced
+twelve findings; the work order attached to them was implemented in one pass. Ten of those
+changes alter behaviour a user would notice, so they are entries rather than fixes — **the owner
+has not ruled on any of them.** Each names the finding it came from and, where there was a road
+not taken, says what it was. G2, G5 and G10 are the three most likely to be reversed, and G10 is
+the widest.*
+
+| | question | built |
+|---|---|---|
+| **G1** | `sync --keep-going` exited **0** with `Status: SUCCESS` over a run in which every package failed — and its batching took installable packages down with the bad name. BUILT: **continuing is not succeeding.** Non-zero after the summary; one package per command under the flag; `Metrics.errors` deleted in favour of the per-operation record that already existed. | 2026-08-12 |
+| **G2** | *"Shall cannot read back"* was an `ok` row, and `ok` decides the exit code — so an unopenable dotfile printed green at exit 0. BUILT: **not `ok`.** Cost: a `setting:` line makes `check` permanently non-clean, with no command that clears it. | 2026-08-12 |
+| **G3** | A `link:` whose source is not on disk got a symlink written to it — which exists, passes `-L`, and opens for nobody. BUILT: **refused**, at plan time and at install time, as `dotfiles:` has always refused its missing tree. A relative source is read from the config repo, which is what `dotfiles:` always did. | 2026-08-12 |
+| **G4** | An empty `priority` file was accepted silently, and an empty backend set was read as *every* backend. BUILT: **refused**, in the same words as the missing file. | 2026-08-12 |
+| **G5** | `hold` did not survive a bulk `upgrade` while `--help` claimed `apt-mark` / `versionlock` parity. BUILT: **the native whole-system upgrade is refused while anything is held**; `--ignore-holds` opts in; the parity claim is gone. Roads not taken: defaulting to per-package (narrows the verb), and pushing holds into the manager (real parity, needs an adapter per backend). | 2026-08-12 |
+| **G6** | A package name could begin with `-`, so `composer:--version` reached composer's argv as a flag. BUILT: **refused everywhere.** The terminator table stays as the mechanism; composer's row was flipped to non-terminating on the nightly's measurement. | 2026-08-12 |
+| **G7** | `pkg@version=1.6 @hold` was one option, not two: the space put the second inside the first one's value, silently, in all ten grammars. BUILT: **refused in the lexer.** An `@` inside a value stays legal; whitespace immediately before one does not. | 2026-08-12 |
+| **G8** | `shall hold` and `check drift` printed clean bills built from questions that failed, and the JSON had `resources_unverifiable` with no packages equivalent. BUILT: **neither prints a clean bill it cannot support**, and `packages_unverifiable` exists. `upgrade` keeps its tolerance: acting on the holds it can see is a different question from reporting on them. | 2026-08-12 |
+| **G9** | Three `--json` flags said "(requires --dry-run)" and none enforced it. BUILT: **enforced in `dispatch`** for `sync`/`install`/`uninstall` — clap's `requires` cannot see a global flag and breaks the working combination when asked to. `upgrade` keeps its flag and loses the sentence. | 2026-08-12 |
+| **G10** | `priority` gated resolution and nothing else: detection walked PATH for all 52 backends before knowing what was asked (`list -b apt` = 3,156 failed `statx` against `list`'s 3,338), and every fan-out went to whatever was installed. BUILT: **the file's own sentence is true of detection and querying too.** `BackendRegistry::available()` was deleted rather than filtered, so the compiler visited all twenty call sites and none could compile without choosing; the choices are a table in `priority_gates_every_fan_out_tests`. Two exceptions, both argued: `init` (writes the file from what it detects) and `check health` (reports on absent managers). | 2026-08-12 |
 
 ---
 
@@ -7806,3 +7829,203 @@ Rule in **II.56**, reasoning in **V.186**.
 - The lost case is covered by `Q54`'s `--absent`, which removes regardless of ownership.
 - `completed_installs` and `unmanage`'s log-clearing were **deleted**, not left beside the new
   reader. `unmanage` drops the manifest line, which is now the whole of the forgetting.
+
+---
+
+## G1
+
+**Status: BUILT, NEVER RULED — 2026-08-12, from `docs/GRADE-2026-08-12.md` B1.**
+
+**Does `--keep-going` change the exit code?** It did. Without the flag a failed sync exits 1;
+with it, the identical failure exited **0** under `Status: SUCCESS`, and `--keep-going --quiet`
+printed zero bytes over a run where every package failed. The flag's own help calls it "the
+per-run opt-in for a fleet rollout that would rather take what it can get", and a fleet rollout
+is exactly where the exit code is the only thing anybody reads.
+
+**BUILT: no. "Continue past a failure" is not "report success".** A partial run persists what
+succeeded, prints its summary and fires its hooks — all of that is real and must survive — and
+*then* exits non-zero naming what did not. The three defects underneath it went with it:
+`Metrics.errors` and its uncalled writer were deleted in favour of the per-operation `success`
+the collector already recorded, so `DEGRADED` and `--quiet` became reachable; and the summary's
+counters are now the achieved work rather than the size of the plan.
+
+**And batching, which contradicted the flag outright.** One name no repository carries failed the
+whole `apt install` and took the installable packages beside it down with it, so the flag
+promised more than the default and delivered less. Under `--keep-going` a batch is one package,
+which costs invocations — the thing this flag is explicitly willing to spend.
+
+## G2
+
+**Status: BUILT, NEVER RULED — 2026-08-12, from `docs/GRADE-2026-08-12.md` B0b.**
+
+**Is "Shall cannot read back" an `ok` row in `check`?** It was, and `ok` is also what decides the
+exit code — so a dotfile no program could open printed as a green row at exit 0, repeatedly.
+
+**BUILT: no.** The sentence was always honest; the marker was not. Absence and unavailability are
+different answers and only one of them is knowable, and filing the unknowable one under the word
+for a good answer throws that distinction away at the last step.
+
+*The cost, stated because it is the reason this is a decision and not a fix:* a machine carrying
+a `setting:` or a `@decrypt`ed `link:` — kinds nothing can read back by construction — now
+reports `check` as needing attention permanently, and there is no command that clears it. If that
+is noise rather than honesty, this is the entry to reverse.
+
+## G3
+
+**Status: BUILT, NEVER RULED — 2026-08-12, from `docs/GRADE-2026-08-12.md` B0b.**
+
+**What happens to a `link:` whose source file is not there?** A symlink was written to it. The
+result exists, satisfies an `-L` test, and cannot be opened by anything.
+
+**BUILT: refuse it, at plan time and at install time.** `dotfiles:` has always refused its
+missing tree in the same position — *"is not a directory"* — on the identical string, so this is
+one idea being answered the same way twice instead of two ways. The relative-source resolution
+was unified with it in the same change: a relative source is read from the config repo, which is
+what `dotfiles:` always did and `link:` never did.
+
+## G4
+
+**Status: BUILT, NEVER RULED — 2026-08-12, from `docs/GRADE-2026-08-12.md` B8.**
+
+**Is an empty `priority` file an answer?** It was accepted without a word, while a *missing* one
+produced the best error in the program. Empty does not mean "no backends" either: an empty
+enabled set was read as *every available backend*, on the stated premise that only a missing file
+could produce one.
+
+**BUILT: refuse it, in the same words as the missing file.** A file naming no manager is the same
+state as no file, and the premise the fallback rested on is now true.
+
+## G5
+
+**Status: BUILT, NEVER RULED — 2026-08-12, from `docs/GRADE-2026-08-12.md` B9. The one here most
+likely to be reversed.**
+
+**What does a hold mean under a bulk `upgrade`?** Nothing. `upgrade` filters its own plan against
+the holds, correctly, and then hands the whole-system path to each manager's native upgrade-all,
+which never sees the filtered plan. `--help` claimed `apt-mark hold` / `dnf versionlock` parity,
+and both of those hold across a bulk upgrade — that is the entire reason they exist.
+
+**BUILT: refuse the native whole-system upgrade while anything is held, and add `--ignore-holds`
+as the opt-in.** The parity claim is gone from the help. Every scoped form of the verb honours
+holds and needs no flag.
+
+*The two roads not taken, because this is the entry to argue with:* defaulting `upgrade` to
+per-package would bind the holds and silently narrow the verb from "upgrade this machine" to
+"upgrade what Shall manages", which is a feature removal wearing a bugfix. Pushing the hold down
+into the manager — `apt-mark hold` before the run, released after — is real parity and the right
+answer eventually; it needs a native-hold adapter per backend and makes Shall the owner of
+manager state it does not currently touch.
+
+## G6
+
+**Status: BUILT, NEVER RULED — 2026-08-12, from `docs/GRADE-2026-08-12.md` B5.**
+
+**May a package name begin with `-`?** It could. `PACKAGE_NAME_REGEX` admitted a leading hyphen,
+so `composer:--version` passed every check and reached composer's argv as a flag — on a manager
+Shall believed `--` would protect and which ignores it.
+
+**BUILT: no, for every backend including the path-oriented ones.** No manager has a package
+called `-rf`. The terminator table is the mechanism and stays; it is fifty booleans measured on
+one image, and a guard that depends on all fifty being right is a guard with fifty ways to be
+wrong. The composer row itself was flipped to non-terminating on the nightly's measurement.
+
+## G7
+
+**Status: BUILT, NEVER RULED — 2026-08-12, from `docs/GRADE-2026-08-12.md` B2.**
+
+**Is `pkg@version=1.6 @hold` two options or one?** One, silently: the lexer splits on the first
+`@` and separates options on commas, so everything after a space was absorbed into the previous
+option's *value*. `@sha256=abc @nosuchkey` produced a checksum that could not match, and `@hold`
+written that way was inert. The same text was refused in first position and accepted in second.
+
+**BUILT: refuse it, in the lexer.** Seven of the ten option grammars accepted it outright and the
+three that refused were saved only by a downstream type check on a date, a count and an enum —
+incidental protection that one free-form option would reopen. An `@` inside a value stays legal
+(`@requires=@angular/cli`, `@source=github:owner/repo@v2`); whitespace immediately before one
+does not, because nothing writes that on purpose.
+
+## G8
+
+**Status: BUILT, NEVER RULED — 2026-08-12, from `docs/GRADE-2026-08-12.md` B3 and B4.**
+
+**May a read verb print a clean bill built from a question that failed?** Two did. `shall hold`
+answered `No packages are held.` at exit 0 over a manifest it could not resolve; `check drift`
+printed *"System matches your manifests"* over managers that never answered, having dropped both
+failures with `unwrap_or_default()`.
+
+**BUILT: no — and the machine-readable contract carries it too.** `check drift --json` had a
+`resources_unverifiable` key and no packages equivalent, so the distinction survived into the
+contract for one half of the model and was lost for the other. There is a `packages_unverifiable`
+now. `upgrade` keeps its tolerance of an unresolvable manifest deliberately: acting on the holds
+it can see beats acting on none, and that is a different question from reporting on them.
+
+## G9
+
+**Status: BUILT, NEVER RULED — 2026-08-12, from `docs/GRADE-2026-08-12.md` B7.**
+
+**Do the flags whose help says "(requires --dry-run)" require it?** Three of the four did not
+enforce it — `shall sync --json` printed the human summary or nothing at all and exited 0, so a
+script that forgot the pair got a success code and no document.
+
+**BUILT: enforced for `sync`, `install` and `uninstall`; the sentence deleted from `upgrade`.**
+`upgrade --security --json` prints what it remediated *after* remediating it, so it is not a
+preview-only flag and enforcing the claim would have deleted a working answer to make a wrong
+help string true.
+
+*Enforced in `dispatch`, not by clap.* `requires = "dry_run"` resolves against the subcommand's
+own arguments and `--dry-run` is global, so the constraint compiles, never fires for the case it
+is meant to catch, and turns the documented working combination into a usage error — measured.
+## G10
+
+**Status: BUILT, NEVER RULED — 2026-08-12, from `docs/GRADE-2026-08-12.md` W4/P1. The widest
+behaviour change in the `G` round.**
+
+**Does `priority` gate anything except resolution?** It did not. A declaration naming an unlisted
+backend was refused — and that was the whole of it. Detection walked PATH for all fifty-two
+backends' binaries before it knew what had been asked, and every fan-out went to whatever happened
+to be installed. Measured with `strace`: `shall list -b apt` cost **3,156** failed `statx` against
+`shall list`'s 3,338, so naming one backend cost 99% of asking about all of them, and `priority`
+bought nothing at all.
+
+Invisible on an ordinary filesystem, where the whole run is 578 ms. The dominant cost the moment
+PATH is long or slow — WSL inheriting 56 `/mnt/c` entries over 9p made `shall list -b apt` take
+12.4 s, of which the `dpkg-query` it actually wanted took 0.02 s.
+
+**BUILT: the file's own sentence is now true of detection and querying, not only of resolution.**
+*"Listed = Shall uses it. Not listed = Shall does not use it at all."* A backend `priority` does
+not name is never PATH-probed and never asked anything.
+
+**How the audit was done, because "get one call site wrong and a backend silently disappears" was
+the risk that made this worth a ruling rather than a fix.** `BackendRegistry::available()` was
+**deleted** rather than filtered. It answered "what is on this machine" and every caller used it
+for "what may Shall use", so renaming it out of existence made the compiler visit all twenty
+sites, and not one of them could compile without choosing. The choices are in
+`tests/priority_gates_every_fan_out_tests.rs` as a table, so the list is something somebody signed
+off rather than a property of wherever the old method happened to be called.
+
+**Two verbs see past `priority`, and both had to earn it:**
+
+- **`init`** writes the priority file *from* what it detects. Gating detection here would read a
+  file that does not exist yet, or gate the answer on the very list it is about to produce —
+  either way an empty priority file and a repo that can do nothing.
+- **`check health`** reports on managers that are **absent**, which the usable set cannot contain
+  by definition. And an absent manager that `priority` names is not absent, it is *broken* — the
+  one place the whole registry and the priority list are both needed at once.
+
+**Everything else asks for the usable set**, including the four that delete: `remove-orphans`,
+`purge-undeclared`, `clean-cache` and the `absent:` expansion. A manager the user told Shall not
+to touch is one Shall must not be deleting through, and that argument is stronger than the
+performance one.
+
+*What a user will notice, stated plainly because it is the reason this is an entry:* on a machine
+carrying package managers that are not in `priority`, `list`, `search`, `info`, `check drift`,
+`adopt` and `update` now report on fewer of them. That is what the file always claimed to mean.
+If a user's mental model was "priority orders the managers, it does not hide them", this is the
+entry to reverse.
+
+**And the failure mode it closes, which is the same one as `G4`.** `App::priority_backends()`
+ended in `.unwrap_or_default()`, so a `priority` that would not resolve became an *empty list* —
+and `UniversalSearch` read an empty enabled set as *every available backend*, on the stated
+premise that only a missing file could produce one. Two swallowed answers composing into the
+exact inversion of the rule. `Backends` carries the resolution failure instead of an empty set,
+and refuses where the question is asked.

@@ -124,6 +124,20 @@ pub fn parse_short(origin: &Origin, text: &str) -> Result<Options> {
                     .with_hint("write `@key=value,key2=value2` with no trailing or doubled comma."),
             );
         }
+        if let Some(tail) = spliced_option(part) {
+            return Err(GrammarError::new(
+                origin.clone(),
+                format!(
+                    "`{}` runs two options together — `{}` is not part of a value",
+                    part, tail
+                ),
+            )
+            .with_hint(format!(
+                "options are separated by commas, never by spaces. Written with a space, `{}` \
+                 is absorbed into the option before it rather than being an option at all.",
+                tail
+            )));
+        }
         match part.split_once('=') {
             Some((k, v)) => {
                 let (k, v) = (k.trim(), v.trim());
@@ -202,6 +216,33 @@ fn looks_like_a_version(token: &str) -> bool {
 /// An option key: a plain identifier. Not a judgement about which keys exist (II.2's table
 /// decides that) — only about what could possibly be one, which is what tells a key apart
 /// from the wreckage of a comma-split value.
+/// The tail of an option token that has a second option spliced into it with a space.
+///
+/// **This lexer splits on the first `@` and separates options on commas, so anything written
+/// after a space was absorbed into whatever option came before it.** `cargo:ripgrep@nosuchkey`
+/// is refused and `cargo:ripgrep@sha256=abc @nosuchkey` was accepted in silence — the same
+/// text, admitted or refused by its position alone. What it produced was
+/// `sha256 = "abc @nosuchkey"`: a checksum that cannot match, and a second option that never
+/// existed. `pkg@requires=jq @hold` made the hold inert the same way (B2).
+///
+/// **It belongs here rather than in each grammar's validator, because the swallow happens in
+/// all ten of them.** Seven accepted it outright; the three that refused — `absent:`, `exec:`,
+/// `firewall:` — were saved only by a downstream type check on a date, a count and an enum, and
+/// each quoted the swallowed text back as part of the value while doing it. That protection is
+/// incidental rather than structural: adding one free-form option to any of the three reopens
+/// it tomorrow.
+///
+/// **An `@` on its own is not the signal.** `@requires=@angular/cli` and
+/// `@source=github:owner/repo@v2` are ordinary values and stay legal. Whitespace *immediately
+/// before* an `@` is the signal, because nothing writes that on purpose — and a value that
+/// genuinely needs one has the block form, which exists for exactly the values the short form
+/// cannot hold.
+fn spliced_option(part: &str) -> Option<&str> {
+    let bytes = part.as_bytes();
+    let at = (1..bytes.len()).find(|&i| bytes[i] == b'@' && bytes[i - 1].is_ascii_whitespace())?;
+    Some(part[at..].trim())
+}
+
 fn is_key(token: &str) -> bool {
     !token.is_empty()
         && token
@@ -293,6 +334,61 @@ mod tests {
         assert_eq!(
             parse_short(&o(), "version=1.6").unwrap().one("version"),
             Some("1.6")
+        );
+    }
+
+    /// **B2, in the lexer where it lives.** Options are separated by commas; a space put the
+    /// second one inside the first one's value, and nothing said so.
+    #[test]
+    fn a_second_option_written_with_a_space_is_refused_rather_than_swallowed() {
+        for line in [
+            "sha256=abc @nosuchkey",
+            "version=1.2.3 @sha256=deadbeef",
+            "requires=jq @hold",
+            "hold @nosuchkey",
+            // A tab is a space for this purpose; nobody meant it either.
+            "version=1.6\t@hold",
+        ] {
+            let err = parse_short(&o(), line)
+                .expect_err("a space before `@` runs two options together and must be refused");
+            let msg = format!("{err}");
+            assert!(
+                msg.contains("comma") || msg.contains("two options"),
+                "the refusal must name the separator, or the user cannot act on it: {msg}"
+            );
+        }
+
+        // And the specific damage it used to do, asserted as no longer possible: the value was
+        // silently wrong and the second option silently absent.
+        assert!(parse_short(&o(), "version=1.2.3 @sha256=deadbeef").is_err());
+    }
+
+    /// The boundary. An `@` is ordinary inside a value and stays legal — banning it outright
+    /// would refuse a scoped npm package and a pinned module source, which are the two things
+    /// most likely to be written as an option value.
+    #[test]
+    fn an_at_sign_inside_a_value_is_not_two_options() {
+        for (line, key, value) in [
+            ("requires=@angular/cli", "requires", "@angular/cli"),
+            (
+                "source=github:owner/repo@v2",
+                "source",
+                "github:owner/repo@v2",
+            ),
+            ("version=1.2.3+build@7", "version", "1.2.3+build@7"),
+        ] {
+            let opts = parse_short(&o(), line)
+                .unwrap_or_else(|e| panic!("`{line}` is an ordinary value and was refused: {e}"));
+            assert_eq!(opts.one(key), Some(value));
+        }
+
+        // A value may still carry a space when no `@` follows it — the rule is about the
+        // separator that was mistyped, not about spaces.
+        assert_eq!(
+            parse_short(&o(), "content=hello world")
+                .unwrap()
+                .one("content"),
+            Some("hello world")
         );
     }
 

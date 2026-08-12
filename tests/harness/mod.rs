@@ -132,3 +132,131 @@ impl Fixture {
 pub fn decl(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/")
 }
+
+/// The registry's source, which is a **directory** rather than a file.
+///
+/// `src/backends/registry.rs` was 4,237 lines of which 1,800 were `fn register_*` bodies in
+/// declaration order, so "what else is like apt" had no answer but scrolling. It became
+/// `registry/mod.rs` plus one module per manager family — and eight scanning gates that read it
+/// by path failed in the same second.
+///
+/// **That is the cost of a split in a repo whose gates are source scans, and it is the argument
+/// for having them, not against it.** Every one of those failures was a gate correctly reporting
+/// that it could no longer see what it was built to watch. They read this instead, so the next
+/// split moves one line rather than eight.
+pub fn registry_source() -> String {
+    // **Normalised twice, and both are the split's artifacts rather than the code's.**
+    //
+    // `pub(super) fn register_apt` is the same registrar `fn register_apt` was; the visibility
+    // exists only because the parent module now has to call across a file boundary. Six scans
+    // keyed on a leading `fn register_` found nothing and reported the *code* broken.
+    //
+    // And the `#[cfg(test)]` module goes, because these gates read production registrations and
+    // a test was never their subject. It mattered the moment `register_generic` stopped being
+    // followed by another registrar: the scan that ends one registrar at the next `fn` ran on
+    // into the test module, found a `ManagerConfig {` there, and reported a helper as a backend
+    // that drops its version pin.
+    without_test_modules(&source_of("src/backends/registry")).replace("pub(super) fn ", "fn ")
+}
+
+/// The body of the argv table — the fixture that names every backend's real command line.
+///
+/// A separate reader because it lives *inside* `#[cfg(test)]`, which [`registry_source`] strips:
+/// three gates count the build's backends from these rows, and stripping the test module took
+/// the table with it. Two questions, two functions, rather than one function that answers
+/// whichever the caller happened to want.
+pub fn registry_argv_table() -> String {
+    let src = source_of("src/backends/registry");
+    src.split_once("    fn argv_cases() -> Vec<ArgvCase> {")
+        .expect("the argv table moved or was renamed")
+        .1
+        .split_once(
+            "
+    }",
+        )
+        .expect("the argv table has no end")
+        .0
+        .to_string()
+}
+
+/// Drop every `#[cfg(test)]` module, by matching braces rather than by looking for the next
+/// blank line — the distinction between production and test code is a nesting question, and
+/// every scan in this repo that got it wrong got it wrong by guessing at a delimiter.
+fn without_test_modules(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut rest = src;
+    while let Some(at) = rest.find("#[cfg(test)]") {
+        out.push_str(&rest[..at]);
+        let after = &rest[at..];
+        let Some(open) = after.find('{') else {
+            break;
+        };
+        let mut depth = 0usize;
+        let mut end = None;
+        for (i, c) in after[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(open + i + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        match end {
+            Some(e) => rest = &after[e..],
+            None => break,
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The executor's source, which is three files: the executors themselves, [how a program is
+/// found and launched](../../src/core/launch.rs), and [how a child is watched and
+/// killed](../../src/core/supervise.rs).
+pub fn executor_source() -> String {
+    [
+        read_source("src/core/executor.rs"),
+        read_source("src/core/launch.rs"),
+        read_source("src/core/supervise.rs"),
+    ]
+    .join("\n")
+}
+
+fn read_source(rel: &str) -> String {
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel);
+    std::fs::read_to_string(&p)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", p.display()))
+        .replace("\r\n", "\n")
+}
+
+/// Every `.rs` file in a directory, concatenated in name order so the result is the same twice
+/// running.
+fn source_of(rel: &str) -> String {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel);
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()))
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+        .collect();
+    assert!(
+        !files.is_empty(),
+        "{} holds no Rust source; a scan over it would pass over nothing",
+        dir.display()
+    );
+    files.sort();
+    files
+        .iter()
+        .map(|p| {
+            std::fs::read_to_string(p)
+                .unwrap_or_default()
+                .replace("\r\n", "\n")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}

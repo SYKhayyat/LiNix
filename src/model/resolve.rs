@@ -132,14 +132,6 @@ impl DesiredState {
         })
     }
 
-    pub fn has_firewall_rules(&self) -> bool {
-        self.in_phase(Phase::Firewall).next().is_some()
-    }
-
-    pub fn has_dotfile_trees(&self) -> bool {
-        self.in_phase(Phase::Dotfiles).next().is_some()
-    }
-
     pub fn has_execs(&self) -> bool {
         self.in_phase(Phase::Execs).next().is_some()
     }

@@ -241,7 +241,7 @@ async fn run(hook: &EventHook, stdin: &str) -> Result<()> {
     // Supervised: an event hook is arbitrary code fired by a timer or a package-manager hook,
     // with nobody at the terminal. Unowned and unbounded, one that waited on something waited
     // forever, and one abandoned by whatever fired it kept running.
-    let out = crate::core::executor::supervised_output_fed(command, "the hook", true, stdin)
+    let out = crate::core::supervise::supervised_output_fed(command, "the hook", true, stdin)
         .await
         .map_err(|e| Error::Other(format!("could not start the hook: {}", e)))?;
     if !out.status.success() {

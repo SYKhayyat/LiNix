@@ -239,18 +239,34 @@ async fn installed_but_undeclared_lists_the_dependency_closure_too() {
     let unmanaged = kernel.app.installed_but_undeclared().await.unwrap();
     assert!(
         unmanaged
+            .packages
             .iter()
             .any(|p| p.backend == "cargo" && p.name == "exa"),
         "exa should be reported as unmanaged, got: {:?}",
         unmanaged
+            .packages
             .iter()
             .map(|p| (&p.backend, &p.name))
             .collect::<Vec<_>>()
     );
     assert!(
-        !unmanaged.iter().any(|p| p.name == "ripgrep"),
+        !unmanaged.packages.iter().any(|p| p.name == "ripgrep"),
         "ripgrep is managed and must not be listed as unmanaged"
     );
+    // **The other half of the same answer, and this fixture demonstrates why it had to become
+    // one.** Four real backends on the host — conda, dotnet, pixi, scoop — are reached by this
+    // crawl and answer with output their parsers refuse. They contribute no packages, which is
+    // correct and safe for `purge-undeclared`; the empty vector they contributed was also, until
+    // now, indistinguishable from "nothing here is unmanaged", and `check drift` printed a clean
+    // bill over it (B4). Not asserted as non-empty — which managers are installed is a fact
+    // about the host — but every entry must name the backend it is about, or the report cannot
+    // be acted on.
+    for who in &unmanaged.unanswered {
+        assert!(
+            who.contains(':'),
+            "an unanswered manager must be named: {who}"
+        );
+    }
 }
 
 /// Reproducible installs: a pinned version reaches the backend command in its native
