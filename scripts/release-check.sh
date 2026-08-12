@@ -3,7 +3,7 @@
 #
 # Runs, in order, everything a release must pass and prints one go/no-go verdict:
 #   1. HERMETIC gates (any host, fast, no Docker):
-#        cargo fmt --check          (HARD)
+#        cargo fmt -- --check       (HARD)
 #        cargo clippy -D warnings   (HARD)
 #        cargo test --release --no-fail-fast   (HARD — all unit/integration tests)
 #        cargo build --release      (HARD)
@@ -36,8 +36,8 @@ SKIP_DOCKER="${SKIP_DOCKER:-0}"
 # ------------------------------------------------------------------ 1. hermetic
 step "1. HERMETIC GATES (cargo fmt / clippy / test / build)"
 
-if cargo fmt --check >/dev/null 2>&1; then pass "cargo fmt --check (formatting clean)"
-else fail "cargo fmt --check reports diffs — run \`cargo fmt\`"; fi
+if cargo fmt -- --check >/dev/null 2>&1; then pass "cargo fmt -- --check (formatting clean)"
+else fail "cargo fmt -- --check reports diffs — run \`cargo fmt\`"; fi
 
 echo "-> cargo clippy --all-targets --all-features -- -D warnings"
 if cargo clippy --all-targets --all-features -- -D warnings; then pass "clippy: no warnings"

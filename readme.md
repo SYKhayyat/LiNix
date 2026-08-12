@@ -1117,7 +1117,18 @@ four sources won with `shall path --explain`.
 
 `docs/SPEC.md` is the source of truth for design — the map, with the parts themselves under
 `docs/spec/`; `docs/spec/decisions.md` is every open question. `CLAUDE.md` is the working
-agreement. Verify with `cargo build --all-targets`, `cargo test`, `cargo clippy --all-targets`.
+agreement. Verify with `cargo build --all-targets`, `cargo test --no-fail-fast`, `cargo clippy
+--all-targets`, `cargo fmt -- --check`.
+
+Then, once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+That installs `.githooks/pre-commit`, which refuses a commit `cargo fmt -- --check` would fail.
+Formatting is the only CI gate a change containing no logic can break, and it takes about a second
+to check; everything slower stays CI's job.
 
 ## Licence
 

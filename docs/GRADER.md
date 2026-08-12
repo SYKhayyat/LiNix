@@ -76,8 +76,9 @@ Before testing anything, measure what is actually covered. Do not accept the num
 docs — regenerate them.
 
 ```bash
-cargo build --all-targets && cargo test && cargo clippy --all-targets --all-features -- -D warnings
-cargo fmt -- --check            # CI treats this as fatal; the local ship gate does not
+cargo build --all-targets && cargo test --no-fail-fast && cargo clippy --all-targets --all-features -- -D warnings
+cargo fmt -- --check            # fatal in CI, in both release scripts, and in .githooks/pre-commit
+git config --get core.hooksPath  # empty means this clone has no pre-commit hook installed
 git rev-list --left-right --count origin/main...HEAD    # unpushed = untested on Linux/macOS
 ```
 

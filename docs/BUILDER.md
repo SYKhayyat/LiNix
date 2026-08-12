@@ -52,8 +52,11 @@ From `CLAUDE.md`, and they are not optional:
    checked **including the ones you cleared, and why**.
 3. **No legacy.** When a thing is replaced, the old thing is deleted in the same change —
    config keys, docs and tests included.
-4. **Verify:** `cargo build --all-targets` → `cargo test` → `cargo clippy --all-targets
-   --all-features -- -D warnings` → `cargo fmt -- --check`. Unverified is not done.
+4. **Verify:** `cargo build --all-targets` → `cargo test --no-fail-fast` → `cargo clippy
+   --all-targets --all-features -- -D warnings` → `cargo fmt -- --check`. Unverified is not done.
+   The last of those is also a pre-commit hook now — `git config core.hooksPath .githooks`, once
+   per clone. Round 8 closed `E3` by declaring a hook out of scope; the next rename proved that
+   wrong across nine CI runs, and the owner ruled it in on 2026-08-11.
 5. **Commit per work order**, message saying what changed and what it does *not* yet do.
 
 ### 0.1 STOP AND ASK — do not implement these unilaterally

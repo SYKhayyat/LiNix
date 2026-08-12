@@ -108,9 +108,11 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: shellcheck
+      # `.githooks/*` is named rather than globbed by extension because a git hook may not have
+      # one, which is the only reason it went unlinted when it was added.
       run: |
         shopt -s globstar nullglob
-        shellcheck -S warning scripts/*.sh docker/**/*.sh
+        shellcheck -S warning scripts/*.sh docker/**/*.sh .githooks/*
 
   build:
     name: Build for ${{ matrix.target }}

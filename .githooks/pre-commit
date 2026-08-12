@@ -1,0 +1,35 @@
+#!/bin/sh
+# Refuse a commit that CI's formatting gate would reject.
+#
+# Enable it, once per clone:  git config core.hooksPath .githooks
+#
+# Only `cargo fmt` runs here. clippy and the suite take minutes, and a pre-commit hook that takes
+# minutes gets --no-verify'd until it gates nothing; CI stays the authority for those. Formatting
+# is the one gate a change containing no logic can break: renaming `nexus::` to `shall::` re-sorted
+# two import groups past `petgraph` and turned main plus every open dependabot PR red. It costs
+# about a second to check.
+#
+# The command must stay spelled as `.github/workflows/ci.yml` spells it. A hook stricter than CI
+# blocks commits CI would accept, which is how a gate earns its bypass.
+#
+# This reads the working tree, not the index: staging a badly formatted file and then formatting it
+# without re-staging still passes. Closing that needs a stash, and a hook that stashes can lose
+# work.
+set -eu
+
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "pre-commit: cargo is not on PATH, so formatting went unchecked." >&2
+    exit 0
+fi
+
+if diffs="$(cargo fmt -- --check 2>&1)"; then
+    exit 0
+fi
+
+echo "pre-commit: cargo fmt -- --check reports diffs, which CI rates fatal." >&2
+echo >&2
+printf '%s\n' "$diffs" >&2
+echo >&2
+echo "Run 'cargo fmt', stage the result, and commit again." >&2
+echo "To commit without this check: git commit --no-verify" >&2
+exit 1

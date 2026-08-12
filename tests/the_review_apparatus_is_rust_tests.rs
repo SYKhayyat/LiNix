@@ -295,6 +295,10 @@ fn mentions(line: &str, name: &str) -> bool {
 fn every_shell_script_the_repo_runs_has_lf_endings() {
     let mut files: Vec<PathBuf> = files_in("scripts", &[".sh"]);
     files.extend(files_in("docker/integration", &[".sh"]));
+    // Every file in `.githooks`, matched on the empty suffix because git fixes a hook's filename
+    // and none of them carry an extension for a glob to catch. A CRLF hook aborts on `set -eu<CR>`
+    // and so refuses every commit in the clone it is installed in.
+    files.extend(files_in(".githooks", &[""]));
 
     // Plus every file bind-mounted into a container, read off the mounts themselves.
     // `scripts/lifecycle-floor.txt` is data, not a script, so no glob covered it — and it is
@@ -345,6 +349,60 @@ fn every_shell_script_the_repo_runs_has_lf_endings() {
          runs, so the container gate reports nothing at all:\n  {}\n\nfix: `git add \
          --renormalize . && git checkout -- .`",
         crlf.join("\n  ")
+    );
+}
+
+/// **The pre-commit hook must run CI's formatting gate, spelled the way CI spells it** (E3).
+///
+/// The gate this hook exists for was fixed twice and run neither time. Formatting is the one CI
+/// gate a change containing no logic can break, and it did: renaming `nexus::` to `shall::`
+/// re-sorted two import groups past `petgraph`, and `cargo fmt --check` failed on main and on
+/// every open dependabot PR branched from it — nine red runs, one reordered line each.
+///
+/// **Both directions matter.** A hook that runs something weaker than CI passes commits CI
+/// rejects, which is the asymmetry E3/E4 found in the release scripts. A hook stricter than CI
+/// refuses commits CI would take, and a gate that refuses good work is a gate people learn to
+/// pass `--no-verify` to. So the command is read out of `ci.yml` rather than written down here.
+#[test]
+fn the_pre_commit_hook_runs_the_formatting_gate_ci_runs() {
+    let ci = read(".github/workflows/ci.yml");
+    let fmt_gate = ci
+        .lines()
+        .skip_while(|l| !l.contains("name: Check formatting"))
+        .find_map(|l| l.trim().strip_prefix("run: "))
+        .map(str::trim)
+        .expect(
+            "this test's premise is gone: `ci.yml` has no `Check formatting` step with a `run:` \
+             command. Either the gate moved, in which case point this scan at where it went, or \
+             the gate was deleted, in which case the hook has nothing to mirror",
+        );
+    assert!(
+        fmt_gate.contains("cargo fmt"),
+        "`ci.yml`'s `Check formatting` step runs `{fmt_gate}`, which is not a `cargo fmt` \
+         invocation; this scan has stopped matching the gate it reads"
+    );
+
+    let hook = read(".githooks/pre-commit");
+
+    // Named in an error message is not run. The hook prints the command it failed on, so a scan
+    // for the bare string passes over a hook whose actual invocation has been deleted.
+    let invocations = hook
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with('#') && !l.starts_with("echo") && !l.starts_with("printf"))
+        .filter(|l| l.contains(fmt_gate))
+        .count();
+    assert!(
+        invocations > 0,
+        "`.githooks/pre-commit` never runs `{fmt_gate}` — the command `ci.yml` gates formatting \
+         with — outside a comment or an `echo`. A hook weaker than CI is how a green local run \
+         becomes a red push"
+    );
+
+    assert!(
+        hook.contains("exit 1"),
+        "`.githooks/pre-commit` runs the formatting gate but never exits non-zero, so git takes \
+         the commit either way. A hook that only warns is a hook that gates nothing"
     );
 }
 

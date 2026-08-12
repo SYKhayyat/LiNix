@@ -89,8 +89,22 @@ One reported symptom, two live siblings.
 
 ## Verify
 
-`cargo build --all-targets` → `cargo test --no-fail-fast` → `cargo clippy --all-targets`. Report
-honestly: unverified is not done, and a skipped step is a said-so, not a done.
+`cargo build --all-targets` → `cargo test --no-fail-fast` → `cargo clippy --all-targets` →
+`cargo fmt -- --check`. Report honestly: unverified is not done, and a skipped step is a said-so,
+not a done.
+
+**`cargo fmt -- --check` is part of this chain, not a release-time afterthought.** CI rates it
+fatal on every push, and it is the one gate a change with no logic in it can break: renaming
+`nexus::` to `shall::` re-sorted two import groups past `petgraph`, which turned the whole board
+red — main plus every open dependabot PR — on a commit that touched only names. The release
+scripts catch it, but they run at release; this chain runs per change. Spelled as `ci.yml` spells
+it, because a local gate stricter than CI refuses work CI would take.
+
+**The hook is not optional, and it is not automatic.** `.githooks/pre-commit` refuses a commit
+that gate would reject; `git config core.hooksPath .githooks` turns it on, once per clone, and a
+clone that has not run it has no hook at all. `git commit --no-verify` is the bypass when you mean
+it. The hook is formatting only — clippy and the suite take minutes, and a pre-commit hook that
+takes minutes gets bypassed until it gates nothing.
 
 **`--no-fail-fast`, always.** Without it, cargo stops at the first test *target* that fails, so a
 failure in the lib abandons the whole integration suite and the run tells you about one defect out

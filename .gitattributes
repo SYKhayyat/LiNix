@@ -10,6 +10,12 @@
 Dockerfile* text eol=lf
 *.bash text eol=lf
 
+# Git requires a hook to be named for the hook, so this one cannot carry `.sh` and the glob above
+# does not reach it. Same failure as that glob's, one directory over and worse: a CRLF `set -eu<CR>`
+# makes the hook exit non-zero on every commit for a reason that has nothing to do with the commit,
+# and the first thing anyone does about a hook that always refuses is stop using hooks.
+.githooks/* text eol=lf
+
 # Bind-mounted into the containers and parsed there, so it is in the same class as the scripts
 # even though it is data. `awk '{print $2}'` over a CRLF line yields `7<CR>`, which is not an
 # integer to `[ -lt ]` — the test errors, the shell takes the else branch, and the else branch is
