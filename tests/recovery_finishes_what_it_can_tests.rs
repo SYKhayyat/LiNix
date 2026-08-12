@@ -11,8 +11,8 @@
 //! So the engine grew the mode instead, and this pins both halves of it: what still stops, and
 //! what now carries on.
 
-use shall::core::{GraphAction, PackageSpec, Transaction, TransactionConfig};
 use petgraph::stable_graph::StableDiGraph;
+use shall::core::{GraphAction, PackageSpec, Transaction, TransactionConfig};
 
 use crate::mock_providers::TestKernel;
 

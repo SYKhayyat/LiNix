@@ -6,9 +6,9 @@
 //! than refused hangs or repeats; and a global lock where a per-backend one belongs makes every
 //! sync run one manager at a time while every assertion still passes.
 
+use petgraph::stable_graph::StableDiGraph;
 use shall::app::sync::planner::{ChangePlanner, HostBackends, PlanScope};
 use shall::core::{GraphAction, PackageSpec, StateRegistry, Transaction};
-use petgraph::stable_graph::StableDiGraph;
 use std::collections::HashMap;
 
 use crate::mock_providers::TestKernel;
