@@ -3194,6 +3194,20 @@ elif [ -f "$FLOOR_FILE" ]; then
         echo "        Something stopped running. A plan-smoke satisfies the audit above, so this"
         echo "        is the only check that notices coverage collapsing rather than breaking."
         [ "$UNMEASURED" -gt 0 ] && echo "        ($UNMEASURED excused as unmeasurable, and it was still not enough.)"
+        # A count is not a finding. The floor is one number, so this cannot name what the last
+        # run did that this one did not — but it can name what ran and what the image is
+        # missing, which is the same answer for the case that actually happens: a best-effort
+        # install failed at build time and took its manager's whole lifecycle with it. Reading
+        # `25, and it has done 26 before` cost a diff of two nightlies' logs to learn the word
+        # `helm`; every fact needed to print that word was already in this container.
+        echo "        did a real lifecycle here: $(tr '\n' ' ' < "$LEDGER/be-life.u")"
+        if [ -f /etc/shall-image-managers ]; then
+            _gone="$(awk '$2 == "ABSENT" {printf "%s ", $1}' /etc/shall-image-managers)"
+            [ -n "$_gone" ] && echo "        the image says these are ABSENT: $_gone" &&
+                echo "        A manager the image failed to install cannot have a lifecycle. If one" &&
+                echo "        of these was here last run, that is the whole shortfall — fix the" &&
+                echo "        install in the Dockerfile rather than the number in $FLOOR_FILE."
+        fi
     elif [ "$LIFECYCLES" -lt "$FLOOR" ]; then
         # Short of the floor, and the shortfall is exactly the backends nothing could measure.
         # Reported at full volume and never silently: a run that excuses coverage has to say so,

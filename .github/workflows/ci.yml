@@ -443,8 +443,15 @@ jobs:
     # whole reason `luarocks`, `mix` and `asdf` went years without anyone asking them a
     # question: not that the gates were missing, but that they had never been pointed at a
     # machine that could answer. The image already carries a Rust toolchain.
+    #
+    # **Runs even when the lifecycle above it failed.** They are separate questions asked of the
+    # same image — "does an install→list→remove still work" and "do these tools still parse the
+    # argv we build" — and a step that only runs after a green step cannot answer its own
+    # question on a red day. A composer finding sat unmeasured for a full day because a
+    # coverage ratchet three steps earlier had gone red over an unrelated manager. The job still
+    # fails; the difference is that the failing run now reports both answers instead of one.
     - name: Ask this image's thirty managers about subcommands, flags and `--`
-      if: matrix.distro == 'tools'
+      if: ${{ !cancelled() && matrix.distro == 'tools' }}
       run: |
         docker run --rm --entrypoint bash \
           -e TERMINATOR_PROBE=1 -e CARGO_TARGET_DIR=/tmp/target \

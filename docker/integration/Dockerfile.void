@@ -24,8 +24,14 @@ RUN xbps-install -yu \
 # reports honestly is still a skip nobody reads, so the dependencies of these installers
 # belong in the package list rather than in the tolerance.
 RUN corepack enable || true
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh || true
-RUN curl -fsSL https://bun.sh/install | bash || true
+# Every network install below goes through this. One attempt was the wrong number: a
+# best-effort install that fails once takes its manager out of the image, and `|| true`
+# means nothing says so until the coverage ratchet goes red. See `retry.sh`.
+COPY docker/integration/retry.sh /usr/local/bin/retry
+RUN chmod 0755 /usr/local/bin/retry
+
+RUN retry 'curl -LsSf https://astral.sh/uv/install.sh | sh' || true
+RUN retry 'curl -fsSL https://bun.sh/install | bash' || true
 # `/root/.local/share/pnpm` is pnpm's global bin directory, and pnpm REFUSES to install a global
 # package when it is not on PATH — `corepack enable` puts the pnpm shim there and does not do
 # this, so on the first Void run pnpm was READY and could not install anything:

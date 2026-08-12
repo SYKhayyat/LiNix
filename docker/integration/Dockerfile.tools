@@ -34,15 +34,21 @@ RUN for p in php-cli composer golang-go opam ocaml-nox lua5.4 luarocks nim \
         apt-get install -y --no-install-recommends "$p" || echo "SKIP unavailable apt pkg: $p"; \
     done; rm -rf /var/lib/apt/lists/*
 
+# Every network install below goes through this. See `retry.sh` for why one attempt was the
+# wrong number: a best-effort install that fails once takes its manager's whole lifecycle out
+# of the image, and `|| true` means nothing says so until the coverage ratchet goes red.
+COPY docker/integration/retry.sh /usr/local/bin/retry
+RUN chmod 0755 /usr/local/bin/retry
+
 # mise (dev-tool version manager) — installs to ~/.local/bin/mise.
-RUN curl -fsSL https://mise.run | sh || true
+RUN retry 'curl -fsSL https://mise.run | sh' || true
 
 # Miniforge (provides conda) — the conda backend. Pre-accept ToS + set conda-forge so a real
 # `conda install` resolves without prompts.
-RUN curl -fsSL -o /tmp/mf.sh "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh" \
-    && bash /tmp/mf.sh -b -p /opt/conda && rm -f /tmp/mf.sh \
+RUN retry 'curl -fsSL -o /tmp/mf.sh "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh" \
+    && bash /tmp/mf.sh -b -f -p /opt/conda && rm -f /tmp/mf.sh \
     && /opt/conda/bin/conda config --system --set always_yes true \
-    && /opt/conda/bin/conda config --system --add channels conda-forge || true
+    && /opt/conda/bin/conda config --system --add channels conda-forge' || true
 
 # Nix (single-user, no daemon) with flakes enabled — the nix backend uses `nix profile`. Symlink
 # the binaries into /usr/local/bin (always on PATH) so `command -v nix` succeeds and the backend
@@ -56,8 +62,8 @@ RUN mkdir -p /etc/nix && printf 'experimental-features = nix-command flakes\n' >
 #
 # The Determinate installer is the one that supports a container with no init, and says so:
 # `--init none`. No `|| true` — see the assertion below.
-RUN curl -fsSL https://install.determinate.systems/nix \
-      | sh -s -- install linux --no-confirm --init none \
+RUN retry 'curl -fsSL https://install.determinate.systems/nix \
+      | sh -s -- install linux --no-confirm --init none' \
     && for b in nix nix-env nix-collect-garbage nix-store; do \
          ln -sf "/nix/var/nix/profiles/default/bin/$b" "/usr/local/bin/$b"; \
        done
@@ -67,41 +73,45 @@ RUN curl -fsSL https://install.determinate.systems/nix \
 RUN nix --version && nix profile list >/dev/null
 
 # Rust (for a REAL `cargo install`), uv and bun — same installers as the base image.
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal || true
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh || true
-RUN curl -fsSL https://bun.sh/install | bash || true
+RUN retry 'curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal' || true
+RUN retry 'curl -LsSf https://astral.sh/uv/install.sh | sh' || true
+RUN retry 'curl -fsSL https://bun.sh/install | bash' || true
 
 # Helm (cloud-native) — its plugin backend.
-RUN curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash || true
+RUN retry 'curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash' || true
 
 # kubectl + krew (kubectl plugin manager); fetch the plugin index so `krew install ns` resolves.
-RUN curl -fsSLo /usr/local/bin/kubectl \
+RUN retry 'curl -fsSLo /usr/local/bin/kubectl \
         "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
-        && chmod +x /usr/local/bin/kubectl || true
-RUN set -e; cd /tmp \
+        && chmod +x /usr/local/bin/kubectl' || true
+RUN retry 'set -e; cd /tmp \
     && curl -fsSLO "https://github.com/kubernetes-sigs/krew/releases/latest/download/krew-linux_amd64.tar.gz" \
     && tar zxf krew-linux_amd64.tar.gz \
     && ./krew-linux_amd64 install krew \
-    && /root/.krew/bin/kubectl-krew update || true
+    && /root/.krew/bin/kubectl-krew update' || true
 
 # asdf (version manager). Pin the last classic (shell) release v0.14.1: its `bin/asdf`
 # launcher works standalone, unlike `main` (now a Go rewrite that would need `go build`).
-RUN git clone --branch v0.14.1 --depth 1 https://github.com/asdf-vm/asdf.git /opt/asdf || true
+#
+# The `rm -rf` is what makes a second attempt possible: `git clone` into a directory a killed
+# clone already made refuses, so without it a retry can only ever repeat the first failure.
+RUN retry 'rm -rf /opt/asdf && git clone --branch v0.14.1 --depth 1 https://github.com/asdf-vm/asdf.git /opt/asdf' || true
 
 # Dart SDK (provides the `pub` backend, invoked as `dart pub global`). Best-effort via
 # Google's apt repo.
-RUN curl -fsSL https://dl-ssl.google.com/linux/linux_signing_key.pub \
-        | gpg --dearmor -o /usr/share/keyrings/dart.gpg \
+RUN retry 'curl -fsSL https://dl-ssl.google.com/linux/linux_signing_key.pub \
+        | gpg --yes --dearmor -o /usr/share/keyrings/dart.gpg \
     && echo "deb [signed-by=/usr/share/keyrings/dart.gpg] https://storage.googleapis.com/download.dartlang.org/linux/debian stable main" \
         > /etc/apt/sources.list.d/dart.list \
     && apt-get update && apt-get install -y --no-install-recommends dart \
-    && rm -rf /var/lib/apt/lists/* || true
+    && rm -rf /var/lib/apt/lists/*' || true
 
 # pixi (conda-like global installer) — installs to ~/.pixi/bin.
-RUN curl -fsSL https://pixi.sh/install.sh | bash || true
+RUN retry 'curl -fsSL https://pixi.sh/install.sh | bash' || true
 
-# Spack (HPC) — cloned; its launcher lives at /opt/spack/bin/spack.
-RUN git clone --depth 1 https://github.com/spack/spack.git /opt/spack || true
+# Spack (HPC) — cloned; its launcher lives at /opt/spack/bin/spack. Same `rm -rf` as asdf, and
+# for the same reason.
+RUN retry 'rm -rf /opt/spack && git clone --depth 1 https://github.com/spack/spack.git /opt/spack' || true
 
 # Surface every tool's bin dir, INCLUDING the per-user global-install dirs the real lifecycle
 # writes to: Go (~/go/bin), .NET global tools (~/.dotnet/tools), Dart pub (~/.pub-cache/bin),
@@ -123,13 +133,19 @@ ENV PATH="/root/.local/bin:/root/.bun/bin:/root/.cargo/bin:/root/go/bin:/root/.d
 # failed with `No switch is currently set`, and the nightly job read that as an opam defect.
 # Asserted rather than best-effort, for the same reason: a setup step nobody checks is a setup
 # step that quietly stops happening.
-RUN opam init --disable-sandboxing --bare -y \
- && opam switch create default ocaml-system \
- && opam switch show
-RUN (cabal update || true) 2>/dev/null; echo done
-RUN (nimble -y refresh || true) 2>/dev/null; echo done
+# `|| opam switch set default` is what lets the retry mean anything: an attempt that created the
+# switch and then lost the network cannot create it again, and without this the second attempt
+# could only repeat the first one's failure. `switch show` still has to answer, so the step is
+# asserted exactly as before.
+RUN retry 'opam init --disable-sandboxing --bare -y \
+ && { opam switch create default ocaml-system || opam switch set default; } \
+ && opam switch show'
+# The index fetches, retried for the same reason the installers are: a manager whose index never
+# arrived is a manager whose every install fails at runtime, which reads as a backend defect.
+RUN (retry 'cabal update' || true) 2>/dev/null; echo done
+RUN (retry 'nimble -y refresh' || true) 2>/dev/null; echo done
 RUN (/opt/spack/bin/spack compiler find || true) 2>/dev/null; echo done
-RUN (flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo || true) 2>/dev/null; echo done
+RUN (retry 'flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo' || true) 2>/dev/null; echo done
 
 # The layers above delete `/var/lib/apt/lists` to stay small, which leaves apt unable to
 # answer `search` at runtime — so every unpinned name skipped the native manager and landed

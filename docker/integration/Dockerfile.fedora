@@ -8,7 +8,13 @@ ENV SHALL_IT_IMAGE=fedora
 RUN dnf install -y curl gcc gcc-c++ make pkgconf-pkg-config openssl-devel perl git unzip \
     nodejs npm python3 python3-pip pipx rubygems \
     && dnf clean all
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+# Every network install below goes through this. One attempt was the wrong number: a
+# best-effort install that fails once takes its manager out of the image, and `|| true`
+# means nothing says so until the coverage ratchet goes red. See `retry.sh`.
+COPY docker/integration/retry.sh /usr/local/bin/retry
+RUN chmod 0755 /usr/local/bin/retry
+
+RUN retry 'curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal'
 # Extra managers via their own installers. Tolerant (`|| true`): a build-time network hiccup
 # leaves the image usable; that backend just won't be READY and is auto-skipped by the sweep.
 #
@@ -18,8 +24,8 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --pr
 # reports honestly is still a skip nobody reads, so the dependencies of these installers
 # belong in the package list rather than in the tolerance.
 RUN corepack enable || true
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh || true
-RUN curl -fsSL https://bun.sh/install | bash || true
+RUN retry 'curl -LsSf https://astral.sh/uv/install.sh | sh' || true
+RUN retry 'curl -fsSL https://bun.sh/install | bash' || true
 ENV PATH="/root/.local/bin:/root/.bun/bin:/root/.cargo/bin:${PATH}"
 WORKDIR /src
 COPY . /src
