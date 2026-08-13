@@ -1,4 +1,4 @@
-# The decision register — all 207, ten of them built and never ruled, none open
+# The decision register — all 208, ten of them built and never ruled, one open
 **One file, six features, ten entries waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -15,7 +15,7 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **10** |
 | **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **193** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
@@ -76,8 +76,8 @@ status loses that, so it is kept here:
 **Nothing is open, and nine entries are waiting.** `Q53` — what a version pin means on a manager
 that cannot express one — was raised, measured and ruled on 2026-08-10. The `G` round then ran the
 other way round: `docs/GRADE-2026-08-12.md`'s work order was implemented in one pass, and the nine
-changes in it that a user would notice shipped ahead of any ruling. All 207 are accounted
-for: **193 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 10 BUILT NEVER RULED, 0 OPEN** — and this line
+changes in it that a user would notice shipped ahead of any ruling. All 208 are accounted
+for: **193 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 10 BUILT NEVER RULED, 1 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -374,7 +374,7 @@ the widest.*
 | **G9** | Three `--json` flags said "(requires --dry-run)" and none enforced it. BUILT: **enforced in `dispatch`** for `sync`/`install`/`uninstall` — clap's `requires` cannot see a global flag and breaks the working combination when asked to. `upgrade` keeps its flag and loses the sentence. | 2026-08-12 |
 | **G10** | `priority` gated resolution and nothing else: detection walked PATH for all 52 backends before knowing what was asked (`list -b apt` = 3,156 failed `statx` against `list`'s 3,338), and every fan-out went to whatever was installed. BUILT: **the file's own sentence is true of detection and querying too.** `BackendRegistry::available()` was deleted rather than filtered, so the compiler visited all twenty call sites and none could compile without choosing; the choices are a table in `priority_gates_every_fan_out_tests`. Two exceptions, both argued: `init` (writes the file from what it detects) and `check health` (reports on absent managers). | 2026-08-12 |
 
-### H — the grading round of 2026-08-13 (GRADE-2026-08-13) — 7
+### H — the grading round of 2026-08-13 (GRADE-2026-08-13) — 8
 
 *`docs/GRADE-2026-08-13.md` graded Bugs at D−, Verification at D+, and refused the release. It
 raised three questions it deliberately did not answer in code (Q-A, Q-B, Q-C), and the work on
@@ -8288,8 +8288,8 @@ thereby approve it for `upgrade`. Recommended **yes, gated on the step opting in
 wants to run on upgrade says so on its own line — so the widening is written down per step
 rather than inherited by every `exec:` already in every manifest.
 
-*(b) is ordinary work once (a) is ruled, and it is what makes the parity claim true rather than
-merely possible.*
+*(b) is `H8`, and it is an entry rather than a sentence here for the reason this whole pair
+exists: a question left inside an answered entry is a question nobody owes an answer on.*
 
 ## H7
 
@@ -8329,3 +8329,40 @@ are none.
 
 *The lesson is the register's own: a gap recorded in prose and never re-measured stops being a
 gap and stays written down. Three reviews carried this one; the fixture took four minutes.*
+
+
+## H8
+
+**Status: OPEN — 2026-08-13, split out of `H6` when that was ruled.** `H6` answered *should
+`upgrade` run declared steps* (yes, opted into per step, built). This is its second half, and it
+is here rather than in `H6`'s prose because an unanswered question inside an ANSWERED entry is
+exactly the shape that left the competitor gaps unowned for three grading rounds.
+
+**Should Shall ship a catalogue of upgrade steps, so a step is a name rather than a script?**
+
+Today `exec:./bin/firmware.sh @on=upgrade` means the user writes the script. `topgrade`'s
+selling point is that they do not: it knows `fwupd`, `rustup`, `gcloud components`, `nvim`'s
+plugin managers and thirty more, and running it is one word. Parity is *possible* with what
+`H6` built and is not *convenient*, and convenience is the whole of that tool's claim.
+
+**The shape it would take is already in this repo, and it is not a pile of shipped scripts.**
+`firewall_adapters.toml`, `setting_stores.toml` and `init_providers.toml` are declarative rows
+describing how to drive a tool — detection, the command, the arguments — loaded through
+`read_approved_definitions`. An upgrade-step catalogue is the same thing with a different
+surface, and that matters for the reason a shipped `.sh` would be a supply-chain question and a
+TOML row naming `fwupd refresh` is a fact about `fwupd`.
+
+**What still has to be decided, and why it is not a detail:**
+
+- **Does a catalogued step still need approving?** A hand-written `exec:` does, because it is
+  the user's code. A row that says `rustup update` is Shall's, reviewed in this repository — and
+  if it needs `shall lock` anyway, the convenience the catalogue exists for is mostly gone.
+- **Does declaring one imply running it?** `upgrade:rustup` reads like a declaration; the thing
+  it declares is a *verb*, which is the bend `exec:` already makes in the model (see
+  `target-state.md`). Two statements that are verbs is a second implementation of the awkward
+  case, and the repo's rule is to have one.
+
+**Recommendation, offered as one:** build it as `@on=`-carrying `exec:` lines sourced from an
+adapter file rather than as a new statement — one verb-shaped statement, not two — and require
+approval once per catalogue *version* rather than per line, so a user vouches for the catalogue
+they are on instead of for thirty rows they did not write.
