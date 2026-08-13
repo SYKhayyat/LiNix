@@ -124,7 +124,7 @@ impl DesiredState {
         verb: crate::model::exec::Verb,
     ) -> impl Iterator<Item = (&str, &Options, &Origin)> {
         self.execs()
-            .filter(move |(_, opts, _)| verb.claims(opts.one("on")))
+            .filter(move |(script, opts, _)| verb.claims_line(script, opts.one("on")))
     }
 
     /// The `dotfiles:` trees this machine wants (7n). Like `execs()`, reaching this list means

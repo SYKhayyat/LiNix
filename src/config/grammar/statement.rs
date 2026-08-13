@@ -1580,7 +1580,11 @@ pub const EXEC_OPTION_KEYS: &[&str] = &["runs", "undo", "on"];
 /// by commas: `@on=sync,upgrade` parses as `on=sync` plus a second option named `upgrade`,
 /// which is `F3`'s boundary confusion invited in by the value grammar. Three names spell the
 /// three cases with nothing to disambiguate.
-pub const EXEC_ON_VALUES: &[&str] = &["sync", "upgrade", "both"];
+///
+/// **The list lives with the type that means it.** This was three strings here and a `Verb`
+/// enum in `model::exec`, which is a value the parser accepts and nothing understands the
+/// moment the two drift.
+pub use crate::model::exec::Verb as ExecVerb;
 /// Empty, and stated as a table rather than as a special case in the validator: "what may
 /// `generate:` carry" is then answered in the same place as it is for every other kind. It runs
 /// every resolution to compute the current answer, so there is no `@runs` ceiling to set.
@@ -1710,7 +1714,7 @@ fn validate_exec(origin: &Origin, name: &str, options: &Options) -> Result<()> {
     )?;
     if let Some(on) = options.one("on") {
         let on = on.trim();
-        if !EXEC_ON_VALUES.contains(&on) {
+        if !ExecVerb::VALUES.contains(&on) {
             return Err(GrammarError::new(
                 origin.clone(),
                 format!("`exec:{}` has an invalid `on={}`", name, on),
@@ -1721,6 +1725,13 @@ fn validate_exec(origin: &Origin, name: &str, options: &Options) -> Result<()> {
                  script is not the same as approving every verb to run it.",
             ));
         }
+    }
+    // Which names exist is a fact about the catalogue, so the catalogue answers it — see
+    // `model::step::refusal`. Refused here rather than at run time, where "cannot read the
+    // script at <config>/step/rustupp" would send a reader looking for a file they never meant
+    // to write.
+    if let Some((what, hint)) = crate::model::step::refusal(name) {
+        return Err(GrammarError::new(origin.clone(), what).with_hint(hint));
     }
     if let Some(runs) = options.one("runs") {
         let runs = runs.trim();

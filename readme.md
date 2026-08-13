@@ -500,6 +500,31 @@ adding this changed nothing about scripts you had already written. Approving a s
 content may run here*; it does not say *any verb may run it*, and that is a separate sentence you
 write on the line.
 
+**The common ones ship with Shall, so you write a name instead of a script:**
+
+```
+exec:step/rustup
+exec:step/gcloud
+```
+
+That is the whole line. Each shipped step knows which verb it belongs to (`upgrade`) and that it
+should run every time, so there are no options to remember — and a step whose tool is not on this
+machine is skipped rather than failed, which is what makes one config work across a laptop and a
+server. `shall check config` lists the names available here, and an unknown name is refused when
+the config is read rather than when it runs.
+
+**These need no `shall lock`, and your own scripts still do.** A shipped step is a row compiled
+into the binary — a fact about a tool, not code your config carries — reviewed in Shall's own
+repository and shipped with the rest of the program. The approval gate exists so that code
+*travelling in your configuration* is read by a human before it runs; requiring you to approve
+Shall's own rows as well would move that check somewhere it means nothing, and delete the reason
+to have a catalogue at all. You approve what you wrote. You approved the rest by installing it.
+
+`exec:step/fwupd` is the exception worth knowing about: it refreshes firmware *metadata* and
+never flashes anything. A config file that writes your BIOS unattended on a weekly upgrade is not
+a convenience, and no snapshot rolls that back — so if you want it, write the line yourself and
+approve it.
+
 **The condition is `when`, and there is no second condition system.** "Run this unless X" is a
 variable your `vars` provider computes:
 

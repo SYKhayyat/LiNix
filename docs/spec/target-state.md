@@ -187,6 +187,14 @@ succeeds makes its own condition false and treating that as removal would flap. 
 else** if it does not (U3) — Shall does not invent an inverse for a script that has none, and
 `plan` says so in those words.
 
+**`exec:step/NAME` names a step Shall ships instead of a script you wrote (H8).** `step/` is a
+reserved first segment: everything else after `exec:` is a path, and neither can shadow the
+other. The rows are in `src/model/upgrade_steps.toml`, compiled into the binary — so, like
+`builtin_backends.toml`, **they carry no approval question**, while a script of your own still
+needs `shall lock`. You approve what you wrote; installing Shall approved the rest. Each row
+brings its own `@on=` and `@runs=` defaults, a line may override either, and a step whose tool is
+not on this machine is skipped rather than failed.
+
 **Being a verb, it is also the only statement that has to say which verb runs it (H6).** `@on=`
 is `sync` (the default), `upgrade`, or `both`. `upgrade` moves managed packages, which is the
 one thing a package manager can be asked to do; everything else a machine needs brought

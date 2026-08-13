@@ -1,4 +1,4 @@
-# The decision register — all 208, ten of them built and never ruled, one open
+# The decision register — all 208, ten of them built and never ruled, none open
 **One file, six features, ten entries waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -15,9 +15,9 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **10** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **193** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **194** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Two of these five statuses now describe nothing, and they stay.** The categories are not
@@ -77,7 +77,7 @@ status loses that, so it is kept here:
 that cannot express one — was raised, measured and ruled on 2026-08-10. The `G` round then ran the
 other way round: `docs/GRADE-2026-08-12.md`'s work order was implemented in one pass, and the nine
 changes in it that a user would notice shipped ahead of any ruling. All 208 are accounted
-for: **193 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 10 BUILT NEVER RULED, 1 OPEN** — and this line
+for: **194 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 10 BUILT NEVER RULED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -8333,7 +8333,52 @@ gap and stays written down. Three reviews carried this one; the fixture took fou
 
 ## H8
 
-**Status: OPEN — 2026-08-13, split out of `H6` when that was ruled.** `H6` answered *should
+**Status: ANSWERED — 2026-08-13, owner ruling, built in the same commit. Split out of `H6`
+earlier the same day and open for about an hour.** The ruling, in the owner's words: *"basically
+you are describing having aliases come defined in a text file and shipped. so yes."* Which is
+what it is — `exec:step/rustup` is an alias for a command, and the aliases ship as data.
+
+**RULED: build it, as rows compiled into the binary.**
+
+- **`exec:step/NAME`**, where `step/` is a reserved first segment. `exec:` has always taken a
+  path, so a bare `exec:rustup` would be both a file in the config repo and a catalogue name with
+  nothing in the line to say which. A resolution order that tries one and falls back to the other
+  is how a typo becomes a different program; a reserved prefix means neither can shadow the
+  other.
+- **No approval, and that asymmetry is the point.** `src/model/upgrade_steps.toml` is
+  `include_str!`'d, which is the status `builtin_backends.toml` already settled in its own
+  header: *"this file is compiled into the binary, so there is no II.12 question to ask about
+  it."* A script the user writes still needs `shall lock`. You approve what you wrote; you
+  approved the binary by installing it. Had a catalogued step needed approving too, the
+  catalogue would buy nothing — the user would still have to go and look at something before it
+  ran, which is the friction it exists to remove.
+- **Rows, never shipped scripts.** A `.sh` in a release is code travelling to machines, which is
+  the supply-chain question the approval gate exists to ask. A row is a fact about a tool:
+  `rustup` is upgraded by `rustup update`. It reaches the executor as argv, so nothing in it is
+  parsed by a shell.
+- **The row carries its own `on` and `runs` defaults**, so `exec:step/rustup` with nothing else
+  written is run by `upgrade`, every time. A line may override either; a default a user cannot
+  override is a rule wearing a default's name.
+- **A step whose tool is absent is skipped and says so.** One config, many machines: the laptop
+  has `rustup` and the server does not, and the server has nothing to do rather than something to
+  report.
+
+**Three rows to start — `fwupd`, `rustup`, `gcloud` — and one of them is deliberately partial.**
+`fwupdmgr update` writes firmware, and a text file that flashes a laptop's BIOS unattended on a
+weekly `shall upgrade` is not a convenience. The shipped row is `fwupdmgr refresh`, which fetches
+metadata so a human can be told what is available and decide. Somebody who genuinely wants
+unattended flashing writes their own `exec:` line and approves it — exactly the friction that
+decision deserves.
+
+**And the second question answered itself.** *"Does declaring one imply running it?"* — yes, and
+it needed no new statement to say so: a catalogued step is an `exec:` line, so there is one
+verb-shaped statement in the grammar and not two. The `Planned` enum in `app/apply/execs.rs` is
+where the two arms meet, and everything after it — the ceiling, the ledger, the write-ahead
+record, the dry-run note — is shared.
+
+*Original entry follows.*
+
+**Status when raised: OPEN — 2026-08-13, split out of `H6` when that was ruled.** `H6` answered *should
 `upgrade` run declared steps* (yes, opted into per step, built). This is its second half, and it
 is here rather than in `H6`'s prose because an unanswered question inside an ANSWERED entry is
 exactly the shape that left the competitor gaps unowned for three grading rounds.

@@ -11,6 +11,16 @@ pub struct Execs<'a> {
     pub(crate) journal: &'a std::sync::Arc<tokio::sync::Mutex<crate::core::Journal>>,
 }
 
+/// What one `exec:` line resolves to: a script the config carries, or a step Shall ships.
+///
+/// Two arms rather than two code paths — everything after this point (the ceiling, the ledger,
+/// the write-ahead record, the dry-run note) is the same for both, which is the argument for
+/// `H8` being a catalogue feeding this statement instead of a second statement of its own.
+enum Planned {
+    Script(std::path::PathBuf),
+    Step(crate::model::step::Step),
+}
+
 impl Execs<'_> {
     /// Resolve one `exec:` line to the script Shall would run, its content hash, and what the
     /// two ledgers say about it. Shared by the preview and the run so a plan cannot describe a
@@ -24,8 +34,34 @@ impl Execs<'_> {
         opts: &crate::config::grammar::Options,
         hooks: &crate::core::hook_lock::HookLedger,
         runs: &crate::core::ExecLedger,
-    ) -> Result<(std::path::PathBuf, String, crate::model::exec::Decision)> {
+    ) -> Result<(Planned, String, crate::model::exec::Decision)> {
         use crate::core::hook_lock::{exec_id, hash_script};
+
+        // **A catalogued step has no file, no approval and no shebang (`H8`).** It is a row
+        // compiled into this binary, so `II.12`'s question — *has a human read this code?* — was
+        // answered by installing Shall. The ceiling still applies and still comes from the row
+        // unless the line overrides it, so a step is counted by the same ledger as a script and
+        // a release that changes a step's command counts it as new work.
+        if let Some(name) = crate::model::step::named(script) {
+            let step = crate::model::step::find(name).ok_or_else(|| {
+                Error::Validation(format!(
+                    "`exec:{}` names no step Shall ships on this machine. Available here: {}.",
+                    script,
+                    match crate::model::step::names_here().join(", ") {
+                        empty if empty.is_empty() => "none".to_string(),
+                        list => list,
+                    }
+                ))
+            })?;
+            let hash = crate::model::step::fingerprint(&step);
+            let ceiling = crate::core::Ceiling::read(Some(opts.one("runs").unwrap_or(&step.runs)));
+            let decision = crate::model::exec::Decision::of(
+                &crate::core::hook_lock::Verdict::Approved,
+                runs.count(&hash),
+                ceiling,
+            );
+            return Ok((Planned::Step(step), hash, decision));
+        }
 
         let declared = std::path::Path::new(script);
         let path = if declared.is_absolute() {
@@ -48,7 +84,7 @@ impl Execs<'_> {
             runs.count(&hash),
             crate::core::Ceiling::read(opts.one("runs")),
         );
-        Ok((path, hash, decision))
+        Ok((Planned::Script(path), hash, decision))
     }
     /// Print what each declared `exec:` will do, before anything happens (XIII.3's exit
     /// condition): the content hash, how many times that content has run here, and the
@@ -78,16 +114,19 @@ impl Execs<'_> {
         // was built from the actor's list rather than the reader's. The line says which verb
         // claims it instead, so nothing is hidden and nothing is misattributed.
         for (script, opts, origin) in state.execs() {
-            let mine = verb.claims(opts.one("on"));
+            let mine = verb.claims_line(script, opts.one("on"));
             match self.exec_plan(script, opts, &hooks, &runs) {
                 Ok((_, hash, decision)) => {
                     println!("  exec:{}  ({})", script, origin);
                     match mine {
                         true => println!("    {}", decision.describe(&hash)),
+                        // Not "will run — not this command", which reads as a contradiction
+                        // and was what the first version printed. The decision is stated once,
+                        // about the verb that owns the line.
                         false => println!(
-                            "    {} — not this command; `@on={}` runs it",
+                            "    {}, under `shall {}`",
                             decision.describe(&hash),
-                            opts.one("on").unwrap_or("sync")
+                            self.on_of(script, opts)
                         ),
                     }
                 }
@@ -120,7 +159,22 @@ impl Execs<'_> {
         let mut runs = crate::core::ExecLedger::load(&runs_path)?;
 
         for (script, opts, origin) in state.execs_for(verb) {
-            let (path, hash, decision) = self.exec_plan(script, opts, &hooks, &runs)?;
+            let (planned, hash, decision) = self.exec_plan(script, opts, &hooks, &runs)?;
+            // **A step for a tool this machine does not have is skipped, not failed.** The
+            // catalogue is the same on every machine and machines are not: a config shared
+            // between a laptop with `rustup` and a server without it declares the step once,
+            // and the server has nothing to do rather than something to report. Said out loud
+            // rather than silently, because a step that never runs and never says so is
+            // indistinguishable from one that is quietly broken.
+            if let Planned::Step(step) = &planned {
+                if !self.executor.command_exists_sync(&step.detect) {
+                    info!(
+                        "skipping exec:{} — `{}` is not on this machine ({})",
+                        script, step.detect, origin
+                    );
+                    continue;
+                }
+            }
             if let crate::model::exec::Decision::NeedsApproval(verdict) = &decision {
                 // A refusal, not a warning: this is code from the configuration, and II.12's
                 // whole point is that nothing runs it until a human has looked.
@@ -167,7 +221,7 @@ impl Execs<'_> {
                     hash: hash.clone(),
                 })
                 .await;
-            let outcome = self.run_exec_script(&path).await;
+            let outcome = self.run_planned(&planned).await;
             self.resolve(started, &outcome).await;
             outcome?;
             // Recorded only on success. A script that failed did not happen, and the next sync
@@ -355,6 +409,39 @@ impl Execs<'_> {
     /// shell if it names none — `sh` on Unix and PowerShell on Windows. A repo that must ship
     /// two spellings of every script is a repo that cannot be shared, which is the reason the
     /// file travels with the config at all.
+    /// Which verb a line belongs to, for the preview's sentence — the line's `@on=` if it has
+    /// one, else the row's if it is a catalogued step, else `sync`. The same order
+    /// [`crate::model::exec::Verb::claims_line`] decides by, so the preview cannot name one verb
+    /// while the filter uses another.
+    fn on_of(&self, script: &str, opts: &crate::config::grammar::Options) -> String {
+        if let Some(explicit) = opts.one("on") {
+            return explicit.to_string();
+        }
+        crate::model::step::named(script)
+            .and_then(crate::model::step::find)
+            .map(|s| s.on)
+            .unwrap_or_else(|| "sync".to_string())
+    }
+
+    /// Run what this line resolved to.
+    async fn run_planned(&self, planned: &Planned) -> Result<()> {
+        match planned {
+            Planned::Script(path) => self.run_exec_script(path).await,
+            // Argv straight to the executor: a shipped row is data, and data that reaches a
+            // shell stops being data. There is no shebang to read and no file to read it from.
+            Planned::Step(step) => {
+                let (program, args) = crate::model::step::launch(step).ok_or_else(|| {
+                    Error::Validation(format!(
+                        "the shipped step `{}` has an empty command",
+                        step.name
+                    ))
+                })?;
+                let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                self.executor.run(&program, &refs, false).await.map(|_| ())
+            }
+        }
+    }
+
     async fn run_exec_script(&self, path: &std::path::Path) -> Result<()> {
         // A script that is not UTF-8 has no first line this can read, and falls through to the
         // platform default — which is what every `exec:` script got before shebangs were read.

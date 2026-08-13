@@ -198,8 +198,8 @@ fn the_plan_shows_a_step_it_will_not_run_and_says_which_verb_runs_it() {
          code in the configuration, and `plan` is where a user reviews it before it runs:\n{out}"
     );
     assert!(
-        out.contains("not this command"),
-        "`plan` listed a step it will not run without saying so, which is worse than hiding \
-         it — the reader takes it for work this command is about to do:\n{out}"
+        out.contains("under `shall upgrade`"),
+        "`plan` listed a step it will not run without saying which command does, which is worse \
+         than hiding it — the reader takes it for work this command is about to do:\n{out}"
     );
 }

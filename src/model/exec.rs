@@ -19,6 +19,30 @@ pub enum Verb {
 }
 
 impl Verb {
+    /// What `@on=` may say, and the one list of it.
+    ///
+    /// Lived in `grammar::statement` as `EXEC_ON_VALUES` while the type that *means* them lived
+    /// here — two copies of three strings, which is how a value gets accepted by the parser and
+    /// understood by nothing. The grammar reads this.
+    pub const VALUES: &'static [&'static str] = &["sync", "upgrade", "both"];
+
+    /// Does this line belong to this verb, given the whole line?
+    ///
+    /// **The catalogue's default is the row's, not the spelling's (`H8`).** A shipped step says
+    /// on its own row which verb it belongs to — `rustup update` is an upgrade — so a user who
+    /// writes `exec:step/rustup` and nothing else gets the step run by `upgrade`, which is the
+    /// convenience the catalogue exists for. An `@on=` written on the line still wins: the row
+    /// is a default, and a default a user cannot override is a rule wearing a default's name.
+    pub fn claims_line(self, script: &str, on: Option<&str>) -> bool {
+        match on {
+            Some(explicit) => self.claims(Some(explicit)),
+            None => match crate::model::step::named(script).and_then(crate::model::step::find) {
+                Some(step) => self.claims(Some(&step.on)),
+                None => self.claims(None),
+            },
+        }
+    }
+
     /// Does this line belong to this verb?
     ///
     /// **`sync` is the default and that direction is the whole ruling.** `upgrade` ran no

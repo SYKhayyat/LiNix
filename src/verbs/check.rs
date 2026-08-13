@@ -598,6 +598,22 @@ pub async fn check_config(config: &Config, registry: &Arc<BackendRegistry>) -> R
         state.extras.len()
     );
 
+    // `H8`: the shipped steps this machine can name, because a catalogue you cannot list is one
+    // you read the source for. Only the ones actually usable here — the row's OS matches and its
+    // tool is on `PATH` — so this answers *what can I write*, not *what exists somewhere*. A
+    // machine with none of them says nothing rather than printing an empty heading.
+    let steps: Vec<crate::model::step::Step> = crate::model::step::rows_here()
+        .into_iter()
+        .filter(|s| crate::core::launch::program_exists(&s.detect))
+        .collect();
+    if !steps.is_empty() {
+        println!("\n{} upgrade step(s) available here:", steps.len());
+        for step in &steps {
+            println!("  exec:step/{:<12} {}", step.name, step.what);
+        }
+        println!("  (no `shall lock` needed — these ship with Shall.)");
+    }
+
     // II.15: a pattern is the one line whose meaning is not on the line. The count is.
     let patterns = state.regex_expansions();
     if !patterns.is_empty() {

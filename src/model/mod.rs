@@ -29,6 +29,7 @@ pub mod schedule;
 pub mod scope;
 pub mod script;
 pub mod secret;
+pub mod step;
 pub mod vars;
 pub mod vars_embedded;
 pub mod vars_provider;

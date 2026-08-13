@@ -509,3 +509,112 @@ async fn a_step_can_belong_to_both_verbs() {
         "`@on=both` ran under one verb and not the other"
     );
 }
+
+/// `H8` — a catalogued step runs from a name, with no script and no approval.
+///
+/// **The approval asymmetry is the assertion, not a side effect.** A script the user writes is
+/// refused until `shall lock` has seen it, and `an_unapproved_script_refuses_the_sync_and_never_
+/// runs` above pins that. A shipped step is a row compiled into this binary — the same status
+/// `builtin_backends.toml` and `firewall_adapters.toml` have, whose header settled the question
+/// in those words: *"this file is compiled into the binary, so there is no II.12 question to ask
+/// about it."* If a catalogued step needed approving too, the catalogue would buy nothing: the
+/// user would still have to go and look at something before it ran.
+#[tokio::test]
+async fn a_catalogued_step_runs_from_its_name_without_a_script_or_an_approval() {
+    use shall::model::exec::Verb;
+
+    let kernel = TestKernel::new().await;
+    let root = kernel.app.config.config_root();
+    std::fs::write(root.join("modules/tools.txt"), "exec:step/rustup\n").unwrap();
+    std::fs::write(root.join("profiles/Main"), "use tools\n").unwrap();
+    // Deliberately no `approve(...)`, and deliberately no file at `<config>/step/rustup`.
+
+    let state = resolve(&kernel).await;
+    assert!(state.has_execs(), "the step line did not reach the model");
+
+    // The row says `on = "upgrade"`, so `sync` must leave it alone without the user writing
+    // `@on=` at all — that default is what makes a name shorter than a script.
+    kernel
+        .app
+        .execs()
+        .apply(&state, Verb::Sync)
+        .await
+        .expect("sync runs its own steps");
+    let calls = kernel.mock_executor.get_calls().await;
+    assert!(
+        !calls.iter().any(|c| c.starts_with("rustup")),
+        "`sync` ran an upgrade step, so the row's own `on` decided nothing: {calls:?}"
+    );
+
+    kernel
+        .app
+        .execs()
+        .apply(&state, Verb::Upgrade)
+        .await
+        .expect("a shipped step needs no approval — that is the whole point of shipping it");
+    let calls = kernel.mock_executor.get_calls().await;
+    assert!(
+        calls.iter().any(|c| c == "rustup update"),
+        "`upgrade` did not run the catalogued step: {calls:?}"
+    );
+}
+
+/// A step for a tool this machine does not have is skipped, and says so.
+///
+/// One config, many machines: the laptop has `rustup` and the server does not, and the server
+/// has *nothing to do* rather than *something to report*. A hard failure here would make a
+/// shared config unusable, which is the opposite of what a catalogue is for.
+#[tokio::test]
+async fn a_step_whose_tool_is_absent_is_skipped_rather_than_failed() {
+    use shall::model::exec::Verb;
+
+    let kernel = TestKernel::new().await;
+    kernel.mock_executor.set_command_exists("rustup", false);
+    let root = kernel.app.config.config_root();
+    std::fs::write(root.join("modules/tools.txt"), "exec:step/rustup\n").unwrap();
+    std::fs::write(root.join("profiles/Main"), "use tools\n").unwrap();
+
+    let state = resolve(&kernel).await;
+    kernel
+        .app
+        .execs()
+        .apply(&state, Verb::Upgrade)
+        .await
+        .expect("an absent tool is not an error");
+    let calls = kernel.mock_executor.get_calls().await;
+    assert!(
+        !calls.iter().any(|c| c.starts_with("rustup")),
+        "a step ran for a tool that is not on this machine: {calls:?}"
+    );
+}
+
+/// A name the catalogue does not have is refused when the config is read, not when it runs.
+///
+/// `exec:step/rustupp` would otherwise reach the runtime as *"cannot read the script at
+/// <config>/step/rustupp"* — sending a reader to look for a file they never meant to write. The
+/// refusal names what this machine actually offers, because a catalogue you cannot discover from
+/// its own error is one you read the source for.
+#[tokio::test]
+async fn an_unknown_step_name_is_refused_with_the_list_of_real_ones() {
+    let kernel = TestKernel::new().await;
+    let root = kernel.app.config.config_root();
+    std::fs::write(root.join("modules/tools.txt"), "exec:step/rustupp\n").unwrap();
+    std::fs::write(root.join("profiles/Main"), "use tools\n").unwrap();
+
+    shall::app::sync::resolver::new_resolution();
+    let err = shall::app::sync::resolver::StateResolver::new(
+        &kernel.app.config,
+        kernel.app.registry.clone(),
+        false,
+    )
+    .await
+    .resolve_model()
+    .await
+    .expect_err("an unknown step name is a configuration error");
+    let msg = err.to_string();
+    assert!(msg.contains("names no step Shall ships"), "{msg}");
+    assert!(
+        msg.contains("rustup"),
+        "the refusal did not list what this machine offers: {msg}"
+    );
+}

@@ -6421,3 +6421,50 @@ boundary confusion `F3` was, invited in through the value grammar instead of the
 **And the unknown value reads as the default, not as "everywhere".** The grammar refuses anything
 outside the three by name, so `Verb::claims` cannot be reached with a fourth — but if it ever is,
 an unrecognised word must not be what widens which verb runs a script.
+
+## `H8` — the aliases that ship, and why they need no approval
+
+`H6` gave `exec:` an `@on=` so a declared step could be run by `upgrade`. It left the step itself
+the user's to write, which is the difference between *possible* and *convenient* — and
+convenience is the whole of the competing tool's claim. Nobody leaves `topgrade` because it
+cannot update `rustup`; they stay because they do not have to say how.
+
+**A catalogue of named commands, spelled `exec:step/NAME`.** `step/` is a reserved first segment
+rather than a fallback, because `exec:` has always taken a path: a bare `exec:rustup` would be a
+file in the config repo *and* a catalogue name, with nothing in the line to say which. Resolution
+orders that try one and fall back to the other are how a typo silently becomes a different
+program. A reserved prefix makes the two unable to shadow each other, and the refusal for an
+unknown name lists what this machine actually offers.
+
+**Rows, never shipped scripts, and that is a difference in kind rather than in format.** A `.sh`
+travelling in a release is code arriving on machines, which is precisely the question `II.12`'s
+approval gate exists to ask. A row is a *fact about a tool* — `rustup` is upgraded by running
+`rustup update` — and it reaches the executor as argv, so nothing in it is parsed by a shell.
+
+**Why a shipped step needs no `shall lock`, stated plainly because it looks like a hole.**
+`upgrade_steps.toml` is `include_str!`'d into the binary, which is the status
+`builtin_backends.toml` settled in its own header: *"this file is compiled into the binary, so
+there is no II.12 question to ask about it."* The approval ledger exists so that code **the
+configuration carries** is read by a human before it runs. A catalogue row is not carried by the
+configuration; it is part of the program, reviewed in this repository, and shipped under the same
+signature as every other line of it. Requiring approval as well would not add a check — it would
+move it from where it is meaningful to where it is theatre, and it would delete the convenience
+the catalogue exists for, since the user would still have to go and look at something first.
+
+The asymmetry is therefore the design: **you approve what you wrote, and you approved the rest by
+installing it.**
+
+**`fwupd` ships partial, on purpose.** `fwupdmgr update` writes firmware. A text file that
+flashes a laptop's BIOS unattended on a weekly `shall upgrade` is not a convenience, it is a way
+to brick hardware from a config repo — and the blast radius is not recoverable by any of the
+mechanisms this program has, because a snapshot does not roll back a BIOS. The shipped row is
+`fwupdmgr refresh`, which fetches metadata so a human can be told what is available. Unattended
+flashing remains writable as a user's own `exec:` line, where it needs approving, which is
+exactly the friction that decision deserves.
+
+**And one statement, not two.** *"Does declaring a step imply running it?"* is the question that
+would have justified a second verb-shaped statement — and a catalogued step is an `exec:` line,
+so the grammar gained a name form rather than a keyword. The two arms meet in `Planned` and
+everything downstream of it is shared: the ceiling, the ledger, the write-ahead record, the
+dry-run note. Two spellings over one implementation is not the thing this repo bans; two
+implementations is.

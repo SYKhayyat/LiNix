@@ -1,0 +1,49 @@
+# The upgrade steps Shall ships with (H8), named so a user writes `exec:step/rustup` instead of
+# writing the script themselves.
+#
+# **Rows, not scripts, and that is the whole safety argument.** A shipped `.sh` would be code
+# travelling with a release and running on machines — the supply-chain question `II.12`'s approval
+# gate exists to ask. A row is a *fact about a tool*: `rustup` is upgraded by running
+# `rustup update`. It is compiled into the binary like `builtin_backends.toml` and
+# `firewall_adapters.toml`, so there is no approval to ask that installing Shall did not already
+# answer. A script the user writes still needs `shall lock`; this is why the two are not the same
+# statement wearing one name.
+#
+# `detect` is the command whose presence means this machine runs this thing. A step nothing
+# detects is skipped and says so — a machine without `rustup` is not a machine with a broken
+# upgrade.
+#
+# `on` and `runs` are the row's own defaults, not the spelling's. A line may override either.
+# Both are written out on every row rather than inherited, because a default that lives in code
+# and a default that lives in data are two places to look for one answer.
+
+# **Firmware metadata only, and the omission is deliberate.** `fwupdmgr update` writes firmware,
+# and a config file that flashes a laptop's BIOS unattended on a weekly `shall upgrade` is not a
+# convenience — it is a way to brick hardware from a text file. `refresh` fetches the metadata so
+# `fwupdmgr get-updates` can tell a human what is available, and the human decides. A user who
+# genuinely wants unattended flashing writes their own `exec:` line and approves it, which is
+# exactly the friction that decision deserves.
+[[step]]
+name = "fwupd"
+os = "linux"
+detect = "fwupdmgr"
+run = ["fwupdmgr", "refresh", "--force"]
+on = "upgrade"
+runs = "always"
+what = "refresh firmware metadata (does not flash — see the note in upgrade_steps.toml)"
+
+[[step]]
+name = "rustup"
+detect = "rustup"
+run = ["rustup", "update"]
+on = "upgrade"
+runs = "always"
+what = "update the Rust toolchains rustup manages"
+
+[[step]]
+name = "gcloud"
+detect = "gcloud"
+run = ["gcloud", "components", "update", "--quiet"]
+on = "upgrade"
+runs = "always"
+what = "update the installed Google Cloud CLI components"
