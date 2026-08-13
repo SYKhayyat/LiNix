@@ -30,20 +30,60 @@ fn stub(dir: &Path, name: &str, body: &str) {
 }
 
 /// A throwaway `PATH` where `apt` exists and `dpkg-query` answers with two known packages.
-fn fake_apt(tag: &str) -> PathBuf {
+///
+/// **Both halves of this fixture were stale, and they were stale for the same reason the whole
+/// file was unread.** These tests are `#[cfg(unix)]` in effect — they need `script(1)` — so they
+/// have never run on Windows, and the Linux job that would have run them was red on `F1`'s
+/// compile error for 26 commits. `d1b3618` introduced that compile error *and*, in the same
+/// commit, taught the apt lister to ask for `${db:Status-Status} ${Package} ${Version}`. So the
+/// change that made this stub's output unreadable is the change that made the test unable to say
+/// so. Repairing `F1` is what surfaced it.
+fn skeleton(tag: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("shall-pty-{}-{}", tag, std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
-    let bin = root.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    std::fs::create_dir_all(root.join("cfg/groups")).unwrap();
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::create_dir_all(root.join("cfg")).unwrap();
     std::fs::create_dir_all(root.join("data")).unwrap();
+    root
+}
+
+/// A config directory Shall will refuse, because it names no managers.
+///
+/// **Its own fixture, because it is a premise rather than an accident.** This was `fake_apt`
+/// with the `priority` file left out — not deliberately, but because no fixture here wrote one
+/// and nothing ran to notice. Fixing that for the two tests that need a *working* config would
+/// have quietly turned this one green for a reason it never asserted: `sync` would have
+/// succeeded, printed *"already up to date"*, and the assertion that the failure-class line
+/// survives on a pipe would have had no failure to read it from.
+fn no_priority(tag: &str) -> PathBuf {
+    skeleton(tag)
+}
+
+fn fake_apt(tag: &str) -> PathBuf {
+    let root = skeleton(tag);
+    let bin = root.join("bin");
+
+    // **The premise, written down rather than assumed** — the same defect `F9` was. Shall
+    // refuses to guess which managers it may use, so a config directory with no `priority` is a
+    // configuration error and every command below it fails before reaching the code under test.
+    // The failure said so plainly; nothing was listening.
+    std::fs::write(root.join("cfg/priority"), "apt\n").unwrap();
+    std::fs::write(root.join("cfg/active"), "").unwrap();
+
     stub(&bin, "apt", "exit 0");
     stub(&bin, "apt-mark", "exit 0");
     stub(&bin, "apt-cache", "exit 0");
+    // The status field leads, because that is what the lister asks for. Without it the first
+    // token is read as the status word, no status word matches, and the row is discarded as
+    // unparseable — which presents as *"the piped run parsed nothing"* and looks exactly like
+    // the pty bug this file exists to catch.
     stub(
         &bin,
         "dpkg-query",
-        &format!("printf '{} 9.9.9\\nshall-pty-other 1.0\\n'", CANARY),
+        &format!(
+            "printf 'installed {} 9.9.9\\ninstalled shall-pty-other 1.0\\n'",
+            CANARY
+        ),
     );
     root
 }
@@ -148,9 +188,9 @@ fn the_failure_class_line_is_for_a_pipe_and_not_for_a_terminal() {
     if !have("script") || !have("timeout") {
         panic!("this check needs script(1) and timeout(1)");
     }
-    let root = fake_apt("failure-class");
-    // No `priority` file was ever written for this fixture, so `sync` fails on the config —
-    // the exact failure the finding was reported against.
+    // A config that names no managers, so `sync` fails on the config — the exact failure the
+    // finding was reported against, and the reason this fixture is not `fake_apt`.
+    let root = no_priority("failure-class");
     let under_pty = shall_under_pty(&root, "sync -y");
     assert!(
         !under_pty.contains("shall-failure-class"),

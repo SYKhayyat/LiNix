@@ -389,6 +389,14 @@ fn the_fan_out_commands_still_fan_out() {
             .ok()
     });
 
+    // **Printed on a green run, not only inside an assert message.** Every comment in this
+    // block says the numbers are here so a human can diff two commits, and every one of them
+    // reached a human only when the gate went red — which is the run where the diff is least
+    // needed. `ci.yml` runs this test with `--nocapture` and puts the line in the job summary,
+    // so "recorded per commit and compared" is a person reading two summaries rather than a
+    // ratchet that would have to be tight enough to flake. The prefix is what CI greps for.
+    eprintln!("latency shape: {line}");
+
     // **The bounds come from `Shape`, not from a second copy of them here.** The first draft
     // wrote `>= 2.0` and `<= 2` in both places, taken from one host, and ubuntu-latest reported
     // 2.0x over 16 children with 3 waves — inside neither. Two copies of a guessed constant is

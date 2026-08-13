@@ -197,6 +197,28 @@ pub struct Transaction {
     /// old behaviour is right in both arms: a `rebuild`'s removal phase is half of a reinstall
     /// of declared packages, and a hand-typed `uninstall` was not derived from anything.
     declared: Option<Arc<std::collections::HashSet<String>>>,
+    /// What the last execution's scheduling actually looked like — packages, graph depth, and
+    /// the number of times the engine went idle and handed out more work.
+    ///
+    /// Recorded rather than only logged, because the shape rule for `Mutating` is otherwise
+    /// asserted by reading a `warn!` line. A warning nothing can read is the shape of a gate
+    /// that cannot fail, which is what the rule was written to replace.
+    pub last_scheduling: Option<Scheduling>,
+}
+
+/// How serially one execution actually ran, against how serial its graph forced it to be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Scheduling {
+    /// Nodes this run had left to do — the whole graph, less anything a resume had finished.
+    pub packages: usize,
+    /// The longest dependency chain among them, which is the fewest waves any correct scheduler
+    /// could take.
+    pub depth: usize,
+    /// Times the engine had nothing in flight and then handed work out. At most `depth` for a
+    /// scheduler that dispatches every ready node the moment it is ready; `packages` for a
+    /// serial loop. Below `depth` whenever independent chains overlap, which is why the rule is
+    /// an inequality and not an equality.
+    pub waves: usize,
 }
 
 impl Transaction {
@@ -238,6 +260,7 @@ impl Transaction {
             completed_indices: HashSet::new(),
             history: Vec::new(),
             cancellation_token: CancellationToken::new(),
+            last_scheduling: None,
         }
     }
 
@@ -321,11 +344,47 @@ impl Transaction {
         self.execute_with_telemetry().await.map(|_| ())
     }
 
+    /// The most waves this plan can honestly take: its longest remaining dependency chain.
+    ///
+    /// Measured over the nodes still to run, so a resumed transaction is judged on the work it
+    /// has left rather than on work somebody else already did. A cycle has no depth and the
+    /// planner rejects one long before here; returning zero switches the check off rather than
+    /// inventing a number for a plan that cannot be scheduled at all.
+    fn critical_path_depth(&self) -> usize {
+        let Ok(order) = petgraph::algo::toposort(&self.graph, None) else {
+            return 0;
+        };
+        let mut level: HashMap<NodeIndex, usize> = HashMap::new();
+        let mut deepest = 0;
+        for idx in order
+            .into_iter()
+            .filter(|i| !self.completed_indices.contains(i))
+        {
+            let depth = self
+                .graph
+                .neighbors_directed(idx, Direction::Incoming)
+                .filter_map(|parent| level.get(&parent).copied())
+                .max()
+                .map_or(1, |deepest_parent| deepest_parent + 1);
+            level.insert(idx, depth);
+            deepest = deepest.max(depth);
+        }
+        deepest
+    }
+
     async fn execute_internal(&mut self) -> Result<Vec<TaskResult>> {
         let total_nodes = self.graph.node_count();
         let mut in_progress = HashSet::new();
         let mut worker_pool = JoinSet::new();
         let mut telemetry_results = Vec::new();
+
+        // The shape budget for `Mutating`, which the fan-out rule in `latency.rs` cannot
+        // express: both quantities come from this graph, so the engine reports its own shape
+        // rather than being inspected from a layer that is handed a subcommand name and nothing
+        // else. Taken before the run, because the loop below is what changes `completed_indices`.
+        let depth = self.critical_path_depth();
+        let remaining = total_nodes - self.completed_indices.len();
+        let mut waves = 0usize;
 
         let semaphore = Arc::new(Semaphore::new(self.config.max_concurrent));
 
@@ -370,7 +429,18 @@ impl Transaction {
                 true => 1,
                 false => Self::MAX_BATCH,
             };
-            for batch in Self::batches(&self.graph, std::mem::take(&mut ready), max_batch) {
+            // **A wave is work handed out after the engine went quiet — not every pass that
+            // dispatched something.** Counting passes looks equivalent and is not: two
+            // independent chains finishing at different moments produce a pass per completion,
+            // which is the scheduler dispatching *eagerly*, and a rule that counted those would
+            // fail the runs it exists to reward. What cannot happen in a correct run is going
+            // idle more times than the graph has levels, because each idle restart means an
+            // entire generation finished before the next was handed out.
+            let dispatching = std::mem::take(&mut ready);
+            if !dispatching.is_empty() && in_progress.is_empty() {
+                waves += 1;
+            }
+            for batch in Self::batches(&self.graph, dispatching, max_batch) {
                 let permit = match semaphore.clone().acquire_owned().await {
                     Ok(p) => p,
                     Err(e) => return Err(Error::Transaction(format!("Semaphore failure: {}", e))),
@@ -522,6 +592,22 @@ impl Transaction {
                     "DAG Logic Stall: Cycle detected in closure.".into(),
                 ));
             }
+        }
+        // Only on the path where the loop ran to closure. A transaction that returned early
+        // went idle fewer times than its graph has levels, so measuring it reports a shape no
+        // run had — and `waves <= depth` being unfalsifiable there is exactly why the number is
+        // not worth keeping.
+        self.last_scheduling = Some(Scheduling {
+            packages: remaining,
+            depth,
+            waves,
+        });
+        if let Some(why) = crate::core::latency::scheduling_violation(remaining, depth, waves) {
+            tracing::warn!(
+                "this plan was executed more serially than it is shaped: {}. The seconds a \
+                 package manager costs belong to the host; the order Shall asks in does not.",
+                why
+            );
         }
         Ok(telemetry_results)
     }
@@ -1985,6 +2071,112 @@ mod batching_tests {
         assert_eq!(
             h.counters[0].widest.load(Ordering::SeqCst),
             Transaction::MAX_BATCH
+        );
+    }
+
+    /// The engine's own shape, measured on plans whose right answer is arithmetic.
+    ///
+    /// This is the `Mutating` half of the latency gate, and it is here rather than in
+    /// `latency.rs` because the two numbers it compares are the engine's: one is the graph's
+    /// longest chain, the other is how many passes the loop actually had work to hand out.
+    /// `latency.rs` owns the rule; nothing owned the measurement, which is why the class read as
+    /// exempt for as long as it did.
+    ///
+    /// A wide plan must take one wave however many packages are in it — that is the assertion a
+    /// change awaiting the batch in flight before dispatching more would break, while leaving
+    /// every package installed and every other test green. Watched failing against exactly that
+    /// change: six packages, depth one, six waves.
+    #[tokio::test]
+    async fn the_engine_reports_the_shape_it_actually_ran_in() {
+        // Wide: nothing depends on anything, so one round is the only correct answer.
+        let mut wide = StableDiGraph::new();
+        for i in 0..6 {
+            wide.add_node(GraphAction::Install(spec("apt", &format!("pkg{}", i))));
+        }
+        let mut h = harness(wide, &["apt"]).await;
+        h.tx.execute_with_telemetry().await.unwrap();
+        assert_eq!(
+            h.tx.last_scheduling,
+            Some(Scheduling {
+                packages: 6,
+                depth: 1,
+                waves: 1
+            }),
+            "six independent packages took more than one wave to hand out"
+        );
+
+        // A chain of three. Serial is the correct schedule here, and the rule must not report
+        // it — which is the case a threshold read off a host gets wrong.
+        let mut chain = StableDiGraph::new();
+        let a = chain.add_node(GraphAction::Install(spec("apt", "libfoo")));
+        let b = chain.add_node(GraphAction::Install(spec("apt", "foo-tool")));
+        let c = chain.add_node(GraphAction::Install(spec("apt", "foo-plugin")));
+        chain.add_edge(a, b, ());
+        chain.add_edge(b, c, ());
+        let mut h = harness(chain, &["apt"]).await;
+        h.tx.execute_with_telemetry().await.unwrap();
+        let ran =
+            h.tx.last_scheduling
+                .expect("a completed run records its shape");
+        assert_eq!(ran.depth, 3, "a chain of three has three levels");
+        assert_eq!(ran.waves, 3, "and goes idle once per level");
+        assert!(
+            crate::core::latency::scheduling_violation(ran.packages, ran.depth, ran.waves)
+                .is_none(),
+            "a chain executed one at a time is the plan's shape, not a regression"
+        );
+
+        // A diamond: one, then two together, then one. Four packages, three levels.
+        let mut diamond = StableDiGraph::new();
+        let root = diamond.add_node(GraphAction::Install(spec("apt", "base")));
+        let left = diamond.add_node(GraphAction::Install(spec("apt", "left")));
+        let right = diamond.add_node(GraphAction::Install(spec("apt", "right")));
+        let top = diamond.add_node(GraphAction::Install(spec("apt", "top")));
+        diamond.add_edge(root, left, ());
+        diamond.add_edge(root, right, ());
+        diamond.add_edge(left, top, ());
+        diamond.add_edge(right, top, ());
+        let mut h = harness(diamond, &["apt"]).await;
+        h.tx.execute_with_telemetry().await.unwrap();
+        let ran =
+            h.tx.last_scheduling
+                .expect("a completed run records its shape");
+        assert_eq!(
+            (ran.packages, ran.depth),
+            (4, 3),
+            "four packages across three levels"
+        );
+        assert!(
+            crate::core::latency::scheduling_violation(ran.packages, ran.depth, ran.waves)
+                .is_none(),
+            "a diamond run in {} waves against a depth of 3",
+            ran.waves
+        );
+
+        // Two independent chains. **This is the case that killed the first version of the
+        // rule**, which counted dispatches: `a` and `b` start together, whichever finishes
+        // first hands out its child while the other pair is still running, and the pass count
+        // reaches three against a depth of two — a violation reported against a scheduler doing
+        // precisely what it should. Counting idle restarts instead, the engine never runs dry
+        // here at all.
+        let mut chains = StableDiGraph::new();
+        let a = chains.add_node(GraphAction::Install(spec("apt", "a")));
+        let b = chains.add_node(GraphAction::Install(spec("apt", "b")));
+        let a2 = chains.add_node(GraphAction::Install(spec("apt", "a2")));
+        let b2 = chains.add_node(GraphAction::Install(spec("apt", "b2")));
+        chains.add_edge(a, a2, ());
+        chains.add_edge(b, b2, ());
+        let mut h = harness(chains, &["apt"]).await;
+        h.tx.execute_with_telemetry().await.unwrap();
+        let ran =
+            h.tx.last_scheduling
+                .expect("a completed run records its shape");
+        assert_eq!((ran.packages, ran.depth), (4, 2));
+        assert!(
+            ran.waves <= ran.depth,
+            "two independent chains reported {} wave(s) against a depth of {}",
+            ran.waves,
+            ran.depth
         );
     }
 }

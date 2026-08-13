@@ -265,6 +265,34 @@ jobs:
       run: "cargo test --release --target ${{ matrix.target }} --test suite pty_tests::"
       if: matrix.target == 'x86_64-unknown-linux-gnu'
 
+    # The numbers this commit measured, where a person can read them.
+    #
+    # The overlap ratio, the child count, the summed child time and the wave count are computed
+    # on every `--timings` run and asserted by `the_fan_out_commands_still_fan_out`, which put
+    # them in front of a human only when it went red — the run where a diff is least useful. So
+    # the grade doc's *"the numbers recorded per commit and compared"* was half built: recorded,
+    # never delivered.
+    #
+    # Delivered rather than ratcheted, and that is the ruling rather than an omission. A
+    # wall-clock ratchet has to be tight enough to catch a doubling, and this file's own
+    # measurement says a budget that tight goes red on a loaded runner — `run_timed_floor` takes
+    # the best of three for exactly that reason. The gates stay shape-based, which cannot flake;
+    # the trend is a person diffing two summaries.
+    #
+    # `|| true` because a missing line must not fail the build: the fan-out test skips loudly on
+    # a runner with too few managers, and its skip line carries the same prefix.
+    - name: Record this commit's fan-out shape
+      if: ${{ !cancelled() && matrix.native }}
+      # `grep`, `sed` and `||` are bash, and one of the native rows is a Windows runner whose
+      # default shell is pwsh. The steps around this one are bare `cargo` lines that parse in
+      # both, which is why none of them needed to say so.
+      shell: bash
+      run: |
+        cargo test --release --target ${{ matrix.target }} --test suite \
+          the_fan_out_commands_still_fan_out -- --nocapture 2>&1 \
+          | grep -E '^latency shape:' \
+          | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY" || true
+
     - name: Check formatting
       run: cargo fmt -- --check
       if: matrix.target == 'x86_64-unknown-linux-gnu'
@@ -417,7 +445,7 @@ jobs:
     - name: Ask this image's managers about subcommands, flags and `--`
       if: ${{ !cancelled() }}
       run: |
-        docker run --rm --entrypoint bash \
+        docker run --rm --entrypoint sh \
           -e TERMINATOR_PROBE=1 -e CARGO_TARGET_DIR=/tmp/target \
           -v "$PWD:/src" \
           shall-it-${{ matrix.distro }} -c \
@@ -434,7 +462,7 @@ jobs:
     - name: Can this harness's checks fail?
       if: matrix.distro == 'ubuntu'
       run: |
-        docker run --rm --entrypoint bash \
+        docker run --rm --entrypoint sh \
           -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
           -v "$PWD/scripts/lifecycle-floor.txt:/src/scripts/lifecycle-floor.txt:ro" \
           -v "$PWD/scripts/harness-mutation-test.sh:/src/scripts/harness-mutation-test.sh:ro" \
@@ -482,7 +510,7 @@ jobs:
     - name: Ask this image's thirty managers about subcommands, flags and `--`
       if: ${{ !cancelled() }}
       run: |
-        docker run --rm --entrypoint bash \
+        docker run --rm --entrypoint sh \
           -e TERMINATOR_PROBE=1 -e CARGO_TARGET_DIR=/tmp/target \
           -v "$PWD:/src" \
           shall-it-${{ matrix.distro }} -c \

@@ -1393,6 +1393,16 @@ impl SyncEngine {
                         // the line is still declared, so the next sync installs it rather than
                         // removing it. Not taking it costs software nobody can remove.
                         //
+                        // **This is the opposite of what `execute_transaction` does with a
+                        // failed node, and the two are one policy rather than a contradiction.**
+                        // There, the engine ran the manager and the manager said no: nothing was
+                        // installed, so recording it would claim a package the machine does not
+                        // have and issue a removal for it the day the declaration goes. Here,
+                        // nobody knows what the manager did — the process was killed mid-write,
+                        // which is the whole reason there is a log entry at all. *"The manager
+                        // refused"* and *"nobody knows how far the manager got"* are different
+                        // facts, and only the second can leave a binary on `PATH`.
+                        //
                         // The entry still stays `InProgress`, so recovery keeps trying.
                         if let GraphAction::Install(spec) = &action {
                             let source = spec.options.one("__source").unwrap_or("sync");

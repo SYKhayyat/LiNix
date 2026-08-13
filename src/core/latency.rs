@@ -114,26 +114,13 @@ impl Class {
 
     /// The shape budget, for the class whose cost is the host's but whose *scheduling* is not.
     ///
-    /// `Mutating` is deliberately exempt: its waves are the plan's, and a dependency edge is a
-    /// wave on purpose. Asserting a shape there would fail a graph that is doing exactly what
-    /// it was asked to do.
-    ///
-    /// **What the right bound for it would be, named here because "exempt" is where a gap
-    /// hides.** The 2026-08-13 review's objection is fair — `sync`, `upgrade` and `rebuild` are
-    /// the slowest things this program does and the ones a person waits on, and the mechanism
-    /// that caught the `sbom`/`export` collapse has never been pointed at them. The reason it
-    /// cannot be pointed at them *as written* is that `waves_per_child` is a guess about the
-    /// shape of the work, and a mutating run's shape is not a guess: it is the plan's own
-    /// **critical-path depth**, which the engine holds and this layer never sees. The honest
-    /// bound is `waves <= depth(graph)` — exact, unguessable, and false for no correct run —
-    /// and building it means the engine reporting its own shape after
-    /// `execute_with_telemetry`, because `report_if_over` is handed a subcommand name and
-    /// nothing else.
-    ///
-    /// **That is not built.** What is deliberately *not* done in the meantime is giving
-    /// `Mutating` a permissive `Shape` so the class stops looking exempt: a ceiling of
-    /// `children` waves cannot be crossed by any run, and a gate that cannot fail is the exact
-    /// defect the rest of this review is about.
+    /// `Mutating` has no [`Shape`] and is not exempt — it is measured by
+    /// [`scheduling_violation`] instead, against a bound this heuristic cannot express.
+    /// `waves_per_child` is a guess about the shape of the work; a mutating run's shape is not a
+    /// guess, it is the plan's own **critical-path depth**, which the engine holds and this
+    /// layer never sees. So the engine reports its own shape rather than being inspected from
+    /// here, and the rule is exact: a scheduler may not go quiet more often than the dependency
+    /// graph forces it to.
     ///
     /// Every number here is a collapse detector — see [`Shape`] for what the first draft's
     /// targets cost. Four readings, from three platforms, all of them healthy:
@@ -321,6 +308,42 @@ pub fn shape_violation(
     (!faults.is_empty()).then(|| faults.join("; "))
 }
 
+/// Why a plan's execution went quiet more often than its dependencies required, or `None`.
+///
+/// The bound for [`Class::Mutating`], and the reason that class needs no [`Shape`]: a run cannot
+/// go idle more times than its plan has levels. One wave per level is a perfect scheduler; one
+/// wave per package is a serial loop wearing a graph. Anything above `depth` is the engine
+/// waiting for work it had already been handed.
+///
+/// **A wave is an idle restart, not a dispatch.** Counting dispatches instead looks equivalent
+/// and inverts the rule: two independent chains finishing at different moments produce a
+/// dispatch per completion, which is eager scheduling doing its job, and the rule would have
+/// failed the runs it exists to reward. Overlapping chains put waves *below* depth, so this is
+/// an inequality in one direction only.
+///
+/// **Exact rather than tuned, which is what the fan-out rule could not be.** `min_overlap` and
+/// `waves_per_child` are numbers read off four hosts, so they carry a margin and cannot be
+/// tightened without a fifth reading. This one has no margin to pick: `waves > depth` is false
+/// for every correct run on every host, because both quantities come from the same graph.
+///
+/// A single node has nothing to schedule, so plans under two packages are not measured — not
+/// for noise, but because `waves > depth` is unreachable there and a rule that cannot fail is
+/// what this replaced.
+pub fn scheduling_violation(packages: usize, depth: usize, waves: usize) -> Option<String> {
+    if packages < 2 || depth == 0 || waves <= depth {
+        return None;
+    }
+    Some(format!(
+        "{} wave(s) over {} package(s) whose longest dependency chain is {} — the engine ran dry \
+         and waited {} more time(s) than the plan required, which is what this loop looks like \
+         just after somebody makes it await the batch in flight",
+        waves,
+        packages,
+        depth,
+        waves - depth
+    ))
+}
+
 /// Say when a fan-out stopped fanning out.
 ///
 /// Only on a run that asked for `--timings`, because that is the only run that records spans.
@@ -354,6 +377,52 @@ fn report_shape(subcommand: &str, class: Class) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bound `Mutating` is measured by, at and either side of its edge.
+    ///
+    /// Named cases rather than one: `waves == depth` is the perfect scheduler and must pass,
+    /// `waves == packages` is the serial loop and must fail, and the two meet on a chain —
+    /// where a serial loop *is* the correct schedule and must not be reported. That last one is
+    /// the case a tuned threshold would get wrong and this rule gets right for free, because it
+    /// compares against the plan rather than against a number read off a host. Waves *below*
+    /// depth are the healthy overlap case and belong here for the same reason.
+    #[test]
+    fn a_serialised_plan_is_out_of_budget_and_a_deep_one_is_not() {
+        // (packages, depth, waves, should_report, what this is)
+        for (packages, depth, waves, reported, what) in [
+            (20, 1, 1, false, "twenty independent packages, one wave"),
+            (20, 4, 4, false, "four levels, four waves — perfect"),
+            (20, 20, 20, false, "a chain: serial is the correct schedule"),
+            (
+                20,
+                4,
+                2,
+                false,
+                "independent chains overlapping, under depth",
+            ),
+            (2, 1, 1, false, "the smallest plan that can be measured"),
+            (20, 1, 20, true, "one level handed out one at a time"),
+            (20, 4, 20, true, "four levels handed out one at a time"),
+            (
+                20,
+                4,
+                5,
+                true,
+                "one idle restart more than the plan requires",
+            ),
+            (1, 1, 1, false, "a single package has nothing to schedule"),
+        ] {
+            let got = scheduling_violation(packages, depth, waves);
+            assert_eq!(
+                got.is_some(),
+                reported,
+                "{what}: {packages} package(s), depth {depth}, {waves} wave(s) — got {got:?}"
+            );
+        }
+
+        let serial = scheduling_violation(20, 1, 20).expect("just asserted");
+        assert!(serial.contains("19 more time(s)"), "{serial}");
+    }
 
     /// The shape budget catches the regression the second budget cannot see.
     ///
@@ -426,8 +495,11 @@ mod tests {
         .is_none());
     }
 
-    /// `Mutating` is exempt on purpose: its waves are the dependency graph's, and an edge is a
-    /// wave by design. A shape assertion there fails a plan doing exactly what it was asked to.
+    /// `Mutating` carries no [`Shape`] because the heuristic is the wrong instrument for it, not
+    /// because it is unmeasured: [`scheduling_violation`] is its rule, and the engine feeds it.
+    /// A `Shape` there would fail a plan doing exactly what it was asked to — an edge is a wave
+    /// by design — which is why "give it a permissive one so it stops looking exempt" was the
+    /// wrong cure twice over.
     #[test]
     fn only_the_fan_out_class_carries_a_shape() {
         assert!(Class::of("list").shape().is_some());
@@ -435,6 +507,14 @@ mod tests {
         assert!(Class::of("sync").shape().is_none());
         assert!(Class::of("eval").shape().is_none());
         assert!(Class::of("info").shape().is_none());
+
+        // And the class without a `Shape` still has a bound. Asserted here so a change that
+        // deletes one instrument cannot leave the other reading as deliberate emptiness.
+        assert!(
+            scheduling_violation(6, 1, 6).is_some(),
+            "`Mutating` has no shape budget and no scheduling rule either, which is the state \
+             this pair was built to leave behind"
+        );
     }
 
     #[test]

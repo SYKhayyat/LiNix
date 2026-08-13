@@ -66,9 +66,23 @@ const GETOPT: Evidence = Evidence::Unasked(
 
 const TERMINATORS: &[Terminator] = &[
     // ---- Debian/Ubuntu.
-    row("apt", true, GETOPT),
+    row(
+        "apt",
+        true,
+        Evidence::Measured(
+            "asked in the ubuntu integration image, CI run 31730161038: the probe drove its verbs with an \
+             operand behind a `--` and every one of them read the operand as a package name.",
+        ),
+    ),
     row("apt-get", true, GETOPT),
-    row("apt-cache", true, GETOPT),
+    row(
+        "apt-cache",
+        true,
+        Evidence::Measured(
+            "asked in the ubuntu integration image, CI run 31730161038, alongside `apt` — same answer, and \
+             asked separately because it is a different binary with its own parser.",
+        ),
+    ),
     row("apt-mark", true, GETOPT),
     row("dpkg", true, GETOPT),
     row("dpkg-query", true, GETOPT),
@@ -128,16 +142,37 @@ const TERMINATORS: &[Terminator] = &[
     ),
     row("rpm", true, GETOPT),
     // ---- Arch.
-    row("pacman", true, GETOPT),
+    row(
+        "pacman",
+        true,
+        Evidence::Measured(
+            "asked in the arch integration image, CI run 31730161038. Its own parser rather than getopt(3), \
+             which is exactly why the inference it replaced was worth confirming.",
+        ),
+    ),
     row("yay", true, GETOPT),
     row("paru", true, GETOPT),
     row("pamac", true, GETOPT),
     // ---- Alpine, Void, SUSE, Gentoo.
-    row("apk", true, GETOPT),
+    row(
+        "apk",
+        true,
+        Evidence::Measured(
+            "asked in the alpine integration image, CI run 31730161038 — a BusyBox userland, where the \
+             getopt(3) inference is least safe and now does not have to be made.",
+        ),
+    ),
     row("xbps-install", true, GETOPT),
     row("xbps-remove", true, GETOPT),
     row("xbps-query", true, GETOPT),
-    row("zypper", true, GETOPT),
+    row(
+        "zypper",
+        true,
+        Evidence::Measured(
+            "asked in the opensuse integration image, CI run 31730161038: the operand behind `--` reached \
+             the resolver as a package name on every verb the probe could drive.",
+        ),
+    ),
     row("emerge", true, GETOPT),
     row("eix", true, GETOPT),
     row("equery", true, GETOPT),
@@ -180,7 +215,14 @@ const TERMINATORS: &[Terminator] = &[
              2026-08-04)",
         ),
     ),
-    row("cargo", true, GETOPT),
+    row(
+        "cargo",
+        true,
+        Evidence::Measured(
+            "asked in all five green integration images, CI run 31730161038. clap, not getopt(3), and the \
+             five hosts agreed — so this is a measurement rather than a family resemblance.",
+        ),
+    ),
     row(
         "npm",
         true,
@@ -627,7 +669,19 @@ mod tests {
     /// a hosted macOS and a hosted Windows runner. Three of the remaining 54 are the same
     /// sentence about a sibling of theirs (`scoop`, `mas`, `sc`); nobody has asked those, and
     /// the ceiling counts them until somebody does.
-    const UNASKED_CEILING: usize = 54;
+    ///
+    /// Lowered 54 → 48 on 2026-08-13: `apt`, `apt-cache`, `pacman`, `apk`, `zypper` and `cargo`.
+    /// These are what widening the probe from one image to six bought, and they came back on the
+    /// first run that widening survived — CI run 31730161038, six distro legs, five of them
+    /// green. Each row now carries the image that answered instead of the parser it links
+    /// against, which matters most for `pacman` and `apk`: neither delegates to getopt(3), so
+    /// both were inferences from a family they are not in.
+    ///
+    /// **Lowered on the printed sentences, not on a report of them.** The round that widened the
+    /// probe deliberately left this at 54 with the reasoning that `Evidence::Measured` carries
+    /// what the tool said, and a summary of nine confirmations is not nine sentences. The lines
+    /// were read out of the five job logs before this number moved.
+    const UNASKED_CEILING: usize = 48;
 
     /// A row whose hosts disagree takes the answer that sends no terminator.
     ///
