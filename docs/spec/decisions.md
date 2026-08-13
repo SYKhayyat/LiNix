@@ -1,4 +1,4 @@
-# The decision register — all 205, ten of them built and never ruled
+# The decision register — all 207, ten of them built and never ruled, two open
 **One file, six features, ten entries waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -15,7 +15,7 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **2** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **10** |
 | **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **191** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
@@ -76,8 +76,8 @@ status loses that, so it is kept here:
 **Nothing is open, and nine entries are waiting.** `Q53` — what a version pin means on a manager
 that cannot express one — was raised, measured and ruled on 2026-08-10. The `G` round then ran the
 other way round: `docs/GRADE-2026-08-12.md`'s work order was implemented in one pass, and the nine
-changes in it that a user would notice shipped ahead of any ruling. All 205 are accounted
-for: **191 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 10 BUILT NEVER RULED, 0 OPEN** — and this line
+changes in it that a user would notice shipped ahead of any ruling. All 207 are accounted
+for: **191 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 10 BUILT NEVER RULED, 2 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -374,7 +374,7 @@ the widest.*
 | **G9** | Three `--json` flags said "(requires --dry-run)" and none enforced it. BUILT: **enforced in `dispatch`** for `sync`/`install`/`uninstall` — clap's `requires` cannot see a global flag and breaks the working combination when asked to. `upgrade` keeps its flag and loses the sentence. | 2026-08-12 |
 | **G10** | `priority` gated resolution and nothing else: detection walked PATH for all 52 backends before knowing what was asked (`list -b apt` = 3,156 failed `statx` against `list`'s 3,338), and every fan-out went to whatever was installed. BUILT: **the file's own sentence is true of detection and querying too.** `BackendRegistry::available()` was deleted rather than filtered, so the compiler visited all twenty call sites and none could compile without choosing; the choices are a table in `priority_gates_every_fan_out_tests`. Two exceptions, both argued: `init` (writes the file from what it detects) and `check health` (reports on absent managers). | 2026-08-12 |
 
-### H — the grading round of 2026-08-13 (GRADE-2026-08-13) — 5
+### H — the grading round of 2026-08-13 (GRADE-2026-08-13) — 7
 
 *`docs/GRADE-2026-08-13.md` graded Bugs at D−, Verification at D+, and refused the release. It
 raised three questions it deliberately did not answer in code (Q-A, Q-B, Q-C), and the work on
@@ -8215,3 +8215,62 @@ shape appearing in three domains, which is what a struct shape does.
 
 *Both halves of this ruling are reversible and cost the same tomorrow as today, which is the test
 for whether deferring was ever the real answer. It was not; deciding was.*
+
+## H6
+
+**Status: OPEN — 2026-08-13. Carried in three grading documents (`GRADE-2026-08-11` §competitive,
+`-08-12`, `-08-13` axis 5) and never entered here, which is why it is an entry before it is an
+answer.** A gap recorded only in a review is a gap nobody is accountable for; this file is where
+the repo says open questions live.
+
+**Should `shall upgrade` cover the things that are not packages?**
+
+`upgrade` upgrades *managed packages*. It does not touch firmware (`fwupd`), OS release upgrades,
+editor and shell plugin managers, tracked git repositories, or the component updaters inside
+tools that have their own (`rustup`, `gcloud`). `topgrade` does, and this is the one axis where a
+competitor does something Shall cannot. `upgrade` is also the verb where a user coming from that
+tool will expect parity without reading anything.
+
+**Why it is a ruling and not a fix.** Every item on that list is a command Shall would run
+against a machine on the user's behalf, chosen by Shall rather than declared by the user — which
+is the opposite of how everything else here works. `sync` acts on declarations; a `topgrade`-style
+upgrade acts on *discovery*. That is a change in what the program is, not an addition to what it
+does, and it is exactly the kind of thing this register exists to keep out of a commit message.
+
+**Recommendation, offered as one:** build it as declarations rather than as discovery — an
+`upgrade:` surface where each non-package step is a declared line with its own adapter, so the
+machinery that already exists (the guard, the journal, `--dry-run`, hooks) applies unchanged and
+nothing runs that a user did not write down. That keeps the parity claim honest without Shall
+acquiring an opinion about a machine it was not told about. The cost is that it is not
+zero-configuration the way `topgrade` is, and a user who wanted `topgrade` may have wanted exactly
+that.
+
+## H7
+
+**Status: OPEN — 2026-08-13. Same provenance as `H6`, and the same reason for being written down
+rather than fixed.**
+
+**Should `check` report managed-file *content* drift, given that `sync` heals it?**
+
+`link` registers `with_installable` and a metadata provider, and **no `Queryable`**
+(`src/backends/link.rs`). So `check` answers the placement question from recorded state — a
+declaration that has never been placed shows as `place`, which `F12`'s counts now include — and
+can say nothing at all about a file that *was* placed and whose bytes have since changed.
+`apply_managed_content` rewrites it on the next `sync`, silently, having compared content the only
+place content is ever compared.
+
+**The shape of this is `F12`'s, one layer down.** That finding was *"one skipped declaration
+erases every other kind of drift from `check`"*; this is *"one kind of drift was never expressible
+in `check` at all"*. The user-facing promise — *what will change if I sync* — is incomplete for
+precisely the declarations a config-management user cares most about.
+
+**Why it is a ruling and not a fix.** It changes what `check` prints and, under `U21`, what it
+*exits*: a machine whose only difference is an edited dotfile currently exits 0 and would begin
+exiting 2. Anything reading that exit code — the harnesses do — sees a machine change state
+without changing. That is behaviour a user notices, so it is not mine to decide.
+
+**Recommendation, offered as one:** make `link` `Queryable` with a content comparison and let the
+drift flow through the same counts as everything else, because the alternative is a `check` whose
+silence means two different things. The exit-code change is the correct blast radius: a
+declaration whose content differs *is* a difference, and `U21` already says that is what exit 2
+means.
