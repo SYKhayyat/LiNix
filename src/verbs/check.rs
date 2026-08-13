@@ -222,12 +222,23 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
             .await;
     let state = match resolver.resolve_model().await {
         Ok(state) => {
+            // **Resources counted beside packages, because a config can declare none of the
+            // one and plenty of the other.** A dotfiles-only manifest read `0 package(s)
+            // declared` — true, and the sentence a user checks to see that their file was
+            // understood at all. The drift row below has reported `place`/`undo` since round 3
+            // and `unverifiable` since `F12`, so the *work* was visible; what was not was that
+            // anything had been declared to do it to.
+            let packages = state.total_present();
+            let resources = state.extras.len();
             findings.push(
                 Finding::ok(
                     Section::Config,
-                    format!("{} package(s) declared", state.total_present()),
+                    match resources {
+                        0 => format!("{} package(s) declared", packages),
+                        n => format!("{} package(s) and {} resource(s) declared", packages, n),
+                    },
                 )
-                .counting([("declared", state.total_present())]),
+                .counting([("declared", packages), ("resources", resources)]),
             );
             Some(state)
         }

@@ -1,4 +1,4 @@
-# The decision register — all 207, ten of them built and never ruled, two open
+# The decision register — all 207, ten of them built and never ruled, one open
 **One file, six features, ten entries waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -15,9 +15,9 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **2** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **10** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **191** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **192** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Two of these five statuses now describe nothing, and they stay.** The categories are not
@@ -77,7 +77,7 @@ status loses that, so it is kept here:
 that cannot express one — was raised, measured and ruled on 2026-08-10. The `G` round then ran the
 other way round: `docs/GRADE-2026-08-12.md`'s work order was implemented in one pass, and the nine
 changes in it that a user would notice shipped ahead of any ruling. All 207 are accounted
-for: **191 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 10 BUILT NEVER RULED, 2 OPEN** — and this line
+for: **192 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 10 BUILT NEVER RULED, 1 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -8247,30 +8247,39 @@ that.
 
 ## H7
 
-**Status: OPEN — 2026-08-13. Same provenance as `H6`, and the same reason for being written down
-rather than fixed.**
+**Status: ANSWERED — 2026-08-13, by measurement, and the answer is that the premise was false.**
+Raised OPEN earlier the same day off three grading documents; closed the same day by building the
+fixture instead of trusting the sentence.
 
 **Should `check` report managed-file *content* drift, given that `sync` heals it?**
 
-`link` registers `with_installable` and a metadata provider, and **no `Queryable`**
-(`src/backends/link.rs`). So `check` answers the placement question from recorded state — a
-declaration that has never been placed shows as `place`, which `F12`'s counts now include — and
-can say nothing at all about a file that *was* placed and whose bytes have since changed.
-`apply_managed_content` rewrites it on the next `sync`, silently, having compared content the only
-place content is ever compared.
+**It already does.** Measured, not reasoned: a config declaring
+`link:mydot @target=<path>,content=hello`, synced, then the destination overwritten by hand.
 
-**The shape of this is `F12`'s, one layer down.** That finding was *"one skipped declaration
-erases every other kind of drift from `check`"*; this is *"one kind of drift was never expressible
-in `check` at all"*. The user-facing promise — *what will change if I sync* — is incomplete for
-precisely the declarations a config-management user cares most about.
+```text
+before tampering:   ok  drift  the machine matches your files
+after tampering:    ->  drift  0 to install, 0 to remove, 1 to place, 0 to undo
+```
 
-**Why it is a ruling and not a fix.** It changes what `check` prints and, under `U21`, what it
-*exits*: a machine whose only difference is an edited dotfile currently exits 0 and would begin
-exiting 2. Anything reading that exit code — the harnesses do — sees a machine change state
-without changing. That is behaviour a user notices, so it is not mine to decide.
+**Why the code reading said otherwise.** `link` registers no `Queryable`, and
+`ChangePlanner::spec_is_missing` returns `Ok(true)` for a backend without one — so reading the
+planner alone says every `link:` line is pending for ever. It never reaches the planner. A `link:`
+is an **extra**, not a package, and `Extras::changes` probes it through `in_effect`, which
+compares inline `@content=` byte for byte, compares a symlink's target against the resolved
+source, and reads the destination back for a plain file. That probe was the `B0b` work; the
+finding this entry came from was written on 2026-08-11, before it, and was carried forward by two
+later reviews without being re-run.
 
-**Recommendation, offered as one:** make `link` `Queryable` with a content comparison and let the
-drift flow through the same counts as everything else, because the alternative is a `check` whose
-silence means two different things. The exit-code change is the correct blast radius: a
-declaration whose content differs *is* a difference, and `U21` already says that is what exit 2
-means.
+**What is deliberately still `None` there, with the reason in the code:** a rendered template and
+a decrypted secret are not their source, and comparing them would mean running the transform. They
+report `unverifiable`, which places — and `F12` gave `unverifiable` a count on the drift row, so
+the one thing `check` cannot verify is now the one thing it says it cannot verify.
+
+**What the finding did leave, and it is fixed in the same commit as this entry.** The `config` row
+counted `state.total_present()` — packages — so a dotfiles-only manifest read `0 package(s)
+declared` while declaring plenty. True, and the sentence a user reads to confirm their file was
+understood at all. It now counts resources beside packages, and says nothing about them when there
+are none.
+
+*The lesson is the register's own: a gap recorded in prose and never re-measured stops being a
+gap and stays written down. Three reviews carried this one; the fixture took four minutes.*

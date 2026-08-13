@@ -284,7 +284,7 @@ mod tests {
     /// A drifted machine, in the exact shape `shall check --json` prints.
     const DRIFTED: &str = r#"[
         {"section":"config","ok":true,"summary":"9 package(s) declared","next":null,
-         "counts":{"declared":9}},
+         "counts":{"declared":9,"resources":0}},
         {"section":"drift","ok":false,"summary":"2 to install, 1 to remove, nothing else",
          "next":"shall sync","counts":{"install":2,"remove":1,"skipped":0,"unverifiable":0}},
         {"section":"unmanaged","ok":false,"summary":"3 package(s) `shall adopt` would take",

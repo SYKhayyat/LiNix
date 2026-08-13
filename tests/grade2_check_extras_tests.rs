@@ -154,3 +154,41 @@ fn sync_does_not_report_no_change_while_placing_resources() {
         target.display()
     );
 }
+
+/// The `config` row counts what was declared, and a resource is a declaration.
+///
+/// **The last thread of the same finding.** Round 3 caught `check` not reporting resource
+/// *drift* and `F12` caught its counts dropping `place`/`undo`/`unverifiable` — both about the
+/// work. This is about the declaration: a dotfiles-only manifest read `0 package(s) declared`,
+/// which is true, and is also the sentence a user reads to confirm their file was understood at
+/// all. Zero of one quantity while the other is non-zero is the shape of every finding in this
+/// family.
+///
+/// Asserted from both sides, because "it says resources" and "it does not say resources when
+/// there are none" are different claims and only one of them is checked by the happy path.
+#[test]
+fn the_config_row_counts_resources_beside_packages() {
+    let f = setup("grade2-check-config-counts");
+    f.declare_one_link();
+
+    let (out, code) = f.run(&["check"]);
+    assert!(code == 0 || code == 2, "`check` failed ({code}):\n{out}");
+    assert!(
+        out.contains("resource(s) declared"),
+        "a manifest declaring a `link:` and no packages reported only a package count, so the \
+         one row that says what Shall understood says nothing was declared:\n{out}"
+    );
+
+    // No resources, and the row must not grow a `0 resource(s)` clause it has to explain.
+    std::fs::write(
+        f.cfg().join("modules/starter.txt"),
+        "cargo:shall-no-such-pkg-zzz\n",
+    )
+    .unwrap();
+    let (out, code) = f.run(&["check"]);
+    assert!(code == 0 || code == 2, "`check` failed ({code}):\n{out}");
+    assert!(
+        !out.contains("resource(s) declared"),
+        "a manifest with no resources still mentions them:\n{out}"
+    );
+}
