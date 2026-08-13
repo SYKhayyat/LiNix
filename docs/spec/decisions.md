@@ -8245,6 +8245,31 @@ acquiring an opinion about a machine it was not told about. The cost is that it 
 zero-configuration the way `topgrade` is, and a user who wanted `topgrade` may have wanted exactly
 that.
 
+**MEASURED 2026-08-13, after `H7` closed on a false premise. This one is smaller than it reads
+too, and the recommendation above is half built already.**
+
+- **The declared-line mechanism exists.** `exec:PATH @runs=always` is a declaration that runs a
+  command on every sync, approval-gated by `shall lock` (an unapproved script refuses the run by
+  name), recorded in the journal, and undone by `@undo=` when the line goes. That is the whole of
+  what an `upgrade:` surface would need underneath it, and none of it has to be built.
+- **`upgrade` does not run extras at all.** `src/verbs/upgrade.rs` names them nowhere, and a
+  fixture confirms it: an always-run `exec:` fires under `sync -y` and not under `upgrade`. So a
+  user who runs `shall upgrade` weekly — the verb a `topgrade` user reaches for — never runs their
+  firmware step, however correctly they declared it.
+- **What is left is therefore two questions, not a subsystem.** *(a)* Should `upgrade` also run
+  always-run declared steps? *(b)* Should Shall ship adapters for the common ones (`fwupd`,
+  `rustup`, `gcloud`) so the step is a name rather than a hand-written script?
+
+**(a) is the ruling, and it is not a small one despite being a small change.** It makes a verb
+that has never executed user scripts start executing them. The approval gate covers *what* runs;
+it says nothing about *which verb* runs it, and somebody who approved a script for `sync` did not
+thereby approve it for `upgrade`. Recommended **yes, gated on the step opting in** — a step that
+wants to run on upgrade says so on its own line — so the widening is written down per step
+rather than inherited by every `exec:` already in every manifest.
+
+*(b) is ordinary work once (a) is ruled, and it is what makes the parity claim true rather than
+merely possible.*
+
 ## H7
 
 **Status: ANSWERED — 2026-08-13, by measurement, and the answer is that the premise was false.**
