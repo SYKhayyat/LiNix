@@ -97,6 +97,21 @@ if (Get-Command wsl -ErrorAction SilentlyContinue) {
     Info "no wsl on this host, so the cfg(unix) blocks are unverified; CI compiles them regardless"
 }
 
+# The `rust-mutation` CI job, over the smallest of the four files it covers. One file, not four:
+# the nightly mutates guard.rs, exit.rs, datalock.rs and transaction.rs against the whole suite,
+# which is hours - guard.rs alone is 125 mutants. A release script that takes an afternoon is one
+# nobody runs, and the parity predicate asks that a developer can find out locally, not that they
+# repeat CI. `--lib` is correct for THIS file and would not be for the others: exit.rs is covered
+# entirely by lib tests, so --lib is the whole of its coverage rather than a slice of it.
+Write-Host "-> cargo mutants over src/core/exit.rs"
+if (Get-Command cargo-mutants -ErrorAction SilentlyContinue) {
+    cargo mutants --no-shuffle --file src/core/exit.rs -- --lib
+    if ($LASTEXITCODE -eq 0) { Pass "mutation: the exit codes and their meanings are guarded" }
+    else { Fail "mutation: a mutant of src/core/exit.rs survived - see mutants.out/" }
+} else {
+    Info "cargo-mutants not installed (cargo install cargo-mutants --locked); the nightly job runs the full four regardless"
+}
+
 # The `supply-chain` and `msrv` CI jobs, run locally. A CI job nothing local drives is a gate a
 # developer finds out about from a red push, which is what grade6_gate_parity asserts against.
 # Both are soft here and hard in CI: cargo-deny and a pinned toolchain are installs a contributor

@@ -66,6 +66,28 @@ echo "-> scripts/unix-check.sh"
 if sh "$(dirname -- "$0")/unix-check.sh" --lib; then pass "unix-check: the tree compiles for Linux"
 else info "unix-check did not pass — the cfg(unix) blocks are unverified on this run"; fi
 
+# The `rust-mutation` CI job, run locally over the smallest of the four files it covers.
+#
+# **Why one file and not four.** The nightly job mutates `guard.rs`, `exit.rs`, `datalock.rs` and
+# `transaction.rs` against the whole suite, which is hours: `guard.rs` alone is 125 mutants at
+# roughly seven minutes each. A release script that takes an afternoon is a release script nobody
+# runs, and this predicate asks that a developer can find out locally — not that they repeat CI.
+#
+# **`--lib` here is correct for THIS file and would not be for the others.** Lesson 13 of the
+# 2026-08-13 review: a mutation score is a statement about the test command you gave it, and
+# scoping to the wrong target is what reported `GuardScope::reconciles` as an uncaught mutant when
+# a lib test asserts it for all twelve scopes. `exit.rs` is covered entirely by lib tests, so
+# `--lib` is the whole of its coverage rather than a slice of it. The nightly gives the other
+# three the full suite.
+echo "-> cargo mutants over src/core/exit.rs"
+if command -v cargo-mutants >/dev/null 2>&1; then
+    if cargo mutants --no-shuffle --file src/core/exit.rs -- --lib; then
+        pass "mutation: the exit codes and their meanings are guarded"
+    else fail "mutation: a mutant of src/core/exit.rs survived — see mutants.out/"; fi
+else
+    info "cargo-mutants not installed (cargo install cargo-mutants --locked); the nightly job runs the full four regardless"
+fi
+
 # The `supply-chain` and `msrv` CI jobs, run locally — because a CI job nothing local drives is a
 # gate a developer finds out about from a red push, which is what `grade6_gate_parity` asserts
 # against. Both are soft here and hard in CI: `cargo-deny` and a pinned toolchain are installs a

@@ -217,6 +217,13 @@ fn every_ci_job_has_something_local_that_runs_it() {
         // directives already in the tree are what made the absence of the job legible — a
         // suppression addressed to a linter nothing runs.
         ("shell", "shellcheck"),
+        // Added with the job, and soft locally for the fourth time and the same reason:
+        // `cargo-mutants` is an install a contributor may not have. It is also the only row
+        // whose local gate deliberately covers **less** than the CI job — one file of the four,
+        // because the nightly's full run is hours and a release script that takes an afternoon
+        // stops being run. `exit.rs` is the file chosen precisely because `--lib` is the whole
+        // of its coverage rather than a slice of it, so the local score means what it says.
+        ("rust-mutation", "cargo mutants"),
     ];
     let drives_nothing = ["release"];
 
