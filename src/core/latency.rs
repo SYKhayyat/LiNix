@@ -118,6 +118,23 @@ impl Class {
     /// wave on purpose. Asserting a shape there would fail a graph that is doing exactly what
     /// it was asked to do.
     ///
+    /// **What the right bound for it would be, named here because "exempt" is where a gap
+    /// hides.** The 2026-08-13 review's objection is fair — `sync`, `upgrade` and `rebuild` are
+    /// the slowest things this program does and the ones a person waits on, and the mechanism
+    /// that caught the `sbom`/`export` collapse has never been pointed at them. The reason it
+    /// cannot be pointed at them *as written* is that `waves_per_child` is a guess about the
+    /// shape of the work, and a mutating run's shape is not a guess: it is the plan's own
+    /// **critical-path depth**, which the engine holds and this layer never sees. The honest
+    /// bound is `waves <= depth(graph)` — exact, unguessable, and false for no correct run —
+    /// and building it means the engine reporting its own shape after
+    /// `execute_with_telemetry`, because `report_if_over` is handed a subcommand name and
+    /// nothing else.
+    ///
+    /// **That is not built.** What is deliberately *not* done in the meantime is giving
+    /// `Mutating` a permissive `Shape` so the class stops looking exempt: a ceiling of
+    /// `children` waves cannot be crossed by any run, and a gate that cannot fail is the exact
+    /// defect the rest of this review is about.
+    ///
     /// Every number here is a collapse detector — see [`Shape`] for what the first draft's
     /// targets cost. Four readings, from three platforms, all of them healthy:
     ///

@@ -12,3 +12,9 @@ dump_files.ps1
 # `shall plan` writes here when no `--out` is given; it is a run artifact.
 shall-plan.json
 scratch_*.sh
+
+# `cargo mutants` scratch. The nightly mutation job uploads it as an artifact; a local run
+# leaves a copy of the whole tree per mutant here, and this session opened with a mutated
+# `guard.rs` sitting in the working tree from an interrupted run.
+mutants.out/
+mutants.out.old/

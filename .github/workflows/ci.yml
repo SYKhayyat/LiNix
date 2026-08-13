@@ -606,3 +606,49 @@ jobs:
     - uses: dtolnay/rust-toolchain@stable
     - name: Stub the binary and count what still passes
       run: bash scripts/harness-mutation-test.sh --check
+
+  # **And the OTHER mutation gate: the Rust suite's own.** The job above asks whether the shell
+  # harness's checks can fail. Nothing asked that of the 1,800 lib tests, and on 2026-08-13
+  # `cargo mutants` over `src/app/sync/guard.rs` answered: the guard's **OS-essential protection
+  # could be deleted entirely** — `essential_names` replaced with `HashSet::new()` — with every
+  # Rust test green AND all 425 container-harness checks green. A Linux binary carrying that
+  # mutation planned removals for `tar`, `sed`, `grep`, `gzip` and `findutils` and the guard said
+  # nothing. Only apt's own refusal to remove `Essential: yes` packages stopped the damage: a
+  # second line of defence Shall does not own and cannot assume of every backend.
+  #
+  # **Nightly and over a named short list, not per change and not over the tree.** One file of
+  # 125 mutants cost ~90 minutes; the whole tree is days. These four are the files where a silent
+  # mutation is a safety failure rather than a wrong answer — the guard that refuses a removal,
+  # the exit codes a script branches on, the lock that stops two Shalls writing at once, and the
+  # transaction that decides whether a failed run gives a package back.
+  #
+  # `--test-tool=cargo` with no filter, deliberately: `--test suite <name>` runs the INTEGRATION
+  # target only, and scoping it that way is what made the first run of this report eight missed
+  # mutants out of eleven, including `GuardScope::reconciles` in both directions — a load-bearing
+  # safety predicate that is in fact asserted for all twelve scopes by a **lib** test. A mutation
+  # score is exactly as trustworthy as the claim that its test command represents the suite.
+  rust-mutation:
+    name: Mutation (the safety files, nightly)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: Swatinem/rust-cache@v2
+    - name: Install cargo-mutants
+      run: cargo install cargo-mutants --locked
+    - name: Mutate the files where a silent mutation is a safety failure
+      run: |
+        cargo mutants --no-shuffle -j2 \
+          --file src/app/sync/guard.rs \
+          --file src/core/exit.rs \
+          --file src/core/datalock.rs \
+          --file src/core/transaction.rs \
+          -- --no-fail-fast
+    - name: The survivors, kept whether the run passed or failed
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: mutants-out
+        path: mutants.out/
