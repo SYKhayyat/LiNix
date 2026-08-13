@@ -51,6 +51,7 @@ mod a_parser_can_say_it_did_not_understand_tests;
 mod a_plan_installs_only_declarations_tests;
 mod a_plan_reaps_only_what_it_was_asked_about_tests;
 mod a_pub_fn_nobody_calls_is_dead_tests;
+mod a_setting_the_config_declares_is_a_setting_that_acts_tests;
 mod a_shim_runs_what_its_line_named_tests;
 mod a_silenced_advisory_says_why_tests;
 mod a_skipped_install_is_not_an_undeclared_leftover_tests;
