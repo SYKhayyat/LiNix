@@ -162,3 +162,44 @@ fn plan_names_the_extras_it_would_tear_down() {
          undone — and it shows them nothing.\n{out}"
     );
 }
+
+/// `H6` — the preview shows every declared script, including the ones this command will not run.
+///
+/// **The same hole as the rest of this file, one option later.** `@on=` gave `exec:` lines two
+/// audiences, and the first version of the preview iterated the *running* list — so a step
+/// declared `@on=upgrade` was code in the configuration that no preview anywhere showed. `plan`
+/// previews `sync`; nothing previews `upgrade`; a filtered preview meant nobody could review the
+/// script before it ran. A summary built from the actor's list rather than the reader's is `F12`
+/// exactly, and it is why this asserts on the line being *present and labelled* rather than on
+/// it being absent.
+#[test]
+fn the_plan_shows_a_step_it_will_not_run_and_says_which_verb_runs_it() {
+    let f = setup("h6-plan-shows-upgrade-steps");
+    let cfg = f.cfg();
+    std::fs::create_dir_all(cfg.join("bin")).unwrap();
+    std::fs::write(cfg.join("bin/sync-step.sh"), "echo sync\n").unwrap();
+    std::fs::write(cfg.join("bin/firmware.sh"), "echo firmware\n").unwrap();
+    std::fs::write(
+        cfg.join("modules/starter.txt"),
+        "exec:./bin/sync-step.sh\nexec:./bin/firmware.sh @on=upgrade\n",
+    )
+    .unwrap();
+
+    let (out, code) = f.run(&["plan"]);
+    assert!(matches!(code, 0 | 2), "`plan` failed:\n{out}");
+    assert!(
+        out.contains("sync-step.sh"),
+        "the control failed — `plan` printed no script section at all, so this proves \
+         nothing:\n{out}"
+    );
+    assert!(
+        out.contains("firmware.sh"),
+        "`plan` hid a declared `exec:` line because this command would not run it. It is still \
+         code in the configuration, and `plan` is where a user reviews it before it runs:\n{out}"
+    );
+    assert!(
+        out.contains("not this command"),
+        "`plan` listed a step it will not run without saying so, which is worse than hiding \
+         it — the reader takes it for work this command is about to do:\n{out}"
+    );
+}

@@ -6385,3 +6385,39 @@ purpose is to close the hole is now a knob.
 **Windows keeps its low-integrity launch, reported as `Confinement::None`.** It does lower the
 token, so deleting it would remove a real reduction; it is not a sandbox, so calling it one would
 be the exact claim this type exists to prevent.
+
+## `H6` — the verb that upgraded everything except the things that are not packages
+
+`shall upgrade` moved managed packages and nothing else. That is defensible for a *package*
+manager right up until you notice what a machine actually needs brought forward: firmware, an
+editor's plugin manager, a tracked git repository, `rustup` and `gcloud` components. None of
+those is a package, none of them is expressible as one, and `topgrade` — the tool a user leaves
+to come here — does all of them.
+
+**The mechanism was already built. Only the verb was missing.** `exec:PATH @runs=always` is a
+declared line that runs a command on every sync: approval-gated by `shall lock` so nothing runs
+that a human has not read, journalled write-ahead like every other mutation, and undone by
+`@undo=` when the line goes. Three grading documents recorded this gap as a subsystem to build.
+Measured on 2026-08-13, it was one fact: `src/verbs/upgrade.rs` never touched extras, so a
+firmware step correctly written and correctly approved was run by `sync` and never by `upgrade`.
+
+**Why the fix is an option and not a widening.** The obvious cure is to run every `exec:` from
+`upgrade` too, and it is wrong for a reason the approval ledger cannot fix. `locks/hooks.toml`
+records *what content is allowed to run here*; it has never recorded *which verb may run it*. So
+a blanket widening takes every `exec:` line in every manifest that already exists — written,
+reviewed and approved by people who were consenting to `sync` running them — and hands them to a
+verb that has never executed a user script in its life. The approval on file would still be
+valid. It would just be answering a question nobody had asked yet.
+
+`@on=` therefore names the verb per step: `sync` (the default), `upgrade`, or `both`. A manifest
+that says nothing means exactly what it meant yesterday, and a step that wants the new behaviour
+says so on the line where a reader will see it next to the script's own name.
+
+**Three values rather than a list, and that is `F3` speaking.** Options are separated by commas,
+so `@on=sync,upgrade` parses as `on=sync` plus a second option called `upgrade` — the same
+boundary confusion `F3` was, invited in through the value grammar instead of the key grammar.
+`both` costs one word and removes the ambiguity entirely.
+
+**And the unknown value reads as the default, not as "everywhere".** The grammar refuses anything
+outside the three by name, so `Verb::claims` cannot be reached with a fourth — but if it ever is,
+an unrecognised word must not be what widens which verb runs a script.

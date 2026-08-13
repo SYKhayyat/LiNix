@@ -1,4 +1,4 @@
-# The decision register — all 207, ten of them built and never ruled, one open
+# The decision register — all 207, ten of them built and never ruled, none open
 **One file, six features, ten entries waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -15,9 +15,9 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **10** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **192** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **193** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Two of these five statuses now describe nothing, and they stay.** The categories are not
@@ -77,7 +77,7 @@ status loses that, so it is kept here:
 that cannot express one — was raised, measured and ruled on 2026-08-10. The `G` round then ran the
 other way round: `docs/GRADE-2026-08-12.md`'s work order was implemented in one pass, and the nine
 changes in it that a user would notice shipped ahead of any ruling. All 207 are accounted
-for: **192 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 10 BUILT NEVER RULED, 1 OPEN** — and this line
+for: **193 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 10 BUILT NEVER RULED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -8218,10 +8218,31 @@ for whether deferring was ever the real answer. It was not; deciding was.*
 
 ## H6
 
-**Status: OPEN — 2026-08-13. Carried in three grading documents (`GRADE-2026-08-11` §competitive,
-`-08-12`, `-08-13` axis 5) and never entered here, which is why it is an entry before it is an
-answer.** A gap recorded only in a review is a gap nobody is accountable for; this file is where
-the repo says open questions live.
+**Status: ANSWERED — 2026-08-13, owner ruling, built in the same commit. Raised OPEN the same
+day off three grading documents (`GRADE-2026-08-11` §competitive, `-08-12`, `-08-13` axis 5),
+which had carried it as prose and entered it here in none of them.** A gap recorded only in a
+review is a gap nobody is accountable for.
+
+**RULED: yes, and opted into per step.** `@on=` on an `exec:` line names the verb that runs it —
+`sync` (the default), `upgrade`, or `both`. `upgrade` now runs the steps that name it, after the
+packages, through the same approval gate, ledger and journal `sync` uses. A manifest that says
+nothing means exactly what it meant yesterday.
+
+**Why not simply run every `exec:` from `upgrade`.** The approval ledger records *what content
+may run here*; it has never recorded *which verb may run it*. A blanket widening therefore takes
+every `exec:` line in every manifest that already exists — approved by people consenting to
+`sync` running them — and hands it to a verb that has never executed a user script. The approval
+on file would still be valid, and would be answering a question nobody had asked.
+
+**Three values rather than a comma-separated list**, because options are themselves separated by
+commas: `@on=sync,upgrade` parses as `on=sync` plus a second option named `upgrade`, which is
+`F3`'s boundary confusion invited in through the value grammar. Rule in `target-state.md`,
+reasoning in `why.md`.
+
+*The test for this was watched failing — and the first version of it did not fail, which is the
+part worth keeping. Both `exec:` lines needed `@runs=always`: with the default run-once ceiling
+the plain script's count stays 1 whether or not `upgrade` reached for it, so the assertion that
+`upgrade` leaves other scripts alone passed against the exact widening it exists to reject.*
 
 **Should `shall upgrade` cover the things that are not packages?**
 

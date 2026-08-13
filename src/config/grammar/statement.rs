@@ -1563,7 +1563,24 @@ pub const SETTING_OPTION_KEYS: &[&str] = &["value", "scope"];
 /// `undo` is what removing the line runs (U3). Optional, because a script has no inverse and
 /// inventing one would be Shall claiming to undo something it cannot: without it, removing an
 /// `exec:` drops the record and nothing else, and `plan` says so in those words.
-pub const EXEC_OPTION_KEYS: &[&str] = &["runs", "undo"];
+/// `on` names the verb this step belongs to — `sync` (the default), `upgrade`, or `both`.
+///
+/// **Per step, never inherited (`H6`).** `upgrade` ran no declared steps at all, so a firmware
+/// or `rustup` line correctly written and correctly approved was never run by the verb a user
+/// reaches for weekly. Widening `upgrade` to run every `exec:` would have made a verb that has
+/// never executed user scripts start executing every script in every existing manifest — and
+/// the approval gate answers *what* may run, not *which verb* may run it, so somebody who
+/// approved a script for `sync` did not thereby approve it for `upgrade`. Writing it on the
+/// line makes the widening one step's, and a manifest that says nothing keeps today's meaning.
+pub const EXEC_OPTION_KEYS: &[&str] = &["runs", "undo", "on"];
+
+/// Which verbs an `exec:` line belongs to.
+///
+/// A closed set rather than a comma-separated list, because options are *themselves* separated
+/// by commas: `@on=sync,upgrade` parses as `on=sync` plus a second option named `upgrade`,
+/// which is `F3`'s boundary confusion invited in by the value grammar. Three names spell the
+/// three cases with nothing to disambiguate.
+pub const EXEC_ON_VALUES: &[&str] = &["sync", "upgrade", "both"];
 /// Empty, and stated as a table rather than as a special case in the validator: "what may
 /// `generate:` carry" is then answered in the same place as it is for every other kind. It runs
 /// every resolution to compute the current answer, so there is no `@runs` ceiling to set.
@@ -1687,10 +1704,24 @@ fn validate_exec(origin: &Origin, name: &str, options: &Options) -> Result<()> {
         name,
         options,
         Some(
-            "an exec takes `runs` (a positive number, or `always`) and `undo` (a command \
-             to run when the line is removed).",
+            "an exec takes `runs` (a positive number, or `always`), `undo` (a command to run \
+             when the line is removed), and `on` (`sync`, `upgrade` or `both`).",
         ),
     )?;
+    if let Some(on) = options.one("on") {
+        let on = on.trim();
+        if !EXEC_ON_VALUES.contains(&on) {
+            return Err(GrammarError::new(
+                origin.clone(),
+                format!("`exec:{}` has an invalid `on={}`", name, on),
+            )
+            .with_hint(
+                "`on` is `sync` (the default), `upgrade`, or `both`. It says which verb runs \
+                 this step; a step `upgrade` should run has to say so, because approving a \
+                 script is not the same as approving every verb to run it.",
+            ));
+        }
+    }
     if let Some(runs) = options.one("runs") {
         let runs = runs.trim();
         if runs != "always" && runs.parse::<u32>().map(|n| n == 0).unwrap_or(true) {
@@ -3659,6 +3690,33 @@ mod exec_tests {
             "exec:./s.sh@runs=0",
             "exec:./s.sh@runs=lots",
             "exec:./s.sh@runs=-1",
+        ] {
+            assert!(pv(bad).is_err(), "{} was accepted", bad);
+        }
+    }
+
+    /// `on` names a verb, and only the three the program has (`H6`).
+    ///
+    /// A fourth word must be refused here rather than read leniently downstream: `Verb::claims`
+    /// falls back to `sync` for anything it does not know, which is the safe direction, and a
+    /// grammar that let `@on=upgrde` through would silently give a user the opposite of what
+    /// they wrote. `on=sync,upgrade` is refused for the same reason a value cannot carry a
+    /// comma — that is the option separator, so it parses as a second option named `upgrade`.
+    #[test]
+    fn on_names_one_of_the_three_verbs_and_nothing_else() {
+        for good in [
+            "exec:./s.sh@on=sync",
+            "exec:./s.sh@on=upgrade",
+            "exec:./s.sh@on=both",
+            "exec:./s.sh@runs=always,on=upgrade",
+        ] {
+            assert!(pv(good).is_ok(), "{} was refused", good);
+        }
+        for bad in [
+            "exec:./s.sh@on=",
+            "exec:./s.sh@on=always",
+            "exec:./s.sh@on=Upgrade",
+            "exec:./s.sh@on=sync,upgrade",
         ] {
             assert!(pv(bad).is_err(), "{} was accepted", bad);
         }

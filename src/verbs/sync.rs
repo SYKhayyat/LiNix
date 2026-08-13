@@ -198,7 +198,8 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
     // `!changes.is_empty()` block on purpose: a config whose only work is an `exec:` still has
     // to show it.
     if opts.out.is_human() {
-        app.execs().print_plan(&state);
+        app.execs()
+            .print_plan(&state, crate::model::exec::Verb::Sync);
     }
 
     // Dry-run is preview-only: never prompt, never mutate. (The report went out above, on the
@@ -397,7 +398,11 @@ pub async fn apply_non_package_phases(
             Phase::Schedules => app.schedules().apply(state).await?,
             // Phase 4b (XIII.3): the declared `exec:` scripts, after the packages and
             // dependents a script is likely to lean on. A verb, so it has no teardown phase.
-            Phase::Execs => app.execs().apply(state).await?,
+            Phase::Execs => {
+                app.execs()
+                    .apply(state, crate::model::exec::Verb::Sync)
+                    .await?
+            }
         }
     }
 

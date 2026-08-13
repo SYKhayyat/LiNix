@@ -57,7 +57,7 @@ impl Execs<'_> {
     ///
     /// A script that cannot be read is reported here rather than propagated: this is the
     /// preview, and the run raises the same problem as a real error a moment later.
-    pub fn print_plan(&self, state: &crate::model::DesiredState) {
+    pub fn print_plan(&self, state: &crate::model::DesiredState, verb: crate::model::exec::Verb) {
         use crate::core::hook_lock::HookLedger;
 
         if !state.has_execs() {
@@ -71,11 +71,25 @@ impl Execs<'_> {
             return;
         };
         println!("Scripts:");
+        // **Every declared line, including the ones this verb will not run.** `execs_for` is
+        // the running list and it is the wrong list to preview from: an `@on=upgrade` step
+        // filtered out here is declared code that no preview anywhere shows, which is the
+        // reporting hole `F12` was — a category dropped from the summary because the summary
+        // was built from the actor's list rather than the reader's. The line says which verb
+        // claims it instead, so nothing is hidden and nothing is misattributed.
         for (script, opts, origin) in state.execs() {
+            let mine = verb.claims(opts.one("on"));
             match self.exec_plan(script, opts, &hooks, &runs) {
                 Ok((_, hash, decision)) => {
                     println!("  exec:{}  ({})", script, origin);
-                    println!("    {}", decision.describe(&hash));
+                    match mine {
+                        true => println!("    {}", decision.describe(&hash)),
+                        false => println!(
+                            "    {} — not this command; `@on={}` runs it",
+                            decision.describe(&hash),
+                            opts.one("on").unwrap_or("sync")
+                        ),
+                    }
                 }
                 Err(e) => println!("  exec:{}  ({}) — {}", script, origin, e),
             }
@@ -90,7 +104,11 @@ impl Execs<'_> {
     /// `@runs=` ceiling allows, so a settled sync executes nothing; and it records the run only
     /// when the script actually succeeded — a failed script has not happened, so the next sync
     /// must try it again.
-    pub async fn apply(&self, state: &crate::model::DesiredState) -> Result<()> {
+    pub async fn apply(
+        &self,
+        state: &crate::model::DesiredState,
+        verb: crate::model::exec::Verb,
+    ) -> Result<()> {
         use crate::core::hook_lock::HookLedger;
 
         // No early return when nothing is declared: deleting the LAST `exec:` line is a real
@@ -101,7 +119,7 @@ impl Execs<'_> {
         let runs_path = crate::core::ExecLedger::path_in(&locks);
         let mut runs = crate::core::ExecLedger::load(&runs_path)?;
 
-        for (script, opts, origin) in state.execs() {
+        for (script, opts, origin) in state.execs_for(verb) {
             let (path, hash, decision) = self.exec_plan(script, opts, &hooks, &runs)?;
             if let crate::model::exec::Decision::NeedsApproval(verdict) = &decision {
                 // A refusal, not a warning: this is code from the configuration, and II.12's

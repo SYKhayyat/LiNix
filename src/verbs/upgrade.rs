@@ -393,11 +393,40 @@ pub async fn upgrade_security(app: &App, except: &[String], out: Output) -> Resu
 pub async fn handle_upgrade(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
     let out = req.out;
     upgrade_modes(app, req).await?;
+    upgrade_steps(app).await?;
     let moved =
         crate::verbs::plan::refresh_version_locks(&app.config, &app.registry, &app.state).await?;
     if moved > 0 && out.is_human() {
         println!("Lock: re-recorded {} version pin(s).", moved);
     }
+    Ok(())
+}
+
+/// The declared steps that are not packages (`H6`) — firmware, a plugin manager, a tracked
+/// repository, `rustup` components.
+///
+/// **`upgrade` ran none of them, and that was the whole gap.** Every mode above moves *managed
+/// packages*, which is the one thing a manager can be asked to do; the rest of what a machine
+/// needs upgrading is a command, and a command is an `exec:` line. Those lines existed, were
+/// approval-gated, were journalled, and were run only by `sync` — so a user running
+/// `shall upgrade` weekly never ran their firmware step however correctly they wrote it.
+///
+/// **Per step, never inherited.** Only lines carrying `@on=upgrade` or `@on=both` run here.
+/// Widening `upgrade` to every `exec:` would make a verb that has never executed user scripts
+/// start executing every script in every manifest that already exists, and the approval ledger
+/// cannot object on a user's behalf: it answers *what* may run, never *which verb* may run it.
+///
+/// After the packages, deliberately: a firmware tool or a `rustup` component is usually the
+/// thing you want brought forward *once the packages under it have moved*, which is the same
+/// order `sync` runs its verb phase in.
+async fn upgrade_steps(app: &App) -> Result<()> {
+    use crate::model::exec::Verb;
+
+    let state = app.resolver().await.resolve_model().await?;
+    if state.execs_for(Verb::Upgrade).next().is_none() {
+        return Ok(());
+    }
+    app.execs().apply(&state, Verb::Upgrade).await?;
     Ok(())
 }
 

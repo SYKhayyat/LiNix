@@ -253,7 +253,8 @@ pub async fn handle_plan(app: &App, out: &str) -> Result<()> {
     // that follows are printed here, before anything happens. Read off the resolution
     // `compute_full_changes` already did — it used to resolve the model a second time for
     // this, which is one model resolved twice and free to disagree with itself.
-    app.execs().print_plan(&full.state);
+    app.execs()
+        .print_plan(&full.state, crate::model::exec::Verb::Sync);
     let created_at = chrono::Utc::now().timestamp();
     let mut plan =
         crate::app::sync::SavedPlan::from_changes(&full.changes, &full.resources, Some(created_at));

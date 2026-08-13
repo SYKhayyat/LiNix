@@ -69,11 +69,21 @@ async fn a_script_runs_once_then_not_again_until_its_content_changes() {
     // First sync: it runs, and the run is recorded.
     let state = resolve(&kernel).await;
     assert!(state.has_execs(), "the exec: line did not reach the model");
-    kernel.app.execs().apply(&state).await.expect("first run");
+    kernel
+        .app
+        .execs()
+        .apply(&state, shall::model::exec::Verb::Sync)
+        .await
+        .expect("first run");
     assert_eq!(runs_of(&kernel, v1), 1, "the first run was not recorded");
 
     // Second sync: the same content is at its ceiling, so nothing runs.
-    kernel.app.execs().apply(&state).await.expect("second pass");
+    kernel
+        .app
+        .execs()
+        .apply(&state, shall::model::exec::Verb::Sync)
+        .await
+        .expect("second pass");
     assert_eq!(runs_of(&kernel, v1), 1, "the script ran twice");
 
     // One byte changes: a different content, never run, so it runs — and the old row survives.
@@ -84,7 +94,7 @@ async fn a_script_runs_once_then_not_again_until_its_content_changes() {
     kernel
         .app
         .execs()
-        .apply(&state)
+        .apply(&state, shall::model::exec::Verb::Sync)
         .await
         .expect("post-edit run");
     assert_eq!(runs_of(&kernel, v2), 1, "the edited script did not run");
@@ -102,7 +112,12 @@ async fn runs_always_runs_every_time() {
 
     let state = resolve(&kernel).await;
     for expected in 1..=3 {
-        kernel.app.execs().apply(&state).await.expect("always runs");
+        kernel
+            .app
+            .execs()
+            .apply(&state, shall::model::exec::Verb::Sync)
+            .await
+            .expect("always runs");
         assert_eq!(runs_of(&kernel, body), expected);
     }
 }
@@ -120,7 +135,7 @@ async fn an_unapproved_script_refuses_the_sync_and_never_runs() {
     let err = kernel
         .app
         .execs()
-        .apply(&state)
+        .apply(&state, shall::model::exec::Verb::Sync)
         .await
         .expect_err("an unapproved script must stop the sync");
     let msg = err.to_string();
@@ -143,7 +158,12 @@ async fn a_script_edited_after_approval_is_refused_until_reapproved() {
     std::fs::write(kernel.app.config.config_root().join("./setup.sh"), v2).unwrap();
 
     let state = resolve(&kernel).await;
-    let err = kernel.app.execs().apply(&state).await.expect_err("changed");
+    let err = kernel
+        .app
+        .execs()
+        .apply(&state, shall::model::exec::Verb::Sync)
+        .await
+        .expect_err("changed");
     let msg = err.to_string();
     assert!(msg.contains("changed since you approved"), "{}", msg);
     assert_eq!(runs_of(&kernel, v2), 0, "the tampered content ran");
@@ -174,14 +194,24 @@ async fn a_false_when_runs_nothing_and_keeps_the_count() {
         state.has_execs(),
         "the gated exec: should be present when true"
     );
-    kernel.app.execs().apply(&state).await.expect("runs");
+    kernel
+        .app
+        .execs()
+        .apply(&state, shall::model::exec::Verb::Sync)
+        .await
+        .expect("runs");
     assert_eq!(runs_of(&kernel, body), 1);
 
     // The script "succeeded", so its own condition is now false: the line drops out entirely.
     std::fs::write(root.join("vars"), "enrolled = yes\n").unwrap();
     let state = resolve(&kernel).await;
     assert!(!state.has_execs(), "a false `when` must drop the line");
-    kernel.app.execs().apply(&state).await.expect("no-op");
+    kernel
+        .app
+        .execs()
+        .apply(&state, shall::model::exec::Verb::Sync)
+        .await
+        .expect("no-op");
 
     // The count survives — this is what stops a flapping condition re-running it.
     assert_eq!(runs_of(&kernel, body), 1, "the ledger row was lost");
@@ -220,7 +250,7 @@ async fn a_failed_script_is_not_recorded_and_runs_again() {
     let err = kernel
         .app
         .execs()
-        .apply(&state)
+        .apply(&state, shall::model::exec::Verb::Sync)
         .await
         .expect_err("a failing script must surface, not be swallowed");
     assert!(err.to_string().contains("exited 1"), "{}", err);
@@ -252,7 +282,12 @@ async fn removing_an_exec_runs_the_undo_it_declared() {
     approve(&kernel, "./enrol.sh", body);
 
     let state = resolve(&kernel).await;
-    kernel.app.execs().apply(&state).await.unwrap();
+    kernel
+        .app
+        .execs()
+        .apply(&state, shall::model::exec::Verb::Sync)
+        .await
+        .unwrap();
     assert_eq!(runs_of(&kernel, body), 1);
 
     // The line is deleted — the declaration no longer exists anywhere.
@@ -261,7 +296,12 @@ async fn removing_an_exec_runs_the_undo_it_declared() {
     let state = resolve(&kernel).await;
     assert!(!state.has_execs());
 
-    kernel.app.execs().apply(&state).await.unwrap();
+    kernel
+        .app
+        .execs()
+        .apply(&state, shall::model::exec::Verb::Sync)
+        .await
+        .unwrap();
 
     let calls = kernel.mock_executor.get_calls().await;
     assert!(
@@ -287,7 +327,12 @@ async fn removing_an_exec_without_an_undo_runs_nothing() {
     approve(&kernel, "./once.sh", body);
 
     let state = resolve(&kernel).await;
-    kernel.app.execs().apply(&state).await.unwrap();
+    kernel
+        .app
+        .execs()
+        .apply(&state, shall::model::exec::Verb::Sync)
+        .await
+        .unwrap();
     let before = kernel.mock_executor.get_calls().await.len();
 
     std::fs::write(
@@ -296,7 +341,12 @@ async fn removing_an_exec_without_an_undo_runs_nothing() {
     )
     .unwrap();
     let state = resolve(&kernel).await;
-    kernel.app.execs().apply(&state).await.unwrap();
+    kernel
+        .app
+        .execs()
+        .apply(&state, shall::model::exec::Verb::Sync)
+        .await
+        .unwrap();
 
     assert_eq!(
         kernel.mock_executor.get_calls().await.len(),
@@ -325,13 +375,23 @@ async fn a_false_when_does_not_run_the_undo() {
     std::fs::write(root.join("profiles/Main"), "use tools\n").unwrap();
 
     let state = resolve(&kernel).await;
-    kernel.app.execs().apply(&state).await.unwrap();
+    kernel
+        .app
+        .execs()
+        .apply(&state, shall::model::exec::Verb::Sync)
+        .await
+        .unwrap();
     assert_eq!(runs_of(&kernel, body), 1);
 
     // The script succeeded, so its own condition is now false — but the LINE is still there.
     std::fs::write(root.join("vars"), "enrolled = yes\n").unwrap();
     let state = resolve(&kernel).await;
-    kernel.app.execs().apply(&state).await.unwrap();
+    kernel
+        .app
+        .execs()
+        .apply(&state, shall::model::exec::Verb::Sync)
+        .await
+        .unwrap();
 
     let calls = kernel.mock_executor.get_calls().await;
     assert!(
@@ -340,4 +400,112 @@ async fn a_false_when_does_not_run_the_undo() {
         calls
     );
     assert_eq!(runs_of(&kernel, body), 1, "the count was lost");
+}
+
+/// `H6` — a step says which verb runs it, and neither verb runs the other's steps.
+///
+/// **Both directions, because the whole ruling is that this is not inherited.** A widening that
+/// only proved "`upgrade` runs the step" would pass just as well if `upgrade` had been taught to
+/// run *every* `exec:` — which is the change that was rejected, and which would hand a verb that
+/// has never executed a user script every script in every manifest that already exists. So the
+/// assertion that matters most is the silent one: a plain line, approved and ready, that
+/// `upgrade` leaves alone.
+#[tokio::test]
+async fn a_step_names_the_verb_that_runs_it_and_the_other_verb_leaves_it_alone() {
+    use shall::model::exec::Verb;
+
+    let kernel = TestKernel::new().await;
+    let root = kernel.app.config.config_root();
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+
+    let plain = "echo plain\n";
+    let stepped = "echo firmware\n";
+    std::fs::write(root.join("bin/plain.sh"), plain).unwrap();
+    std::fs::write(root.join("bin/firmware.sh"), stepped).unwrap();
+    std::fs::write(
+        root.join("modules/tools.txt"),
+        // **Both `@runs=always`, and that is load-bearing.** With the default run-once
+        // ceiling the plain line's count stays 1 whether or not `upgrade` reached for it, so
+        // the assertion below passed against the very widening it exists to reject. Watched
+        // doing exactly that before this option was added.
+        "exec:./bin/plain.sh @runs=always\nexec:./bin/firmware.sh @runs=always,on=upgrade\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("profiles/Main"), "use tools\n").unwrap();
+    approve(&kernel, "./bin/plain.sh", plain);
+    approve(&kernel, "./bin/firmware.sh", stepped);
+
+    // `sync` runs the plain line and not the upgrade-only one.
+    let state = resolve(&kernel).await;
+    kernel
+        .app
+        .execs()
+        .apply(&state, Verb::Sync)
+        .await
+        .expect("sync runs its steps");
+    assert_eq!(
+        runs_of(&kernel, plain),
+        1,
+        "`sync` did not run a plain line"
+    );
+    assert_eq!(
+        runs_of(&kernel, stepped),
+        0,
+        "`sync` ran a step declared `@on=upgrade`, so the option decides nothing"
+    );
+
+    // `upgrade` runs the step and does NOT reach for the plain line — the half that would still
+    // pass if the verb had simply been widened to every script.
+    let state = resolve(&kernel).await;
+    kernel
+        .app
+        .execs()
+        .apply(&state, Verb::Upgrade)
+        .await
+        .expect("upgrade runs its steps");
+    assert_eq!(
+        runs_of(&kernel, stepped),
+        1,
+        "`upgrade` did not run a step that named it, which is the whole finding"
+    );
+    assert_eq!(
+        runs_of(&kernel, plain),
+        1,
+        "`upgrade` ran a script that never asked for it — approving a line for `sync` is not \
+         approving every verb to run it"
+    );
+}
+
+/// `@on=both` is the third case, and it is not two options written twice.
+#[tokio::test]
+async fn a_step_can_belong_to_both_verbs() {
+    use shall::model::exec::Verb;
+
+    let kernel = TestKernel::new().await;
+    let body = "echo both\n";
+    declare_exec(
+        &kernel,
+        "exec:./bin/both.sh @runs=always,on=both",
+        "./bin/both.sh",
+        body,
+    )
+    .await;
+    approve(&kernel, "./bin/both.sh", body);
+
+    let state = resolve(&kernel).await;
+    kernel.app.execs().apply(&state, Verb::Sync).await.unwrap();
+    assert_eq!(runs_of(&kernel, body), 1);
+
+    let state = resolve(&kernel).await;
+    kernel
+        .app
+        .execs()
+        .apply(&state, Verb::Upgrade)
+        .await
+        .unwrap();
+    assert_eq!(
+        runs_of(&kernel, body),
+        2,
+        "`@on=both` ran under one verb and not the other"
+    );
 }

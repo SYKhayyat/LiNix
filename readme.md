@@ -485,6 +485,21 @@ and it is a different script, so it runs again. `@runs=3` raises the ceiling and
 `@runs=always` opts out entirely — being explicit is the point, so nothing becomes a per-sync
 command by accident.
 
+**`@on=` says which verb runs it.** `sync` is the default; `upgrade` and `both` are the other
+two. `shall upgrade` moves managed packages, which is the one thing a package manager can be
+asked to do — everything else a machine needs brought forward is a command:
+
+```
+exec:./bin/firmware.sh   @runs=always,on=upgrade
+exec:./bin/rustup-up.sh  @runs=always,on=both
+```
+
+Both lines above run under `shall upgrade`; only the second also runs under `shall sync`. A step
+has to name `upgrade` to be run by it, and a line that says nothing runs on `sync` alone — so
+adding this changed nothing about scripts you had already written. Approving a script says *this
+content may run here*; it does not say *any verb may run it*, and that is a separate sentence you
+write on the line.
+
 **The condition is `when`, and there is no second condition system.** "Run this unless X" is a
 variable your `vars` provider computes:
 

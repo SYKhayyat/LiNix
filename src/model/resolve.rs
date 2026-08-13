@@ -115,6 +115,18 @@ impl DesiredState {
         })
     }
 
+    /// The `exec:` lines one verb runs, which is not the same list for both (`H6`).
+    ///
+    /// `execs()` stays whole because the teardown and the preview of *removals* are about every
+    /// declared line regardless of which verb would have run it; this is the running list.
+    pub fn execs_for(
+        &self,
+        verb: crate::model::exec::Verb,
+    ) -> impl Iterator<Item = (&str, &Options, &Origin)> {
+        self.execs()
+            .filter(move |(_, opts, _)| verb.claims(opts.one("on")))
+    }
+
     /// The `dotfiles:` trees this machine wants (7n). Like `execs()`, reaching this list means
     /// the `when` was true; unlike it, a tree IS a noun — its files are undone when it goes.
     pub fn dotfile_trees(&self) -> impl Iterator<Item = (&str, &Options, &Origin)> {

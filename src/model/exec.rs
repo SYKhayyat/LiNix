@@ -11,6 +11,37 @@
 use crate::core::exec_lock::Ceiling;
 use crate::core::hook_lock::Verdict;
 
+/// The verb asking. An `exec:` line belongs to one or both of them (`H6`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verb {
+    Sync,
+    Upgrade,
+}
+
+impl Verb {
+    /// Does this line belong to this verb?
+    ///
+    /// **`sync` is the default and that direction is the whole ruling.** `upgrade` ran no
+    /// declared steps at all, so a firmware or `rustup` line correctly written and correctly
+    /// approved was never run by the verb a user reaches for weekly. The obvious cure — run
+    /// every `exec:` from `upgrade` too — makes a verb that has never executed user scripts
+    /// start executing every script in every manifest that already exists, and the approval
+    /// ledger cannot object: it answers *what* may run, never *which verb* may run it. So the
+    /// widening is written on the line, one step at a time, and a manifest that says nothing
+    /// means exactly what it meant yesterday.
+    pub fn claims(self, on: Option<&str>) -> bool {
+        match on.map(str::trim) {
+            None | Some("sync") => self == Verb::Sync,
+            Some("upgrade") => self == Verb::Upgrade,
+            Some("both") => true,
+            // Unreachable through the grammar, which refuses any other value by name. Read as
+            // the default rather than as "runs everywhere": an unknown word must not widen
+            // what runs it.
+            Some(_) => self == Verb::Sync,
+        }
+    }
+}
+
 /// What a sync will do with this script, and why — the "why" being the part `plan` prints.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
@@ -137,5 +168,37 @@ mod tests {
     fn a_short_hash_does_not_panic() {
         assert!(Decision::Run.describe("abc").contains("abc"));
         assert!(Decision::Run.describe("").contains("will run"));
+    }
+
+    /// Which verb claims which line, as a table (`H6`).
+    ///
+    /// **The `None` row is the ruling.** A manifest that says nothing about verbs belongs to
+    /// `sync` and to `sync` alone, which is what makes this change invisible to every `exec:`
+    /// line that already exists. The alternative — `upgrade` running everything — needs no
+    /// option, no grammar and no test, and hands a verb that has never executed a user script
+    /// every script somebody approved for a different verb.
+    #[test]
+    fn a_line_belongs_to_the_verb_it_names_and_a_silent_one_belongs_to_sync() {
+        for (on, sync, upgrade, what) in [
+            (None, true, false, "silent: today's meaning, unchanged"),
+            (Some("sync"), true, false, "written out"),
+            (Some("upgrade"), false, true, "the step this was built for"),
+            (Some("both"), true, true, "the third case"),
+            (
+                Some(" upgrade "),
+                false,
+                true,
+                "trimmed like every other value",
+            ),
+            (
+                Some("nonsense"),
+                true,
+                false,
+                "unknown reads as the default, never as both",
+            ),
+        ] {
+            assert_eq!(Verb::Sync.claims(on), sync, "sync/{on:?}: {what}");
+            assert_eq!(Verb::Upgrade.claims(on), upgrade, "upgrade/{on:?}: {what}");
+        }
     }
 }

@@ -187,6 +187,15 @@ succeeds makes its own condition false and treating that as removal would flap. 
 else** if it does not (U3) — Shall does not invent an inverse for a script that has none, and
 `plan` says so in those words.
 
+**Being a verb, it is also the only statement that has to say which verb runs it (H6).** `@on=`
+is `sync` (the default), `upgrade`, or `both`. `upgrade` moves managed packages, which is the
+one thing a package manager can be asked to do; everything else a machine needs brought
+forward — firmware, a plugin manager, a tracked repository, `rustup` components — is a command,
+and a command is an `exec:` line. **A step `upgrade` should run says so on its own line, and a
+line that says nothing runs on `sync` alone.** The widening is per step and never inherited,
+because the approval ledger answers *what* may run and says nothing about *which verb* may run
+it.
+
 `use` takes **a name. Never a path, never a URL.** A file from the internet is a fetch step
 that puts a module on disk; then you `use` it by name like everything else.
 
@@ -315,7 +324,7 @@ take the else branch — the silent-wrongness this rule closes.
 | `enabled`, `status` | on `service:` |
 | `value` | on `setting:` (the value to write) and on `firewall:default/…` (`allow` or `deny`) |
 | `target` | on `dotfiles:` — where the tree is mirrored. Absent means the home directory. **There is no per-file option**: the tree has no place to write one, which is why it never decrypts (U24) |
-| `runs`, `undo` | on `exec:` — `runs` caps how many times one script *content* may run (`1` is the default, `always` opts out); `undo` is what removing the line runs (U3) |
+| `runs`, `undo`, `on` | on `exec:` — `runs` caps how many times one script *content* may run (`1` is the default, `always` opts out); `undo` is what removing the line runs (U3); `on` is which verb runs the step — `sync` (the default), `upgrade`, or `both` (H6) |
 | `scope` | `user` or `system` — on `setting:`, `link:` and `shim:`, the three statements where "for me" and "for the machine" can differ (U19). Defaults to whatever the store does anyway, so it is written only to override. **Writing the default is not an error**: a config is allowed to state a thing it also gets for free |
 | `formats` | ordered artifact preference. Repeated key makes the list. Backends that offer a choice only |
 | `asset` | filename or glob narrowing the choice; `all` takes every match |
