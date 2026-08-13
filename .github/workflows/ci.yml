@@ -357,7 +357,7 @@ jobs:
     # invisible until somebody pushed a tag.
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/v')
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       with:
         files: dist/*
         generate_release_notes: true
