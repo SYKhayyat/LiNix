@@ -10,6 +10,10 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SandboxSettings {
     /// On Linux, if true, Shall will fail if 'bwrap' is missing.
+    ///
+    /// Outranks `fallback_allowed`, which is the whole of its purpose: an administrator sets this
+    /// because an unconfined run is unacceptable on their fleet, and a permission to fall back
+    /// that beat it would hand them back the run they wrote it to forbid.
     #[serde(default = "default_false")]
     pub require_bwrap: bool,
 
@@ -17,10 +21,18 @@ pub struct SandboxSettings {
     pub macos_profile_template: Option<PathBuf>,
 
     /// On Windows, if true, Shall will fail if Windows Sandbox is unavailable.
+    ///
+    /// `require_bwrap`'s twin. Both are read by `Sandbox::decide` and both outrank
+    /// `fallback_allowed`; neither may be wired without the other.
     #[serde(default = "default_false")]
     pub windows_require_sandbox: bool,
 
     /// If true, allow running without OS-level isolation if mechanisms are missing.
+    ///
+    /// A permission, not an isolation: the fallback runs the command with an unmodified
+    /// environment on Linux and macOS, and at a lowered integrity level on Windows. Every run it
+    /// permits is announced at `warn!` by the caller, because the request it is quietly declining
+    /// was explicit.
     #[serde(default = "default_true")]
     pub fallback_allowed: bool,
 }

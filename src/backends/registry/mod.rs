@@ -1855,7 +1855,8 @@ mod tests {
     /// A pinned version rides where that manager puts it, and still behind the terminator.
     ///
     /// The argv table drives one declaration per backend and that declaration is unpinned, so
-    /// the pinned shape has no row. `pubdart.rs` asserted it before it became data and this is
+    /// the pinned shape has no row. The since-deleted `pubdart.rs` asserted it before it became
+    /// data and this is
     /// that assertion, kept rather than lost with the module: `dart pub global activate --
     /// webdev 2.7.0` is a trailing positional, not `webdev@2.7.0`, and the two are one
     /// `VersionPin` variant apart.

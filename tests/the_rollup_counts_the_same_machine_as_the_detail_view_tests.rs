@@ -1,10 +1,10 @@
 //! `shall check` and `shall check health` must not report different machines.
 //!
 //! A manager that is not on PATH probes as `Absent`. `check health` then promotes it
-//! (`check.rs:840`): if `priority` names it, the user told Shall to use it, so absent is a
+//! (`check.rs`): if `priority` names it, the user told Shall to use it, so absent is a
 //! **failure** and the row reads *"`apt` is not on PATH ... — and `priority` lists it, so Shall
 //! was told to use it"*. The `check` rollup consumes the same probe and never promotes
-//! anything — `HealthStatus::Absent => {}` (`check.rs:382`) — so its `critical` count is zero
+//! anything — `HealthStatus::Absent => {}` (`check.rs`) — so its `critical` count is zero
 //! where the detail view's is eight.
 //!
 //! Measured on an Ubuntu container whose `priority` names eleven managers, run with an empty
@@ -27,14 +27,14 @@
 //! `priority` names it**, and it cannot work"*; **absent** is *"it is not installed here **and
 //! nothing asked for it**"*. `priority` asked for it.
 //!
-//! **It has been fixed here once already, and grew back by another road.** `check.rs:365`:
+//! **It has been fixed here once already, and grew back by another road.** `check.rs`:
 //! *"This rollup used to skip `critical` entirely ... the rollup said `25 backend(s) ready`
 //! while `check health` called the same machine `23 critical`."* That cure taught the rollup to
 //! count `Critical`. It did not move the `Absent`-to-`Critical` promotion out of the one caller
 //! that performs it, so the rollup still cannot see the failures that only exist after it.
 //!
 //! **And the comment that says this cannot happen is on the shared function.**
-//! `probe_all_health` (`check.rs:149`): *"They share this one now, which is also what keeps the
+//! `probe_all_health` (`check.rs`): *"They share this one now, which is also what keeps the
 //! two views from disagreeing about the same machine."* Sharing the probe was mistaken for
 //! sharing the verdict. The promotion is the verdict, and it lives in `check health` alone.
 //!

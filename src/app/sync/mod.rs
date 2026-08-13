@@ -917,6 +917,33 @@ impl SyncEngine {
                 .push(spec);
         }
 
+        // **What this run's own log says it installed** — `S87`'s other half, and the half that
+        // no listing can supply.
+        //
+        // The pass below asks each manager *"is this installed?"* and claims what it says yes
+        // to. That is right for a package somebody installed by hand, and it is not enough for
+        // the one this defect is about: a `SIGKILL` mid-transaction can leave a package
+        // **unpacked but not configured**, which is on disk, on `PATH`, and correctly reported
+        // by `dpkg-query`'s status field as *not installed*. The lister is right to say so — the
+        // 2026-08-12 fix that taught it to read `${db:Status-Status}` closed a real bug — and
+        // the consequence was that ownership could never be taken for exactly the packages a
+        // crash had stranded. The registry write happens once at the end of a run; the log is
+        // written per operation; a kill in between leaves the package owned by nobody and
+        // nothing downstream notices, because a package that is genuinely installed makes
+        // `sync` converge and the preview plan nothing.
+        //
+        // So a *declared* package this machine's own journal records having installed is
+        // claimed on that evidence, whatever the manager's listing says today. The two sources
+        // answer different questions — *is it here* and *did we put it here* — and ownership is
+        // the second one.
+        let recorded_by_us: std::collections::HashSet<String> = {
+            let j = self.journal.lock().await;
+            j.completed_installs()
+                .into_iter()
+                .map(|(backend, name)| format!("{}:{}", backend, name))
+                .collect()
+        };
+
         let mut reclaimed: Vec<PackageSpec> = Vec::new();
         for (backend, specs) in by_backend {
             let Some(b_cap) = self.registry.get(&backend) else {
@@ -925,19 +952,26 @@ impl SyncEngine {
             let Some(queryable) = b_cap.as_queryable() else {
                 continue;
             };
-            // A manager that cannot answer leaves its packages unclaimed. The opposite default
-            // — assume they are there — would have Shall claim to manage packages that are
-            // not on the machine, and the next sync would issue a removal for each.
-            let Ok(installed) = queryable.list_installed().await else {
-                debug!(
-                    "`{}` could not be listed, so its declared packages stay unclaimed.",
-                    backend
-                );
-                continue;
+            // A manager that cannot answer leaves its packages unclaimed **on its own
+            // evidence** — the opposite default, assume they are there, would have Shall claim
+            // to manage packages that are not on the machine and issue a removal for each on
+            // the next sync. What it does not veto is our own journal: a listing this manager
+            // cannot produce says nothing about what Shall recorded installing.
+            let present: std::collections::HashSet<String> = match queryable.list_installed().await
+            {
+                Ok(installed) => installed.into_iter().map(|p| p.name).collect(),
+                Err(_) => {
+                    debug!(
+                        "`{}` could not be listed; only what our own log records is claimed.",
+                        backend
+                    );
+                    Default::default()
+                }
             };
-            let present: std::collections::HashSet<String> =
-                installed.into_iter().map(|p| p.name).collect();
-            reclaimed.extend(specs.into_iter().filter(|s| present.contains(&s.name)));
+            reclaimed.extend(specs.into_iter().filter(|s| {
+                present.contains(&s.name)
+                    || recorded_by_us.contains(&format!("{}:{}", s.backend, s.name))
+            }));
         }
         if reclaimed.is_empty() {
             return Ok(());
@@ -1339,9 +1373,44 @@ impl SyncEngine {
                             // 2026-08-04; it is an error with a reason, not an absence.
                             _ => None,
                         };
+                        // **An install Shall started is Shall's to own, whether or not recovery
+                        // could finish it** (`S87`).
+                        //
+                        // This branch used to end with *"the entry stays recorded as
+                        // interrupted, so nothing claims this package is installed"* — and that
+                        // sentence is the defect. A group-kill mid-`apt` wedges dpkg, so the
+                        // replay above fails; but the kill can also leave a package **unpacked**
+                        // — on disk, on `PATH`, runnable — which `dpkg-query`'s status field
+                        // correctly reports as *not installed*. So the package is on the machine
+                        // and the registry claims nothing, which means `uninstall` reports
+                        // success and takes nothing away, for ever. Measured in the container:
+                        // *"the crash left ncdu installed and under nobody's management"*.
+                        //
+                        // Ownership is not a claim that the package is installed — it is a claim
+                        // that **Shall is answerable for whatever this operation left behind**,
+                        // and the durable log saying "I began installing this" is exactly that
+                        // evidence. Taking it costs nothing when the install truly did nothing:
+                        // the line is still declared, so the next sync installs it rather than
+                        // removing it. Not taking it costs software nobody can remove.
+                        //
+                        // The entry still stays `InProgress`, so recovery keeps trying.
+                        if let GraphAction::Install(spec) = &action {
+                            let source = spec.options.one("__source").unwrap_or("sync");
+                            let mut state = self.state.lock().await;
+                            state.add(
+                                &spec.backend,
+                                &spec.name,
+                                None,
+                                spec.options.clone(),
+                                source,
+                                false,
+                            );
+                        }
                         error!(
-                            "could not recover {} — {}. {} The entry stays recorded as \
-                             interrupted, so nothing claims this package is installed.",
+                            "could not recover {} — {}. {} Shall has taken ownership of it \
+                             regardless: the run that was interrupted may have left part of it \
+                             on this machine, and a package nothing claims is one nothing can \
+                             remove.",
                             key,
                             e.as_ref()
                                 .map_or("the recovery did not reach it".to_string(), |e| e
@@ -1386,7 +1455,14 @@ impl SyncEngine {
         // ownership record made above and not written here dies with the process and the orphan
         // comes straight back. Same shape as the finalisation in `run`: serialised under the
         // lock, written outside it.
-        if !recovered.is_empty() || !kept.is_empty() {
+        //
+        // **`failed` is in this condition, and leaving it out was the other half of `S87`.** A
+        // recovery that could not finish now takes ownership anyway — that is the whole point of
+        // the branch above — and a run where *every* entry failed changes the registry and
+        // nothing else. Gated on `recovered || kept`, exactly that run wrote nothing, so the
+        // ownership record died with the process and the orphan came straight back on the next
+        // one. The group-kill scenario is that run: dpkg is wedged, every replay fails.
+        if !recovered.is_empty() || !kept.is_empty() || !failed.is_empty() {
             let to_write = self.state.lock().await.snapshot()?;
             tokio::task::spawn_blocking(move || to_write.write())
                 .await

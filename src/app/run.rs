@@ -111,35 +111,34 @@ impl Runner {
         }
 
         let settings = &self.config.sandbox;
-        let can_sandbox = Sandbox::is_available(settings).await;
 
         let status = if sandbox_requested {
-            if can_sandbox {
-                debug!("running command in sandbox");
-                let sandbox_cfg = SandboxConfig {
-                    allow_network: true,
-                    allow_home: true,
-                    allow_write: true,
-                    ..Default::default()
-                };
-
-                let cmd_str = command.to_string();
-                let args_vec = args.to_vec();
-                let settings_clone = settings.clone();
-
-                tokio::task::spawn_blocking(move || {
-                    Sandbox::run(&cmd_str, &args_vec, &sandbox_cfg, &settings_clone)
-                })
-                .await
-                .map_err(|e| Error::Other(format!("Sandbox thread failure: {}", e)))??
-            } else if settings.fallback_allowed {
-                warn!("Sandbox requested but unavailable. Falling back to host execution.");
-                self.execute_standard(command, args).await?
+            // One decision, and the user hears about it before the command runs rather than at
+            // `debug!` after. An unconfined verdict here is the whole of F10: `@sandbox` was
+            // asked for and cannot be given, which is a sentence a person is owed.
+            let decided = Sandbox::decide(settings).await?;
+            if let Some(warning) = decided.unconfined_warning() {
+                warn!("{warning}");
             } else {
-                return Err(Error::UnsupportedPlatform(
-                    "Sandboxing is required by policy but not functional on this host.".into(),
-                ));
+                debug!("running command in sandbox");
             }
+
+            let sandbox_cfg = SandboxConfig {
+                allow_network: true,
+                allow_home: true,
+                allow_write: true,
+                ..Default::default()
+            };
+
+            let cmd_str = command.to_string();
+            let args_vec = args.to_vec();
+            let settings_clone = settings.clone();
+
+            tokio::task::spawn_blocking(move || {
+                Sandbox::run(&cmd_str, &args_vec, &sandbox_cfg, &settings_clone, &decided)
+            })
+            .await
+            .map_err(|e| Error::Other(format!("Sandbox thread failure: {}", e)))??
         } else {
             self.execute_standard(command, args).await?
         };

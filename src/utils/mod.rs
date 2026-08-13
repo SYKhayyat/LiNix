@@ -43,7 +43,8 @@ pub fn safe_config_dir() -> PathBuf {
 
 // `refresh_path` was here, with a doc comment asserting that "backends that install a toolchain
 // (mise, cargo) must call this before running hooks that invoke it". **Nothing called it, and
-// there is no `cargo.rs`** — so either the bug it describes is live and this never guarded it,
+// there is no `cargo.rs`, since-deleted** — so either the bug it describes is live and this
+// never guarded it,
 // or the requirement is fiction. Deleting it makes that an open question instead of a solved
 // one: a helper nobody calls, documented as mandatory, reads as coverage from every angle
 // except the only one that counts.

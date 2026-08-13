@@ -18,6 +18,76 @@ and x86_64 Windows, and installers that download them.
 five things the assessment did not know about. All of them are in this release, which is why the
 entry it was written for now carries them rather than sitting above an untagged number.*
 
+### Two commands now return an exit code they did not
+
+- **`shall plan` exits `2` when the plan it wrote is not empty.** It answers the question `check`
+  answers *and* writes the artifact a script consumes, so a pipeline that branches on drift
+  reaches for it — and it returned `0` every time, including while printing `1 install(s), 0
+  removal(s)` on the line above. The condition is `check`'s condition, over the same quantities,
+  because two readings of one machine that disagree is the defect this repository keeps paying
+  for. `shall list --outdated` is deliberately unchanged: a listing's subject is inventory rather
+  than a verdict.
+- **`shall sync` exits `1` when a declaration could not be acted on**, counted per declaration so
+  a partial skip is caught. It warned and returned `Exit::Converged`, which matters most where
+  nobody reads warnings: `sudo` ships `secure_path` without `~/.cargo/bin`, `~/.bun/bin` or
+  `~/.local/bin`, so an unattended sync could install none of what it was asked for and report
+  success — while `shall check`, on the same state one line later, reported drift and exited 2.
+  A *removal* the guard declines is not this: that is the guard working, and it is the ordinary
+  state of every adopted machine. The two used to share one list and are now distinct in the type.
+
+### `@sandbox` says so when it cannot confine
+
+- **It ran the command unconfined and mentioned it at `debug`.** On a Linux host without `bwrap`,
+  `shall run -p pkg@sandbox -- cmd` executed with an unmodified environment; the one
+  user-visible warning was on a branch that could not be reached, because the predicate in front
+  of it (`bwrap_available() || fallback_allowed`) had already folded the condition in and was a
+  constant `true` under the default. The fallback logged *"Falling back to PATH isolation"* over
+  a bare command that isolated nothing.
+- **The permission stays; the silence goes.** `sandbox.fallback_allowed` still defaults to `true`
+  — a user who asked for confinement on a host that cannot provide it is owed the fact, not a
+  program that decides on their behalf that they may not proceed. Every unconfined run is now
+  announced at `warn!` before the command starts, and one function (`Sandbox::decide`) answers
+  the question for `run`, `shell` and `wrap` so they cannot disagree.
+- **`sandbox.require_bwrap` now does what its documentation always said.** It was declared,
+  defaulted, serialised and **read by nothing**, while its Windows twin was wired — so an
+  administrator who wrote it got byte-for-byte the same unconfined run. It is read, and it
+  outranks `fallback_allowed`.
+
+### An option written straight after a value is no longer swallowed
+
+- **`cargo:ripgrep@version=1.0.0@hold` parsed as one package at version `1.0.0@hold`, with no
+  hold, and said nothing.** The refusal for this existed and required a space before the `@`, so
+  the same text was accepted or refused by how it was typed. All ten bare flags went the same
+  way — including `@sandbox`, which decides whether a command is confined, and `@system`, which
+  decides whether a package is written into the environment the OS owns.
+- Values that legitimately carry an `@` stay legal: `@requires=@angular/cli`,
+  `@source=github:owner/repo@v2` and semver build metadata like `@version=1.2.3+build@7`.
+
+### `check` no longer loses one kind of drift by finding another
+
+- **One skipped declaration erased every other kind.** The skip arm was matched before the counts
+  arm, so a machine with one skip and any amount of real pending work reported the skip and
+  nothing else — and a declared `link:` missing from disk vanished from the JSON as well as the
+  prose, because `place`/`undo` had no key in `counts` and existed only inside the summary
+  sentence that arm replaced. The row is built by appending what is true, and every quantity the
+  prose can mention has a key beside it.
+
+### `sync --dry-run` asks the guard the question `sync` asks
+
+- **The rehearsal reported `install 0  remove 13`, exit 0, nothing protected; the same command
+  without the flag exited 3 and named ten protected packages.** `plan` had it right over
+  identical state the whole time, which is what made this a defect rather than a missing feature.
+  The dry run now calls the same `preview_refusals` `plan` calls.
+
+### A backend says whether it has ever met its manager
+
+- **`check health` marks a backend no harness has ever driven** as `(unproven — no harness has
+  run it)`. 62 backends ship and a substantial minority have never completed a real install →
+  list → binary-on-PATH → remove anywhere; a user could not tell those from the ones with a
+  lifecycle behind them, because they were listed side by side in the same words. The reasons
+  live in `src/backends/proving.rs` and the coverage gate reads that table rather than its own
+  copy of it.
+
 ### The project is called Shall
 
 - **It was LiNix.** Everything that carried the old name moved with it: the binary and the crate

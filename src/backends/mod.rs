@@ -4,6 +4,7 @@ pub mod generic;
 pub mod node_registry;
 pub mod onboarder;
 pub mod pip_search;
+pub mod proving;
 pub mod registry;
 
 pub mod appimage;

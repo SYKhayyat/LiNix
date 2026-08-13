@@ -90,8 +90,36 @@ One reported symptom, two live siblings.
 ## Verify
 
 `cargo build --all-targets` → `cargo test --no-fail-fast` → `cargo clippy --all-targets` →
-`cargo fmt -- --check`. Report honestly: unverified is not done, and a skipped step is a said-so,
-not a done.
+`cargo fmt -- --check` → `scripts/unix-check.sh`. Report honestly: unverified is not done, and a
+skipped step is a said-so, not a done.
+
+**This chain runs on Windows, so four of its five steps verify one platform of two — and nothing
+used to say so.** `scripts/unix-check.sh` is the fifth step and the only one that compiles the
+**45 `cfg`-gated blocks across 17 source files** the other four cannot see. It runs `cargo check`
+in a container, because the cheap alternative does not exist: `cargo check --target
+x86_64-unknown-linux-gnu` from this host dies in `mlua`'s vendored C build for want of
+`x86_64-linux-gnu-gcc`.
+
+**What it costs to skip it, measured rather than argued.** `d1b3618` named one private associated
+const across a module boundary, under `#[cfg(unix)]` on both sides. The local chain was clean.
+Every Apple, Linux and MSRV job went red, and so did all seven distro integration jobs — and
+because the container harness *builds its binary in-image*, a tree that does not compile on Linux
+takes every fault-injection check offline with it. So the same commit introduced a blocker and
+disabled the only instrument that could have reported it, and both sat for 26 commits. The first
+thing the restored harness did was hand back a second blocker from that same commit.
+
+**Which behaviours only the container harness can verify — state this, do not re-run and hope.**
+The Rust suite is hermetic: it drives mock providers, so any behaviour that depends on a *real*
+manager's answer is outside what it can reach. A red harness is therefore not "a job to re-run
+later", it is **this list of properties currently unverified**:
+
+- the removal guard's OS-essential protection against a manager that actually reports one
+  (the hermetic half of this now has a fixture — `guard.rs`'s `Essentials` — but only the
+  harness sees the real query);
+- crash and fault injection: `crash/midway`, `crash/completed`, `crash/groupkill`, and whether a
+  killed process leaves the state the recovery tests *construct by hand*;
+- a backend's real install → list → binary-on-PATH → remove lifecycle;
+- argv and terminator behaviour of a manager as installed, rather than as the table infers it.
 
 **`cargo fmt -- --check` is part of this chain, not a release-time afterthought.** CI rates it
 fatal on every push, and it is the one gate a change with no logic in it can break: renaming

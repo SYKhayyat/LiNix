@@ -96,7 +96,7 @@ pub async fn handle_remove_orphans(app: &App) -> Result<()> {
     // per-backend `installable.remove` here, with its own journalling and no transaction — so
     // `remove-orphans` had no write-ahead recovery, no rollback, and no batching, and a kill
     // part-way through left a machine whose only account of what went was the terminal
-    // scrollback. `plan.rs:483-499` records what that shape cost `apply`, which stopped keeping
+    // scrollback. `plan.rs-499` records what that shape cost `apply`, which stopped keeping
     // its own loop for the same reasons; this is the same fix on the next command along.
     //
     // The guard already ran above, over the whole set at once. The engine asks again — through
@@ -119,7 +119,7 @@ pub async fn handle_remove_orphans(app: &App) -> Result<()> {
 ///
 /// **`LX-5`: four commands removed or installed outside the planner.** Sugar that routes through
 /// `sync` is the model working, and `install`/`uninstall`/`teleport`/`rollback`/`activate` all do
-/// — `packages.rs:46` states the rule outright. `remove-orphans` and `purge-undeclared` did not:
+/// — `packages.rs` states the rule outright. `remove-orphans` and `purge-undeclared` did not:
 /// each had its own preview, its own confirm, its own journalling loop, and neither ever saw
 /// `ChangePlanner` or `SyncEngine`. What they lost by that is not abstract — no transaction, no
 /// write-ahead recovery, no rollback, and one manager invocation per package where `Y1` measured
@@ -402,7 +402,7 @@ pub async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Resul
 
     // **Executed by the one engine.** This was a `for` loop calling `inst.remove` one package
     // at a time — no transaction, no batching, no rollback — in the most destructive command in
-    // the program. `plan.rs:483-499` is the best paragraph in `src/verbs/` on exactly what that
+    // the program. `plan.rs-499` is the best paragraph in `src/verbs/` on exactly what that
     // shape cost `apply`, and nobody applied it here.
     //
     // The guard's scope carries `II.11` with it: `SyncEngine::sync` dispatches

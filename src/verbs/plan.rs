@@ -134,12 +134,11 @@ pub async fn handle_status(app: &App, out: Output) -> Result<()> {
     // Distinct from `undeclared` below, and the distinction is the point: an undeclared
     // package is one Shall never took responsibility for, and one of these is a package it
     // manages, that nothing declares, and that it has decided never to remove (AU1).
-    if !report.skipped.is_empty() {
-        println!(
-            "~ drift — `sync` would leave in place ({}):",
-            report.skipped.len()
-        );
-        for s in &report.skipped {
+    // Grouped by kind: this list holds declined removals *and* declarations this machine cannot
+    // act on, and "would leave in place" is only true of the first.
+    for (kind, rows) in crate::app::sync::planner::Skipped::by_kind(&report.skipped) {
+        println!("~ drift — {}:", kind.heading(rows.len()));
+        for s in rows {
             println!("    {}  ({})", s.key, s.reason);
         }
     }
@@ -269,12 +268,15 @@ pub async fn handle_plan(app: &App, out: &str) -> Result<()> {
         // `already matches` is a claim about the machine, and the lines above have just named
         // packages it holds that nothing declares. The plan is genuinely empty; the machine is
         // genuinely not converged, and saying only the first is how AU1 read.
-        println!(
-            "Wrote plan to {} — no actions. {} package(s) are installed, declared nowhere, and \
-             will not be removed (above).",
-            out,
-            full.changes.skipped.len()
-        );
+        // By kind. This sentence used to call every skipped row "installed, declared nowhere,
+        // and will not be removed" — three clauses, all three false of a declaration this
+        // machine cannot act on, which is the other half of what the list holds.
+        let by_kind = crate::app::sync::planner::Skipped::by_kind(&full.changes.skipped)
+            .into_iter()
+            .map(|(kind, rows)| kind.heading(rows.len()))
+            .collect::<Vec<_>>()
+            .join("; ");
+        println!("Wrote plan to {} — no actions. {} (above).", out, by_kind);
     } else if plan.is_empty() {
         println!(
             "Wrote plan to {} — system already matches desired state (no changes).",
@@ -338,6 +340,29 @@ pub async fn handle_plan(app: &App, out: &str) -> Result<()> {
                 refusals.join("\n")
             );
         }
+    }
+
+    // **`Q-A`, ruled 2026-08-13: a read-only command that finds work exits 2.**
+    //
+    // `target-state.md` says exit 2 *"means a read-only command found work to do"*, and until
+    // now only `check` ever built it: `shall plan` printed *"1 install(s), 0 removal(s)"* and
+    // exited **0**. `plan` answers the question `check` answers *and* writes the artifact a
+    // script consumes, so a pipeline that branches on drift reaches for it and is told the
+    // machine has converged, every time.
+    //
+    // The condition is `check`'s condition, deliberately — the same quantities in the same
+    // combination — because the rule this repo keeps paying for is that two readings of one
+    // machine disagree. `list --outdated` is **not** given this treatment: a listing's subject
+    // is inventory rather than a verdict, and one that exited non-zero for having contents
+    // would be surprising in a way this is not.
+    let found_work = !plan.is_empty()
+        || !full.changes.skipped.is_empty()
+        || !full.resources.unverifiable.is_empty();
+    if found_work {
+        return Err(crate::core::Error::Differences(format!(
+            "the plan written to {out} is not empty"
+        ))
+        .into());
     }
     Ok(())
 }

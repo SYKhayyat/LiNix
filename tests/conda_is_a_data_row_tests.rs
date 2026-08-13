@@ -10,7 +10,7 @@
 //! bought it nothing and cost it eight capabilities. `ManagerConfig::resolve_settings` and the
 //! `{setting.env|base}` placeholder are what the row was missing.
 //!
-//! **This file is the deleted module's own test, kept.** `conda.rs:267` asserted exactly these
+//! **This file is the deleted module's own test, kept.** `conda.rs` asserted exactly these
 //! three commands through a mock; the conversion is only correct if the same three still come
 //! out, so the assertion moved here rather than going with the module. The default and the
 //! blank-value cases came with it, because a placeholder with a default is precisely the thing

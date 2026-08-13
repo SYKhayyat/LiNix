@@ -348,7 +348,7 @@ impl RawExecutor {
     /// Unix only, because it is the grace between the signal that can be caught and the one that
     /// cannot, and Windows has only the second.
     #[cfg(unix)]
-    const TERMINATION_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+    pub(crate) const TERMINATION_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 
     /// Collect the child's output, optionally echoing it to the terminal as it arrives, and
     /// give up on a child that has gone silent.
@@ -681,10 +681,10 @@ fn restrict_to_owner(path: &Path) -> Result<()> {
 /// never matched, the call falls through to the default, and the test passes having asserted
 /// nothing.
 ///
-/// It was not hypothetical. `e2e_tests.rs:108` registered `"brew install {name}"` while the
-/// product emits `"brew install -- neovim"` (`argv.rs:490`); all five of that file's
+/// It was not hypothetical. The since-deleted `e2e_tests.rs` registered `"brew install {name}"` while the
+/// product emits `"brew install -- neovim"` (`argv.rs`); all five of that file's
 /// registrations were dead strings and every test passed on the default. Sixteen lines away in
-/// the same suite, `a_machine_converges_tests.rs:115` registered the `--` form. **Two tests
+/// the same suite, `a_machine_converges_tests.rs` registered the `--` form. **Two tests
 /// disagreed about the product's own argv and both were green.**
 ///
 /// So the mock now keeps two ledgers, and the second is the one that catches that bug:
@@ -832,7 +832,7 @@ impl MockExecutor {
              What actually ran:\n\n  {}\n\n\
              A stub nobody matched is the test's belief about the product's argv, and the \
              product disagreed. The call fell through to the empty-success default and the \
-             assertions below it proved nothing — which is how `e2e_tests.rs` registered \
+             assertions below it proved nothing — which is how the since-deleted `e2e_tests.rs` registered \
              `brew install {{name}}` against a product that emits `brew install -- neovim`, and \
              stayed green. Fix the pattern to the argv that ran, or call \
              `allow_unmatched_registrations()` and be able to say why.",

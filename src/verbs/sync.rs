@@ -34,6 +34,27 @@ pub struct Reconciled {
     pub applied: usize,
     /// Removals the planner declined, each already named on the way past.
     pub left_in_place: usize,
+    /// **Declarations this machine could not act on** — declared, not installed, and they did
+    /// not arrive.
+    ///
+    /// Counted apart from `left_in_place`, because the two are opposite facts and one number
+    /// over both cannot answer the question `Q-C` asks. A declined removal is the guard working
+    /// and is the ordinary state of any adopted machine; a skipped install is work that was
+    /// asked for and did not happen, which is the difference between a run that converged and
+    /// one that only reported it had.
+    pub not_installed: usize,
+}
+
+/// How many rows of a skip list are declarations that did not arrive.
+///
+/// `Q-C`'s discriminator, and it is the reason `SkipKind` exists: without it this count would
+/// have to be inferred from a sentence.
+fn not_installed_of(skipped: &[crate::app::sync::planner::Skipped]) -> usize {
+    use crate::app::sync::planner::SkipKind;
+    skipped
+        .iter()
+        .filter(|s| s.kind == SkipKind::InstallSkipped)
+        .count()
 }
 
 /// One reconcile pass: resolve the model, apply repos, plan, apply, then dependents,
@@ -163,12 +184,14 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
         return Ok(Reconciled {
             applied: resources.place.len() + undone,
             left_in_place: changes.skipped.len(),
+            not_installed: not_installed_of(&changes.skipped),
         });
     }
 
     let applied = changes.total_install() + changes.total_remove();
     // Read before the plan is consumed by the engine below.
     let left_in_place = changes.skipped.len();
+    let not_installed = not_installed_of(&changes.skipped);
 
     // XIII.3: a script's decision is printed before anything happens — the hash, how many
     // times that content has run, and what this run will therefore do. Outside the
@@ -181,12 +204,46 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
     // Dry-run is preview-only: never prompt, never mutate. (The report went out above, on the
     // path a converged machine also takes.)
     if app.config.dry_run {
+        // **The rehearsal asks the guard, because the act asks it.**
+        //
+        // This block returns before `engine.sync`, which is where the guard is enforced — so a
+        // preview of an operation the guard refuses reported `install 0  remove 13`, exit 0,
+        // nothing protected, while the same command without `--dry-run` exited 3 and named ten
+        // protected packages. `plan` had it right the whole time over the identical state,
+        // which is what made this a defect rather than a missing feature.
+        //
+        // Through `preview_refusals` — the same function `plan` calls, in the engine's own
+        // order over one ledger. A second implementation here would be free to disagree with
+        // the enforcer, which is the bug one layer up.
+        //
+        // It reports and does not refuse: what a dry-run should *exit* with is `U21`'s and the
+        // owner's, and answering it here would be answering it in code.
+        let resources = app.extras().changes(&state).await?;
+        let package_pairs = crate::app::sync::guard::removal_pairs(&changes);
+        let extra_pairs = crate::app::sync::guard::extra_removal_pairs(&resources.undo);
+        let refusals = crate::app::sync::guard::preview_refusals(
+            &app.config,
+            &app.registry,
+            changes.total_install(),
+            &package_pairs,
+            &extra_pairs,
+            opts.scope,
+        )
+        .await;
+        if !refusals.is_empty() {
+            println!(
+                "\nWARNING: `shall sync` will refuse this.\n{}",
+                refusals.join("\n")
+            );
+        }
+
         // The same phases a real run would perform, in the same order, from the same list —
         // each honours `dry_run` itself and previews instead of acting.
         let extras_undone = apply_non_package_phases(app, &state, opts.scope).await?;
         return Ok(Reconciled {
             applied: applied + extras_undone,
             left_in_place: changes.skipped.len(),
+            not_installed: not_installed_of(&changes.skipped),
         });
     }
 
@@ -208,6 +265,7 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
                 return Ok(Reconciled {
                     applied: 0,
                     left_in_place: changes.skipped.len(),
+                    not_installed: not_installed_of(&changes.skipped),
                 });
             }
             changes = preview.get_filtered_changes();
@@ -231,6 +289,7 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
     Ok(Reconciled {
         applied: applied + extras_undone,
         left_in_place,
+        not_installed,
     })
 }
 
@@ -626,8 +685,40 @@ pub async fn handle_sync(app: &App, mode: SyncMode, out: Output) -> Result<()> {
     // in `check`.
     // Not under `--json`: the answer there is the document, and a sentence after it is a second
     // answer in a second language that no consumer can read.
-    if done.applied == 0 && done.left_in_place == 0 && out.is_human() {
+    if done.applied == 0 && done.left_in_place == 0 && done.not_installed == 0 && out.is_human() {
         println!("already up to date");
+    }
+
+    // **`Q-C`, ruled 2026-08-13: a declaration Shall was told to act on and could not is a
+    // failure of the run, not a line that does not apply here.**
+    //
+    // `sudo`'s stock `secure_path` hides `~/.cargo/bin`, `~/.bun/bin` and `~/.local/bin`, so an
+    // unattended `sync` warns once per declaration, installs nothing, and returned
+    // `Exit::Converged` — while `shall check`, on the same unchanged state one line later,
+    // reported drift and exited 2. Three packages asked for, zero installed, exit 0. Run twice
+    // more, alternating, and the two commands never agreed about one machine at one moment.
+    //
+    // The rule was already ruled, one command over: `target-state.md` §Q2 defines **critical**
+    // as *"it is installed, **or `priority` names it**, and it cannot work"* — so a
+    // `priority`-named manager that cannot be reached is a failure of the machine and not an
+    // inapplicable declaration. `check` was told. `sync` was not.
+    //
+    // `Failed` and not `Differences`, from `U21`'s own table: 2 means *a read-only command
+    // looked and found work to do*, and `sync` is not read-only. 1 means *Shall could not carry
+    // the command out*, which is exactly what happened — the same code a failed install already
+    // returns, for the same reason, since a declaration that never reached its manager and one
+    // whose manager refused it are both work that was asked for and did not happen.
+    //
+    // A **partial** skip counts too, and that is the case this has to cover: three of four is
+    // the ordinary shape and is worse than three of three, because something did get installed
+    // and the summary reads like a successful transaction.
+    if done.not_installed > 0 {
+        return Err(crate::core::Error::command_failed(format!(
+            "{} declaration(s) could not be acted on and were not installed; this machine has \
+             not converged. The reason for each is named above.",
+            done.not_installed
+        ))
+        .into());
     }
     Ok(())
 }
@@ -726,11 +817,22 @@ pub async fn handle_watch(
                 println!("watch: manifests changed — reconciling.");
             }
             match watch_reconcile(app).await {
-                Ok(done) if done.applied == 0 && done.left_in_place == 0 => {
+                // `not_installed` is in the first arm's condition for the same reason
+                // `left_in_place` is: `already in sync` is a claim about the machine, and a
+                // machine holding declarations that did not arrive is not in sync. `watch` is
+                // unattended by definition, so this line is the whole of what anybody reads.
+                Ok(done)
+                    if done.applied == 0 && done.left_in_place == 0 && done.not_installed == 0 =>
+                {
                     if changed || first {
                         println!("watch: already in sync.");
                     }
                 }
+                Ok(done) if done.applied == 0 && done.not_installed > 0 => println!(
+                    "watch: nothing applied; {} declaration(s) could not be acted on and {} \
+                     package(s) left in place (listed above).",
+                    done.not_installed, done.left_in_place
+                ),
                 Ok(done) if done.applied == 0 => println!(
                     "watch: nothing applied; {} package(s) left in place (listed above).",
                     done.left_in_place
@@ -772,7 +874,7 @@ pub async fn handle_watch(
 /// Every `[guard]` install/change rule this desired state violates.
 ///
 /// **Split out so `shall policy` can preview exactly what `sync` will enforce.**
-/// `verbs/setup.rs:637` used to re-implement this — the same `inspect_desired` call, the same
+/// `verbs/setup.rs` used to re-implement this — the same `inspect_desired` call, the same
 /// `require_snapshot` check, and **no `deny_vulnerable`** — and then printed a footnote at `:646`
 /// admitting the gap: *"(deny_vulnerable is also enforced at sync time via `shall check
 /// security`.)"*
@@ -889,28 +991,28 @@ pub fn print_flight_plan(
 /// packages in it would otherwise bury the plan under the list of what is NOT happening.
 const MAX_LISTED_SKIPS: usize = 10;
 
-/// The removals the plan declined, each with the reason that item carries.
+/// What the plan left out, grouped by which question each row answers.
 ///
 /// Free-standing so that every surface showing a plan shows the same lines — `sync`, its
 /// preview and `prune` all reach it, and a fourth caller added later gets it by calling this
 /// rather than by remembering the rule.
+///
+/// **Grouped rather than headed by one sentence**, because the list holds two opposite kinds and
+/// this function used to describe both as *"installed, declared nowhere, and not removed"*. For
+/// a skipped install every clause of that is false, and the advice under it asked the user to
+/// declare something they had already declared.
 pub fn print_skipped(skipped: &[crate::app::sync::planner::Skipped]) {
-    if skipped.is_empty() {
-        return;
+    use crate::app::sync::planner::Skipped;
+    for (kind, rows) in Skipped::by_kind(skipped) {
+        println!("{}:", kind.heading(rows.len()));
+        for item in rows.iter().take(MAX_LISTED_SKIPS) {
+            println!("  ~ {}  ({})", item.key, item.reason);
+        }
+        if rows.len() > MAX_LISTED_SKIPS {
+            println!("  … and {} more", rows.len() - MAX_LISTED_SKIPS);
+        }
+        println!("  {}.", kind.advice());
     }
-    println!(
-        "Left in place ({}) — installed, declared nowhere, and not removed:",
-        skipped.len()
-    );
-    for item in skipped.iter().take(MAX_LISTED_SKIPS) {
-        println!("  ~ {}  ({})", item.key, item.reason);
-    }
-    if skipped.len() > MAX_LISTED_SKIPS {
-        println!("  … and {} more", skipped.len() - MAX_LISTED_SKIPS);
-    }
-    println!(
-        "  Declare them to keep them, or run `shall protected <name>` to see what decides this."
-    );
 }
 
 /// W13: name the variables whose value changed since the last successful sync (HEAD), so a

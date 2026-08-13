@@ -1466,7 +1466,7 @@ mod tests {
 
     /// GRADER round 5, 2026-07-30 — RED.
     ///
-    /// `error.rs:226` classifies a rate limit `Transient`, and says why in as many words:
+    /// `error.rs` classifies a rate limit `Transient`, and says why in as many words:
     /// *"The whole point of a rate limit is that the window moves."* `why_kept` branches on
     /// `Refused`, `Exhausted` and name-absence and then falls through to `Unclassified`, so the
     /// user is told **"Nothing classified the failure above"** about a failure this program

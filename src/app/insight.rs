@@ -29,35 +29,19 @@ pub struct ResolvedPkg {
 async fn resolve_managed(
     state: &tokio::sync::Mutex<crate::core::StateRegistry>,
     registry: &crate::backends::BackendRegistry,
+    max_parallel: usize,
 ) -> Vec<ResolvedPkg> {
-    let managed: Vec<(String, String, Option<String>)> = {
-        let state = state.lock().await;
-        state
-            .packages
-            .iter()
-            .map(|p| (p.backend.clone(), p.name.clone(), p.version.clone()))
-            .collect()
-    };
-
-    let mut out = Vec::with_capacity(managed.len());
-    for (backend, name, recorded) in managed {
-        let version = match registry
-            .get(&backend)
-            .and_then(|b| b.as_queryable().cloned())
-        {
-            Some(q) => match q.info(&name).await {
-                Ok(Some(p)) => p.version.or(recorded),
-                _ => recorded,
-            },
-            None => recorded,
-        };
-        out.push(ResolvedPkg {
+    // **One implementation, in `export`.** This was a byte-for-byte second copy of that loop,
+    // and both were serial — so fixing the fan-out in one would have left the other at 1.0×.
+    crate::app::export::managed_pkgs(state, registry, max_parallel)
+        .await
+        .into_iter()
+        .map(|(backend, name, version)| ResolvedPkg {
             backend,
             name,
             version,
-        });
-    }
-    out
+        })
+        .collect()
 }
 
 /// Returns None for backends with no standardized purl type — those must be omitted from
@@ -145,10 +129,11 @@ fn build_cyclonedx(pkgs: &[ResolvedPkg]) -> Value {
 
 /// Emit a CycloneDX SBOM of every managed package, across all backends, as pretty JSON.
 pub async fn sbom(
+    config: &Config,
     registry: &Arc<BackendRegistry>,
     state: &tokio::sync::Mutex<crate::core::StateRegistry>,
 ) -> Result<String> {
-    let pkgs = resolve_managed(state, registry).await;
+    let pkgs = resolve_managed(state, registry, config.max_parallel).await;
     let doc = build_cyclonedx(&pkgs);
     serde_json::to_string_pretty(&doc).map_err(|e| Error::Json(e.to_string()))
 }
@@ -260,7 +245,7 @@ pub async fn audit(
     registry: &Arc<BackendRegistry>,
     state: &tokio::sync::Mutex<crate::core::StateRegistry>,
 ) -> Result<AuditReport> {
-    let pkgs = resolve_managed(state, registry).await;
+    let pkgs = resolve_managed(state, registry, config.max_parallel).await;
     let (body, index_map) = build_querybatch(&pkgs);
 
     let mut report = AuditReport {

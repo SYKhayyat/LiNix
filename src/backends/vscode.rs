@@ -207,7 +207,7 @@ impl Queryable for VscodeQueryable {
     /// silent: `shall install vscode:x` reported success and installed nothing, a `@version=`
     /// pin re-installed for ever the moment upstream published a newer build, and every plan
     /// made one rate-limited HTTPS POST per declared extension. Same bug as `mise:`, whose
-    /// obituary is at `mise.rs:183`.
+    /// obituary is at `mise.rs`.
     ///
     /// The marketplace answers *could this be installed?* — that is `search`, and
     /// `get_dependencies`, both of which still ask it.
@@ -348,7 +348,7 @@ mod tests {
     /// re-installed for ever the moment upstream published, and every plan made one
     /// rate-limited HTTPS POST per declared extension.
     ///
-    /// The same bug's obituary is in `mise.rs:183`, written 2026-07-24. The assertion that the
+    /// The same bug's obituary is in `mise.rs`, written 2026-07-24. The assertion that the
     /// catalogue is not consulted is the one that file already makes; this is its sibling.
     #[tokio::test]
     async fn info_answers_installed_here_not_published_to_the_marketplace() {

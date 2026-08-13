@@ -394,6 +394,29 @@ jobs:
           -v "$PWD/scripts/lifecycle-floor.txt:/src/scripts/lifecycle-floor.txt:ro" \
           shall-it-${{ matrix.distro }} ${{ matrix.backend }} ${{ matrix.pkg }}
 
+    # **The argv probe, on every image rather than on one of six.**
+    #
+    # It was gated to the `tools` image, in the nightly job — so five distro images that each
+    # carry a Rust toolchain, and between them `pacman`, `zypper`, `apk`, `xbps-install`,
+    # `xbps-query`, `xbps-remove`, `pnpm`, `yarn` and `cargo`, never ran it. Those rows sat as
+    # `Unasked` inferences, counted against `UNASKED_CEILING`, on images that could have
+    # answered on every push. The evidence was being left on the floor.
+    #
+    # `!cancelled()` for the same reason as its twin in the nightly job: this and the lifecycle
+    # are separate questions about the same image, and a step that runs only after a green step
+    # cannot answer its own question on a red day.
+    #
+    # The ceiling comes down when these runs report, not before — a row says what the tool
+    # *said*, and an inference confirmed by somebody else's run is still an inference here.
+    - name: Ask this image's managers about subcommands, flags and `--`
+      if: ${{ !cancelled() }}
+      run: |
+        docker run --rm --entrypoint bash \
+          -e TERMINATOR_PROBE=1 -e CARGO_TARGET_DIR=/tmp/target \
+          -v "$PWD:/src" \
+          shall-it-${{ matrix.distro }} -c \
+          "cd /src && cargo test --test suite -- argv_drift_tests:: terminator_probe_tests:: --nocapture"
+
     # The container harness runs four distros on every push and nothing ever asked whether its
     # checks CAN fail — the mutation gate was pointed only at the Windows harness. It runs here,
     # on the ubuntu leg, because this is where the image already exists: a job of its own would
@@ -451,12 +474,12 @@ jobs:
     # coverage ratchet three steps earlier had gone red over an unrelated manager. The job still
     # fails; the difference is that the failing run now reports both answers instead of one.
     - name: Ask this image's thirty managers about subcommands, flags and `--`
-      if: ${{ !cancelled() && matrix.distro == 'tools' }}
+      if: ${{ !cancelled() }}
       run: |
         docker run --rm --entrypoint bash \
           -e TERMINATOR_PROBE=1 -e CARGO_TARGET_DIR=/tmp/target \
           -v "$PWD:/src" \
-          shall-it-tools -c \
+          shall-it-${{ matrix.distro }} -c \
           "cd /src && cargo test --test suite -- argv_drift_tests:: terminator_probe_tests:: --nocapture"
 
   # The storage effectors, on real block devices. `btrfs`, `lvm` and `zfs` operate on volumes

@@ -234,16 +234,80 @@ fn limit_drifted(want: &str, reported: Option<&String>) -> bool {
     }
 }
 
+/// Which question a skipped row answers.
+///
+/// **The two are opposites and one list carried both.** A declined removal is software the
+/// machine *keeps*; a skipped install is software the machine *does not get*. Every surface
+/// described every row with the first sentence — "installed and declared nowhere that `sync`
+/// will not remove" — so for an install skip all three of its clauses were false, and the
+/// follow-up advice, *"declare them to keep them"*, asked the user for the thing they had just
+/// done. `Declined::reported` makes this distinction carefully; the install path never passed
+/// through it, so nothing carried the answer to the printers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkipKind {
+    /// Installed, undeclared, and it stays. The machine keeps software your files do not name.
+    RemovalDeclined,
+    /// Declared, not installed, and it does not arrive. Your files name software the machine
+    /// will not get.
+    InstallSkipped,
+}
+
+impl SkipKind {
+    /// The header a list of rows of this kind gets. One per kind, because a fixed sentence over
+    /// a mixed list is exactly the bug this enum exists to prevent.
+    pub fn heading(&self, n: usize) -> String {
+        match self {
+            Self::RemovalDeclined => format!(
+                "{} package(s) installed and declared nowhere that `sync` will not remove",
+                n
+            ),
+            Self::InstallSkipped => format!(
+                "{} declaration(s) this machine cannot act on, so they will not be installed",
+                n
+            ),
+        }
+    }
+
+    /// What to do about it, which is also opposite per kind.
+    pub fn advice(&self) -> &'static str {
+        match self {
+            Self::RemovalDeclined => "declare them to keep them, or remove them by hand",
+            Self::InstallSkipped => {
+                "install the manager they name, or drop the declaration on this host"
+            }
+        }
+    }
+}
+
 /// Something the plan left out, and why.
 ///
 /// **The reason travels with the item.** A rollup that counts skips and explains them with one
 /// sentence is a sentence that is wrong for every input it does not describe — `adopt` printed
 /// *"Left alone: 185 (listed in the manifest)"* about items none of which were listed in the
 /// manifest.
+///
+/// **And the kind travels with it too**, for the same reason one layer up: the per-row `reason`
+/// was already right while the headers above it asserted three facts about every row regardless.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Skipped {
     pub key: String,
     pub reason: String,
+    pub kind: SkipKind,
+}
+
+impl Skipped {
+    /// Split a mixed list into its two kinds, in the order a reader wants them: what the machine
+    /// keeps, then what it will not get.
+    pub fn by_kind(rows: &[Skipped]) -> Vec<(SkipKind, Vec<&Skipped>)> {
+        [SkipKind::RemovalDeclined, SkipKind::InstallSkipped]
+            .into_iter()
+            .filter_map(|kind| {
+                let of_kind: Vec<&Skipped> = rows.iter().filter(|s| s.kind == kind).collect();
+                (!of_kind.is_empty()).then_some((kind, of_kind))
+            })
+            .collect()
+    }
 }
 
 /// Why a managed package was not scheduled for removal.
@@ -369,6 +433,7 @@ impl SyncChanges {
             self.skipped.push(Skipped {
                 reason: format!("`{}` is not on this machine", backend),
                 key,
+                kind: SkipKind::InstallSkipped,
             });
         }
     }
@@ -702,7 +767,11 @@ impl<'a> ChangePlanner<'a> {
                 {
                     debug!("'{}' will not be removed: {:?}", key, declined);
                     if let Some(reason) = declined.reported() {
-                        changes.skipped.push(Skipped { key, reason });
+                        changes.skipped.push(Skipped {
+                            key,
+                            reason,
+                            kind: SkipKind::RemovalDeclined,
+                        });
                     }
                     continue;
                 }
@@ -796,6 +865,7 @@ impl<'a> ChangePlanner<'a> {
                     "`{}` is not on this machine, so it cannot install `{}` here",
                     spec.backend, spec.name
                 ),
+                kind: SkipKind::InstallSkipped,
             });
         }
         runnable
@@ -829,6 +899,7 @@ impl<'a> ChangePlanner<'a> {
             changes.skipped.push(Skipped {
                 key: pin.key,
                 reason,
+                kind: SkipKind::InstallSkipped,
             });
         }
         declared

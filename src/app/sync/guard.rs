@@ -26,7 +26,7 @@ use tracing::{debug, warn};
 ///
 /// **`readme.md:358` promises that every path removing anything goes through one guard. Until
 /// this type existed, that sentence was checked by a regex over source text** —
-/// `removal_guard_enumeration_tests.rs:91`'s `is_removal_call`, matching `.remove(` with `sudo`
+/// `removal_guard_enumeration_tests.rs`'s `is_removal_call`, matching `.remove(` with `sudo`
 /// on the line, `.remove_repo(`, `.remove_shim(` and `.deprovision(`. `apply/firewall.rs` closes
 /// a port with `deny_command`, which matches none of them, and the word `guard` appears nowhere
 /// in that file. **The fix for `G-1` replaced a stale list of paths with a stale list of verbs**,
@@ -36,7 +36,7 @@ use tracing::{debug, warn};
 /// the only way to get one is to have asked. Effector six is covered by construction rather than
 /// by someone remembering the list.
 ///
-/// This is what `PlanScope` did for planning, applied to removal. `planner.rs:83` states the
+/// This is what `PlanScope` did for planning, applied to removal. `planner.rs` states the
 /// technique better than this comment can: *"the case that reaps cannot be written without the
 /// list that bounds it."*
 ///
@@ -63,7 +63,7 @@ impl Reaped {
     /// - **A test double.** A unit test for an effector is testing the effector, and threading a
     ///   real `Config` and `BackendRegistry` through it to mint a token proves nothing about the
     ///   guard.
-    /// - **A rollback compensating its own transaction.** `transaction.rs:993` already calls
+    /// - **A rollback compensating its own transaction.** `transaction.rs` already calls
     ///   `protection_of` before it removes, deliberately and correctly, and its removals are of
     ///   packages this same run installed seconds ago.
     ///
@@ -453,7 +453,7 @@ pub async fn essential_names(
             }
         })
         // `max_parallel`, and a cap that ignores the setting is a cap the user cannot move —
-        // `planner.rs:324` states the rule and this was the one fan-out in the tree that did
+        // `planner.rs` states the rule and this was the one fan-out in the tree that did
         // not follow it (AU9). It is on every removal path, which is where a user who has
         // turned the parallelism down most wants it honoured.
         .buffer_unordered(max_parallel.max(1))
@@ -2236,6 +2236,212 @@ mod tests {
                 .iter()
                 .any(|r| r.contains("makes 6 changes in total")),
             "two installs, two packages and two teardowns is six: {refusals:?}"
+        );
+    }
+
+    // ---- The OS-essential protection, driven against a backend that reports one. -----------
+    //
+    // **`cargo mutants` over this file on 2026-08-13 found the one hole in it.** 125 mutants:
+    // 101 killed by the unit tests, 11 rejected by the compiler, and of the 13 survivors the
+    // integration suite killed all but four. Three of the four are this function:
+    //
+    // ```text
+    // MISSED  replace essential_names -> HashSet<String> with HashSet::new()
+    // MISSED  replace essential_names -> HashSet<String> with HashSet::from_iter([String::new()])
+    // MISSED  replace essential_names -> HashSet<String> with HashSet::from_iter(["xyzzy".into()])
+    // ```
+    //
+    // Measured rather than asserted: a Linux binary carrying the first mutation was built and
+    // run against a clean one on the same image and scenario. The clean binary refused with
+    // exit 3 and five protections — `tar`, `sed`, `grep`, `gzip`, `findutils`. The mutant was
+    // silent, exited 1, and attempted the removal. **The machine survived only because apt
+    // refuses to remove its own `Essential: yes` packages** — a second line of defence Shall
+    // does not own, does not check for, and cannot assume of every backend.
+    //
+    // **Nothing in this repository caught it.** Not the 1,814 lib tests, not the 535
+    // integration tests, and not the 425-check container harness — the mutant binary swept the
+    // `tools` image at 424 pass / 1 fail, the same single failure the clean binary has. Even
+    // `protected includes a system essential`, which the harness greps, passes: that command
+    // reports the *static* config rules and is byte-identical between the two binaries.
+    //
+    // **The reason is a missing input, not a missing assertion.** The suite is hermetic and no
+    // mock had ever reported an essential set, so `essential_names` returned empty in every test
+    // that has ever run — and a function that always returns empty is indistinguishable from one
+    // hard-coded to. `Essentials` below is that input.
+
+    /// A backend that answers the essential query, which no other test fixture in the tree does.
+    struct Essentials {
+        name: String,
+        essential: Vec<String>,
+        listings: crate::core::installed::InstalledListings,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::core::manager::BackendCore for Essentials {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn is_available(&self) -> bool {
+            true
+        }
+        fn probes(&self) -> Vec<String> {
+            Vec::new()
+        }
+        fn needs_root(&self) -> bool {
+            false
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::core::manager::Queryable for Essentials {
+        fn installed_cache(&self) -> (&crate::core::installed::InstalledListings, &str) {
+            (&self.listings, &self.name)
+        }
+        async fn fetch_installed(&self) -> crate::core::Result<Vec<crate::core::Package>> {
+            Ok(Vec::new())
+        }
+        async fn list_manual(&self) -> crate::core::Result<Vec<crate::core::Package>> {
+            Ok(Vec::new())
+        }
+        async fn info(&self, _: &str) -> crate::core::Result<Option<crate::core::Package>> {
+            Ok(None)
+        }
+        async fn essential(&self) -> crate::core::Result<Vec<String>> {
+            Ok(self.essential.clone())
+        }
+    }
+
+    fn registry_reporting(backend: &str, essential: &[&str]) -> Arc<BackendRegistry> {
+        let fake = Arc::new(Essentials {
+            name: backend.to_string(),
+            essential: essential.iter().map(|s| s.to_string()).collect(),
+            listings: Default::default(),
+        });
+        let mut reg = BackendRegistry::new();
+        reg.register(Arc::new(
+            crate::core::manager::BackendCapabilities::builder(fake.clone())
+                .with_queryable(fake)
+                .build(),
+        ));
+        Arc::new(reg)
+    }
+
+    /// `essential_names` returns what the backend said, qualified by backend.
+    ///
+    /// Kills all three surviving mutants directly: `HashSet::new()` fails the emptiness check,
+    /// `[String::new()]` and `["xyzzy"]` fail the equality.
+    #[tokio::test]
+    async fn essential_names_reports_what_the_backend_says_is_essential() {
+        let registry = registry_reporting("apt", &["tar", "sed", "grep"]);
+        let backends: HashSet<String> = ["apt".to_string()].into_iter().collect();
+
+        let names = essential_names(&registry, &backends, 4).await;
+
+        let want: HashSet<String> = ["apt:tar", "apt:sed", "apt:grep"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        assert_eq!(
+            names, want,
+            "the essential set must be exactly what the backend reported, qualified by backend"
+        );
+    }
+
+    /// A backend that reports nothing essential contributes nothing — the control that makes the
+    /// test above a measurement rather than a coincidence.
+    #[tokio::test]
+    async fn a_backend_with_no_essential_concept_contributes_nothing() {
+        let registry = registry_reporting("cargo", &[]);
+        let backends: HashSet<String> = ["cargo".to_string()].into_iter().collect();
+        assert!(essential_names(&registry, &backends, 4).await.is_empty());
+    }
+
+    /// And the protection those names buy: a removal of one is refused, by the OS-essential
+    /// rule rather than by a config rule.
+    ///
+    /// This is the assertion the container measured on two binaries. It is here so that the
+    /// next person to delete `essential_names` finds out on their own machine in 30ms rather
+    /// than from apt on somebody's laptop.
+    #[tokio::test]
+    async fn a_package_the_os_calls_essential_is_never_removed() {
+        let registry = registry_reporting("apt", &["tar", "sed", "grep", "gzip", "findutils"]);
+        // No `protected_packages` rule covers these — the static config list is a different
+        // mechanism and the container measurement turned specifically on the five it misses.
+        let cfg = Config::default();
+        let reaping = Reaping::new();
+
+        let report = inspect_removals(
+            &cfg,
+            &registry,
+            &pairs(&["tar", "sed", "grep", "gzip", "findutils"]),
+            RemovalKind::Package,
+            &reaping,
+        )
+        .await;
+
+        assert!(
+            !report.is_empty(),
+            "five packages the OS reports as essential were planned for removal and the guard \
+             said nothing"
+        );
+        let message = report.message(GuardScope::Sync, RemovalKind::Package);
+        for name in ["tar", "sed", "grep", "gzip", "findutils"] {
+            assert!(
+                message.contains(name),
+                "`{name}` is essential to the running system and the refusal does not name \
+                 it:\n{message}"
+            );
+        }
+    }
+
+    /// The ceiling triggers **above** `max_removals`, not at it.
+    ///
+    /// The second finding in the same mutation run: three of the six survivors were
+    /// numeric-boundary mutations, and `too_many_changes`'s `>`→`>=` is the behavioural one —
+    /// it moves the refusal to fire *at* the limit instead of past it. It errs safe, which is
+    /// why it is a boundary test and not a bug report, and it says the same thing about the
+    /// other two: the thresholds were tested for "well over" and "well under" and never at the
+    /// limit itself, which is the only place a ceiling is interesting.
+    #[tokio::test]
+    async fn the_removal_ceiling_fires_past_the_limit_and_not_at_it() {
+        let cfg = Config {
+            guard: crate::config::GuardSettings {
+                max_removals: 3,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let registry = registry_reporting("apt", &[]);
+
+        // Exactly at the limit: allowed.
+        let reaping = Reaping::new();
+        let at = inspect_removals(
+            &cfg,
+            &registry,
+            &pairs(&["a", "b", "c"]),
+            RemovalKind::Package,
+            &reaping,
+        )
+        .await;
+        assert!(
+            at.objections.is_empty(),
+            "three removals under a ceiling of three is at the limit, not over it: {:?}",
+            at.objections
+        );
+
+        // One past it: refused.
+        let reaping = Reaping::new();
+        let over = inspect_removals(
+            &cfg,
+            &registry,
+            &pairs(&["a", "b", "c", "d"]),
+            RemovalKind::Package,
+            &reaping,
+        )
+        .await;
+        assert!(
+            !over.objections.is_empty(),
+            "four removals under a ceiling of three must be refused"
         );
     }
 }

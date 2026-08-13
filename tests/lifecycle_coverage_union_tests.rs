@@ -149,98 +149,27 @@ const UNIVERSE: &[&str] = &[
 
 /// A backend no harness can reach with a real lifecycle, and why.
 ///
-/// **The reason must be something a harness genuinely cannot do** — no such userland, no such
-/// device, no account to sign in with (`Q17`). A cost is not a reason: "it downloads 2 GB" is
-/// an argument for baking it into an image, not for an exemption. "It touches the real machine"
-/// is not a reason either; every package manager does.
+/// **This table moved into `src/backends/proving.rs`, and this test now reads it.** It used to
+/// live here, which meant the repository knew which backends had never met their manager and
+/// the program could not say it — a fact known only to a test is a fact no user gets. `check
+/// health` now marks them, and the same table answers both questions.
+///
+/// Reading it rather than keeping a copy is `F7`'s lesson applied instead of repeated: the gate
+/// that checked the latency class table read a hand-typed transcription of it, so the one name
+/// that had gone stale was the one the copy omitted.
+use shall::backends::proving::UNPROVEN;
+
 struct Nowhere {
     backend: &'static str,
     why: &'static str,
 }
 
-const NOWHERE: &[Nowhere] = &[
-    // `brew` is deliberately NOT here. It has no container canary and the container harness
-    // counts it in its own gap — but it HAS one in `integration-windows.sh`, which the macOS
-    // CI leg runs, and this file asks whether a backend is reachable ANYWHERE. My first draft
-    // listed it and this test rejected the entry, which is the check disagreeing with its
-    // author and being right.
-    Nowhere {
-        backend: "emerge",
-        why: "Gentoo is SMOKE_ONLY by design: a source-building install→remove costs hours, so \
-              its image installs nothing and crediting it would be a caption, not coverage.",
-    },
-    Nowhere {
-        backend: "eopkg",
-        why: "no Solus image exists on any public registry — probed 2026-07-30, \
-              getsolus/solus:latest is not published.",
-    },
-    Nowhere {
-        backend: "guix",
-        why: "no published base image; Guix installs via a script that needs a running \
-              guix-daemon. Closable with an image built from that script.",
-    },
-    Nowhere {
-        backend: "slackpkg",
-        why: "Slackware images exist but are community-built and ship a Rust too old to build \
-              Shall in-image. Closable by copying in a statically-linked binary.",
-    },
-    Nowhere {
-        backend: "yay",
-        why: "AUR helpers refuse to run as root (needs_root = false) and the container sweep \
-              runs as root. Closable with a non-root leg on the arch image.",
-    },
-    Nowhere {
-        backend: "paru",
-        why: "the same as yay, and it closes with the same non-root leg.",
-    },
-    Nowhere {
-        backend: "pkg",
-        why: "FreeBSD userland. A container shares the host's LINUX kernel, so this needs a VM \
-              and not an image.",
-    },
-    Nowhere {
-        backend: "pkg_add",
-        why: "OpenBSD userland — a VM, for the same reason as pkg.",
-    },
-    Nowhere {
-        backend: "pkgin",
-        why: "NetBSD/SmartOS userland — a VM, for the same reason as pkg.",
-    },
-    Nowhere {
-        backend: "mas",
-        why: "needs a signed-in Mac App Store account on real Apple hardware. No container and \
-              no VM can hold one legitimately.",
-    },
-    Nowhere {
-        backend: "macports",
-        why: "needs a real Mac. Apple's licence forbids virtualising macOS off Apple hardware, \
-              so this is a runner we do not have rather than a thing we have not done.",
-    },
-    Nowhere {
-        backend: "link",
-        why: "not a package statement. `link:SRC @target=…` is its own grammar branch, so the \
-              harness's `lifecycle()` — which builds a `backend:name` package declaration — \
-              cannot express one. Closable with a lifecycle function for dependent statements; \
-              covered today by link_teardown_test.rs and the plan-smoke.",
-    },
-    Nowhere {
-        backend: "service",
-        why: "a dependent statement like link, AND starting one needs an init system a plain \
-              container does not run. Two independent blocks, and the second is real.",
-    },
-    Nowhere {
-        backend: "setting",
-        why: "a dependent statement like link, AND it writes to a live desktop settings store \
-              (dconf/gsettings) that no image here runs a bus for.",
-    },
-    Nowhere {
-        backend: "stack",
-        why: "its first install downloads a whole GHC toolchain (~2 GB). That is a COST and not \
-              an impossibility — Q17 says so — and the fix is the one every other manager in \
-              the tools image already got: bake the toolchain in at build time. Named here so \
-              the ceiling counts it rather than hiding it in a harness exemption.",
-    },
-];
+fn nowhere() -> Vec<Nowhere> {
+    UNPROVEN
+        .iter()
+        .map(|(backend, why)| Nowhere { backend, why })
+        .collect()
+}
 
 /// **What this gate cannot see, stated because `nix` proved it.** It reads the two harnesses'
 /// TABLES, not their runs — deliberately, since no single run observes every image. So a canary
@@ -281,9 +210,9 @@ fn every_backend_is_reachable_somewhere_or_named_as_unreachable() {
 
     Ledger::of(
         "without a canary in EITHER harness",
-        "NOWHERE (and lower NOWHERE_CEILING with it)",
+        "`UNPROVEN` in src/backends/proving.rs (and lower NOWHERE_CEILING with it)",
     )
-    .exempting(NOWHERE.iter().map(|n| Entry {
+    .exempting(nowhere().iter().map(|n| Entry {
         site: n.backend,
         why: n.why,
     }))
@@ -305,7 +234,7 @@ fn every_backend_is_reachable_somewhere_or_named_as_unreachable() {
 /// Its stale check would report it as "reachable now", which is the opposite of true.
 #[test]
 fn every_exemption_names_a_backend() {
-    for n in NOWHERE {
+    for n in &nowhere() {
         assert!(
             UNIVERSE.contains(&n.backend),
             "{} is exempted and is not a backend",
@@ -341,6 +270,6 @@ async fn every_backend_this_host_registers_is_in_the_universe() {
     assert!(
         missing.is_empty(),
         "this host registers backends the coverage universe does not list: {missing:?}\n\
-         Add them to UNIVERSE — and to a canary table, or to NOWHERE with a reason."
+         Add them to UNIVERSE — and to a canary table, or to `UNPROVEN` with a reason."
     );
 }

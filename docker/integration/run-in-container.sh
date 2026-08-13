@@ -503,7 +503,10 @@ ok "active file exists" test -f "$SHALL_CONFIG_DIR/active"
 echo "[2] Discovery / read-only verbs"
 ok "check health" lx check health
 ok "check drift" lx check drift
-ok "plan (no changes yet)" lx plan --dry-run
+# `plan` exits 2 when it finds work (`H2`, owner 2026-08-13) — it is a read-only command
+# that looked, which is what 2 means. `answers` is the helper for exactly that: 0 or 2 is
+# an answer, 1 and 3 are not.
+answers "plan (no changes yet)" lx plan --dry-run
 answers "check parses the model" lx check
 ok "check absent lists nothing" lx check absent
 ok "protected lists guarded packages" lx protected
@@ -1770,7 +1773,10 @@ else
 fi
 
 # plan → apply: the frozen plan is the one that gets applied.
-ok "plan freezes a reviewable file" lx plan --out /tmp/shall-it-plan.json
+# `plan` exits 2 when it finds work (`H2`, owner 2026-08-13) — it is a read-only command
+# that looked, which is what 2 means. `answers` is the helper for exactly that: 0 or 2 is
+# an answer, 1 and 3 are not.
+answers "plan freezes a reviewable file" lx plan --out /tmp/shall-it-plan.json
 ok "the plan file exists" test -f /tmp/shall-it-plan.json
 ok "apply reads a saved plan" lx --dry-run apply /tmp/shall-it-plan.json
 

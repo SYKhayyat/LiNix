@@ -565,7 +565,7 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
         Commands::Path { explain, set } => handle_path(cli, *explain, set.as_deref()).await,
         Commands::Edit { file } => handle_edit(cli, file.as_deref()).await,
         Commands::Init { force, interactive } => handle_init(app, *force, *interactive).await,
-        Commands::Sbom => handle_sbom(&app.registry, &app.state).await,
+        Commands::Sbom => handle_sbom(&app.config, &app.registry, &app.state).await,
         Commands::Export {
             format,
             out,

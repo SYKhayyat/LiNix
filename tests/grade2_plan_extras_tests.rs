@@ -90,7 +90,10 @@ fn plan_names_the_extras_it_would_place() {
     }
 
     let (out, code) = f.run(&["plan"]);
-    assert_eq!(code, 0, "`plan` failed:\n{out}");
+    // `H2` (owner, 2026-08-13): a read-only command that finds work exits **2**, and `plan`
+    // is one. Both 0 and 2 are successful runs of it; 1 is a failure. The content
+    // assertions below are what carry this test's meaning either way.
+    assert!(matches!(code, 0 | 2), "`plan` failed:\n{out}");
     assert!(
         !out.contains("already matches desired state"),
         "`shall plan` reported the system already matches, while three `link:` declarations \
@@ -147,7 +150,10 @@ fn plan_names_the_extras_it_would_tear_down() {
     );
 
     let (out, code) = f.run(&["plan"]);
-    assert_eq!(code, 0, "`plan` failed:\n{out}");
+    // `H2` (owner, 2026-08-13): a read-only command that finds work exits **2**, and `plan`
+    // is one. Both 0 and 2 are successful runs of it; 1 is a failure. The content
+    // assertions below are what carry this test's meaning either way.
+    assert!(matches!(code, 0 | 2), "`plan` failed:\n{out}");
     assert!(
         !out.contains("already matches desired state"),
         "`shall plan` reported the system already matches, while `--dry-run sync` on the same \

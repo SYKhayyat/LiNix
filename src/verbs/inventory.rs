@@ -17,10 +17,14 @@ pub async fn handle_audit(
 }
 
 pub async fn handle_sbom(
+    config: &Config,
     registry: &Arc<BackendRegistry>,
     state: &tokio::sync::Mutex<crate::core::StateRegistry>,
 ) -> Result<()> {
-    println!("{}", crate::app::insight::sbom(registry, state).await?);
+    println!(
+        "{}",
+        crate::app::insight::sbom(config, registry, state).await?
+    );
     Ok(())
 }
 
@@ -45,16 +49,7 @@ pub async fn handle_export(
         anyhow::bail!("--stdout needs a single --format (brew|pip|npm|apt).");
     }
     let out_dir = std::path::PathBuf::from(out);
-    let results = export(
-        state,
-        registry,
-        fmt,
-        &out_dir,
-        stdout,
-        force,
-        config.dry_run,
-    )
-    .await?;
+    let results = export(state, registry, config, fmt, &out_dir, stdout, force).await?;
     for (file, outcome) in &results {
         match outcome {
             Outcome::NoPackages => println!("  skipped {} (no matching packages)", file),

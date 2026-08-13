@@ -1,4 +1,4 @@
-# The decision register — all 200, ten of them built and never ruled
+# The decision register — all 205, ten of them built and never ruled
 **One file, six features, ten entries waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -17,7 +17,7 @@ not in this paragraph.
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **10** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **186** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **191** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Two of these five statuses now describe nothing, and they stay.** The categories are not
@@ -76,8 +76,8 @@ status loses that, so it is kept here:
 **Nothing is open, and nine entries are waiting.** `Q53` — what a version pin means on a manager
 that cannot express one — was raised, measured and ruled on 2026-08-10. The `G` round then ran the
 other way round: `docs/GRADE-2026-08-12.md`'s work order was implemented in one pass, and the nine
-changes in it that a user would notice shipped ahead of any ruling. All 200 are accounted
-for: **186 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 10 BUILT NEVER RULED, 0 OPEN** — and this line
+changes in it that a user would notice shipped ahead of any ruling. All 205 are accounted
+for: **191 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 10 BUILT NEVER RULED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -373,6 +373,24 @@ the widest.*
 | **G8** | `shall hold` and `check drift` printed clean bills built from questions that failed, and the JSON had `resources_unverifiable` with no packages equivalent. BUILT: **neither prints a clean bill it cannot support**, and `packages_unverifiable` exists. `upgrade` keeps its tolerance: acting on the holds it can see is a different question from reporting on them. | 2026-08-12 |
 | **G9** | Three `--json` flags said "(requires --dry-run)" and none enforced it. BUILT: **enforced in `dispatch`** for `sync`/`install`/`uninstall` — clap's `requires` cannot see a global flag and breaks the working combination when asked to. `upgrade` keeps its flag and loses the sentence. | 2026-08-12 |
 | **G10** | `priority` gated resolution and nothing else: detection walked PATH for all 52 backends before knowing what was asked (`list -b apt` = 3,156 failed `statx` against `list`'s 3,338), and every fan-out went to whatever was installed. BUILT: **the file's own sentence is true of detection and querying too.** `BackendRegistry::available()` was deleted rather than filtered, so the compiler visited all twenty call sites and none could compile without choosing; the choices are a table in `priority_gates_every_fan_out_tests`. Two exceptions, both argued: `init` (writes the file from what it detects) and `check health` (reports on absent managers). | 2026-08-12 |
+
+### H — the grading round of 2026-08-13 (GRADE-2026-08-13) — 5
+
+*`docs/GRADE-2026-08-13.md` graded Bugs at D−, Verification at D+, and refused the release. It
+raised three questions it deliberately did not answer in code (Q-A, Q-B, Q-C), and the work on
+F10 raised a fourth. **The owner ruled all four on 2026-08-13, by delegation**: asked to choose,
+he declined to adjudicate them one by one and gave the principle instead — that a feature in this
+codebase is **built fully, and not deferred because it is hard or potentially insecure**, because
+within reason people are smart. H4 is the one that turns on that sentence, and it is ruled the
+opposite way to the recommendation that was put to him.*
+
+| | question | ruled |
+|---|---|---|
+| **H1** | Is a declaration Shall was told to act on and could not a **failure of the run**, or a line that does not apply to this host? RULED: **a failure.** `sync` exits 1 and no longer returns `Converged` over it. | 2026-08-13 |
+| **H2** | Should a read-only command that finds work exit 2, beyond `check`? RULED: **yes for `plan`, no for `list --outdated`.** | 2026-08-13 |
+| **H3** | `outdated` — remove the dead name from the latency class table, or promote `list --outdated` to a subcommand? RULED: **remove the name; the flag stays a flag.** | 2026-08-13 |
+| **H4** | Should `sandbox.fallback_allowed` default to `false`, so an unavailable sandbox refuses instead of running unconfined? RULED: **no — it stays `true`, and the run is made loud and honest instead.** | 2026-08-13 |
+| **H5** | Is `StateResolver` (38 methods, 1,483 production lines) to be split, and are the three `Skipped` structs to be collapsed? RULED: **neither** — measured, argued, and the seam named for whenever something needs it. | 2026-08-13 |
 
 ---
 
@@ -8029,3 +8047,171 @@ and `UniversalSearch` read an empty enabled set as *every available backend*, on
 premise that only a missing file could produce one. Two swallowed answers composing into the
 exact inversion of the rule. `Backends` carries the resolution failure instead of an empty set,
 and refuses where the question is asked.
+
+## H1
+
+**Status: ANSWERED — 2026-08-13, from `docs/GRADE-2026-08-13.md` F13 (raised there as Q-C).**
+
+**Is a declaration Shall could not act on a failure, or a declaration that does not apply here?**
+`sudo`'s stock `secure_path` is `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin`,
+which does not contain `~/.cargo/bin`, `~/.bun/bin` or `~/.local/bin` — so `cargo`, `bun` and `uv`
+are invisible to anything run through `sudo`, installed exactly where their own installers put
+them. Measured in a stock Ubuntu container: `sync --yes` with three declarations warned three
+times, installed nothing, printed no transaction summary, and exited **0** — the code named
+`Exit::Converged`. `shall check`, on the same unchanged state one line later, reported drift and
+exited 2. Alternating the two commands repeated it: 0, 2, 0, 2.
+
+**RULED: a failure.** The underlying distinction was already ruled one command over.
+`target-state.md` §Q2 defines **critical** as *"it is installed, or `priority` names it, and it
+cannot work"* — so a `priority`-named manager that cannot be reached is a fact about a broken
+machine, not an inapplicable line. `check` was told that. `sync` was not.
+
+**Exit 1, not 2, and the table decides it.** `U21` reserves 2 for *a read-only command that
+looked and found work to do*; `sync` is not read-only. 1 is *Shall could not carry the command
+out*, which is what happened, and it is the code a failed install already returns — a declaration
+that never reached its manager and one whose manager refused it are the same fact about the run.
+
+**A partial skip is the case that matters.** Three of three is the container reproduction; three
+of four is the ordinary shape and is worse, because something did install and the summary reads
+like a successful transaction. The count is therefore per-declaration and not a whole-run
+boolean.
+
+**What made this expressible at all.** F4's `SkipKind` split: `SyncChanges::skipped` carried
+declined removals and skipped installs in one list, and a declined removal must **not** make a
+sync fail — it is the guard working, and it is the ordinary state of every adopted machine.
+Without the two kinds distinguished in the type, this ruling would have to be inferred from a
+sentence.
+
+## H2
+
+**Status: ANSWERED — 2026-08-13, from `docs/GRADE-2026-08-13.md` (raised there as Q-A).**
+
+**Should a read-only command that finds work exit 2?** `target-state.md` says exit 2 *"means a
+read-only command found work to do"*, and only `check` ever built `Error::Differences`. Measured:
+`shall plan` printed *"1 install(s), 0 removal(s)"* and exited **0**; `shall list --outdated`
+listed dozens of outdated packages and exited **0**.
+
+**RULED: yes for `plan`, no for `list --outdated`.** `plan` answers the question `check` answers
+*and* writes the machine-readable artifact a script consumes, so a pipeline that branches on
+drift reaches for `plan` and is told the machine has converged, every time. A listing is
+different in kind: its subject is inventory rather than a verdict, and a listing that exited
+non-zero for having contents would surprise every script that has ever piped one.
+
+`plan`'s condition is `check`'s condition — the same quantities in the same combination — because
+the rule this repository keeps paying for is that two readings of one machine disagree.
+
+`U21` settled the table before these commands existed; this is the first command it did not
+cover, and it is an addition to that table rather than a change to it.
+
+## H3
+
+**Status: ANSWERED — 2026-08-13, from `docs/GRADE-2026-08-13.md` F7 (raised there as Q-B).**
+
+**`outdated`: remove the name, or add the subcommand?** `Class::of` classified `"outdated"` as
+`EveryBackend`. There is no `outdated` subcommand — it is `shall list --outdated`, a flag — so the
+arm was dead.
+
+**RULED: remove the name. The flag stays a flag.** Promoting it would be a user-visible addition
+nobody asked for, and `list --outdated` is the spelling every existing script uses.
+
+**The dead arm was never the defect, and this is the half worth writing down.** `Class::of`'s own
+doc said *"the list is asserted against `--help` by `tests/latency_budget_tests.rs` — a name that
+stops existing fails that test rather than sitting here forever, which is the mistake `undo` made
+in two harness exemption lists."* That test did not read the table. It read a `NAMED` array of
+twenty-four hand-typed strings beside it, and the array omitted `outdated` — so **the failure the
+gate guarded against was the failure it demonstrated.** A `match` gives a test nothing to
+iterate, which is *why* the copy existed; the table is data now (`CLASSIFIED`), exposed as
+`classified_names()`, and the gate reads it.
+
+## H4
+
+**Status: ANSWERED — 2026-08-13, from `docs/GRADE-2026-08-13.md` F10/F11. Ruled against the
+recommendation that was put to the owner, on the principle he gave instead of an answer.**
+
+**Should `sandbox.fallback_allowed` default to `false`?** On any Linux host without `bwrap`,
+`shall run -p pkg@sandbox -- cmd` ran the command **unconfined, with an unmodified environment**,
+and said so only at `debug!`. Measured in a container: `touch /srv/escaped` landed on the host
+filesystem, rc=0, nothing on stdout or stderr. The recommendation put to the owner was to flip
+the default so an explicit `@sandbox` refuses rather than degrades.
+
+**RULED: no.** A feature here is built fully and is not withdrawn because it is hard or because
+it could be misused; within reason, people are smart. A user who asked for confinement on a host
+that cannot provide it is owed **the fact**, plainly and at `warn!`, not a program that decides
+on their behalf that they may not proceed. The escape hatch stays open and stays the default;
+what changes is that it can no longer be taken silently.
+
+**What was built instead, and it is more than a log level.**
+
+- `Sandbox::decide` is the **one** place that answers *"is a mechanism in force, and if not may
+  this proceed"*. `run`, `shell` and `wrap` each answered it separately before, which is how the
+  one user-visible `warn!` in `run.rs` became unreachable: its condition (`can_sandbox == false`
+  and `fallback_allowed == true`) was already folded into the predicate in front of it, because
+  `Sandbox::is_available` returned `bwrap_available() || fallback_allowed` — a constant `true`
+  under the default. It did not answer *"is a sandbox available"*; it answered *"is a sandbox
+  available, or are we permitted to skip it"*, and every caller read it as the first.
+- `Confinement` is returned beside the command rather than inferred from it. An unconfined
+  fallback and a real `bwrap` invocation are the same type — `Command` — so a caller that wants
+  to claim a boundary now has to hold the variant that grants one.
+- **`require_bwrap` is wired**, and outranks `fallback_allowed`. It was declared, documented
+  (*"On Linux, if true, Shall will fail if 'bwrap' is missing"*), defaulted and serialised, and
+  **read by nothing** — while its Windows twin `windows_require_sandbox` was checked. An
+  administrator who read the configuration reference, decided silent unconfined execution was
+  unacceptable on their fleet, and wrote the setting got byte-for-byte the same unconfined run.
+  That is what makes this ruling safe to make: the knob that closes the hole is now a knob.
+- The sentence *"Falling back to PATH isolation"* is deleted. There was no PATH isolation — it
+  returned `Command::new(cmd).args(args)` with an unmodified environment. `hooks.rs` records
+  having caught this exact shape once already: *"It was called `setup_lua_sandbox`, which claimed
+  a boundary this does not build."*
+
+**Windows keeps its low-integrity launch**, and it is reported as `Confinement::None` rather than
+as a mechanism: it does lower the token, so deleting it would remove a real reduction, and it is
+not a sandbox, so naming it one would be the claim the type exists to stop.
+
+## H5
+
+**Status: ANSWERED — 2026-08-13, from `docs/GRADE-2026-08-13.md` axis 3. Deferred twice before
+this; the grade doc's condition was that it be *measured and decided*, not deferred a third
+time.**
+
+**Is `StateResolver` to be split, and are the three `Skipped` structs to be collapsed?**
+
+**Measured first, because both previous deferrals were arguments without numbers.**
+`src/app/sync/resolver.rs` is 2,021 lines, of which **1,483 are production** (the `#[cfg(test)]`
+module opens at 1,618). `StateResolver` has **38 methods**, and they fall into four groups that
+are visible from their names alone:
+
+| group | methods | what it is |
+|---|---|---|
+| construction | 5 | `new`, `upgrading`, `with_vars`, `as_if_active`, `recording_locks` |
+| priority / host facts | 4 | `priority`, `priority_body`, `priority_for_host`, `host_backends` |
+| variables | 7 | the `resolve_vars*` family, `vars_at_last_sync`, `vars_provider`, `vars_vocabulary` |
+| model expansion | 9 | `parse_everything`, `resolve_model`, `expand_generators`, `expand_regexes`, `match_catalogue`, `probe_bare_names`, `apply_locks`, … |
+| single-spec resolution | 10 | `resolve_spec`, `parse_and_probe_spec`, `validate_line`, `ask`, `ask_the_chain`, `satisfies_constraint`, … |
+
+**RULED: not split, and the variables group is the one that would go if it ever is.**
+
+The four groups are not four responsibilities held by accident — they are one pipeline with four
+stages, and every stage reads the same three fields (`config`, `registry`, `layout`) plus the same
+two caches. Splitting them produces types that call each other while threading the identical
+state, which is the shape `cfg ad22d` has already paid for once: *"the god object dissolved, and
+the parameter list it became."* A 38-method type whose methods all operate on one resolution is
+not the `&App` problem in miniature; `&App` was a bag of unrelated services, and this is a
+resolver.
+
+**The variables group is the exception and is named here so the next reader does not re-derive
+it.** It is the only cluster with its own cache, its own vocabulary, and callers outside the
+resolution pipeline (`vars_provider`, `vars_at_last_sync`). If this type is ever cut, that is the
+seam — 7 methods out, one field of shared state, no back-edges. It is not cut now because the cut
+is worth doing when something needs it, and nothing does.
+
+**The three `Skipped` structs: also not collapsed, and the reason is that they are three
+records rather than three implementations.** `planner::Skipped` now carries `SkipKind` — two
+*opposite* meanings that one list held, which is `F4` and is fixed. `rebuild::Skipped` answers a
+third question ("left out of this rebuild"), and `adopt::Skipped` carries a whole `Package`
+because it writes a manifest rather than a report. A single generic record — `Skipped<K>` over a
+per-domain kind — is the shape that would unify them, and it unifies three fields and no
+behaviour. The repo's rule is against a *second implementation of one thing*; this is one struct
+shape appearing in three domains, which is what a struct shape does.
+
+*Both halves of this ruling are reversible and cost the same tomorrow as today, which is the test
+for whether deferring was ever the real answer. It was not; deciding was.*

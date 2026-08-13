@@ -54,6 +54,18 @@ echo "-> cargo build --release"
 if cargo build --release; then pass "release build succeeds"
 else fail "release build FAILED"; fi
 
+# **The other platform.** Every gate above this line compiles one OS, and on Windows that leaves
+# 45 `cfg`-gated blocks across 17 source files unread — which is how a private associated const
+# named across a module boundary took every Apple, Linux and MSRV job red, took the container
+# harness (and with it every fault-injection check) offline, and sat for 26 commits.
+#
+# Soft, on the same reasoning as `cargo-deny` below: it needs a reachable Docker daemon, and a
+# release script that refuses to run without one stops being run. It says so loudly when it
+# cannot answer, because a skipped step is a said-so and not a done.
+echo "-> scripts/unix-check.sh"
+if sh "$(dirname -- "$0")/unix-check.sh" --lib; then pass "unix-check: the tree compiles for Linux"
+else info "unix-check did not pass — the cfg(unix) blocks are unverified on this run"; fi
+
 # The `supply-chain` and `msrv` CI jobs, run locally — because a CI job nothing local drives is a
 # gate a developer finds out about from a red push, which is what `grade6_gate_parity` asserts
 # against. Both are soft here and hard in CI: `cargo-deny` and a pinned toolchain are installs a

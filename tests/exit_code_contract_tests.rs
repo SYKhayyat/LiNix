@@ -17,6 +17,12 @@ fn exit_code(args: &[&str]) -> i32 {
 }
 
 fn exit_code_in(dir: &str, args: &[&str]) -> i32 {
+    run_in(dir, args).0
+}
+
+/// The exit code **and** what the command said, because a test that asserts a refusal has to be
+/// able to check that the refusal was reachable at all.
+fn run_in(dir: &str, args: &[&str]) -> (i32, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_shall"))
         .args(args)
         // A missing config must not turn a usage error into a different failure, and a real
@@ -27,7 +33,9 @@ fn exit_code_in(dir: &str, args: &[&str]) -> i32 {
         .stdin(std::process::Stdio::null())
         .output()
         .expect("the binary should run");
-    out.status.code().unwrap_or(-1)
+    let mut said = String::from_utf8_lossy(&out.stdout).into_owned();
+    said.push_str(&String::from_utf8_lossy(&out.stderr));
+    (out.status.code().unwrap_or(-1), said)
 }
 
 /// A config directory with a repo in it, so the commands below have something to refuse about.
@@ -76,20 +84,50 @@ fn asking_for_help_or_version_still_succeeds() {
 /// correctly and declined on purpose in both of these, and both returned 1 — indistinguishable
 /// from a crash. Neither harness could see it: they assert refusals with `nok`, which takes any
 /// non-zero code and therefore cannot tell 1 from 3.
+///
+/// **The premise is established rather than assumed, which it was not.** The
+/// `purge-undeclared` half asserted exit 3 unconditionally. That refusal only exists when the
+/// crawl finds undeclared packages — on a machine where the managers named in `priority` are
+/// absent or empty, the command correctly reports a clean bill and exits 0. So the test passed
+/// on a developer machine *because* it is used, and failed on the clean CI Windows runner: 534
+/// passed, 1 failed, and it was the sole reason the Windows build was red.
+///
+/// The suite already found this class in the shell harness and wrote it down — *"the gate's
+/// coverage is therefore inversely proportional to how much the machine is used, and it never
+/// noticed"* — without anyone asking whether the Rust suite had the same defect. It did, in the
+/// mirror image: greenest exactly where it is least trustworthy.
+///
+/// Which case the host is in is now read from the output instead of assumed, and both branches
+/// are asserted. The ratio rule itself is pinned deterministically by
+/// `cleanup::tests::the_ratio_catches_the_small_machine_a_count_misses`, so what is host-shaped
+/// here is only whether this path can be reached — never what it must return when it is.
 #[test]
 fn a_refusal_exits_three_and_not_one() {
     let dir = scratch("refusal-purge");
-    assert_eq!(
-        exit_code_in(&dir, &["purge-undeclared", "--yes"]),
-        3,
-        "the unadopted-machine ratio refusal is a decision, not a failure"
-    );
+    let (code, said) = run_in(&dir, &["purge-undeclared", "--yes"]);
+    // The command's own words for "the crawl came back empty", which is the state in which
+    // there is nothing to refuse about.
+    let nothing_found = said.contains("Nothing to do") || said.contains("Nothing to delete");
+    if nothing_found {
+        assert_eq!(
+            code, 0,
+            "no manager in `priority` had anything undeclared, so this is a clean bill and \
+             not a refusal — but it did not exit 0:\n{said}"
+        );
+    } else {
+        assert_eq!(
+            code, 3,
+            "the unadopted-machine ratio refusal is a decision, not a failure:\n{said}"
+        );
+    }
 
+    // This half establishes its own premise: `scratch` writes a config repo, and refusing to
+    // reset over one is unconditional.
     let dir = scratch("refusal-reset");
+    let (code, said) = run_in(&dir, &["reset"]);
     assert_eq!(
-        exit_code_in(&dir, &["reset"]),
-        3,
-        "refusing to reset while a config repo exists is a decision, not a failure"
+        code, 3,
+        "refusing to reset while a config repo exists is a decision, not a failure:\n{said}"
     );
 }
 

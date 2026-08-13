@@ -18,21 +18,21 @@
 //! `yes`, with the one reason that is never true of a name a user typed. `--json` says
 //! `"protected": true` for all of them.
 //!
-//! Why: `src/verbs/cleanup.rs:528` defaults the backend to `""` for an unqualified name, and
+//! Why: `src/verbs/cleanup.rs` defaults the backend to `""` for an unqualified name, and
 //! `protection_of` opens with `is_declarable(backend, name)`, which builds the line `":jq"` and
 //! rejects it. So the declarability test fires before any rule is consulted, and the answer to
 //! *which rule decides this?* — the only question the command exists to answer — is a sentence
 //! about package lines. The comment three lines above says the intent plainly: *"a bare name is
 //! checked against the config rules only."* It is checked against none of them.
 //!
-//! And the guard says what this costs, in `src/app/sync/guard.rs:96`: *"Everything that asks 'is
+//! And the guard says what this costs, in `src/app/sync/guard.rs`: *"Everything that asks 'is
 //! this protected?' must route through here — the `protected` command included. When the inspector
 //! and the enforcer answer separately they drift apart, and an inspector that contradicts the
 //! guard is worse than none, because it is believed."* The enforcer, asked about the same package
 //! with the backend it really has, answers `no rule matches`.
 //!
-//! **Family.** Every caller of `protection_of` was read. `app/leases.rs:35`, `verbs/sync.rs:342`
-//! (rebuild) and `core/transaction.rs:691` take the backend from the state registry or from a
+//! **Family.** Every caller of `protection_of` was read. `app/leases.rs`, `verbs/sync.rs`
+//! (rebuild) and `core/transaction.rs` take the backend from the state registry or from a
 //! resolved plan, so none can be empty; the extras path uses `RemovalKind::Extra`, which skips the
 //! declarability test on purpose. The empty-backend call is unique to this inspector.
 //!

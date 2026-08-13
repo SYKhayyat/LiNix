@@ -56,7 +56,8 @@ use crate::ledger::{Entry, Ledger};
 /// in the module they excused. `pacman.rs` said *"the removal guard needs pacman's own
 /// essential/required-by data"* and there was no `essential()` impl anywhere in it —
 /// `grep -n essential src/backends/pacman.rs` returned nothing. `dnf.rs` described
-/// `ManualListing::Command { format: SameAsInstalled }` in prose. `xbps.rs` named three binaries
+/// `ManualListing::Command { format: SameAsInstalled }` in prose. The since-deleted `xbps.rs`
+/// named three binaries
 /// that are three existing fields. Sixty characters of fluent prose is what a check that cannot
 /// fail looks like when the subject is English.
 ///

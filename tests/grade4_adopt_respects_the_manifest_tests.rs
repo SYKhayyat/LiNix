@@ -20,7 +20,7 @@
 //!
 //! **Two defects, one root.** `discover()` keeps a candidate when
 //! `!state_guard.is_managed(&pkg.backend, &pkg.name)` — the managed-state *registry*
-//! (`app/adopt.rs:117`). Nothing in `discover` reads the manifests at all, so a package declared by
+//! (`app/adopt.rs`). Nothing in `discover` reads the manifests at all, so a package declared by
 //! hand and not yet synced is offered again. And `found.skipped` has exactly two push sites,
 //! `:154` (the OS reports it essential) and `:315` (`hold_back_what_cannot_be_written`); the
 //! summary at `:281` prints `found.skipped.len()` under *"(listed in the manifest)"*, a reason that

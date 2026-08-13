@@ -329,6 +329,21 @@ take the else branch — the silent-wrongness this rule closes.
 | `shim` | bare flag: put a PATH stand-in for this tool in `[bin_dir]`. The form R3's ruling names — a shim asked for on the tool's own line, rather than as a separate `shim:` statement. **It declares the same resource that a `shim:` statement does** (V.111), so it is placed, counted, guarded and torn down like one: adding the option to an installed package creates the stand-in, and deleting the option removes it |
 | `sandbox` | bare flag: the shim above, and `shall run` confines the process |
 
+**A confinement that is not in force says so, at `warn!`, before the command runs** (H4, owner
+2026-08-13; V.H4). `@sandbox` on a host with no mechanism does **not** refuse — the escape hatch
+`sandbox.fallback_allowed` stays open and stays the default, because a feature here is built
+fully rather than withdrawn for being misusable, and within reason people are smart. What it may
+not do is degrade **silently**: the run is announced, the sentence names why, and
+`sandbox.require_bwrap` (Linux) / `sandbox.windows_require_sandbox` (Windows) refuse outright for
+an administrator who wants that — **both read, both outranking `fallback_allowed`.**
+
+**One decision, carried as a value.** `Sandbox::decide` is the only place that answers *"is a
+mechanism in force, and if not may this proceed"*, and its answer travels with the command as
+`Confinement`. A caller holding a `Command` cannot otherwise tell a real `bwrap` invocation from
+a bare one — they are the same type — which is how `run.rs`'s one user-visible warning became
+unreachable and how a fallback that built no boundary came to log *"Falling back to PATH
+isolation"*.
+
 **A shim never resolves to itself.** `[bin_dir]` is on `PATH` *ahead* of the real binary — that
 is the whole mechanism — so Shall looking up the shimmed name by bare name finds the shim, which
 re-enters Shall, which looks the name up again. Every name Shall spawns is therefore resolved
@@ -1437,6 +1452,25 @@ V.91). A package manager the user does not have is **absent**, not critical:
 failures, and a manager nobody asked for is not one — `25 OK, 0 degraded, 23 critical` on a
 healthy Windows box was the principle applied where there was nothing to report. **The rollup
 and the detail view read the same tally**, because two counts of one machine will disagree.
+
+**And the promotion that makes a tally is part of the probe, not part of a caller** (2026-08-13;
+V.H1). *"Absent, and `priority` names it"* becomes **critical**, and that step lives inside
+`probe_all_health` where both views meet. Sharing the probe is not sharing the verdict: the first
+cure taught the rollup to count `Critical` and left the promotion in the detail view, so `check`
+printed `Nothing needs you` and exited 0 while `check health`, on the same machine in the same
+second, reported `8 critical`. A second copy of the promotion in a caller is how it came back.
+
+**A `priority`-named manager that cannot be reached is a failure of the *run*, not only of the
+report** (H1, owner 2026-08-13; V.H1). `sync` may not return `Exit::Converged` over a declaration
+it was told to act on and could not: it exits **1**, per package, naming each. A declined
+*removal* is the opposite fact and must not fail a run — the guard declining a protected package
+is the ordinary state of every adopted machine — so the two kinds are distinct in the type
+(`SkipKind`) rather than inferred from a sentence.
+
+**A read-only command that finds work exits 2, and `plan` is one** (H2, owner 2026-08-13; V.H2).
+`plan` answers the question `check` answers and writes the artifact a script consumes, over the
+same condition `check` uses. `list --outdated` does not: a listing's subject is inventory rather
+than a verdict.
 
 **A usage error exits 1** (Q3, owner 2026-07-27; V.92). A mistyped subcommand or flag is
 "failed — something went wrong", which is already in the table. It must not exit 2: that means

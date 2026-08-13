@@ -1439,7 +1439,10 @@ ok "export writes native manifests" lx export --out "${TMPDIR:-/tmp}/shall-it-wi
 # answer rather than on `run`.
 ok "run executes inside an ephemeral environment" lx run -p "$BACKEND:$PKG" true
 
-ok "plan freezes a reviewable file" lx plan --out "${TMPDIR:-/tmp}/shall-it-win-plan.json"
+# `plan` exits 2 when it finds work (`H2`, owner 2026-08-13) — it is a read-only command
+# that looked, which is what 2 means. `answers` is the helper for exactly that: 0 or 2 is
+# an answer, 1 and 3 are not.
+answers "plan freezes a reviewable file" lx plan --out "${TMPDIR:-/tmp}/shall-it-win-plan.json"
 ok "the plan file exists" test -f "${TMPDIR:-/tmp}/shall-it-win-plan.json"
 ok "apply reads a saved plan" lx --dry-run apply "${TMPDIR:-/tmp}/shall-it-win-plan.json"
 

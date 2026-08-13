@@ -8,7 +8,7 @@
 //! keyed on `.remove(`+`sudo`, `.remove_repo(`, `.remove_shim(` and `.deprovision(`; a firewall
 //! closes a port with `deny_command`, which matches none of them.
 //!
-//! **Steelman, and it is real.** `firewall.rs:35` returns early when nothing is declared, so a
+//! **Steelman, and it is real.** `firewall.rs` returns early when nothing is declared, so a
 //! user with no `firewall:` lines is untouched — you must opt in by writing one line. And the
 //! file carries three bespoke refusals: an unreadable baseline (*"closing ports against an
 //! unknown baseline is how a machine goes dark"*), the SSH session lockout, and the

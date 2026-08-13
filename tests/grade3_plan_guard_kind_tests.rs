@@ -3,7 +3,7 @@
 //!
 //! Round 3's N-2 was "`check`, `plan` and `apply` cannot see the extras family". They can now, and
 //! that half is closed. But the guard preview added with it runs the *package* rules over resource
-//! keys — `src/verbs/plan.rs:259` merges `extra_removal_pairs(...)` into `guard::inspect(...)`, and
+//! keys — `src/verbs/plan.rs` merges `extra_removal_pairs(...)` into `guard::inspect(...)`, and
 //! `inspect` is `RemovalKind::Package`. Three `link:` lines, undeclared, on a default config:
 //!
 //!     $ shall plan
@@ -22,7 +22,7 @@
 //! Every file was removed. `sync -y` does the same, also rc=0, no refusal.
 //!
 //! The trap is documented in the guard, and there is a unit test asserting it cannot happen —
-//! `src/app/sync/guard.rs:973`, `no_extra_is_refused_merely_for_not_being_a_package_line`:
+//! `src/app/sync/guard.rs`, `no_extra_is_refused_merely_for_not_being_a_package_line`:
 //!
 //!     // `protection_of`'s declarability test asks whether a package line could hold the name,
 //!     // and no extras key can — `link:/home/u/.vimrc` is not a package line and never parses as
@@ -30,7 +30,7 @@
 //!     // teardown on every machine forever…
 //!
 //! That test passes. It exercises `inspect_removals(..., RemovalKind::Extra, …)`; the product
-//! calls `inspect(...)`, which is `Package`. And `app/apply/extras.rs:146` states the property
+//! calls `inspect(...)`, which is `Package`. And `app/apply/extras.rs` states the property
 //! this violates, in the other direction: *"a preview that skipped the guard would report a
 //! teardown the real run then refuses, and the two must never disagree about the same machine."*
 //!
@@ -89,7 +89,10 @@ fn plan_does_not_predict_a_refusal_apply_will_not_make() {
     let targets = f.placed_then_undeclared(3);
 
     let (plan_out, plan_code) = f.run(&["plan"]);
-    assert_eq!(plan_code, 0, "{plan_out}");
+    // `H2` (owner, 2026-08-13): a read-only command that finds work exits **2**, and `plan`
+    // is one. Both 0 and 2 are successful runs of it; 1 is a failure. The content
+    // assertions below are what carry this test's meaning either way.
+    assert!(matches!(plan_code, 0 | 2), "{plan_out}");
     // The control: the preview must actually see the teardown, or a green assertion below would
     // only mean `plan` had gone blind again (round 3's N-2).
     assert!(

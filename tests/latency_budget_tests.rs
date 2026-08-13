@@ -241,6 +241,12 @@ fn every_config_only_command_stays_inside_its_class_budget() {
 
 /// The class table names subcommands, and a name is the thing that goes stale. `undo` sat in
 /// two harness exemption lists after being renamed away because nothing validated the list.
+///
+/// **Reads the table, not a copy of it.** This test used to compare `--help` against a
+/// hand-typed array of twenty-four strings sitting beside it — so the two could disagree, and
+/// they did: the array omitted `outdated`, which the table classified and which is not a
+/// subcommand at all. The gate written to catch a stale name could not see the stale name,
+/// because it was checking a transcription. `Class::classified_names()` exists for this.
 #[test]
 fn every_subcommand_the_class_table_names_still_exists() {
     let help = Command::new(env!("CARGO_BIN_EXE_shall"))
@@ -249,34 +255,16 @@ fn every_subcommand_the_class_table_names_still_exists() {
         .expect("the binary should run");
     let help = String::from_utf8_lossy(&help.stdout).into_owned();
 
-    const NAMED: &[&str] = &[
-        "policy",
-        "vars",
-        "eval",
-        "why",
-        "protected",
-        "completions",
-        "path",
-        "history",
-        "diff",
-        "sbom",
-        "export",
-        "plan",
-        "profile",
-        "module",
-        "edit",
-        "config",
-        "hooks",
-        "schedule",
-        "fleet",
-        "info",
-        "list",
-        "search",
-        "check",
-        "adopt",
-    ];
+    let named: Vec<&str> = shall::core::latency::classified_names().collect();
+    // The self-test. A scan that yielded nothing would make the assertion below vacuous, which
+    // is the failure mode this whole file is about.
+    assert!(
+        named.len() > 20,
+        "the class table yielded {} names; the reader has lost it",
+        named.len()
+    );
 
-    let missing: Vec<&str> = NAMED
+    let missing: Vec<&str> = named
         .iter()
         .copied()
         .filter(|n| !help.contains(&format!("  {n} ")) && !help.contains(&format!("  {n}\n")))

@@ -26,9 +26,9 @@
 //! nothing stands in the way.
 //!
 //! `adopt` routes its *manifest* write through `Writes::for_run(dry_run)` and then calls
-//! `state_mut.add()` + `save()` with no dry-run test at all (`src/app/adopt.rs:236-255`). `hold`
-//! and `unhold` do the same (`src/verbs/packages.rs:605,624`). The sibling that was fixed proves
-//! the class was known — `src/verbs/cleanup.rs:467`:
+//! `state_mut.add()` + `save()` with no dry-run test at all (`src/app/adopt.rs-255`). `hold`
+//! and `unhold` do the same (`src/verbs/packages.rs,624`). The sibling that was fixed proves
+//! the class was known — `src/verbs/cleanup.rs`:
 //!
 //!     // The registry is what Shall believes it manages. A preview that persisted `forget`
 //!     // would leave the package unmanaged for real while promising it had changed nothing.

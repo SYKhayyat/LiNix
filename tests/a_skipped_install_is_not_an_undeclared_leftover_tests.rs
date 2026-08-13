@@ -4,14 +4,14 @@
 //!
 //! | producer | what the row is |
 //! |---|---|
-//! | `planner.rs:369`, `planner.rs:705` (via `Declined::reported`) | a **removal** declined — the package is installed, nothing declares it, and it stays |
-//! | `planner.rs:793` | an **install** skipped — the package is declared, it is *not* installed, and it does not arrive |
+//! | `planner.rs`, `planner.rs` (via `Declined::reported`) | a **removal** declined — the package is installed, nothing declares it, and it stays |
+//! | `planner.rs` | an **install** skipped — the package is declared, it is *not* installed, and it does not arrive |
 //!
 //! Three surfaces print that vec, and all three describe it with the first row's sentence:
 //!
-//! - `sync.rs:902` — *"Left in place (N) — installed, declared nowhere, and not removed"*
-//! - `plan.rs:273` — *"N package(s) are installed, declared nowhere, and will not be removed"*
-//! - `check.rs:235` — *"N package(s) installed and declared nowhere that `sync` will not remove"*
+//! - `sync.rs` — *"Left in place (N) — installed, declared nowhere, and not removed"*
+//! - `plan.rs` — *"N package(s) are installed, declared nowhere, and will not be removed"*
+//! - `check.rs` — *"N package(s) installed and declared nowhere that `sync` will not remove"*
 //!
 //! For an install skip every clause is false: it is not installed, it *is* declared, and there
 //! was never a removal to decline. The follow-up advice — *"Declare them to keep them"* — asks

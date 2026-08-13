@@ -145,21 +145,68 @@ impl Class {
     }
 
     /// Which class a subcommand is in, by the name `--help` prints for it.
-    ///
-    /// Listed rather than derived, and the list is asserted against `--help` by
-    /// `tests/latency_budget_tests.rs` — a name that stops existing fails that test rather than
-    /// sitting here forever, which is the mistake `undo` made in two harness exemption lists.
     pub fn of(subcommand: &str) -> Class {
-        match subcommand {
-            // Reads files, answers, stops.
-            "policy" | "vars" | "eval" | "why" | "protected" | "completions" | "path"
-            | "history" | "diff" | "sbom" | "export" | "plan" | "profile" | "module" | "edit"
-            | "config" | "hooks" | "schedule" | "fleet" | "help" => Class::ConfigOnly,
-            "info" => Class::OneBackend,
-            "list" | "search" | "check" | "outdated" | "adopt" => Class::EveryBackend,
-            _ => Class::Mutating,
-        }
+        CLASSIFIED
+            .iter()
+            .find(|(name, _)| *name == subcommand)
+            .map_or(Class::Mutating, |(_, class)| *class)
     }
+}
+
+/// Every subcommand this table names, with its class.
+///
+/// **Data rather than a `match`, and that is the whole point of the shape.** The gate that keeps
+/// these names honest — `tests/latency_budget_tests.rs` — asserts them against `--help`, and a
+/// `match` gives it nothing to iterate, so it read a hand-typed array of twenty-four strings
+/// beside it instead. The copy omitted two entries, and one of them was `outdated`: a name
+/// classified here that is not a subcommand at all (`shall list --outdated` is a flag), so the
+/// arm was dead and the gate written to catch exactly that could not see it.
+///
+/// **The failure the gate guarded against was the failure it demonstrated** — `undo` sat in two
+/// harness exemption lists because nothing validated the list, and the cure validated a
+/// transcription of the list. A name that stops existing now fails that test, because the test
+/// reads this.
+///
+/// Scanned linearly, and that is not worth a map: this is consulted once per command invocation.
+const CLASSIFIED: &[(&str, Class)] = &[
+    // Reads files, answers, stops.
+    ("policy", Class::ConfigOnly),
+    ("vars", Class::ConfigOnly),
+    ("eval", Class::ConfigOnly),
+    ("why", Class::ConfigOnly),
+    ("protected", Class::ConfigOnly),
+    ("completions", Class::ConfigOnly),
+    ("path", Class::ConfigOnly),
+    ("history", Class::ConfigOnly),
+    ("diff", Class::ConfigOnly),
+    ("plan", Class::ConfigOnly),
+    ("profile", Class::ConfigOnly),
+    ("module", Class::ConfigOnly),
+    ("edit", Class::ConfigOnly),
+    ("config", Class::ConfigOnly),
+    ("hooks", Class::ConfigOnly),
+    ("schedule", Class::ConfigOnly),
+    ("fleet", Class::ConfigOnly),
+    ("help", Class::ConfigOnly),
+    ("info", Class::OneBackend),
+    // **`sbom` and `export` are here, not in `ConfigOnly`.** They were filed as "reads files,
+    // answers, stops" and they spawn one child process per manager — so the shape gate never
+    // looked at them while they ran a serial loop at 1.0× overlap and twenty-one waves over
+    // twenty-one children, and the five-second config budget they were handed printed a `WARN`
+    // on an ordinary run. A class is about what a command *does*, not how it reads.
+    ("sbom", Class::EveryBackend),
+    ("export", Class::EveryBackend),
+    ("list", Class::EveryBackend),
+    ("search", Class::EveryBackend),
+    ("check", Class::EveryBackend),
+    ("adopt", Class::EveryBackend),
+];
+
+/// The names [`CLASSIFIED`] classifies, for the gate that checks them against `--help`.
+///
+/// Exists so that gate reads the table rather than a copy of it.
+pub fn classified_names() -> impl Iterator<Item = &'static str> {
+    CLASSIFIED.iter().map(|(name, _)| *name)
 }
 
 /// The subcommand name clap prints, taken off the `Commands` variant's own `Debug`.

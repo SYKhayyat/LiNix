@@ -1,7 +1,8 @@
 //! **Nothing in this repository tested that a machine converges.**
 //!
 //! `lamdan/whole-repo-2026-08-05.md` closes with this as the one gap to shut before any of its
-//! findings: `e2e_tests.rs` wrote one `brew:neovim`, ran resolver → planner → engine once, and
+//! findings: the since-deleted `e2e_tests.rs` wrote one `brew:neovim`, ran resolver → planner
+//! → engine once, and
 //! asserted `is_managed`. One package, install-only, no second run. **No test deleted a line and
 //! asserted the package left. No test synced twice and asserted the second run was empty.**
 //! `src/app/sync/mod.rs` — 1,102 lines holding the entire apply loop — contains zero
@@ -48,7 +49,8 @@ fn answer(mock: &MockExecutor, cmd: &str, stdout: &str) {
 async fn machine_holds(mock: &MockExecutor, names: &[&str]) {
     // **These stubs are a world, not an expectation.** The mock's unmatched-registration check
     // exists because a stub the product never ran usually means the test was wrong about the
-    // product's argv — `e2e_tests.rs` registered `brew install {name}` against a product that
+    // product's argv — the since-deleted `e2e_tests.rs` registered `brew install {name}`
+    // against a product that
     // emits `brew install -- neovim`, and stayed green. That reading does not apply here: this
     // helper describes what the *machine* is holding, and a machine having a state does not mean
     // Shall asks about every part of it. `brew leaves` goes unasked whenever nothing is being
@@ -214,7 +216,7 @@ async fn convergence_never_reaches_for_what_shall_did_not_install() {
 /// forward and backward on the happy path only, and the one mechanism that provably un-converges
 /// runs only when something fails."*
 ///
-/// That mechanism is `auto_rollback`, on by default (`transaction.rs:60`). On the first failure
+/// That mechanism is `auto_rollback`, on by default (`transaction.rs`). On the first failure
 /// it walks the completed nodes backwards, and for each one whose `Prior` is `Absent` it calls
 /// `remove` — **on packages this run installed successfully, which are still in the manifest,
 /// which the next `sync` therefore reinstalls.** `heal`, whose entire job is the same failure

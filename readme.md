@@ -929,6 +929,20 @@ checked by `tests/grader_refusal_exit_code_tests.rs` rather than asserted in a c
 `2` is why `shall check` in CI tells you a machine has drifted without failing the job the way
 an error would, and `3` is distinct from `1` because "I will not do this" is not "this broke".
 
+**`shall plan` exits `2` when the plan it wrote is not empty** (2026-08-13). It answers the same
+question `check` answers *and* writes the artifact a script consumes, so a pipeline that branches
+on drift will reach for it — and until this it was told `0` every time, including while printing
+the work on the line above. `shall list --outdated` deliberately still exits `0`: a listing's
+subject is inventory rather than a verdict, and one that failed for having contents would
+surprise every script that has ever piped one.
+
+**`shall sync` exits `1` when a declaration could not be acted on** (2026-08-13) — one that names
+a manager this machine cannot reach, counted per declaration so a partial skip is caught too. It
+used to warn and return `0`, which matters most where nobody is reading the warnings: `sudo`'s
+stock `secure_path` hides `~/.cargo/bin`, `~/.bun/bin` and `~/.local/bin`, so an unattended sync
+could install nothing and report success. A *removal* the guard declines is not this — that is
+the guard working, and it is the ordinary state of every adopted machine.
+
 ## Teaching Shall a package manager it has never heard of
 
 If a manager's CLI has plain install/remove/list verbs, Shall can learn it from data — no

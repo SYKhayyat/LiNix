@@ -15,10 +15,23 @@ pub type Pkg = (String, String, Option<String>);
 
 /// Snapshot the managed set as `(backend, name, version)`, preferring the live installed
 /// version and falling back to the recorded one.
+/// Every managed package with the version the manager reports for it, asked concurrently.
+///
+/// **The one implementation, and it fans out.** This existed twice — here and as
+/// `insight::resolve_managed` — and both were a serial `for` loop `await`ing `info()` once per
+/// *package*, each of which spawns a child process. `shall --timings` measured the result at
+/// **1.0× overlap with one wave per child**: a serial loop wearing a fan-out's clothes, ~9s for
+/// `sbom` and ~11s for `export` against 3.6s for `list` doing more work over the same managers.
+///
+/// Bounded by `max_parallel` for the same reason every other fan-out here is: a machine with
+/// hundreds of managed packages would otherwise start hundreds of processes at once.
 pub async fn managed_pkgs(
     state: &tokio::sync::Mutex<crate::core::StateRegistry>,
     registry: &crate::backends::BackendRegistry,
+    max_parallel: usize,
 ) -> Vec<Pkg> {
+    use futures::stream::StreamExt;
+
     let recorded: Vec<Pkg> = {
         let state = state.lock().await;
         state
@@ -27,21 +40,28 @@ pub async fn managed_pkgs(
             .map(|p| (p.backend.clone(), p.name.clone(), p.version.clone()))
             .collect()
     };
-    let mut out = Vec::with_capacity(recorded.len());
-    for (backend, name, rec) in recorded {
-        let version = match registry
-            .get(&backend)
-            .and_then(|b| b.as_queryable().cloned())
-        {
-            Some(q) => match q.info(&name).await {
-                Ok(Some(p)) => p.version.or(rec),
-                _ => rec,
-            },
-            None => rec,
-        };
-        out.push((backend, name, version));
-    }
-    out
+
+    // `buffered`, not `buffer_unordered`: the SBOM and every export format are documents whose
+    // row order should not depend on which manager answered first.
+    futures::stream::iter(recorded)
+        .map(|(backend, name, rec)| {
+            let queryable = registry
+                .get(&backend)
+                .and_then(|b| b.as_queryable().cloned());
+            async move {
+                let version = match queryable {
+                    Some(q) => match q.info(&name).await {
+                        Ok(Some(p)) => p.version.or(rec),
+                        _ => rec,
+                    },
+                    None => rec,
+                };
+                (backend, name, version)
+            }
+        })
+        .buffered(max_parallel.max(1))
+        .collect()
+        .await
 }
 
 /// The formats `export` can emit, plus which output filename each conventionally uses.
@@ -207,13 +227,17 @@ async fn free_path(out_dir: &Path, name: &str) -> PathBuf {
 pub async fn export(
     state: &tokio::sync::Mutex<crate::core::StateRegistry>,
     registry: &crate::backends::BackendRegistry,
+    config: &crate::config::Config,
     format: Option<Format>,
     out_dir: &Path,
     to_stdout: bool,
     force: bool,
-    dry_run: bool,
 ) -> Result<Vec<(String, Outcome)>> {
-    let pkgs = managed_pkgs(state, registry).await;
+    // `dry_run` and `max_parallel` arrived as two separate arguments and took this past the
+    // seven clippy allows. They are both readings of one thing the caller already holds, so the
+    // fix is the configuration itself rather than a wider signature.
+    let dry_run = config.dry_run;
+    let pkgs = managed_pkgs(state, registry, config.max_parallel).await;
     let formats: Vec<Format> = match format {
         Some(f) => vec![f],
         None => Format::all().to_vec(),

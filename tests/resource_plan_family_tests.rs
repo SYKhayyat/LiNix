@@ -107,7 +107,10 @@ fn every_kind_of_undeclared_resource_is_reported_by_check_and_frozen_by_plan() {
 
     // Then `plan`, which is the reviewable artifact and has to name each one.
     let (out, code) = f.run(&["plan"]);
-    assert_eq!(code, 0, "`plan` failed:\n{out}");
+    // `H2` (owner, 2026-08-13): a read-only command that finds work exits **2**, and `plan`
+    // is one. Both 0 and 2 are successful runs of it; 1 is a failure. The content
+    // assertions below are what carry this test's meaning either way.
+    assert!(matches!(code, 0 | 2), "`plan` failed:\n{out}");
     assert!(
         !out.contains("already matches desired state"),
         "`plan` froze an empty plan over {} declared resources:\n{}",
@@ -144,7 +147,10 @@ fn every_kind_of_undeclared_resource_is_reported_as_a_teardown() {
     f.write_module("");
 
     let (out, code) = f.run(&["plan"]);
-    assert_eq!(code, 0, "`plan` failed:\n{out}");
+    // `H2` (owner, 2026-08-13): a read-only command that finds work exits **2**, and `plan`
+    // is one. Both 0 and 2 are successful runs of it; 1 is a failure. The content
+    // assertions below are what carry this test's meaning either way.
+    assert!(matches!(code, 0 | 2), "`plan` failed:\n{out}");
     assert!(
         !out.contains("already matches desired state"),
         "`plan` reported a match while {} applied resources are no longer declared:\n{}",
@@ -200,7 +206,10 @@ fn a_resource_that_is_applied_and_present_is_not_reported_as_drift() {
     assert!(!out.contains("to place"), "the same, counted:\n{out}");
 
     let (out, code) = f.run(&["plan"]);
-    assert_eq!(code, 0, "`plan` failed:\n{out}");
+    // `H2` (owner, 2026-08-13): a read-only command that finds work exits **2**, and `plan`
+    // is one. Both 0 and 2 are successful runs of it; 1 is a failure. The content
+    // assertions below are what carry this test's meaning either way.
+    assert!(matches!(code, 0 | 2), "`plan` failed:\n{out}");
     assert!(
         out.contains("already matches desired state"),
         "`plan` found work on a converged machine:\n{out}"

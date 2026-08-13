@@ -1,12 +1,12 @@
 //! **The four managers that matter on Linux had real captured `outdated` output and zero captured
 //! `installed` output.** These are the installed listings, from the same containers.
 //!
-//! `apt.rs:169`, `pacman.rs:199`, `dnf.rs:246`, `dnf.rs:273` and `common.rs:156` each say
+//! `apt.rs`, `pacman.rs`, `dnf.rs`, `dnf.rs` and `common.rs` each say
 //! *"verbatim from a container"* — about the *outdated* listing. The installed listing is the one
 //! the planner acts on: it decides what is already there, therefore what to install, therefore
 //! what to remove. It was tested against strings somebody typed.
 //!
-//! The rule this pays into is written in `parsers/ecosystem.rs:633`, in this repo's own words:
+//! The rule this pays into is written in `parsers/ecosystem.rs`, in this repo's own words:
 //!
 //! > *"a parser is tested against output captured from the tool it parses, and from no other
 //! > tool."*
@@ -177,7 +177,7 @@ fn apk_reads_its_own_info_output() {
 /// them.** This is opam's, from `ocaml/opam:debian-12-ocaml-5.2`.
 ///
 /// The function's only test was hand-typed and labelled `"spack"` — a manager it does not serve
-/// as an installed lister — which is the exact shape `ecosystem.rs:633` names: *"it passed, and
+/// as an installed lister — which is the exact shape `ecosystem.rs` names: *"it passed, and
 /// said nothing whatever about pixi, which is exactly where it was wrong."*
 ///
 /// `emerge` still has none, and cannot get one from here: the Gentoo image bakes `SMOKE_ONLY=1`,
@@ -213,7 +213,7 @@ fn the_fixture_check_can_fail() {
         "a two-line invention must not satisfy the floor a real image meets"
     );
     // And the shared reader must not be satisfied by another tool's output — the exact rule
-    // `ecosystem.rs:633` states, applied to itself. apk's output is `name-version` with no space;
+    // `ecosystem.rs` states, applied to itself. apk's output is `name-version` with no space;
     // apt's parser needs a space, so it reads nothing and now says so.
     const APK: &str = include_str!("fixtures/apk/info-v-installed.txt");
     assert!(
@@ -233,7 +233,7 @@ fn the_fixture_check_can_fail() {
         crossed.iter().take(5).map(|p| &p.name).collect::<Vec<_>>()
     );
 
-    // **And the case that makes `ecosystem.rs:633`'s rule concrete — recorded as it now
+    // **And the case that makes `ecosystem.rs`'s rule concrete — recorded as it now
     // behaves, and it changed for a reason worth keeping.**
     //
     // `bsd::parse_pkg` fed apt's listing used to *succeed*: it read 7 of the 92 lines — every

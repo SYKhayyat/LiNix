@@ -124,7 +124,21 @@ pub fn parse_short(origin: &Origin, text: &str) -> Result<Options> {
                     .with_hint("write `@key=value,key2=value2` with no trailing or doubled comma."),
             );
         }
-        if let Some(tail) = spliced_option(part) {
+        if let Some((tail, how)) = spliced_option(part) {
+            let hint = match how {
+                Splice::AfterSpace => format!(
+                    "options are separated by commas, never by spaces. Written with a space, `{}` \
+                     is absorbed into the option before it rather than being an option at all.",
+                    tail
+                ),
+                Splice::NamesAnOption => format!(
+                    "options are separated by commas: write `,{}`. Written straight after a \
+                     value, `{}` is absorbed into that value rather than being an option at all. \
+                     If you meant it as part of the value, use the block form.",
+                    tail.trim_start_matches('@'),
+                    tail
+                ),
+            };
             return Err(GrammarError::new(
                 origin.clone(),
                 format!(
@@ -132,11 +146,7 @@ pub fn parse_short(origin: &Origin, text: &str) -> Result<Options> {
                     part, tail
                 ),
             )
-            .with_hint(format!(
-                "options are separated by commas, never by spaces. Written with a space, `{}` \
-                 is absorbed into the option before it rather than being an option at all.",
-                tail
-            )));
+            .with_hint(hint));
         }
         match part.split_once('=') {
             Some((k, v)) => {
@@ -233,14 +243,71 @@ fn looks_like_a_version(token: &str) -> bool {
 /// it tomorrow.
 ///
 /// **An `@` on its own is not the signal.** `@requires=@angular/cli` and
-/// `@source=github:owner/repo@v2` are ordinary values and stay legal. Whitespace *immediately
-/// before* an `@` is the signal, because nothing writes that on purpose — and a value that
-/// genuinely needs one has the block form, which exists for exactly the values the short form
-/// cannot hold.
-fn spliced_option(part: &str) -> Option<&str> {
+/// `@source=github:owner/repo@v2` are ordinary values and stay legal.
+///
+/// **Two signals, because the space was never the mechanism.** Requiring whitespace before the
+/// `@` made the refusal a property of how the line was typed rather than of what it says:
+/// `cargo:ripgrep@version=1.0.0 @hold` was refused and `cargo:ripgrep@version=1.0.0@hold` parsed
+/// as the single version `1.0.0@hold`, silently dropping the hold. All ten bare flags went the
+/// same way, `@sandbox` and `@system` among them — an option that decides whether a command is
+/// confined, and one that decides whether a package is written into the OS's environment.
+///
+/// So the second signal is the text itself: an `@` whose tail *names an option*. That is the
+/// only thing separating `1.0.0@hold` from `owner/repo@v2`, and it is why this function has to
+/// consult II.2's table rather than judge by shape alone. A value that genuinely needs an `@`
+/// followed by an option's name has the block form, which exists for exactly the values the
+/// short form cannot hold.
+fn spliced_option(part: &str) -> Option<(&str, Splice)> {
     let bytes = part.as_bytes();
-    let at = (1..bytes.len()).find(|&i| bytes[i] == b'@' && bytes[i - 1].is_ascii_whitespace())?;
-    Some(part[at..].trim())
+    if let Some(at) =
+        (1..bytes.len()).find(|&i| bytes[i] == b'@' && bytes[i - 1].is_ascii_whitespace())
+    {
+        return Some((part[at..].trim(), Splice::AfterSpace));
+    }
+    // Every `@`, not just the first: `@version=1.0@hold` and `@version=1.0@x@hold` are one
+    // mistake, and stopping at the first `@` would find `x` and call it a value.
+    for i in (1..bytes.len()).filter(|&i| bytes[i] == b'@') {
+        let tail = &part[i + 1..];
+        let key = tail.split_once('=').map_or(tail, |(k, _)| k);
+        if crate::config::grammar::statement::is_package_option_key(key) {
+            return Some((part[i..].trim(), Splice::NamesAnOption));
+        }
+    }
+
+    // **And a third signal, for the flag names that are not options at all.**
+    // `@version=1.0.0@optional` splices a word II.2's table has never held, so the rule above
+    // cannot see it — and it is absorbed exactly like `@hold` was, into a version of
+    // `1.0.0@optional` that no manager will ever match.
+    //
+    // **Two conditions, and both are load-bearing.** The key must be one whose value is a
+    // number, a date or a digest rather than a name — `source=` and `requires=` are excluded,
+    // because `github:owner/repo@v2` and `@angular/cli` are ordinary values and Q23's ruling
+    // depends on a *name* being able to carry an `@`. And the tail must read as an option name
+    // rather than as more of the value: `version=1.2.3+build@7` is legal semver build metadata,
+    // and `7` is not a key. That is the discriminator [`looks_like_a_version`] already encodes —
+    // a leading digit means a version, never a flag — applied on the other side of the `@`.
+    if let Some((key, value)) = part.split_once('=') {
+        const VALUE_IS_NOT_A_NAME: &[&str] =
+            &["version", "sha256", "expires", "until", "size", "quota"];
+        if VALUE_IS_NOT_A_NAME.contains(&key.trim()) {
+            for (i, _) in value.match_indices('@') {
+                let tail = &value[i + 1..];
+                let candidate = tail.split_once('=').map_or(tail, |(k, _)| k);
+                if is_key(candidate) && !looks_like_a_version(candidate) {
+                    let at = key.len() + 1 + i;
+                    return Some((part[at..].trim(), Splice::NamesAnOption));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Which of the two signals found a spliced option — they need different advice, because one is
+/// a typing mistake and the other is a value that has to move to the block form.
+enum Splice {
+    AfterSpace,
+    NamesAnOption,
 }
 
 fn is_key(token: &str) -> bool {

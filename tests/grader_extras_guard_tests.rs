@@ -1,11 +1,11 @@
 //! GRADER, 2026-07-28 — RED. A removal path with no guard, no count, and no plan line.
 //!
 //! `readme.md` — "**every path that removes anything** goes through one guard".
-//! `src/app/sync/guard.rs:9` — "*Every* path that deletes is guarded, not just the reviewed
+//! `src/app/sync/guard.rs` — "*Every* path that deletes is guarded, not just the reviewed
 //! ones. A guard on one command is a guard on nothing: the bug that motivated this arrived
 //! through `prune`, which nobody thought to check."
 //!
-//! `src/app/apply/extras.rs:105` deletes and the word `guard` does not appear in that file.
+//! `src/app/apply/extras.rs` deletes and the word `guard` does not appear in that file.
 //! It is the undo path for every non-package resource Shall manages — `link:`, `service:`,
 //! `setting:`, `shim:`, `schedule:`, `repo:`. When a declaration leaves the model, this loop
 //! tears the resource down directly through `inst.remove(...)`, outside the transaction, and

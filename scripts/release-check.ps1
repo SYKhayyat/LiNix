@@ -81,6 +81,22 @@ Write-Host "-> cargo build --release"
 cargo build --release
 if ($LASTEXITCODE -eq 0) { Pass "release build succeeds" } else { Fail "release build FAILED" }
 
+# **The other platform, and on Windows it is the one that matters.** Every gate above this line
+# compiles one OS, which leaves 45 cfg-gated blocks across 17 source files unread here - how a
+# private associated const named across a module boundary took every Apple, Linux and MSRV job
+# red, took the container harness offline with them, and sat for 26 commits.
+#
+# Soft, like cargo-deny below: it needs a reachable Docker daemon, and a release script that
+# refuses to run without one stops being run.
+Write-Host "-> scripts/unix-check.sh"
+if (Get-Command wsl -ErrorAction SilentlyContinue) {
+    wsl -- bash ./scripts/unix-check.sh --lib
+    if ($LASTEXITCODE -eq 0) { Pass "unix-check: the tree compiles for Linux" }
+    else { Info "unix-check did not pass - the cfg(unix) blocks are unverified on this run" }
+} else {
+    Info "no wsl on this host, so the cfg(unix) blocks are unverified; CI compiles them regardless"
+}
+
 # The `supply-chain` and `msrv` CI jobs, run locally. A CI job nothing local drives is a gate a
 # developer finds out about from a red push, which is what grade6_gate_parity asserts against.
 # Both are soft here and hard in CI: cargo-deny and a pinned toolchain are installs a contributor

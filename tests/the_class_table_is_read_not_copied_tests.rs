@@ -1,153 +1,85 @@
-//! The latency class table is checked against the source of the table, not against a copy of it.
+//! The gate over the latency class table reads **the table**, not a transcription of it.
 //!
-//! `core/latency.rs::Class::of` says of itself: *"Listed rather than derived, and the list is
+//! **What was found, 2026-08-13.** `Class::of` classified `"outdated"` as `EveryBackend`. There
+//! is no `outdated` subcommand — it is `shall list --outdated`, a flag — so the arm was dead.
+//!
+//! The interesting half was why nothing caught it. `Class::of`'s own doc said *"the list is
 //! asserted against `--help` by `tests/latency_budget_tests.rs` — a name that stops existing
 //! fails that test rather than sitting here forever, which is the mistake `undo` made in two
-//! harness exemption lists."*
+//! harness exemption lists."* That test did not read the table. It read a `NAMED` array of
+//! twenty-four hand-typed strings sitting beside it, and the array omitted `outdated` and
+//! `help`. **The failure it guarded against was the failure it demonstrated**: `undo` sat in two
+//! exemption lists because nothing validated the list, and the cure validated a transcription of
+//! the list.
 //!
-//! That test does not read the table. It reads a `NAMED` array of twenty-four strings typed out
-//! beside it, and checks *those* against `--help`. So the guarantee is not "every name in the
-//! table exists" — it is "every name someone remembered to copy exists", and the two have
-//! already diverged: the table classifies `outdated` as `EveryBackend`, `--help` has no
-//! `outdated` subcommand, the copy omits the name, and the test passes.
+//! **Why the copy existed, which is the part worth keeping.** `Class::of` was a `match`, and a
+//! `match` cannot be enumerated from outside it — so a test that wanted the names had no way to
+//! ask for them and typed them out instead. The copy was not laziness; it was the only thing
+//! available. The table is data now (`CLASSIFIED`) and the program exposes
+//! `Class::classified_names()`, so `latency_budget_tests` reads it and there is nothing to
+//! drift from.
 //!
-//! The failure it guards against is therefore the failure it demonstrates. `undo` sat in two
-//! exemption lists after being renamed away because nothing validated the list; the fix
-//! validated a transcription of the list.
-//!
-//! **What the dead row costs.** `Class::of("outdated")` is unreachable, so the arm is dead
-//! rather than wrong, and the visible damage is small. The reason to care is that it is the
-//! only evidence available about whether the table is maintained — and the one check built to
-//! produce that evidence cannot see the one row where it is missing. A gate that reports on a
-//! copy reports on the copy.
-//!
-//! The fix is to derive: read the arms, or drive `Class::of` off the same variant list
-//! `subcommand_name` already walks. Not to correct the array — the array being correctable by
-//! hand is the defect.
+//! **So this file no longer checks the names** — `latency_budget_tests` does that, against
+//! `--help`, from the table itself. What it checks is the *structural* property that made the
+//! bug possible, because that is the thing that can come back: a gate over a list must not keep
+//! its own copy of the list. The original version of this file said so in its own words —
+//! *"deleting the array once the check derives its names makes this test unnecessary, which is
+//! the outcome to aim for"* — and this is that outcome, with a lock on the door behind it.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
 }
 
-fn help_text() -> String {
-    let out = Command::new(env!("CARGO_BIN_EXE_shall"))
-        .arg("--help")
-        .output()
-        .expect("the binary should run");
-    String::from_utf8_lossy(&out.stdout).into_owned()
+fn guard_source() -> String {
+    let p = repo_root().join("tests/latency_budget_tests.rs");
+    std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("cannot read {}: {e}", p.display()))
 }
 
-/// Every string literal in the body of `Class::of`, in source order.
-///
-/// Read out of the file rather than called, because a `match` cannot be enumerated from
-/// outside it — which is the same property that let a dead arm sit there.
-fn names_in_the_class_table() -> Vec<String> {
-    let src = std::fs::read_to_string(repo_root().join("src/core/latency.rs"))
-        .expect("src/core/latency.rs should be readable");
-    let start = src
-        .find("pub fn of(subcommand: &str) -> Class {")
-        .expect("`Class::of` should still be spelled this way");
-    let body = &src[start..];
-    let end = body
-        .find("_ => Class::Mutating,")
-        .expect("`Class::of` should still end with its fallthrough arm");
-
-    let mut out = Vec::new();
-    for line in body[..end].lines() {
-        let code = match line.find("//") {
-            Some(at) => &line[..at],
-            None => line,
-        };
-        let mut rest = code;
-        while let Some(open) = rest.find('"') {
-            let after = &rest[open + 1..];
-            let Some(close) = after.find('"') else { break };
-            let name = &after[..close];
-            if !name.is_empty() {
-                out.push(name.to_string());
-            }
-            rest = &after[close + 1..];
-        }
-    }
-    out
-}
-
-fn help_lists(help: &str, name: &str) -> bool {
-    help.contains(&format!("  {name} ")) || help.contains(&format!("  {name}\n"))
-}
-
-/// The extractor finds the names it is supposed to find.
-///
-/// A source-scanning test that silently matched nothing would pass forever, which is the
-/// failure mode of the test it replaces. These five are spread across all three arms.
+/// The guard asks the program for the names instead of holding them.
 #[test]
-fn the_table_reader_reads_the_table() {
-    let names = names_in_the_class_table();
+fn the_guard_reads_the_table_rather_than_a_copy() {
+    let guard = guard_source();
+
     assert!(
-        names.len() >= 20,
-        "only {} name(s) came out of `Class::of`; the extractor has lost the body: {names:?}",
+        guard.contains("classified_names()"),
+        "`latency_budget_tests` no longer asks `Class::classified_names()` for the subcommands \
+         it checks against `--help`. Whatever it reads instead is a second statement of the \
+         table, and the two can disagree — which is exactly how `outdated` came to be \
+         classified for years after it stopped being a subcommand."
+    );
+
+    assert!(
+        !guard.contains("const NAMED"),
+        "`latency_budget_tests` has grown a hand-typed list of subcommand names again. That is \
+         the defect this file exists about: the previous one omitted `outdated`, so the gate \
+         written to catch a stale name could not see the stale name."
+    );
+}
+
+/// And the table is data the program can enumerate, which is what makes the above possible.
+///
+/// The self-test. Without it, a `classified_names()` that returned nothing would satisfy every
+/// assertion in `latency_budget_tests` and this file would still be green — a gate over a gate,
+/// both measuring an empty set.
+#[test]
+fn the_table_can_be_enumerated_and_is_not_empty() {
+    let names: Vec<&str> = shall::core::latency::classified_names().collect();
+
+    assert!(
+        names.len() > 20,
+        "the class table yielded {} names. `latency_budget_tests` checks each of them against \
+         `--help`, so a table that cannot be read makes that gate vacuous rather than red.",
         names.len()
     );
-    for expected in ["policy", "help", "info", "list", "adopt"] {
-        assert!(
-            names.iter().any(|n| n == expected),
-            "`{expected}` is in `Class::of` and the extractor did not find it: {names:?}"
-        );
-    }
-}
-
-/// Every name the class table classifies is a subcommand the binary has.
-#[test]
-fn every_name_in_the_class_table_is_a_real_subcommand() {
-    let help = help_text();
-    let dead: Vec<String> = names_in_the_class_table()
-        .into_iter()
-        .filter(|n| !help_lists(&help, n))
-        .collect();
-
     assert!(
-        dead.is_empty(),
-        "the latency class table classifies {} name(s) `--help` does not list: {:?}\n\n\
-         `Class::of` cannot be reached with these, so the arm is dead. The check that was \
-         supposed to catch this reads a hand-copied array instead of the table.",
-        dead.len(),
-        dead
+        names.contains(&"check") && names.contains(&"list"),
+        "the table does not name the commands whose latency it exists to classify: {names:?}"
     );
-}
-
-/// And the copy that stands in for the table covers it.
-///
-/// Kept separate from the test above because they fail for different reasons and want
-/// different fixes: that one says a row is dead, this one says the instrument cannot see the
-/// row. Deleting the array once the check derives its names makes this test unnecessary, which
-/// is the outcome to aim for.
-#[test]
-fn the_hand_copied_list_covers_every_name_in_the_table() {
-    let guard = std::fs::read_to_string(repo_root().join("tests/latency_budget_tests.rs"))
-        .expect("tests/latency_budget_tests.rs should be readable");
-    let start = guard
-        .find("const NAMED: &[&str] = &[")
-        .expect("the guard should still hold a copy of the table");
-    let end = start
-        + guard[start..]
-            .find("];")
-            .expect("the copy should still be a closed array");
-    let copy = &guard[start..end];
-
-    let missing: Vec<String> = names_in_the_class_table()
-        .into_iter()
-        .filter(|n| !copy.contains(&format!("\"{n}\"")))
-        .collect();
-
     assert!(
-        missing.is_empty(),
-        "the class table names {} thing(s) the list that guards it does not: {:?}\n\n\
-         Whatever is on this list is invisible to `every_subcommand_the_class_table_names_still_\
-         exists`, which is the only check the table has.",
-        missing.len(),
-        missing
+        !names.contains(&"outdated"),
+        "`outdated` is back in the class table. It is not a subcommand — `shall list --outdated` \
+         is a flag — and `H3` ruled that the name comes out rather than the subcommand going in."
     );
 }

@@ -235,7 +235,7 @@ pub async fn handle_service(app: &App, cmd: &ServiceCommand) -> Result<()> {
     match cmd {
         ServiceCommand::Enable { name } => {
             // **The write comes first, and this used to be the other way round.** `S15` and the
-            // comment at `packages.rs:46` state the rule for exactly this shape: *"Backwards,
+            // comment at `packages.rs` state the rule for exactly this shape: *"Backwards,
             // every refusal on the write (nothing active, several profiles active, an unwritable
             // file) landed after the package was already installed: on the machine, in no file,
             // and drift by the next sync."* A service is the same sentence with a different noun

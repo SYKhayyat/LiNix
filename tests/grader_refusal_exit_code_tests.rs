@@ -20,14 +20,14 @@
 //! Enumerated from the code rather than from the two that were reported, every site whose own
 //! message says "refusing to …" and which is NOT built as `Error::Refused`:
 //!
-//!     src/core/download.rs:46    plain HTTP                      (SEC2)
-//!     src/core/download.rs:69    unverified, no @sha256          (SEC2)
-//!     src/core/executor.rs:396   a secret nothing protects       (T5)
-//!     src/backends/link.rs:68    decrypt into the git repo       (T2)
-//!     src/app/hooks.rs:55        unapproved hooks                (II.12)
-//!     src/app/shim_manager.rs:98 deploy over a foreign file      (SEC1)
-//!     src/utils/file.rs:174      deploy over a foreign file      (SEC1)
-//!     src/app/apply/dotfiles.rs:67 files outside $HOME           (SEC3)
+//!     src/core/download.rs    plain HTTP                      (SEC2)
+//!     src/core/download.rs    unverified, no @sha256          (SEC2)
+//!     src/core/executor.rs   a secret nothing protects       (T5)
+//!     src/backends/link.rs    decrypt into the git repo       (T2)
+//!     src/app/hooks.rs        unapproved hooks                (II.12)
+//!     src/app/shim_manager.rs deploy over a foreign file      (SEC1)
+//!     src/utils/file.rs      deploy over a foreign file      (SEC1)
+//!     src/app/apply/dotfiles.rs files outside $HOME           (SEC3)
 //!
 //! That list is the entire SEC/T series. **The refusals that exit 3 are the ones about removing
 //! packages; the refusals that exit 1 are the ones about security.**
@@ -36,7 +36,7 @@
 //!
 //! 1. A script branching on the documented table reads "Shall refused to download over plain
 //!    HTTP" as "Shall crashed", and cannot tell it from a network failure.
-//! 2. `src/main.rs:185` says, of the `Error::Refused` arm: *"`on_guard_refusal` (XIII.13) fires
+//! 2. `src/main.rs` says, of the `Error::Refused` arm: *"`on_guard_refusal` (XIII.13) fires
 //!    here and nowhere else: this is the one point every refusal in the program passes through,
 //!    so no command can be added that refuses without the hook hearing about it."* **That is
 //!    false for all eight sites above.** A user who wires `on_guard_refusal` to be told when
@@ -113,7 +113,7 @@ fn a_security_refusal_exits_with_the_documented_refusal_code() {
 
 /// The half of G-10 that the exit code is only a symptom of: **does the hook actually fire?**
 ///
-/// `src/main.rs:185` promises `on_guard_refusal` fires for every refusal in the program. Someone
+/// `src/main.rs` promises `on_guard_refusal` fires for every refusal in the program. Someone
 /// wires that hook precisely so they are told when Shall refuses something — and until now they
 /// were told about a mass package removal and *not* about a refused plain-HTTP download, an
 /// unverified binary, an unprotected secret or an unapproved hook. Silent where it matters most.
@@ -164,7 +164,7 @@ fn a_security_refusal_fires_the_refusal_hook() {
     );
 }
 
-/// The comment at src/main.rs:185 claims every refusal passes through the `Error::Refused` arm.
+/// The comment at src/main.rs claims every refusal passes through the `Error::Refused` arm.
 ///
 /// Checked from the code, because a claim that quantifies over paths is verified by enumerating
 /// the paths and never by reading the sentence.
@@ -173,8 +173,8 @@ fn a_security_refusal_fires_the_refusal_hook() {
 /// is kept here because it is the same mistake the test exists to catch. It looked eight lines
 /// above each "refusing to" for `Error::Refused` *in the same file*, and reported five sites
 /// that were already correct: `model/firewall.rs`, `model/health.rs` and `model/rehearsal.rs`
-/// hold the message and `app/apply/firewall.rs:99`, `app/sync/mod.rs:386` and
-/// `verbs/setup.rs:208`/`:218` hold the `Error::Refused` that wraps it. A window that stops at
+/// hold the message and `app/apply/firewall.rs`, `app/sync/mod.rs` and
+/// `verbs/setup.rs`/`:218` hold the `Error::Refused` that wraps it. A window that stops at
 /// the file boundary cannot see a two-file split, so it scored the split as an offence.
 ///
 /// The fix is not an exemption list. A message builder is followed to **every** one of its call
@@ -238,7 +238,7 @@ fn call_sites(
             }
             // Above *and* below: the wrap is above for `Err(Error::Refused(build(..)))`
             // and below for `match build(..) { Some(m) => Err(Error::Refused(m)) }`, which
-            // is how `sync/mod.rs:381` reads. A window that only looked up scored that
+            // is how `sync/mod.rs` reads. A window that only looked up scored that
             // second shape as unwrapped.
             let from = i.saturating_sub(3);
             let to = (i + 6).min(lines.len() - 1);

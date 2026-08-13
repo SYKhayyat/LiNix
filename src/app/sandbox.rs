@@ -22,19 +22,95 @@ pub struct SandboxConfig {
     pub environment: Vec<(String, String)>,
 }
 
+/// Whether a command is actually confined, carried beside the command rather than inferred
+/// from the settings that asked for it.
+///
+/// A caller holding a [`Command`] cannot tell the two apart: an unconfined fallback and a real
+/// `bwrap` invocation have the same type. Every way this has gone wrong is a caller reporting a
+/// boundary it was never handed one of, so the answer travels with the command and a caller that
+/// wants to claim confinement has to hold the variant that grants it.
+#[derive(Debug, Clone)]
+#[must_use]
+pub enum Confinement {
+    /// A mechanism is in force, named so a caller can say which one.
+    By(&'static str),
+    /// No mechanism is in force. Carries the reason, so a caller cannot report the absence
+    /// without being able to say why it is absent.
+    None { because: String },
+}
+
+impl Confinement {
+    /// The sentence a user is owed when a command they asked to confine is about to run loose.
+    pub fn unconfined_warning(&self) -> Option<String> {
+        match self {
+            Self::By(_) => None,
+            Self::None { because } => Some(format!(
+                "confinement was requested but this command will run unconfined: {because}"
+            )),
+        }
+    }
+}
+
 pub struct Sandbox;
 
 impl Sandbox {
-    pub async fn is_available(settings: &SandboxSettings) -> bool {
-        if cfg!(target_os = "linux") {
-            Self::bwrap_available() || settings.fallback_allowed
+    /// The one place that answers "is a mechanism in force, and if not may this proceed".
+    ///
+    /// `run`, `shell` and `wrap` each used to answer it separately, which is how the `warn!` in
+    /// `run` became unreachable: its condition was already folded into the predicate in front of
+    /// it. The decision is made once here and carried, so the three cannot disagree and a
+    /// mechanism that is missing cannot be spelled the same as one that is present.
+    ///
+    /// `require_bwrap` and `windows_require_sandbox` outrank `fallback_allowed`: they exist to
+    /// refuse exactly the run `fallback_allowed` would permit, so a host that has neither
+    /// mechanism nor permission to skip it gets an error rather than a bare command.
+    pub async fn decide(settings: &SandboxSettings) -> Result<Confinement> {
+        let (mechanism, present, required, knob) = if cfg!(target_os = "linux") {
+            (
+                "bubblewrap",
+                Self::bwrap_available(),
+                settings.require_bwrap,
+                "sandbox.require_bwrap",
+            )
         } else if cfg!(target_os = "macos") {
-            Self::sandbox_exec_available() || settings.fallback_allowed
+            (
+                "sandbox-exec",
+                Self::sandbox_exec_available(),
+                false,
+                "sandbox.fallback_allowed",
+            )
         } else if cfg!(target_os = "windows") {
-            Self::windows_sandbox_feature_enabled().await || settings.fallback_allowed
+            (
+                "Windows Sandbox",
+                Self::windows_sandbox_feature_enabled().await,
+                settings.windows_require_sandbox,
+                "sandbox.windows_require_sandbox",
+            )
         } else {
-            false
+            (
+                std::env::consts::OS,
+                false,
+                false,
+                "sandbox.fallback_allowed",
+            )
+        };
+
+        if present {
+            return Ok(Confinement::By(mechanism));
         }
+        if required {
+            return Err(Error::UnsupportedPlatform(format!(
+                "`{knob}` is set and `{mechanism}` is not functional on this host."
+            )));
+        }
+        if !settings.fallback_allowed {
+            return Err(Error::UnsupportedPlatform(format!(
+                "Sandboxing is required by policy but `{mechanism}` is not functional on this host."
+            )));
+        }
+        Ok(Confinement::None {
+            because: format!("`{mechanism}` is not available on this host"),
+        })
     }
 
     fn bwrap_available() -> bool {
@@ -50,10 +126,21 @@ impl Sandbox {
         false
     }
 
-    /// Detects if the Windows Sandbox optional feature is enabled.
+    /// Where the Windows Sandbox host binary lives. Named once because `decide` and
+    /// `wrap_windows` asking two different questions about one mechanism is how the verdict and
+    /// the command they build came apart.
+    #[cfg(target_os = "windows")]
+    const WSB_EXE: &'static str = "C:\\Windows\\System32\\WindowsSandbox.exe";
+
+    /// Detects if the Windows Sandbox optional feature is enabled *and* its host binary is on
+    /// disk. Both, because the feature can be reported enabled while servicing has not yet laid
+    /// the binary down, and `wrap_windows` needs the binary.
     async fn windows_sandbox_feature_enabled() -> bool {
         #[cfg(target_os = "windows")]
         {
+            if !Path::new(Self::WSB_EXE).exists() {
+                return false;
+            }
             let mut command = tokio::process::Command::new("powershell");
             command.args(["-NoProfile", "-NonInteractive", "-Command", "Get-WindowsOptionalFeature -Online -FeatureName 'Containers-DisposableClient' | Select-Object -ExpandProperty State"]);
             // Supervised: `Get-WindowsOptionalFeature` talks to the servicing stack, which is
@@ -147,15 +234,39 @@ impl Sandbox {
         profile
     }
 
+    /// Build the command `decided` describes.
+    ///
+    /// The verdict is passed in rather than recomputed: recomputing it here is what let the
+    /// decision differ between the caller that reports to the user and the code that builds the
+    /// process. An unconfined verdict yields the bare command and nothing else — in particular it
+    /// does not claim an isolation it is not building.
     pub fn wrap(
         cmd: &str,
         args: &[String],
         config: &SandboxConfig,
         settings: &SandboxSettings,
+        decided: &Confinement,
     ) -> Result<Command> {
+        let _ = (config, settings);
+        if let Confinement::None { .. } = decided {
+            // Windows keeps its low-integrity launch here rather than in `By`: it does lower the
+            // token, so deleting it would remove a real reduction, and it is not a sandbox, so
+            // naming it one would be the claim this type exists to stop.
+            #[cfg(target_os = "windows")]
+            {
+                return Ok(Self::low_integrity_windows(cmd, args, config));
+            }
+            #[allow(unreachable_code)]
+            {
+                let mut bare = Command::new(cmd);
+                bare.args(args);
+                return Ok(bare);
+            }
+        }
+
         #[cfg(target_os = "linux")]
         {
-            return Self::wrap_linux(cmd, args, config, settings);
+            return Self::wrap_linux(cmd, args, config);
         }
 
         #[cfg(target_os = "macos")]
@@ -165,7 +276,7 @@ impl Sandbox {
 
         #[cfg(target_os = "windows")]
         {
-            return Self::wrap_windows(cmd, args, config, settings);
+            return Self::wrap_windows(cmd, args, config);
         }
 
         #[allow(unreachable_code)]
@@ -176,21 +287,13 @@ impl Sandbox {
     }
 
     #[cfg(target_os = "linux")]
-    fn wrap_linux(
-        cmd: &str,
-        args: &[String],
-        config: &SandboxConfig,
-        settings: &SandboxSettings,
-    ) -> Result<Command> {
+    fn wrap_linux(cmd: &str, args: &[String], config: &SandboxConfig) -> Result<Command> {
+        // Reached only for a `Confinement::By` verdict. A mechanism that has gone missing between
+        // the decision and here is an error rather than a fallback: the caller has already told
+        // the user this command is confined.
         if !Self::bwrap_available() {
-            if settings.fallback_allowed {
-                debug!("Sandboxing: 'bwrap' not found. Falling back to PATH isolation.");
-                let mut fallback = Command::new(cmd);
-                fallback.args(args);
-                return Ok(fallback);
-            }
             return Err(Error::UnsupportedPlatform(
-                "bubblewrap (bwrap) required but not found.".into(),
+                "bubblewrap (bwrap) was available when this run was planned and is not now.".into(),
             ));
         }
 
@@ -251,15 +354,11 @@ impl Sandbox {
         config: &SandboxConfig,
         settings: &SandboxSettings,
     ) -> Result<Command> {
+        // As `wrap_linux`: reached only for a `Confinement::By` verdict, so a mechanism that has
+        // gone missing since is an error rather than a silent unconfined run.
         if !Self::sandbox_exec_available() {
-            if settings.fallback_allowed {
-                debug!("Sandboxing: 'sandbox-exec' not found. Falling back to non-sandboxed execution.");
-                let mut fallback = Command::new(cmd);
-                fallback.args(args);
-                return Ok(fallback);
-            }
             return Err(Error::UnsupportedPlatform(
-                "sandbox-exec required but not found.".into(),
+                "sandbox-exec was available when this run was planned and is not now.".into(),
             ));
         }
 
@@ -280,35 +379,29 @@ impl Sandbox {
     }
 
     #[cfg(target_os = "windows")]
-    fn wrap_windows(
-        cmd: &str,
-        args: &[String],
-        config: &SandboxConfig,
-        settings: &SandboxSettings,
-    ) -> Result<Command> {
-        let wsb_exe = "C:\\Windows\\System32\\WindowsSandbox.exe";
-
-        if Path::new(wsb_exe).exists() {
-            info!("Sandboxing (Windows): Launching hardware-isolated environment (.wsb)");
-            let wsb_content = Self::generate_wsb_config(cmd, args, config);
-            let mut tmp_file = NamedTempFile::new().map_err(Error::from)?;
-            tmp_file
-                .write_all(wsb_content.as_bytes())
-                .map_err(Error::from)?;
-            let mut command = Command::new(wsb_exe);
-            command.arg(tmp_file.path());
-            return Ok(command);
-        }
-
-        if settings.windows_require_sandbox {
+    fn wrap_windows(cmd: &str, args: &[String], config: &SandboxConfig) -> Result<Command> {
+        // As `wrap_linux`: reached only for a `Confinement::By` verdict.
+        if !Path::new(Self::WSB_EXE).exists() {
             return Err(Error::UnsupportedPlatform(
-                "Windows Sandbox feature is required by configuration but not enabled on this system.".into()
+                "Windows Sandbox was available when this run was planned and is not now.".into(),
             ));
         }
 
-        debug!(
-            "Sandboxing (Windows): Windows Sandbox unavailable. Using integrity-level fallback."
-        );
+        info!("Sandboxing (Windows): Launching hardware-isolated environment (.wsb)");
+        let wsb_content = Self::generate_wsb_config(cmd, args, config);
+        let mut tmp_file = NamedTempFile::new().map_err(Error::from)?;
+        tmp_file
+            .write_all(wsb_content.as_bytes())
+            .map_err(Error::from)?;
+        let mut command = Command::new(Self::WSB_EXE);
+        command.arg(tmp_file.path());
+        Ok(command)
+    }
+
+    /// Windows' unconfined path: a lower integrity level, which is a real reduction and is not
+    /// a sandbox. Reached only for a `Confinement::None` verdict, whose `because` says so.
+    #[cfg(target_os = "windows")]
+    fn low_integrity_windows(cmd: &str, args: &[String], config: &SandboxConfig) -> Command {
         let mut command = Command::new("cmd");
         command
             .arg("/c")
@@ -323,17 +416,18 @@ impl Sandbox {
         if !config.allow_home {
             command.env("USERPROFILE", "C:\\Users\\Public");
         }
-        Ok(command)
+        command
     }
 
-    /// Executes a command in a one-off sandbox.
+    /// Executes a command under the confinement `decided` describes.
     pub fn run(
         cmd: &str,
         args: &[String],
         config: &SandboxConfig,
         settings: &SandboxSettings,
+        decided: &Confinement,
     ) -> Result<std::process::ExitStatus> {
-        let mut sandboxed_cmd = Self::wrap(cmd, args, config, settings)?;
+        let mut sandboxed_cmd = Self::wrap(cmd, args, config, settings, decided)?;
         sandboxed_cmd.status().map_err(Error::from)
     }
 }

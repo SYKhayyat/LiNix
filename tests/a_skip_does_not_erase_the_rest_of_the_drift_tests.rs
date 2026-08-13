@@ -1,6 +1,6 @@
 //! One skipped declaration must not erase every other kind of drift from `check`.
 //!
-//! `check.rs:231` matches `!c.skipped.is_empty()` **before** the arm at `check.rs:288` that
+//! `check.rs` matches `!c.skipped.is_empty()` **before** the arm at `check.rs` that
 //! prints the counts, so the two are alternatives rather than a sum. A machine with one skipped
 //! declaration and a hundred pending changes reports the skip and nothing else:
 //!

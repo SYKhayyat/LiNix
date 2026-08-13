@@ -6255,3 +6255,133 @@ failed, not one that was refused — the guard declining a protected package rea
 nothing removed, which is `S87` again in a new command. The advice has to differ from the plain
 path's: telling someone to `adopt` a package that just survived an explicit `absent:` line
 answers a question they did not ask.
+
+## `H1` — the two commands that did not agree about one machine
+
+**The bug.** On a stock Ubuntu container with `sudo` installed, three declarations, and nothing
+unusual done to the environment:
+
+```
+$ sudo -n env SHALL_CONFIG_DIR=… shall sync --yes ; echo $?
+ WARN `ripgrep` is declared for `cargo`, which is not on this machine — skipping it.
+ WARN `left-pad` is declared for `bun`, which is not on this machine — skipping it.
+ WARN `cowsay` is declared for `uv`, which is not on this machine — skipping it.
+0
+$ sudo -n env SHALL_CONFIG_DIR=… shall check ; echo $?
+->  drift  3 package(s) ...
+2
+```
+
+Three packages asked for, zero installed, no transaction summary, and the exit code named
+`Exit::Converged`. Alternating the two commands repeated it exactly: 0, 2, 0, 2.
+
+**The trigger is not exotic.** `sudo` ships `secure_path` set to
+`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin`, and `cargo`, `bun` and
+`uv` install to `~/.cargo/bin`, `~/.bun/bin` and `~/.local/bin`. Every one of them is invisible to
+anything run through `sudo`, sitting exactly where its own installer put it. `shall schedule` and
+`shall fleet` exist, so an unattended sync is a supported use — and an unattended run is precisely
+where `PATH` is not the user's. The three warnings are useful to a person watching. Nothing is
+watching. What the pipeline reads is the 0.
+
+**Why the rule is what it is.** The distinction was already ruled one command over: §Q2 defines
+**critical** as *"it is installed, or `priority` names it, and it cannot work"* — a
+`priority`-named manager that cannot be reached is a broken machine, not a line that does not
+apply here. `check` was told. `sync` was not, and the two therefore described one machine in
+opposite terms at one moment.
+
+**Exit 1 rather than 2**, from `U21`'s own table: 2 is *a read-only command looked and found work
+to do*, and `sync` is not read-only; 1 is *Shall could not carry the command out*, which is what
+happened. It is already the code a failed install returns, and a declaration that never reached
+its manager is the same fact about the run as one the manager refused.
+
+**The trap this had to avoid, and the reason `SkipKind` exists.** `SyncChanges::skipped` carried
+two opposite kinds of row in one list: a *declined removal* (installed, undeclared, and it stays)
+and a *skipped install* (declared, not installed, and it does not arrive). Failing a run over the
+first would fail every adopted machine on earth, because a guard declining a protected package is
+the ordinary case. The two kinds are now distinct in the type, so this rule can be stated about
+one of them instead of inferred from a sentence — which is the same move `Declined::reported`
+already made for removals and which the install path never went through.
+
+**The partial case is the dangerous one.** Three of three is the reproduction; three of four is
+ordinary and worse, because something did install and the summary reads like a successful
+transaction. Hence a per-declaration count rather than a whole-run boolean.
+
+## `H2` — the preview a script reaches for, always saying "converged"
+
+**The bug.** `target-state.md` says exit 2 *"means a read-only command found work to do"*, and
+only `check` ever built `Error::Differences`. Measured: `shall plan` printed *"1 install(s), 0
+removal(s)"* and exited **0**.
+
+**Why it matters more for `plan` than for anything else.** `plan` is the command that writes the
+machine-readable artifact — it exists to be consumed by a script. A pipeline that wants to know
+"is there work to do" will reach for the command that hands it a document, and that command told
+it "no" every single time, including while printing the work on the line above.
+
+**Why `list --outdated` is deliberately excluded.** A listing's subject is inventory, not a
+verdict. Every script that has ever piped a listing expects 0 for a non-empty list, and a
+`list` that exited non-zero for having contents would break them for a distinction they did not
+ask about. The two commands are not the same kind of thing, and `U21`'s table is about commands
+that render a verdict.
+
+**The condition is `check`'s condition, deliberately.** Not "roughly the same" — the same
+quantities in the same combination. The single most expensive recurring defect in this tree is
+two readings of one machine disagreeing, and a `plan` whose threshold drifted from `check`'s
+would be that defect with a new pair of names.
+
+## `H4` — the confinement that was not one, and the knob that was not wired
+
+**The bug, in a container with no `bwrap` and stock configuration:**
+
+```
+$ shall run -p apt:bash@sandbox -- sh -c 'id -u; touch /srv/escaped'
+IN-SANDBOX-UID=0
+$ ls /srv/escaped
+/srv/escaped          # on the host filesystem. rc=0. Nothing on stdout or stderr said so.
+```
+
+**Three mechanisms in a row, each of which alone would have been enough.**
+
+1. `SandboxSettings::fallback_allowed` defaults to `true`.
+2. `Sandbox::is_available` was `bwrap_available() || settings.fallback_allowed`. It did not
+   answer *"is a sandbox available"* — it answered *"is a sandbox available, **or** are we
+   permitted to skip it"*, which under the default is a constant `true`. Every caller read it as
+   the first question.
+3. `wrap_linux` then found no `bwrap`, logged *"Falling back to PATH isolation"* at `debug!`, and
+   returned `Command::new(cmd).args(args)` — a bare command with an unmodified environment.
+   **There was no PATH isolation.** The sentence named a boundary the code did not build, which
+   is word for word the bug `hooks.rs` records having already caught once: *"It was called
+   `setup_lua_sandbox`, which claimed a boundary this does not build."*
+
+**The one user-visible warning was unreachable.** `run.rs` read `else if settings.fallback_allowed
+{ warn!("Sandbox requested but unavailable…") }`. Reaching it needed `can_sandbox == false &&
+fallback_allowed == true`, and step 2 makes that combination impossible. The `warn!` was dead for
+every input; the live path logged at `debug!`.
+
+**And the documented remedy did nothing.** `require_bwrap` was declared, documented — *"On Linux,
+if true, Shall will fail if 'bwrap' is missing"* — defaulted and serialised, and **read by
+nothing**. Its Windows twin `windows_require_sandbox` was wired and raised exactly the refusal its
+doc promised. So an administrator who read the configuration reference, decided silent unconfined
+execution was unacceptable on their fleet, and wrote `require_bwrap = true` got byte-for-byte the
+same unconfined run. A scan of all 76 `pub` fields in the configuration schema found **exactly
+one** dead setting, and it was this one — no false positives, so the instrument was naming a
+singular case rather than a pattern of noise.
+
+**Why the default stays `true`, which is the part that will look wrong at a glance.** The obvious
+fix is to flip it, so an explicit `@sandbox` refuses on a host that cannot honour it. That was the
+recommendation put to the owner and it was ruled against, on a principle worth writing down: a
+feature in this codebase is **built fully, and not deferred or withdrawn because it is hard or
+potentially insecure** — within reason, people are smart. Refusing to run is Shall deciding, on a
+user's behalf, that they may not proceed on their own machine. What the user is owed is **the
+fact**, and what was wrong here was never the permission — it was that the permission could be
+exercised in silence.
+
+So the escape hatch stays open and stays the default, and all three mechanisms above are closed:
+one decision point (`Sandbox::decide`), a verdict carried as a value (`Confinement`) so no caller
+can claim a boundary it was not handed, a `warn!` on every unconfined run that reaches the person
+before the command does, the false "PATH isolation" sentence deleted, and `require_bwrap` wired
+and outranking `fallback_allowed` — which is what makes the ruling safe: the knob whose entire
+purpose is to close the hole is now a knob.
+
+**Windows keeps its low-integrity launch, reported as `Confinement::None`.** It does lower the
+token, so deleting it would remove a real reduction; it is not a sandbox, so calling it one would
+be the exact claim this type exists to prevent.

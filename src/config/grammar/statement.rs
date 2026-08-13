@@ -1834,6 +1834,15 @@ pub(crate) const PACKAGE_OPTION_KEYS: &[&str] = &[
     "allow_shrink",
 ];
 
+/// Whether `key` names an option a package line may carry.
+///
+/// The one predicate over II.2's table. It exists because the lexer needs the same answer the
+/// validator needs: `@version=1.0.0@hold` has to be told apart from `@source=owner/repo@v2`, and
+/// the only thing that distinguishes them is whether the text after the `@` names an option.
+pub(crate) fn is_package_option_key(key: &str) -> bool {
+    PACKAGE_OPTION_KEYS.contains(&key) || key.ends_with("_install")
+}
+
 /// Options that are only meaningful on some backends — one that resolves a name to several
 /// downloadable artifacts, one that publishes version streams, one that installs from a URL,
 /// one that carves up a disk. Each is refused by name on any other backend: an option nobody
@@ -2106,7 +2115,7 @@ fn validate_options(origin: &Origin, decl: &PackageDecl, absent: bool) -> Result
     // uninstalls itself (S19). An option nobody reads is a line that does nothing; an
     // option someone still reads is worse.
     for key in o.keys() {
-        if PACKAGE_OPTION_KEYS.contains(&key) || key.ends_with("_install") {
+        if is_package_option_key(key) {
             continue;
         }
         let mut err = GrammarError::new(origin.clone(), format!("`@{}` is not an option", key));

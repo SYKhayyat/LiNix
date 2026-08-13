@@ -4,7 +4,7 @@
 //! fail if 'bwrap' is missing"* — defaulted, serialised, and **read nowhere**. Setting it does
 //! nothing at all.
 //!
-//! Its Windows twin is wired. `windows_require_sandbox` is checked at `sandbox.rs:303` and
+//! Its Windows twin is wired. `windows_require_sandbox` is checked at `sandbox.rs` and
 //! produces a refusal in exactly the words its doc promises. The Linux one — the one that
 //! governs the default host for this program, and the platform where `bwrap` is the only real
 //! mechanism — was never connected.

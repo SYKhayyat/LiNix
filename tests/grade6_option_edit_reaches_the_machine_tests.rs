@@ -444,7 +444,10 @@ fn adding_the_option_declares_the_stand_in_and_withdrawing_it_takes_it_back() {
     f.write_module(&format!("cargo:{CANARY}\n"));
     f.seed_ledger(&[&format!("shim:{CANARY}")]);
     let (out, code) = f.run(&["plan"]);
-    assert_eq!(code, 0, "`plan` failed:\n{out}");
+    // `H2` (owner, 2026-08-13): a read-only command that finds work exits **2**, and `plan`
+    // is one. Both 0 and 2 are successful runs of it; 1 is a failure. The content
+    // assertions below are what carry this test's meaning either way.
+    assert!(matches!(code, 0 | 2), "`plan` failed:\n{out}");
     assert!(
         out.contains(&format!("shim:{CANARY}")),
         "the line stopped asking for a stand-in and nothing plans to remove it. A shim is an \
@@ -456,7 +459,10 @@ fn adding_the_option_declares_the_stand_in_and_withdrawing_it_takes_it_back() {
     // assertion above would pass on a tree that tears the shim down unconditionally.
     f.write_module(&format!("cargo:{CANARY}@shim=true\n"));
     let (out, code) = f.run(&["plan"]);
-    assert_eq!(code, 0, "`plan` failed:\n{out}");
+    // `H2` (owner, 2026-08-13): a read-only command that finds work exits **2**, and `plan`
+    // is one. Both 0 and 2 are successful runs of it; 1 is a failure. The content
+    // assertions below are what carry this test's meaning either way.
+    assert!(matches!(code, 0 | 2), "`plan` failed:\n{out}");
     assert!(
         !out.contains("no longer declared"),
         "a declared `@shim=true` was planned for teardown:\n{out}"

@@ -7,7 +7,7 @@
 //!
 //! **That heuristic lives in `bsd.rs` and this module calls it.** It used to be written out
 //! again here, character for character, alongside a `parse_pkgin` that was
-//! `bsd::parse_with_backend` with the label inlined. `bsd.rs:90-94` had already noticed and said
+//! `bsd::parse_with_backend` with the label inlined. `bsd.rs-94` had already noticed and said
 //! so out loud — *"a second copy of that rule is how `pkgsrc.rs` came to be `bsd.rs`
 //! byte-for-byte"* — while the second copy went on compiling one directory away.
 //!

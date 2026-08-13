@@ -1,6 +1,6 @@
 // src/app/shell/mod.rs
 
-use crate::app::sandbox::{Sandbox, SandboxConfig};
+use crate::app::sandbox::{Confinement, Sandbox, SandboxConfig};
 use crate::app::sync::{ChangePlanner, PlanScope, StateResolver, SyncEngine};
 use crate::app::Machinery;
 use crate::core::{Error, PackageSpec, Result};
@@ -77,20 +77,20 @@ impl EphemeralShell {
             }
         });
 
-        let can_sandbox = Sandbox::is_available(&self.m.config.sandbox).await;
+        // The same one decision `run` makes, from the same function, so the two commands cannot
+        // answer "is this session confined" differently on one host.
+        let decided = Sandbox::decide(&self.m.config.sandbox).await?;
 
-        if can_sandbox {
-            debug!("using sandbox isolation");
-            self.launch_sandboxed_shell(&shell_bin, &session_id, &store_paths)
-                .await?;
-        } else if self.m.config.sandbox.fallback_allowed {
-            warn!("sandbox unavailable — falling back to PATH-only isolation");
+        if let Some(warning) = decided.unconfined_warning() {
+            // Said plainly: this shell gets the session's store paths prepended to `PATH`, which
+            // is how the packages are found and is not a boundary of any kind.
+            warn!("{warning} — the session's packages are on `PATH` and nothing is isolated");
             self.spawn_fallback_shell(&shell_bin, &session_id, &store_paths)
                 .await?;
         } else {
-            return Err(Error::UnsupportedPlatform(
-                "Sandbox policy violation: Isolation requested but unavailable.".into(),
-            ));
+            debug!("using sandbox isolation");
+            self.launch_sandboxed_shell(&shell_bin, &session_id, &store_paths, &decided)
+                .await?;
         }
 
         info!("session ended — removing session packages");
@@ -125,11 +125,15 @@ impl EphemeralShell {
         Ok(())
     }
 
+    /// Takes the verdict rather than re-deciding: `enter` has already told the person whether
+    /// this session is confined, and a second opinion here is how the sentence and the process
+    /// came to disagree.
     async fn launch_sandboxed_shell(
         &self,
         shell: &str,
         session_id: &str,
         store_paths: &[(String, String)],
+        decided: &Confinement,
     ) -> Result<()> {
         let mut mounts = Vec::new();
         let mut internal_path = String::from("/usr/local/bin:/usr/bin:/bin");
@@ -151,9 +155,11 @@ impl EphemeralShell {
         let shell_owned = shell.to_string();
         let session_owned = session_id.to_string();
         let settings_clone = self.m.config.sandbox.clone();
+        let decided = decided.clone();
 
         tokio::task::spawn_blocking(move || {
-            let mut bwrap = Sandbox::wrap(&shell_owned, &[], &sandbox_cfg, &settings_clone)?;
+            let mut bwrap =
+                Sandbox::wrap(&shell_owned, &[], &sandbox_cfg, &settings_clone, &decided)?;
             bwrap
                 .env("PATH", internal_path)
                 .env("SHALL_EPHEMERAL_SHELL", "1")

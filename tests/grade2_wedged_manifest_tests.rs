@@ -15,7 +15,7 @@
 //! | `github:shall-zzz-nope/nope`       |  1   | no                   |
 //! | `luarocks:luafilesystem` (no Lua 5.5 rock here) | 1 | no        |
 //!
-//! `withdraw_what_can_never_succeed` (`src/verbs/packages.rs:153`) recognises exactly two
+//! `withdraw_what_can_never_succeed` (`src/verbs/packages.rs`) recognises exactly two
 //! shapes: `Error::Unresolvable`, and `Error::CommandFailed { retry: Permanent }` **whose
 //! message quotes the package name**. github raises neither — its own words are `Package
 //! 'shall-zzz-nope/nope: the repo has no published release' was not found in the target

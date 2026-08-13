@@ -262,7 +262,7 @@ impl Transaction {
     /// Tell rollback what the manifest still asks for, as `backend:name`.
     ///
     /// See the `declared` field. Without it, rollback compensates work that succeeded and is
-    /// still wanted, and `auto_rollback: true` — the default at `transaction.rs:60` — becomes an
+    /// still wanted, and `auto_rollback: true` — the default at `transaction.rs` — becomes an
     /// anti-convergent step. `heal`, whose entire job is the same failure shape, sets
     /// `auto_rollback: false`; nothing explained the split, and this is what it was standing in
     /// for.

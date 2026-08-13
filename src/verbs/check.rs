@@ -141,35 +141,69 @@ pub async fn check_approvals(config: &Config, out: Output) -> Result<()> {
 
 /// Every section's verdict, one line each. The summary is deliberately cheap to read: a reader
 /// wants to know whether anything needs them, and if so which command to run.
-/// Every backend's own health probe, run concurrently, in registry order.
+/// Every backend's own health probe, run concurrently, in registry order, **with Q2's promotion
+/// already applied**.
 ///
 /// `check_health` is a real probe for several backends and there are ~55 of them, so asking
 /// them one at a time cost the sum of every manager's answer — and the `check` rollup and the
 /// `check health` detail view each did their own serial pass, so a machine paid it twice. They
-/// share this one now, which is also what keeps the two views from disagreeing about the same
-/// machine.
+/// share this one now.
+///
+/// **Sharing the probe is not sharing the verdict, and the difference is a shipped bug.** The
+/// first cure taught the rollup to count `Critical` and left the `Absent`→`Critical` promotion
+/// inside the detail view, so the rollup still could not see the failures that only exist after
+/// it: `check` printed `Nothing needs you` and exited 0 while `check health`, on the same machine
+/// in the same second, reported `8 critical`. The promotion lives here now because this is where
+/// the two views actually meet, and a second copy of it in a caller is how it came back the
+/// first time.
 async fn probe_all_health(
     backends: &crate::app::Backends,
     config: &Config,
 ) -> Vec<(String, crate::core::HealthReport)> {
+    use crate::core::HealthStatus;
     use futures::stream::StreamExt;
     // **Every backend this build knows, installed or not** — the one question where that is
     // right. A manager that is absent is a report; a manager that is absent *and* named by
     // `priority` is a failure, and neither is visible from the set Shall may use.
-    futures::stream::iter(backends.registered())
-        .map(|b| async move {
-            let report = match b.core().check_health().await {
-                Ok(r) => r,
-                Err(e) => crate::core::HealthReport {
-                    status: crate::core::HealthStatus::Critical,
-                    message: Some(format!("health probe errored: {}", e)),
-                },
-            };
-            (b.name().to_string(), report)
-        })
-        .buffered(config.max_parallel.max(1))
-        .collect()
-        .await
+    let mut reports: Vec<(String, crate::core::HealthReport)> =
+        futures::stream::iter(backends.registered())
+            .map(|b| async move {
+                let report = match b.core().check_health().await {
+                    Ok(r) => r,
+                    Err(e) => crate::core::HealthReport {
+                        status: HealthStatus::Critical,
+                        message: Some(format!("health probe errored: {}", e)),
+                    },
+                };
+                (b.name().to_string(), report)
+            })
+            .buffered(config.max_parallel.max(1))
+            .collect()
+            .await;
+
+    // Absent means "not installed, and nothing asked for it" — so a manager listed in
+    // `priority` is not absent, it is broken. The user named it; Shall cannot use it. That
+    // second half is what keeps Q2 from being a way to hide real failures: the state depends
+    // on whether the machine was asked for the manager, not only on whether it is there.
+    //
+    // Unwrapped to empty on purpose, and this is the one place that is right: a `priority`
+    // that will not resolve means Shall was told to use nothing it can name, so no absent
+    // manager can be *promoted* to broken — and the machine can still be reported on. The
+    // config section reports the unreadable file itself.
+    let wanted: std::collections::HashSet<String> =
+        backends.names().unwrap_or_default().into_iter().collect();
+    for (name, report) in reports.iter_mut() {
+        // A set, not a scan: this ran `wanted.iter().any(...)` once per backend, inside the
+        // loop over every backend.
+        if report.status == HealthStatus::Absent && wanted.contains(name) {
+            report.status = HealthStatus::Critical;
+            report.message = Some(format!(
+                "{} — and `priority` lists it, so Shall was told to use it",
+                report.message.as_deref().unwrap_or("it cannot run")
+            ));
+        }
+    }
+    reports
 }
 
 pub async fn check_summary(app: &App, out: Output) -> Result<()> {
@@ -223,86 +257,104 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
         // disk — and again after one Shall had placed was deleted behind its back.
         let resources = app.extras().changes(state).await;
         match (changes, resources) {
-            // A skip is drift the planner declined to act on, so it belongs here and not in a
-            // clean bill of health: `check` reported `the machine matches your files` about a
-            // machine holding a managed, undeclared, protected package (AU1). The command
-            // named is the one that explains the decision, because `sync` is precisely the
-            // command that will not act on it.
-            (Ok(c), Ok(_)) if !c.skipped.is_empty() => findings.push(
-                Finding::attention(
-                    Section::Drift,
-                    format!(
-                        "{} package(s) installed and declared nowhere that `sync` will not \
-                         remove: {}",
-                        c.skipped.len(),
-                        c.skipped
-                            .iter()
+            // **One row, built by appending what is true.**
+            //
+            // These used to be three alternative arms elected by a `match`, and the skip arm
+            // came first — so a machine with one skipped declaration and any amount of real
+            // pending work reported the skip and nothing else. A declared `link:` missing from
+            // disk vanished from the human line *and* from the JSON, because `place`/`undo` had
+            // no key in `counts` and lived only inside the summary sentence that arm replaced.
+            //
+            // A summary assembled by appending cannot lose a fact by gaining one. That is the
+            // rule this arm now enforces, and the reason every quantity the prose can mention
+            // has a key beside it.
+            (Ok(c), Ok(r)) => {
+                // Zeroes, spelled out, on every arm. A consumer that has to treat "the key is
+                // absent" and "the count is nought" as the same thing will one day be handed a
+                // real absence and call the machine converged. `place` and `undo` are here
+                // because a number that exists only inside an English sentence is not
+                // machine-readable however the document is encoded.
+                use crate::app::sync::planner::SkipKind;
+                let of_kind = |k: SkipKind| c.skipped.iter().filter(|s| s.kind == k).count();
+                let counts = [
+                    ("install", c.total_install()),
+                    ("remove", c.total_remove()),
+                    ("place", r.place.len()),
+                    ("undo", r.undo.len()),
+                    ("skipped", c.skipped.len()),
+                    // The two kinds separately, because they are opposite facts and a consumer
+                    // summing them is reading one number over two questions.
+                    ("skipped_removals", of_kind(SkipKind::RemovalDeclined)),
+                    ("skipped_installs", of_kind(SkipKind::InstallSkipped)),
+                    ("unverifiable", r.unverifiable.len()),
+                ];
+
+                let mut clauses: Vec<String> = Vec::new();
+                if !c.is_empty() || !r.is_empty() {
+                    clauses.push(format!(
+                        "{} to install, {} to remove, {}",
+                        c.total_install(),
+                        c.total_remove(),
+                        r.summary()
+                    ));
+                }
+                // A skip is drift the planner declined to act on, so it belongs here and not in
+                // a clean bill of health: `check` reported `the machine matches your files`
+                // about a machine holding a managed, undeclared, protected package (AU1).
+                //
+                // One clause per *kind*, for the same reason: a declined removal and a
+                // declaration this machine cannot act on are opposites, and this row used to
+                // call both of them "installed and declared nowhere".
+                for (kind, rows) in crate::app::sync::planner::Skipped::by_kind(&c.skipped) {
+                    clauses.push(format!(
+                        "{}: {}",
+                        kind.heading(rows.len()),
+                        rows.iter()
                             .map(|s| format!("{} ({})", s.key, s.reason))
                             .collect::<Vec<_>>()
                             .join("; ")
-                    ),
-                    "shall protected",
-                )
-                .counting([
-                    ("install", c.total_install()),
-                    ("remove", c.total_remove()),
-                    ("skipped", c.skipped.len()),
-                ]),
-            ),
-            (Ok(c), Ok(r)) if c.is_empty() && r.is_empty() => {
-                // **`ok` is the word that made this invisible.** The sentence below has always
-                // been scrupulously honest — Shall says it cannot read these back, and names
-                // them — and it was filed under the one marker that means "nothing to see",
-                // which is also the marker that decides the exit code. A dotfile that no
-                // program could open printed as a green row and exited 0, repeatedly (B0b).
+                    ));
+                }
+                // **`ok` is the word that made this invisible.** This clause has always been
+                // scrupulously honest — Shall says it cannot read these back, and names them —
+                // and it was filed under the one marker that means "nothing to see", which is
+                // also the marker that decides the exit code. A dotfile that no program could
+                // open printed as a green row and exited 0, repeatedly (B0b).
                 //
                 // Absence and unavailability are different answers and only one of them is
                 // knowable: that rule is the reason this codebase distinguishes them at all,
                 // and reporting the unknowable one under the marker for the good answer throws
                 // the distinction away at the last step.
-                let finding = match r.unverifiable.len() {
-                    0 => Finding::ok(Section::Drift, "the machine matches your files"),
-                    n => Finding::attention(
-                        Section::Drift,
-                        format!(
-                            "the packages and every resource Shall can read back match your \
-                             files; {} resource(s) it cannot read back ({})",
-                            n,
-                            r.unverifiable.join(", ")
-                        ),
-                        "shall sync",
-                    ),
+                if !r.unverifiable.is_empty() {
+                    let lead = if clauses.is_empty() {
+                        "the packages and every resource Shall can read back match your files; "
+                    } else {
+                        ""
+                    };
+                    clauses.push(format!(
+                        "{}{} resource(s) it cannot read back ({})",
+                        lead,
+                        r.unverifiable.len(),
+                        r.unverifiable.join(", ")
+                    ));
+                }
+
+                let finding = if clauses.is_empty() {
+                    Finding::ok(Section::Drift, "the machine matches your files")
+                } else {
+                    // `sync` is the command for pending work; `shall protected` only when the
+                    // *only* thing to report is a decision `sync` will not act on, because
+                    // sending a user to the guard to explain an install they are waiting for
+                    // answers a question they did not ask.
+                    let advice = if c.is_empty() && r.is_empty() && !c.skipped.is_empty() {
+                        "shall protected"
+                    } else {
+                        "shall sync"
+                    };
+                    Finding::attention(Section::Drift, clauses.join("; "), advice)
                 };
-                findings.push(
-                    // Zeroes, spelled out. A consumer that has to treat "the key is absent" and
-                    // "the count is nought" as the same thing will one day be handed a real
-                    // absence and call the machine converged.
-                    finding.counting([
-                        ("install", 0),
-                        ("remove", 0),
-                        ("skipped", 0),
-                        ("unverifiable", r.unverifiable.len()),
-                    ]),
-                );
+                findings.push(finding.counting(counts));
             }
-            (Ok(c), Ok(r)) => findings.push(
-                Finding::attention(
-                    Section::Drift,
-                    format!(
-                        "{} to install, {} to remove, {}",
-                        c.total_install(),
-                        c.total_remove(),
-                        r.summary()
-                    ),
-                    "shall sync",
-                )
-                .counting([
-                    ("install", c.total_install()),
-                    ("remove", c.total_remove()),
-                    ("skipped", c.skipped.len()),
-                    ("unverifiable", r.unverifiable.len()),
-                ]),
-            ),
             (Err(e), _) | (_, Err(e)) => findings.push(Finding::attention(
                 Section::Drift,
                 format!("could not be planned — {}", e),
@@ -368,20 +420,16 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
     // health` called the same machine `23 critical`, and neither number was wrong on its own
     // terms. Now that "not installed" is `Absent` (Q2), a `critical` is a real one and the
     // rollup can report it.
-    let mut ok = 0usize;
-    let mut degraded = 0usize;
-    let mut critical = 0usize;
     // Concurrent: `check_health` is a real probe for several backends — `psresource` asks
     // PowerShell about its cmdlets, a `generic` backend probes its binary — and there are ~55
     // of them with nothing to say to one another.
-    for r in probe_all_health(app.backends().await, &app.config).await {
-        match r.1.status {
-            crate::core::HealthStatus::Ok => ok += 1,
-            crate::core::HealthStatus::Degraded => degraded += 1,
-            crate::core::HealthStatus::Critical => critical += 1,
-            crate::core::HealthStatus::Absent => {}
-        }
-    }
+    //
+    // Counted by `doctor_tally`, the same function `check health` counts with. Two tallies over
+    // one probe is the shape that produced the divergence in the first place: this arm used to
+    // carry its own `match`, whose `Absent => {}` discarded exactly the reports the detail view
+    // had promoted to `Critical`.
+    let (ok, degraded, critical, _absent) =
+        doctor_tally(&probe_all_health(app.backends().await, &app.config).await);
     findings.push(
         if critical > 0 {
             Finding::attention(
@@ -817,34 +865,10 @@ pub async fn check_health(app: &App, out: Output) -> Result<()> {
 
     // ---- Per-backend health, via each backend's own probe (not a shallow is_available). ----
     // See `probe_all_health` for why it is concurrent.
-    // Absent means "not installed, and nothing asked for it" — so a manager listed in
-    // `priority` is not absent, it is broken. The user named it; Shall cannot use it. That
-    // second half is what keeps Q2 from being a way to hide real failures: the state depends
-    // on whether the machine was asked for the manager, not only on whether it is there.
-    // Unwrapped to empty on purpose, and this is the one place that is right: a `priority`
-    // that will not resolve means Shall was told to use nothing it can name, so no absent
-    // manager can be *promoted* to broken — and `check health`'s whole subject is the machine,
-    // which it can still report on. The config section reports the unreadable file itself.
-    let wanted: std::collections::HashSet<String> = app
-        .backends()
-        .await
-        .names()
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
+    // Q2's promotion is applied by `probe_all_health` itself, so this view and the `check`
+    // rollup read one verdict rather than two.
     let mut reports: Vec<(String, HealthReport)> =
         probe_all_health(app.backends().await, &app.config).await;
-    for (name, report) in reports.iter_mut() {
-        // A set, not a scan: this ran `wanted.iter().any(...)` once per backend, inside the
-        // loop over every backend.
-        if report.status == HealthStatus::Absent && wanted.contains(name) {
-            report.status = HealthStatus::Critical;
-            report.message = Some(format!(
-                "{} — and `priority` lists it, so Shall was told to use it",
-                report.message.as_deref().unwrap_or("it cannot run")
-            ));
-        }
-    }
 
     // A backend that says it is healthy and cannot answer its cheapest real question is
     // lying, whatever the reason. `psresource` claimed `[READY]` for months on the strength of
@@ -1118,9 +1142,23 @@ pub async fn check_health(app: &App, out: Output) -> Result<()> {
     // (unindented, uncolored) so it is both human-readable AND machine-greppable —
     // `shall check health | grep '^\[READY\]'` enumerates every usable backend on this host. Without
     // this, a healthy `doctor` printed nothing about which package managers actually work.
+    //
+    // **A backend that has never met its manager says so, here, on its own line.** 62 backends
+    // ship and a substantial minority have never completed a real install → list →
+    // binary-on-PATH → remove in any harness — which is not a testing gap, it is a claim the
+    // program makes and nothing has ever checked. Until now a user could not tell those apart
+    // from the ones with a lifecycle behind them: same list, same word, same colour.
+    //
+    // `[READY]` still means "this manager is here and answers", which is unchanged and is what
+    // the greppable roster promises. The suffix is a separate fact about *Shall's* evidence, not
+    // about the machine, and it is phrased so `grep '^\[READY\]'` still enumerates every usable
+    // backend.
     for (name, r) in &reports {
         if r.status == HealthStatus::Ok {
-            println!("[READY] {}", name);
+            match crate::backends::proving::unproven_reason(name) {
+                None => println!("[READY] {}", name),
+                Some(_) => println!("[READY] {} (unproven — no harness has run it)", name),
+            }
         }
     }
     // Then surface only the backends that need attention — a long OK list here would be noise.
