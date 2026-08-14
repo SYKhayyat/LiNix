@@ -1,6 +1,6 @@
-//! The exit-code contract `readme.md` publishes, asserted against the real binary.
+//! The exit-code contract `README.md` publishes, asserted against the real binary.
 //!
-//! `readme.md` says "the same four everywhere, so a script can branch on them": 0 converged,
+//! `README.md` says "the same four everywhere, so a script can branch on them": 0 converged,
 //! 1 failed, 2 differences, 3 refused. Nothing tested it, and three of the four commands a
 //! script is most likely to get wrong — a mistyped subcommand, a mistyped flag, a bad flag on
 //! a real subcommand — all returned 2, which the table defines as *a read-only command looked

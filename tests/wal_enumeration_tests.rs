@@ -1,4 +1,4 @@
-//! `readme.md`: "A write-ahead log records **every mutation** before it runs. If Shall is
+//! `README.md`: "A write-ahead log records **every mutation** before it runs. If Shall is
 //! killed mid-transaction, the next run heals it." This test does the counting that sentence
 //! quantifies over.
 //!
@@ -289,7 +289,7 @@ fn every_package_mutation_is_recorded_before_it_runs() {
     assert!(
         problems.is_empty(),
         "the mutation surface has moved since it was last counted:\n\n{}\n\n\
-         readme.md says a write-ahead log records every mutation before it runs. That \
+         README.md says a write-ahead log records every mutation before it runs. That \
          sentence is only true while this list is.",
         problems.join("\n\n")
     );

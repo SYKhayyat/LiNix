@@ -12,6 +12,13 @@
 //! a copy of a fact, and this copy had been wrong long enough that nobody could say which of the
 //! three was the stale one. So it is asserted.
 //!
+//! **Four documents, in fact.** `README.md` states the same number in its own words, and this
+//! file gated only `SPEC.md` — so when the spec was corrected from 52 to 62, the README kept the
+//! stale one, in the section that exists to say what has and has not actually been driven. A
+//! gate aimed at one copy of a fact leaves the other copies exactly as free to drift as they
+//! were; it just makes them harder to notice, because the file everyone quotes now agrees with
+//! the code.
+//!
 //! The authority is the argv table in `src/backends/registry.rs`, and it is the right authority
 //! for a reason beyond convenience: `os_native_argv_coverage_tests.rs` already fails the build
 //! if a registrar has no row there. So "every backend has a row" and "the row count is the
@@ -43,6 +50,34 @@ fn backends_in_the_build() -> usize {
         "counted only {n} argv rows — the scan is broken, not the code"
     );
     n
+}
+
+/// The number `README.md` states, read from the one sentence that states it.
+///
+/// A different sentence from the spec's, deliberately: the README is prose for a user and the
+/// spec is a specification, and forcing them to share a wording is how one of them ends up
+/// reading badly. What they must share is the number.
+fn backends_claimed_by_the_readme() -> usize {
+    let readme = read("README.md");
+    let marker = " backends.";
+    let head = "Shall ships ";
+    let at = readme.find(head).unwrap_or_else(|| {
+        panic!(
+            "README.md no longer contains the sentence this test reads. It must say \
+             `Shall ships <N> backends.`; if the wording changed, change it here too rather \
+             than deleting the assertion."
+        )
+    });
+    let rest = &readme[at + head.len()..];
+    let end = rest.find(marker).unwrap_or_else(|| {
+        panic!("README.md says `Shall ships` but not `<N> backends.` after it: {rest:.60}")
+    });
+    rest[..end].parse().unwrap_or_else(|_| {
+        panic!(
+            "README.md's backend count is not a number: {:?}",
+            &rest[..end]
+        )
+    })
 }
 
 /// The number `SPEC.md` states, read from the one sentence that states it.
@@ -81,6 +116,23 @@ fn the_spec_states_the_number_of_backends_the_build_actually_has() {
          Update the sentence in SPEC.md. Do NOT update the grade documents — those are dated \
          measurements of one host, they say `registered on Windows`/`on Ubuntu`, and both of \
          those are different questions with different right answers."
+    );
+}
+
+/// The README's copy of the same fact.
+///
+/// Split from the spec's assertion rather than folded into it so a failure names which document
+/// is stale — the whole difficulty the header describes was that three numbers disagreed and
+/// nobody could say which one had moved.
+#[test]
+fn the_readme_states_the_number_of_backends_the_build_actually_has() {
+    let real = backends_in_the_build();
+    let claimed = backends_claimed_by_the_readme();
+    assert_eq!(
+        claimed, real,
+        "README.md says Shall ships {claimed} backends; the argv table has {real} rows. The \
+         README kept 52 for as long as this file gated only SPEC.md, in the section that exists \
+         to state honestly what has been driven."
     );
 }
 

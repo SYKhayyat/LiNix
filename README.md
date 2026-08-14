@@ -35,6 +35,36 @@ That indirection is what lets one repo describe several machines — see [Profil
 
 ---
 
+## Contents
+
+**Getting going** — [Install](#install) · [Start](#start) · [The files](#the-files) ·
+[Configuration](#configuration)
+
+**Writing declarations** — [The grammar](#the-grammar) · [Options](#options) ·
+[Which file gets installed](#which-file-gets-installed) ·
+[Storage you can declare](#storage-you-can-declare) · [Host conditions](#host-conditions) ·
+[Profiles](#profiles) · [Your own conditions](#your-own-conditions)
+
+**Beyond packages** — [Running a script](#running-a-script) · [The firewall](#the-firewall) ·
+[A folder of dotfiles](#a-folder-of-dotfiles) · [Secrets](#secrets)
+
+**Running it** — [Commands](#commands) · [History and rollback](#history-and-rollback) ·
+[When `sync` says "nothing to do"](#when-sync-says-nothing-to-do-and-something-is-still-broken) ·
+[Exit codes](#exit-codes)
+
+**Trusting it** — [The removal guard](#the-removal-guard) · [Safety](#safety) ·
+[What has been driven](#what-has-been-driven-and-what-has-only-been-argv-checked)
+
+**Extending it** — [Teaching Shall a package manager it has never heard
+of](#teaching-shall-a-package-manager-it-has-never-heard-of)
+
+> **Working on Shall itself?** [`CONTRIBUTING.md`](CONTRIBUTING.md) is the working agreement,
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is the map of the code, and
+> [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) is how to build, test and run it without
+> reconfiguring your own machine by accident.
+
+---
+
 ## Install
 
 ```bash
@@ -93,9 +123,10 @@ is using it.
 
 ## The files
 
-`shall init` creates them under `$SHALL_CONFIG_DIR` (default `~/.config/shall`). **This
-directory is meant to be a git repo** — `shall git init` turns on version control, after which
-every sync commits, and `shall rollback <commit>` puts the machine back.
+They live under `$SHALL_CONFIG_DIR` (default `~/.config/shall`). `shall init` creates the ones
+every machine needs; the rest appear when you first use the feature they belong to, and are
+marked below. **This directory is meant to be a git repo** — `shall git init` turns on version
+control, after which every sync commits, and `shall rollback <commit>` puts the machine back.
 
 `shall path` prints where they are, so you never have to remember. To keep them somewhere else
 — a dotfiles repo, a shared drive — `shall path --set ~/dotfiles/shall` records it once and
@@ -110,7 +141,7 @@ active         which profiles are on right now
 priority       which package managers this machine uses, in order
 groups         named backend chains, so `tools:rg` means `apt,cargo:rg` (optional)
 vars           your own names for conditions, so `when` can ask about them
-schedules      when Shall runs itself
+schedules      when Shall runs itself (written by `shall schedule`)
 locks/         what everything resolved to, one file per backend
 adapters/      what you have taught Shall — see below (optional)
 preferences.toml   refusals and behaviour (written by `shall config init`)
@@ -402,8 +433,13 @@ The guard refuses when a removal:
   (ports nothing declares, 20), `max_installs` (off by default) and `max_total_changes` —
   everything one command does, installs and upgrades included, off by default. A refusal names
   every ceiling it hit, because a set can be over two at once,
-- touches a protected package — a built-in list, anything you add, **and** the OS's own
-  essential flags where it has them (`dpkg`'s `Essential` / `Priority: required`),
+- is out of proportion to what Shall manages. `purge_ratio` (default `0.1`) refuses a sweep that
+  would remove more than ten times what Shall is managing — the case a count cannot catch, because
+  on a small machine "delete all fourteen" is under every ceiling. Set it to `0` to turn the rule
+  off,
+- touches a protected package — a built-in list, anything you add via `protected_packages`, **and**
+  the OS's own essential flags where it has them (`dpkg`'s `Essential` / `Priority: required`).
+  `unprotected_packages` is the escape hatch, and it wins over both,
 - or trips one of the `[guard]` policy rules.
 
 `shall protected` prints the effective rules, every ceiling included. The override for a
@@ -918,7 +954,7 @@ named and skipped rather than rebuilt. It cannot be put in `schedules`.
 
 ### What has been driven, and what has only been argv-checked
 
-Shall ships 52 backends. That is a count of the managers it knows how to drive, and it is not a
+Shall ships 62 backends. That is a count of the managers it knows how to drive, and it is not a
 claim that every one of them has been driven — so here is the difference, taken from the
 harnesses' own tables rather than from anybody's memory.
 
@@ -1171,20 +1207,28 @@ four sources won with `shall path --explain`.
 
 ## Contributing
 
-`docs/SPEC.md` is the source of truth for design — the map, with the parts themselves under
-`docs/spec/`; `docs/spec/decisions.md` is every open question. `CLAUDE.md` is the working
-agreement. Verify with `cargo build --all-targets`, `cargo test --no-fail-fast`, `cargo clippy
---all-targets`, `cargo fmt -- --check`.
+Start with **[`CONTRIBUTING.md`](CONTRIBUTING.md)** — the working agreement, the conventions that
+are load-bearing rather than stylistic, and what review will ask you.
 
-Then, once per clone:
+The short version:
+
+| you want to | read |
+|---|---|
+| understand the code | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
+| build, test, debug it | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) |
+| know what is supposed to exist | [`docs/SPEC.md`](docs/SPEC.md), then `docs/spec/target-state.md` |
+| know *why* a rule exists before changing it | `docs/spec/why.md` — every rule has an entry |
+| find out whether a question is yours to answer | `docs/spec/decisions.md` |
+| see what everything in `docs/` is for | [`docs/README.md`](docs/README.md) |
 
 ```sh
-git config core.hooksPath .githooks
+git clone … && cd shall
+git config core.hooksPath .githooks   # once per clone; it is not automatic
+cargo build --all-targets && cargo test --no-fail-fast
 ```
 
-That installs `.githooks/pre-commit`, which refuses a commit `cargo fmt -- --check` would fail.
-Formatting is the only CI gate a change containing no logic can break, and it takes about a second
-to check; everything slower stays CI's job.
+The full verify chain, and the reason its fifth step (`scripts/unix-check.sh`) is not optional on
+a Windows host, are in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md#the-verify-chain).
 
 ## Licence
 

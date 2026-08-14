@@ -380,27 +380,27 @@ const TERMINATORS: &[Terminator] = &[
     // ---- Go-flag parsers: `age` and `sops` are handed a source path a declaration chose.
     row("age", true, GETOPT),
     row("sops", true, GETOPT),
-    // ---- Measured NOT to terminate. Every one of these was in the terminating set at some
-    // point, put there by family resemblance, and every one of them broke something.
-    //
-    // **`composer` is the newest, and it got in on a reading of its own usage line.** The row
-    // claimed `--` was honoured because `composer global require -- <bogus>` was byte-identical
-    // to the same line without it, and because `[--] [<packages>...]` appears in composer's
-    // usage. Byte-identical is exactly as consistent with *ignoring* the terminator as with
-    // honouring it, and the differential probe in the tools image has reported it swallowing on
-    // three consecutive nightlies. The nightly is a measurement and the usage line is a
-    // document, so the nightly wins.
+    // ---- PHP. **This row has been decided three times, twice on evidence that could not
+    // decide it.** A bogus operand cannot answer the question at all: composer's answer to
+    // `require <bogus>` is the same "could not find a matching version" whether it read the
+    // terminator or dropped it, so both earlier readings — "byte-identical, therefore honoured"
+    // and "byte-identical, therefore swallowed" — were the same non-measurement with opposite
+    // signs. A **flag-shaped** operand is what separates them, because the two hypotheses
+    // predict different tools doing different things.
     row(
         "composer",
-        false,
+        true,
         Evidence::Measured(
-            "the differential probe reports `composer global require -- <bogus>` swallowing the \
-             terminator, on three consecutive nightly runs of the tools image. The row that \
-             claimed otherwise read `[--] [<packages>...]` in composer's usage and a pair of \
-             byte-identical runs — neither of which distinguishes honouring `--` from ignoring \
-             it (nightly Integration (tools), 2026-08-10 onwards)",
+            "`composer global search --format=json -- --version` searches packagist for the \
+             string and answers with `sebastian/version`; the same line without the terminator \
+             answers `Composer version 2.10.2` and searches nothing. `global require` and \
+             `global remove` flip the same way — with the terminator `--version` is a package \
+             name they fail to resolve, without it they print the version banner and exit 0 \
+             (composer 2.10.2, official image, 2026-08-14)",
         ),
     ),
+    // ---- Measured NOT to terminate. Every one of these was in the terminating set at some
+    // point, put there by family resemblance, and every one of them broke something.
     row(
         "asdf",
         false,

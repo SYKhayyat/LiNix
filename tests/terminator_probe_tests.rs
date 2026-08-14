@@ -13,6 +13,16 @@
 //! same exit code, the same answer to "did it echo the operand back **as a word of its own**",
 //! and no bare `--` anywhere in the output.
 //!
+//! **Agreement only counts once the tool has reached the operand**, and for two versions of this
+//! file it did not have to. A manager that fails before resolution — no writable `COMPOSER_HOME`,
+//! no network, a search that answers `[]` — agrees with itself perfectly and says nothing at all
+//! about its parser, and every such pair was read as a clean pass. So there are three verdicts
+//! now ([`Verdict`]) and the vacuous ones are inconclusive rather than confirming. It is not a
+//! hypothetical: composer's row was flipped to non-terminating on nightlies of exactly this
+//! shape, and a container run with a flag-shaped operand then showed it honouring `--` on every
+//! verb. Note which way the old bug could err — a vacuous pass can only move a row *into* the
+//! terminating set, which is the unsafe half of `src/core/argv.rs`'s default.
+//!
 //! Each of those three signals was earned. The operand check counts whole tokens because
 //! `spack install -- <name>` answers `Spec ~~<name> has no name`: the terminator was absorbed
 //! into the operand rather than dropped, so a substring test finds the name and calls it a pass.
@@ -120,19 +130,61 @@ fn echoes_operand(text: &str) -> bool {
         .any(|t| trim_wrapping(t) == SENTINEL)
 }
 
-/// The verdict for one argv: which signal moved when the terminator was added, or `None` if
-/// the two runs agree and the tool is believed to honour it.
+/// What one argv's pair of runs establishes.
+///
+/// **Three answers, not two.** A tool that fails before it ever resolves the operand agrees
+/// with itself perfectly — same exit code, same silence about `--`, same absence of the
+/// operand — and for two versions of this file that read as [`Verdict::Honours`]. It is not:
+/// it is a measurement that did not happen. See [`assess`].
+#[derive(Debug, PartialEq, Eq)]
+enum Verdict {
+    /// The tool resolved the operand and adding `--` changed nothing.
+    Honours,
+    /// A signal moved when the terminator was added, and this names which.
+    Swallows(&'static str),
+    /// The runs agree, but the tool never got far enough for the agreement to mean anything.
+    Inconclusive,
+}
+
+/// The verdict for one argv.
+///
+/// **A difference is self-evident; an agreement is not.** A signal that moves can only have
+/// been moved by the terminator, so [`disagreement`] is read first and its answer is always
+/// conclusive. Agreement is the case that needs a premise: the tool has to have *reached* the
+/// operand before "it behaved the same either way" says anything about its parser.
+///
+/// The premise is read off the run that had no terminator at all — if that run never names the
+/// operand as a word of its own, the tool never resolved it, and both runs are agreeing about
+/// something else entirely. `composer global search --format=json <bogus>` answers `[]`;
+/// `composer global require <bogus>` on a host with no writable `COMPOSER_HOME` answers
+/// `No composer.json present in the current directory`. Both agree with themselves under `--`
+/// and neither is evidence about `--`.
+///
+/// **This cost the composer row two wrong values in three days.** It was flipped to
+/// non-terminating on nightlies whose runs never resolved the operand, then a container run
+/// with a flag-shaped operand showed it honouring the terminator on all three verbs. Note the
+/// direction of the old bug: a vacuous pass can only ever push a row *into* the terminating
+/// set, which is the unsafe half of `src/core/argv.rs`'s "default is does not terminate".
+///
+/// The cost of the premise is real and worth naming: a tool that honours `--` and answers
+/// silently — `gem list -- <x>` lists everything rather than erroring — is now inconclusive
+/// rather than confirmed. That is the conservative direction. This probe is a ratchet against
+/// rows nobody asked, and declining to confirm is not the same as reporting a violation.
+fn assess(with: &Run, without: &Run) -> Verdict {
+    match disagreement(with, without) {
+        Some(why) => Verdict::Swallows(why),
+        None if !echoes_operand(&without.text) => Verdict::Inconclusive,
+        None => Verdict::Honours,
+    }
+}
+
+/// Which signal moved when the terminator was added, or `None` if the two runs agree.
 ///
 /// **Every signal is differential**, including the bare-`--` one. A tool that dumps its own
 /// usage on failure prints `--` either way, and reading that as "the tool is complaining about
 /// the terminator" made composer — which names the operand and produces byte-identical output
 /// both ways — come back as a violation for the wrong reason. The question is never "does this
 /// output contain X", always "did adding the terminator change X".
-///
-/// *(Composer's row has since been measured to swallow, on a signal this function does read,
-/// and now says so. The lesson here is unchanged and is worth more than the row: byte-identical
-/// output is exactly as consistent with a tool ignoring `--` as with a tool honouring it, and
-/// only a signal that moves distinguishes them.)*
 ///
 /// The answer names the signal because the failure report is the only thing a nightly leaves
 /// behind. A report that says "swallows" and prints one line of each run cannot be acted on:
@@ -160,9 +212,14 @@ fn disagreement(with: &Run, without: &Run) -> Option<&'static str> {
 /// verb turning a nightly red on evidence about someone's DNS.
 ///
 /// Re-measuring costs nothing on a real finding — a swallowed operand is swallowed every time —
-/// and it is the difference between a gate and a coin toss. Agreement on any attempt is the
-/// answer: the failure mode being defended against is a spurious *difference*, and no amount of
-/// repetition can make a tool that honours `--` disagree with itself.
+/// and it is the difference between a gate and a coin toss.
+///
+/// **[`Verdict::Honours`] on any attempt is the answer, and it is the only verdict that can end
+/// the loop early.** Both of the others are producible by a bad minute on the network: a run
+/// that dies before resolution can differ from its partner (a spurious `Swallows`) or match it
+/// while proving nothing (a spurious `Inconclusive`). Nothing transient can manufacture the
+/// third — a tool that never resolved the operand cannot echo it back, and a tool that honours
+/// `--` cannot be made to disagree with itself by repetition.
 const ATTEMPTS: usize = 3;
 
 /// One verb, measured until it stops changing its mind: the without-run, then the with-run,
@@ -195,10 +252,10 @@ fn believe(mut pair: impl FnMut() -> Option<(Run, Run)>) -> Option<Measured> {
     loop {
         attempts += 1;
         let (with, without) = pair()?;
-        let why = disagreement(&with, &without);
-        if why.is_none() || attempts == ATTEMPTS {
+        let verdict = assess(&with, &without);
+        if verdict == Verdict::Honours || attempts == ATTEMPTS {
             return Some(Measured {
-                why,
+                verdict,
                 attempts,
                 with,
                 without,
@@ -209,8 +266,7 @@ fn believe(mut pair: impl FnMut() -> Option<(Run, Run)>) -> Option<Measured> {
 
 /// The last pair of runs for one verb, and what it took to believe them.
 struct Measured {
-    /// The signal that moved, or `None` when the tool honours the terminator.
-    why: Option<&'static str>,
+    verdict: Verdict,
     attempts: usize,
     with: Run,
     without: Run,
@@ -331,6 +387,7 @@ async fn every_terminator_claim_still_holds_where_the_tool_is_installed() {
     let mut probed: BTreeSet<(String, String)> = BTreeSet::new();
     let mut verbs: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut absent: BTreeSet<String> = BTreeSet::new();
+    let mut inconclusive: BTreeSet<String> = BTreeSet::new();
     let mut undriven: BTreeSet<String> = claims.keys().map(|k| k.to_string()).collect();
 
     for call in mock.get_calls().await {
@@ -374,15 +431,27 @@ async fn every_terminator_claim_still_holds_where_the_tool_is_installed() {
             absent.insert(base);
             continue;
         };
-        let honours = m.why.is_none();
-        // The conservative merge: a binary terminates only if EVERY verb of it does. One verb
-        // that swallows the operand is enough to make the terminator unsafe for that binary,
-        // because the table is keyed on the binary (Q30 — per-verb keying was measured and
-        // rejected: `gem list -- <x>` does not error, it silently lists everything).
-        confirmed
-            .entry(base.clone())
-            .and_modify(|v| *v &= honours)
-            .or_insert(honours);
+        // An inconclusive verb is not a vote. It joins neither side of the merge below, and a
+        // binary whose every verb is inconclusive never reaches `confirmed` at all — so it can
+        // neither confirm its row nor contradict it. Counting these as "honours" is what put
+        // two different wrong values in composer's row inside three days.
+        match m.verdict {
+            Verdict::Inconclusive => {
+                inconclusive.insert(base.clone());
+            }
+            // The conservative merge: a binary terminates only if EVERY verb of it does. One
+            // verb that swallows the operand is enough to make the terminator unsafe for that
+            // binary, because the table is keyed on the binary (Q30 — per-verb keying was
+            // measured and rejected: `gem list -- <x>` does not error, it silently lists
+            // everything).
+            _ => {
+                let honours = m.verdict == Verdict::Honours;
+                confirmed
+                    .entry(base.clone())
+                    .and_modify(|v| *v &= honours)
+                    .or_insert(honours);
+            }
+        }
         // Kept per verb, judged per binary below. Reporting a single verb as a violation is
         // how `nimble install` (which parses `--` happily) and `spack list` (which has no
         // operand to mangle) each came back as a disagreement while the binary's merged
@@ -391,8 +460,8 @@ async fn every_terminator_claim_still_holds_where_the_tool_is_installed() {
         // A verb that agrees is one line; a verb that swallows brings both runs in full. The
         // asymmetry is the point — the disagreeing verb is the only one anybody reads, and it
         // is the one the old format summarised away.
-        verbs.entry(base).or_default().push(match m.why {
-            None => format!(
+        verbs.entry(base).or_default().push(match m.verdict {
+            Verdict::Honours => format!(
                 "    agrees: {} {}\n      -> with    exit {:?}: {}\n      -> without exit {:?}: {}",
                 program,
                 with.join(" "),
@@ -401,7 +470,20 @@ async fn every_terminator_claim_still_holds_where_the_tool_is_installed() {
                 m.without.code,
                 first_line(&m.without.text),
             ),
-            Some(why) => format!(
+            // The without-run in full: the claim being made is "this tool never resolved the
+            // operand", and the only thing that can support or refute it is what the tool
+            // actually said when it had no terminator to blame.
+            Verdict::Inconclusive => format!(
+                "    inconclusive: {} {}\n      the run without the terminator never named \
+                 `{SENTINEL}`, so it never resolved the operand and the two runs agree about \
+                 nothing — after {} attempt(s)\n      -> without exit {:?}:\n{}",
+                program,
+                with.join(" "),
+                m.attempts,
+                m.without.code,
+                quoted(&m.without.text),
+            ),
+            Verdict::Swallows(why) => format!(
                 "    swallows: {} {}\n      {why} — still, after {} attempt(s)\n      \
                  -> with    exit {:?}:\n{}\n      -> without exit {:?}:\n{}",
                 program,
@@ -483,6 +565,20 @@ async fn every_terminator_claim_still_holds_where_the_tool_is_installed() {
     }
     for b in &absent {
         eprintln!("  skipped: {b} (not installed here)");
+    }
+    // Named, and named separately from "not installed". A binary that is here, was driven, and
+    // still could not be measured is a hole in this gate's coverage on this host — and the one
+    // failure mode that reads as a clean pass if it is not printed. `confirmed` above lists what
+    // the probe knows; this lists what it went and failed to find out.
+    for b in &inconclusive {
+        let also_measured = confirmed.contains_key(b);
+        eprintln!(
+            "  inconclusive: {b} ({})",
+            match also_measured {
+                true => "some verbs answered, these did not",
+                false => "no verb of it ever resolved the operand here, so its row is unchecked",
+            }
+        );
     }
     for b in &undriven {
         eprintln!("  skipped: {b} (no backend built an argv carrying an operand for it here)");
@@ -594,7 +690,7 @@ fn a_pair_that_disagrees_once_and_then_agrees_is_not_a_finding() {
         })
     })
     .expect("a pair");
-    assert_eq!(m.why, None);
+    assert_eq!(m.verdict, Verdict::Honours);
     assert_eq!(m.attempts, 2, "stops the moment they agree");
 }
 
@@ -608,10 +704,90 @@ fn a_pair_that_keeps_disagreeing_is_believed_and_says_how_often_it_was_asked() {
     })
     .expect("a pair");
     assert_eq!(
-        m.why,
-        Some("one run talks about a bare `--` and the other does not")
+        m.verdict,
+        Verdict::Swallows("one run talks about a bare `--` and the other does not")
     );
     assert_eq!(m.attempts, ATTEMPTS);
+    assert_eq!(taken, ATTEMPTS, "re-measured, not merely re-read");
+}
+
+// ---- The premise: agreement is only evidence once the tool reached the operand. ------------
+//
+// These are the composer bug, in both of the shapes that produced a wrong row. Neither is
+// hypothetical prose: the strings below are what composer actually printed on the hosts whose
+// nightlies decided the row.
+
+#[test]
+fn a_tool_that_never_resolved_the_operand_proves_nothing_by_agreeing() {
+    // ubuntu-latest, nightly 2026-08-14: composer never reached packagist because it had no
+    // project to work in. Byte-identical, exit-identical, and evidence about nothing.
+    let dead = "::error ::No composer.json present in the current directory (./composer.json)";
+    assert_eq!(
+        assess(&run_of(1, dead), &run_of(1, dead)),
+        Verdict::Inconclusive,
+        "the operand is never named, so neither run got far enough to have a parser opinion"
+    );
+
+    // The same shape with nothing to say at all: `composer global search --format=json <bogus>`.
+    assert_eq!(
+        assess(&run_of(0, "[]"), &run_of(0, "[]")),
+        Verdict::Inconclusive
+    );
+}
+
+#[test]
+fn agreement_counts_once_the_operand_comes_back_named() {
+    // The tools image, same command, on a host where composer could resolve. This is the only
+    // one of the three that is a measurement.
+    let named = format!("Could not find a matching version of package {SENTINEL}.");
+    assert_eq!(
+        assess(&run_of(1, &named), &run_of(1, &named)),
+        Verdict::Honours
+    );
+}
+
+#[test]
+fn a_moved_signal_is_conclusive_even_when_the_operand_is_never_named() {
+    // `asdf install -- <x>` answers `No such plugin: --` and the operand appears in neither
+    // run. The premise is only required for AGREEMENT — a difference can only have been made
+    // by the terminator, so it is believed without it. Reversing this order would have made
+    // asdf, spack and nimble inconclusive and un-caught.
+    assert_eq!(
+        assess(
+            &run_of(1, "No such plugin: --"),
+            &run_of(1, "No such plugin")
+        ),
+        Verdict::Swallows("one run talks about a bare `--` and the other does not")
+    );
+}
+
+#[test]
+fn an_inconclusive_pair_is_re_measured_before_it_is_believed() {
+    // A tool that could not reach its index on the first attempt and could on the second is a
+    // network story, not a parser story — the same defence `ATTEMPTS` gives a spurious
+    // difference, owed equally to a spurious silence.
+    let named = format!("no such package: {SENTINEL}");
+    let mut taken = 0;
+    let m = believe(|| {
+        taken += 1;
+        Some(match taken {
+            1 => (run_of(1, "curl error 6"), run_of(1, "curl error 6")),
+            _ => (run_of(1, &named), run_of(1, &named)),
+        })
+    })
+    .expect("a pair");
+    assert_eq!(m.verdict, Verdict::Honours);
+    assert_eq!(m.attempts, 2, "stops the moment one run resolves the name");
+
+    // And when it never resolves, the answer stands after the full budget rather than being
+    // quietly upgraded to a pass.
+    let mut taken = 0;
+    let m = believe(|| {
+        taken += 1;
+        Some((run_of(0, "[]"), run_of(0, "[]")))
+    })
+    .expect("a pair");
+    assert_eq!(m.verdict, Verdict::Inconclusive);
     assert_eq!(taken, ATTEMPTS, "re-measured, not merely re-read");
 }
 

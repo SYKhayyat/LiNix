@@ -85,6 +85,7 @@ mod dotfiles_tree_is_a_pile_of_links_tests;
 mod dry_run_every_verb_tests;
 mod dry_run_marker_tests;
 mod dry_run_tests;
+mod every_documentation_link_resolves_tests;
 mod every_example_is_checked_tests;
 mod exec_lifecycle_tests;
 mod exit_code_contract_tests;

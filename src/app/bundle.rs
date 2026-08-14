@@ -335,7 +335,7 @@ pub async fn restore_bundle(
 
     if !force && dir_has_entries(config_root).await {
         // `Error::Refused`, not `Other`: Shall worked correctly and declined on purpose, which
-        // readme.md's table calls exit 3. It said "refuses" where the rest of the family says
+        // README.md's table calls exit 3. It said "refuses" where the rest of the family says
         // "refusing to", which is how it survived the round-2 sweep of exactly this class.
         return Err(Error::Refused(format!(
             "{} is not empty. A restore writes your declarations over what is there, so it \
@@ -415,7 +415,7 @@ mod tests {
         let reg = data.join("registry.json");
         let refused = restore_bundle(&bundle, &cfg, &reg, false).await;
         assert!(refused.is_err(), "a non-empty config must be refused");
-        // And refused as a REFUSAL: `Error::Other` here exited 1, which readme.md's table
+        // And refused as a REFUSAL: `Error::Other` here exited 1, which README.md's table
         // defines as "Shall could not carry it out", and never fired `on_guard_refusal`.
         assert!(
             matches!(refused, Err(Error::Refused(_))),

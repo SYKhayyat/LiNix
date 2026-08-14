@@ -38,7 +38,7 @@
 //! in `main.rs` already avoids and what `help_map_tests.rs` was written to catch.
 //!
 //! Covered: everything a user reads or a machine runs — `src/`, `tests/`, `scripts/`, `docker/`,
-//! `examples/`, `.github/`, and `readme.md`.
+//! `examples/`, `.github/`, and `README.md`.
 //!
 //! ## `docs/`, and the weaker property that fits it
 //!
@@ -277,7 +277,7 @@ fn covered_files() -> Vec<PathBuf> {
         "docker",
         "examples",
         ".github",
-        "readme.md",
+        "README.md",
     ];
     const EXTENSIONS: &[&str] = &["rs", "sh", "ps1", "md", "toml", "txt", "yml", "yaml"];
 
@@ -700,7 +700,7 @@ fn the_deleted_register_is_the_specs_and_is_bounded() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The same property where the prefix cannot reach it: `readme.md`'s verb tables.
+// The same property where the prefix cannot reach it: `README.md`'s verb tables.
 // ---------------------------------------------------------------------------------------------
 
 /// A markdown table's rows, and which of them name a verb.
@@ -712,7 +712,7 @@ struct VerbTable {
     rows: Vec<(usize, Vec<Vec<String>>)>,
 }
 
-/// The tables in `readme.md` that list verbs, found by what they contain rather than by where
+/// The tables in `README.md` that list verbs, found by what they contain rather than by where
 /// they are.
 ///
 /// A verb table is one whose candidate rows are *mostly* live commands. That is what separates
@@ -785,7 +785,7 @@ fn verb_tables(text: &str, surface: &Surface) -> Vec<VerbTable> {
         .collect()
 }
 
-/// How many verb tables `readme.md` has.
+/// How many verb tables `README.md` has.
 ///
 /// Pinned, because the rule above identifies a verb table by the rows that are still right — so
 /// a table that rotted badly enough would stop being recognised as one and would leave the gate
@@ -795,15 +795,15 @@ const README_VERB_TABLES: usize = 5;
 
 #[test]
 fn the_readme_verb_tables_name_only_commands_that_exist() {
-    let readme = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("readme.md"))
-        .expect("readme.md should be readable");
+    let readme = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md"))
+        .expect("README.md should be readable");
     let surface = Surface::live();
     let tables = verb_tables(&readme, &surface);
 
     assert_eq!(
         tables.len(),
         README_VERB_TABLES,
-        "readme.md has {} verb table(s), and {} were expected (they begin at lines {:?}).\n\
+        "README.md has {} verb table(s), and {} were expected (they begin at lines {:?}).\n\
          If one was deliberately added or removed, move this number. If one simply stopped \
          looking like a verb table, it has rotted past the point where this gate can see it — \
          which is the case this number exists to catch.",
@@ -818,7 +818,7 @@ fn the_readme_verb_tables_name_only_commands_that_exist() {
             for path in paths {
                 if let Some(unknown) = first_unknown(&surface, path) {
                     problems.push(format!(
-                        "readme.md:{}  the verb table beginning at line {} lists `{}`, and `{}` \
+                        "README.md:{}  the verb table beginning at line {} lists `{}`, and `{}` \
                          is not a command.",
                         line,
                         table.line,
@@ -832,7 +832,7 @@ fn the_readme_verb_tables_name_only_commands_that_exist() {
 
     assert!(
         problems.is_empty(),
-        "{}\n\nreadme.md:648 argues that `--help` cannot go stale the way a README can. These \
+        "{}\n\nREADME.md:648 argues that `--help` cannot go stale the way a README can. These \
          rows are the README going stale.",
         problems.join("\n")
     );
@@ -895,7 +895,7 @@ fn the_scan_can_see_what_it_is_looking_for() {
     assert_eq!(
         unknown("shall undo               # interactive snapshot gallery"),
         ["undo"],
-        "a line in one of readme.md's fenced blocks"
+        "a line in one of README.md's fenced blocks"
     );
 
     // Depth: a wrong word in a nested path is the same defect one level down.
@@ -975,8 +975,8 @@ fn the_scan_can_see_what_it_is_looking_for() {
         "install.sh is what a user pipes from the web, and it is the file this gate exists for"
     );
     assert!(
-        found.iter().any(|i| i.file == "readme.md"),
-        "readme.md is the only user-facing document in the repo"
+        found.iter().any(|i| i.file == "README.md"),
+        "README.md is the only user-facing document in the repo"
     );
 }
 

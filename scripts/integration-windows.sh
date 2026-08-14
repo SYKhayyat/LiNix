@@ -322,7 +322,7 @@ refuses_with_3() { # description command...
     elif never_ran "$rc"; then
         _rw="rc=$rc: the command never ran"
     else
-        _rw="rc=$rc: a failure, not the documented refusal (readme.md: 3 means refused on purpose)"
+        _rw="rc=$rc: a failure, not the documented refusal (README.md: 3 means refused on purpose)"
     fi
     FAILED_NAMES="$FAILED_NAMES\n    - $desc ($_rw)"
     echo "  FAIL  $desc ($_rw)"
@@ -701,12 +701,48 @@ echo "[8] The guard"
 # only that the binary still exists — which it would whatever Shall did.
 $TO "$SHALL" -y uninstall shall >/dev/null 2>&1 || true
 ok "Shall survives an uninstall attempt" on_path "$SHALL"
-refuses_with_3 "purge-undeclared is still not a silent mass-delete after adopt" lx -y purge-undeclared
-# WHICH rule refuses is still asserted, but the answer depends on how much `adopt`
-# could take on this host: where it adopted well the protected set decides, where it
-# adopted little the ratio still does. Both are named answers; "some error" is not.
-grep_ok "and the refusal after adopt still names its rule" \
-    "protected\|essential\|allow-mass-removal\|allow-mass-purge" lx -y purge-undeclared
+# **This establishes its premise instead of assuming the host's package census supplies
+# one.** It used to assert only that `purge-undeclared` refuses after adopt, and what did
+# the refusing was the ratio (II.11) — whose denominator is the undeclared crawl. When the
+# crawl stopped surveying `service:` (correctly: `priority` names package managers, and a
+# sweep must not propose to delete every running service), several hundred entries left that
+# denominator on every host, the ratio rose over 0.1, and the refusal went away. Nothing
+# about the guard changed. The assertion had been reading a property of the runner image.
+#
+# So the premise is built here: one package that IS undeclared on this host is written into
+# `protected_packages`, and the refusal that names it is the thing under test. That holds on
+# a machine with four undeclared packages and on one with four hundred.
+PREFS="$SHALL_CONFIG_DIR/preferences.toml"
+# The list is printed before the ratio is consulted, so it is there whether the command
+# would have gone on to refuse or to sweep.
+#
+# **The first name that cannot break the file it is written into, not simply the first.**
+# winget reports MSIX packages as `MSIX\AdobeAcrobatDCCoreApp_23.1.0.0_x64__pc75e8sa7ep4e`,
+# and a backslash in a TOML basic string is an escape — `\A` is not one, so the whole
+# preferences file failed to parse and the command exited 1. A refusal that never happened
+# because the config was unreadable would have read as this test passing had it been
+# asserting on the exit code alone.
+VICTIM=$($TO "$SHALL" --dry-run purge-undeclared 2>/dev/null \
+    | sed -n 's/^  [a-z0-9]*:\([A-Za-z0-9][A-Za-z0-9._+-]*\)$/\1/p' | head -1)
+if [ -n "$VICTIM" ]; then
+    # Restored by copy, not by editing the file back. A `sed` that deletes from `[guard]`
+    # to EOF also deletes whatever a later step put there, and this harness runs 300 more
+    # checks against this config.
+    [ -f "$PREFS" ] && cp "$PREFS" "$PREFS.beforeguard"
+    printf '\n[guard]\nprotected_packages = ["%s"]\n' "$VICTIM" >> "$PREFS"
+    echo "        protecting an undeclared package by name: $VICTIM"
+    refuses_with_3 "purge-undeclared refuses a sweep that would take a protected package" \
+        lx -y purge-undeclared
+    grep_ok "and the refusal names the protection rather than some other failure" \
+        "protected" lx -y purge-undeclared
+    if [ -f "$PREFS.beforeguard" ]; then
+        mv "$PREFS.beforeguard" "$PREFS"
+    else
+        rm -f "$PREFS"
+    fi
+else
+    soft "purge-undeclared: nothing is undeclared on this host, so the protected-package refusal has no subject"
+fi
 
 # --- 9. Git history + rollback --------------------------------------------
 echo "[9] Git history + rollback"

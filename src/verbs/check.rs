@@ -156,12 +156,11 @@ pub async fn check_approvals(config: &Config, out: Output) -> Result<()> {
 /// in the same second, reported `8 critical`. The promotion lives here now because this is where
 /// the two views actually meet, and a second copy of it in a caller is how it came back the
 /// first time.
-async fn probe_all_health(
-    backends: &crate::app::Backends,
-    config: &Config,
-) -> Vec<(String, crate::core::HealthReport)> {
+async fn probe_all_health(app: &App) -> Vec<(String, crate::core::HealthReport)> {
     use crate::core::HealthStatus;
     use futures::stream::StreamExt;
+    let backends = &app.backends().await;
+    let config = &app.config;
     // **Every backend this build knows, installed or not** — the one question where that is
     // right. A manager that is absent is a report; a manager that is absent *and* named by
     // `priority` is a failure, and neither is visible from the set Shall may use.
@@ -203,6 +202,113 @@ async fn probe_all_health(
             ));
         }
     }
+
+    // **The second promotion, and it lives here for the same reason the first one does.** A
+    // backend that says it is healthy and cannot answer its cheapest real question is lying,
+    // whatever the reason: `psresource` claimed `[READY]` for months on the strength of
+    // PowerShell existing, and every operation then died on a cmdlet that was never there. A
+    // probe can only be as good as the question it asks, and this asks the backend to do its
+    // job instead.
+    //
+    // It used to run in the `check health` caller alone, which is how the divergence this
+    // function exists to close came back one promotion later: `check` reported `24 ready, 1
+    // cannot run` while `check health`, on the same machine in the same second, reported 7 —
+    // six backends that answer `check_health` and cannot list. The rollup was not counting
+    // differently, it was counting a verdict nobody had finished forming. **Any promotion a
+    // caller applies after this returns is a second copy of the verdict, and both times that
+    // has happened the two views have disagreed in public.**
+    //
+    // It costs one `list` per healthy backend. That is the price of the sentence "N ready"
+    // being true, and `check` already pays far more than this elsewhere in the same run.
+    let healthy: Vec<String> = reports
+        .iter()
+        .filter(|(_, r)| r.status == HealthStatus::Ok)
+        .map(|(n, _)| n.clone())
+        .collect();
+    let probed: Vec<(String, Option<String>)> = futures::stream::iter(healthy)
+        .map(|name| {
+            let backend = backends.get(&name);
+            async move {
+                let Some(q) = backend.as_ref().and_then(|b| b.as_queryable()) else {
+                    return (name, None); // nothing to ask; not a claim it failed
+                };
+                // Bounded, because `check` is a read-only command and a wedged manager must
+                // not hold the whole report open. 60s, and the number is evidence rather than
+                // taste: `list` measured 2-7s per backend on this machine, and an earlier 20s
+                // cap with eight in flight timed out scoop and winget — which take 1.2s each
+                // on their own. A limit tight enough to fail on contention manufactures the
+                // defect it claims to find.
+                let answer =
+                    tokio::time::timeout(std::time::Duration::from_secs(60), q.list_installed())
+                        .await;
+                let complaint = match answer {
+                    Ok(Ok(_)) => None,
+                    Ok(Err(e)) => Some(format!("says it is ready but cannot list: {}", e)),
+                    Err(_) => Some("says it is ready but `list` did not answer in 60s".into()),
+                };
+                (name, complaint)
+            }
+        })
+        .buffer_unordered(config.max_parallel.max(1))
+        .collect()
+        .await;
+
+    // An index rather than a scan per complaint: the outer loop is over backends and so was
+    // the inner one.
+    let at: std::collections::HashMap<&str, usize> = reports
+        .iter()
+        .enumerate()
+        .map(|(i, (n, _))| (n.as_str(), i))
+        .collect();
+    let updates: Vec<(usize, String)> = probed
+        .into_iter()
+        .filter_map(|(name, complaint)| Some((*at.get(name.as_str())?, complaint?)))
+        .collect();
+    for (i, complaint) in updates {
+        reports[i].1.status = HealthStatus::Critical;
+        reports[i].1.message = Some(complaint);
+    }
+
+    // **The third promotion, and it was still in the caller when the first two were moved.** A
+    // backend can pass every probe above, answer `list`, and install nothing, because the setup
+    // it needs was never done (Q11): `opam` reports READY with no switch and then fails every
+    // install with `No switch is currently set`. Degraded rather than Critical because reads
+    // genuinely work and the fix is one command, which the message carries.
+    //
+    // It demotes `Ok`, not `Absent`, so it moves the *ready* count rather than the *critical*
+    // one — which is why the tally test did not catch it while it sat in `check health` alone,
+    // and why it was left behind twice. The rollup was reporting those backends as ready in the
+    // same breath as the detail view called them degraded. Same divergence, different column.
+    //
+    // Manager-level rows only. `asdf`'s prerequisite is a plugin per declared tool, which is a
+    // question about a line rather than about the machine, and `check health` has no lines.
+    let rows = app.prereqs().rows();
+    let os = std::env::consts::OS;
+    for (name, report) in reports.iter_mut() {
+        if report.status != HealthStatus::Ok {
+            continue;
+        }
+        for row in crate::model::prereq::for_manager(&rows, name, os) {
+            if row.is_per_package() {
+                continue;
+            }
+            let cmd = row.probe_command("");
+            let Some((program, args)) = cmd.split_first() else {
+                continue;
+            };
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            if app.executor.run(program, &refs, false).await.is_ok() {
+                continue;
+            }
+            report.status = HealthStatus::Degraded;
+            report.message = Some(format!(
+                "installed, but it needs {} before it can install anything — `{}`",
+                row.missing_line(""),
+                row.command_line("")
+            ));
+        }
+    }
+
     reports
 }
 
@@ -439,8 +545,7 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
     // one probe is the shape that produced the divergence in the first place: this arm used to
     // carry its own `match`, whose `Absent => {}` discarded exactly the reports the detail view
     // had promoted to `Critical`.
-    let (ok, degraded, critical, _absent) =
-        doctor_tally(&probe_all_health(app.backends().await, &app.config).await);
+    let (ok, degraded, critical, _absent) = doctor_tally(&probe_all_health(app).await);
     findings.push(
         if critical > 0 {
             Finding::attention(
@@ -894,111 +999,13 @@ pub async fn check_health(app: &App, out: Output) -> Result<()> {
     // See `probe_all_health` for why it is concurrent.
     // Q2's promotion is applied by `probe_all_health` itself, so this view and the `check`
     // rollup read one verdict rather than two.
-    let mut reports: Vec<(String, HealthReport)> =
-        probe_all_health(app.backends().await, &app.config).await;
+    // Not `mut`, and that is the point: this view no longer adjusts the verdict it was handed.
+    let reports: Vec<(String, HealthReport)> = probe_all_health(app).await;
 
-    // A backend that says it is healthy and cannot answer its cheapest real question is
-    // lying, whatever the reason. `psresource` claimed `[READY]` for months on the strength of
-    // PowerShell existing, and every operation then died on a cmdlet that was never there —
-    // a probe can only be as good as the question it asks, and this asks the backend to do its
-    // job instead. It costs one `list` per healthy backend and it is the check that would have
-    // caught psresource without anyone having to think about PowerShell.
-    {
-        use futures::stream::{self, StreamExt};
-        let healthy: Vec<String> = reports
-            .iter()
-            .filter(|(_, r)| r.status == HealthStatus::Ok)
-            .map(|(n, _)| n.clone())
-            .collect();
-        let probed: Vec<(String, Option<String>)> = stream::iter(healthy)
-            .map(|name| {
-                let registry = app.registry.clone();
-                async move {
-                    let Some(b) = registry.get(&name) else {
-                        return (name, None);
-                    };
-                    let Some(q) = b.as_queryable() else {
-                        return (name, None); // nothing to ask; not a claim it failed
-                    };
-                    // Bounded, because `check` is a read-only command and a wedged manager
-                    // must not hold the whole report open.
-                    // 60s, and the number is evidence rather than taste: `list` measured
-                    // 2-7s per backend on this machine, and an earlier 20s cap with eight in
-                    // flight timed out scoop and winget — which take 1.2s each on their own.
-                    // A limit tight enough to fail on contention manufactures the defect it
-                    // claims to find.
-                    let answer = tokio::time::timeout(
-                        std::time::Duration::from_secs(60),
-                        q.list_installed(),
-                    )
-                    .await;
-                    let complaint = match answer {
-                        Ok(Ok(_)) => None,
-                        Ok(Err(e)) => Some(format!("says it is ready but cannot list: {}", e)),
-                        Err(_) => Some("says it is ready but `list` did not answer in 60s".into()),
-                    };
-                    (name, complaint)
-                }
-            })
-            // The knob, not a number. The 60s timeout above is chosen and defended; this cap
-            // was neither, and a machine told to run twenty at once was running four.
-            .buffer_unordered(app.config.max_parallel.max(1))
-            .collect()
-            .await;
-
-        // An index rather than a scan per complaint: the outer loop is over backends and so
-        // was the inner one.
-        let at: std::collections::HashMap<&str, usize> = reports
-            .iter()
-            .enumerate()
-            .map(|(i, (n, _))| (n.as_str(), i))
-            .collect();
-        let updates: Vec<(usize, String)> = probed
-            .into_iter()
-            .filter_map(|(name, complaint)| Some((*at.get(name.as_str())?, complaint?)))
-            .collect();
-        for (i, complaint) in updates {
-            reports[i].1.status = HealthStatus::Critical;
-            reports[i].1.message = Some(complaint);
-        }
-    }
-
-    // And the other way a backend can be here, answer `list`, and install nothing: the setup
-    // it needs was never done (Q11). `opam` passes every probe above with no switch and then
-    // fails every install with `No switch is currently set` — READY, and unable to do the one
-    // thing it is for. Degraded rather than Critical because reads genuinely work and the fix
-    // is one command, which the message carries.
-    //
-    // Manager-level rows only. `asdf`'s prerequisite is a plugin per declared tool, which is a
-    // question about a line rather than about the machine, and `check health` has no lines.
-    {
-        let rows = app.prereqs().rows();
-        let os = std::env::consts::OS;
-        for (name, report) in reports.iter_mut() {
-            if report.status != HealthStatus::Ok {
-                continue;
-            }
-            for row in crate::model::prereq::for_manager(&rows, name, os) {
-                if row.is_per_package() {
-                    continue;
-                }
-                let cmd = row.probe_command("");
-                let Some((program, args)) = cmd.split_first() else {
-                    continue;
-                };
-                let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-                if app.executor.run(program, &refs, false).await.is_ok() {
-                    continue;
-                }
-                report.status = HealthStatus::Degraded;
-                report.message = Some(format!(
-                    "installed, but it needs {} before it can install anything — `{}`",
-                    row.missing_line(""),
-                    row.command_line("")
-                ));
-            }
-        }
-    }
+    // All three promotions — Q2's absent-but-wanted, the `list`-actually-works probe, and Q11's
+    // prerequisite check — are inside `probe_all_health` now, so this view and the `check`
+    // rollup read one finished verdict. Each of them was a copy here once, and each time the
+    // two views disagreed in public about the same machine.
 
     // ---- System-level checks. Reported, never repaired: that is `heal`'s job (U9). ----
     let mut system: Vec<(String, HealthStatus, Option<String>)> = Vec::new();

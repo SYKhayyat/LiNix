@@ -10,6 +10,13 @@
 //! under normal load never goes red, and a regression of the *shape* that produced E14 — a
 //! probe fanning out across every backend when it was told which one to ask — cannot pass.
 //! A budget tight enough to fail on a busy CI runner is a budget people delete.
+//!
+//! **And where a claim can be counted instead of timed, it is.** Every ceiling here approximates
+//! a property — "asks one manager", "asks none" — that `--timings` reports directly, and the
+//! count does not move when the box is loaded while the clock moves by two orders of magnitude.
+//! So the counted form is the assertion and the clock is the corroboration, gated on a control
+//! run proving the host is quiet. The reverse arrangement is what produced a red suite over a
+//! `shall eval` that had measured 0.14s an hour earlier.
 
 use std::path::Path;
 use std::process::Command;
@@ -49,6 +56,11 @@ fn run_timed(dir: &Path, args: &[&str]) -> (Duration, i32) {
 /// gate the first time a runner is loaded, and a budget that goes red for reasons nobody
 /// controls is a budget people delete. The comment at the top of this file says exactly that
 /// about the *number*; this says it about the *method*.
+///
+/// **It is not enough on its own, and this comment used to imply it was.** Best-of-three picks
+/// the least-queued sample; it does not help when all three are queued behind the same suite,
+/// which is what happens when the box is saturated rather than merely busy. Every timed
+/// assertion below is therefore gated on [`timing_is_meaningful`].
 fn run_timed_floor(dir: &Path, args: &[&str]) -> (Duration, i32) {
     let mut best = Duration::MAX;
     let mut code = -1;
@@ -63,6 +75,68 @@ fn run_timed_floor(dir: &Path, args: &[&str]) -> (Duration, i32) {
         }
     }
     (best, code)
+}
+
+/// A command that does nothing at all must still return promptly, or no clock in this file is
+/// measuring Shall.
+///
+/// Ten times the ~0.1s `--version` costs on an idle box. It is a load detector, not a budget:
+/// crossing it says the *host* is the slow part, which is the one thing a per-command ceiling
+/// cannot distinguish from a regression.
+const CONTROL_CEILING: Duration = Duration::from_secs(1);
+
+/// Whether a wall clock on this box is measuring the program or the box.
+///
+/// **The check these budgets needed and did not have.** Measured on an idle host, every
+/// config-only command takes 0.12-0.22s and `--timings` reports `no child commands`; the same
+/// test read `shall eval` at 10.1s and `shall vars` at 5.5s during a full-suite run — a
+/// different command each time, which is contention's signature and not a command's cost. The
+/// failing assertion said "crossing it is an order of magnitude and not load", and that
+/// sentence was simply false: it was load.
+///
+/// `--version` is the control because clap answers it before Shall does any work of its own, so
+/// it cannot regress into manager work and inflate the baseline that hides a real defect. What
+/// it *can* miss — start-up overhead growing for every command at once — is
+/// `startup_budget_tests.rs`'s job, measured in-process where no clock competes with a suite.
+fn timing_is_meaningful(dir: &Path) -> Result<(), Duration> {
+    let (control, _) = run_timed_floor(dir, &["--version"]);
+    if control < CONTROL_CEILING {
+        Ok(())
+    } else {
+        Err(control)
+    }
+}
+
+/// How many child commands a run spawned, per `--timings`, or `None` when the run printed no
+/// summary — the honest answer for `--version` and `--help`, which clap answers before Shall's
+/// instrumentation starts.
+///
+/// **This is the load-immune half of every budget here.** "Config-only" is a claim about what a
+/// command *asks*, and asking is counted rather than timed: a busy box changes how long the
+/// answer takes and never changes how many managers were consulted.
+fn child_commands(dir: &Path, args: &[&str]) -> Option<usize> {
+    let mut full = vec!["--timings"];
+    full.extend_from_slice(args);
+    let out = Command::new(env!("CARGO_BIN_EXE_shall"))
+        .args(&full)
+        .env("SHALL_CONFIG_DIR", dir.join("config"))
+        .env("SHALL_DATA_DIR", dir.join("data"))
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("the binary should run");
+    // stderr, because `shall eval --timings | jq` must still get JSON on stdout.
+    let report = String::from_utf8_lossy(&out.stderr).into_owned();
+    let line = report.lines().find(|l| l.starts_with("Timings:"))?;
+    // `Timings: 0.12s wall, no child commands — this run asked no package manager anything.`
+    if line.contains("no child commands") {
+        return Some(0);
+    }
+    let at = line.find(" child command(s)")?;
+    line[..at]
+        .rsplit(|c: char| !c.is_ascii_digit())
+        .find(|t| !t.is_empty())?
+        .parse()
+        .ok()
 }
 
 /// A ceiling, and only a ceiling.
@@ -84,6 +158,15 @@ fn a_qualified_info_stays_under_its_ceiling() {
     assert_eq!(code, 0, "init failed");
 
     let (elapsed, _) = run_timed_floor(&dir, &["info", "cargo:ripgrep"]);
+    if let Err(control) = timing_is_meaningful(&dir) {
+        eprintln!(
+            "latency ceiling: SKIPPED — `shall --version` took {control:?} on this box, so this \
+             clock measures the suite. `shall info cargo:ripgrep` read {elapsed:?}. The property \
+             this ceiling approximates is counted, not timed, by \
+             `a_qualified_info_consults_only_the_named_backend`."
+        );
+        return;
+    }
     assert!(
         elapsed < Duration::from_secs(5),
         "`shall info cargo:ripgrep` took {elapsed:?}. It names the manager to ask; taking this \
@@ -92,11 +175,19 @@ fn a_qualified_info_stays_under_its_ceiling() {
 }
 
 /// Commands that only read a file must not touch the machine at all.
+///
+/// "Must not touch the machine" is the claim, so it is asserted by counting what they touched.
+/// The clock is the weaker restatement of the same thing and runs only when it can mean
+/// something.
 #[test]
 fn commands_that_only_read_the_config_are_immediate() {
     let dir = fresh("latency-read");
     let (_, code) = run_timed(&dir, &["init"]);
     assert_eq!(code, 0, "init failed");
+
+    let meaningful = timing_is_meaningful(&dir);
+    let mut touched = Vec::new();
+    let mut over = Vec::new();
 
     for args in [
         vec!["--version"],
@@ -106,11 +197,36 @@ fn commands_that_only_read_the_config_are_immediate() {
         vec!["path"],
     ] {
         let (elapsed, _) = run_timed_floor(&dir, &args);
-        assert!(
-            elapsed < Duration::from_secs(5),
-            "`shall {}` took {elapsed:?} and reads nothing but the config directory",
-            args.join(" ")
-        );
+        // `None` for `--version` and `--help`: clap answers those before the instrument exists,
+        // and a command that never reaches Shall's code cannot ask a manager anything.
+        if let Some(children) = child_commands(&dir, &args) {
+            if children > 0 {
+                touched.push(format!(
+                    "`shall {}` ran {children} child command(s)",
+                    args.join(" ")
+                ));
+            }
+        }
+        if meaningful.is_ok() && elapsed >= Duration::from_secs(5) {
+            over.push(format!("`shall {}` took {elapsed:?}", args.join(" ")));
+        }
+    }
+
+    assert!(
+        touched.is_empty(),
+        "these read nothing but the config directory and still asked a package manager:\n  {}",
+        touched.join("\n  ")
+    );
+    match meaningful {
+        Ok(()) => assert!(
+            over.is_empty(),
+            "these read nothing but the config directory and still took five seconds:\n  {}",
+            over.join("\n  ")
+        ),
+        Err(control) => eprintln!(
+            "latency read: SKIPPED the wall-clock half — `shall --version` took {control:?} on \
+             this box. The counted half above ran and is the claim that matters."
+        ),
     }
 }
 
@@ -202,6 +318,12 @@ go
 
 /// Every config-only command against its class budget — the class the two ceilings above did
 /// not cover, and the one whose cost is Shall's alone.
+///
+/// **The class is named for what these commands ask, so that is what is asserted.** `ConfigOnly`
+/// means the run consults no package manager; `--timings` reports exactly that, and it reports
+/// the same number whether the box is idle or has five hundred tests on it. The five-second
+/// budget is the same claim expressed in a unit the host also has a vote in, which is why it now
+/// runs second and only when the host is quiet enough for its vote to be small.
 #[test]
 fn every_config_only_command_stays_inside_its_class_budget() {
     use shall::core::latency::Class;
@@ -210,7 +332,9 @@ fn every_config_only_command_stays_inside_its_class_budget() {
     let (_, code) = run_timed(&dir, &["init"]);
     assert_eq!(code, 0, "init failed");
 
+    let meaningful = timing_is_meaningful(&dir);
     let mut over = Vec::new();
+    let mut asked = Vec::new();
     for args in [
         vec!["policy"],
         vec!["vars"],
@@ -225,18 +349,46 @@ fn every_config_only_command_stays_inside_its_class_budget() {
             "`shall {}` exited {code}, so its timing measures nothing",
             args.join(" ")
         );
-        if elapsed > budget {
+        let counted = child_commands(&dir, &args);
+        // The self-test. Every command here reaches Shall's own code, so a missing summary means
+        // the instrument this gate reads has gone away — which would make the check vacuous.
+        let counted = counted.unwrap_or_else(|| {
+            panic!(
+                "`shall --timings {}` printed no `Timings:` line; the instrument this gate \
+                 counts with is gone",
+                args.join(" ")
+            )
+        });
+        if counted > 0 {
+            asked.push(format!(
+                "`shall {}` ran {counted} child command(s)",
+                args.join(" ")
+            ));
+        }
+        if meaningful.is_ok() && elapsed > budget {
             over.push(format!("`shall {}` took {elapsed:?}", args.join(" ")));
         }
     }
 
     assert!(
-        over.is_empty(),
-        "these read no manager and still crossed {}s:\n  {}\n\nMeasured at 0.13-0.32s when the \
-         budget was set, so crossing it is an order of magnitude and not load.",
-        budget.as_secs(),
-        over.join("\n  ")
+        asked.is_empty(),
+        "these are classified config-only and asked a package manager anyway:\n  {}\n\nThat is \
+         the E14 shape — a command fanning out when it was told to read a file.",
+        asked.join("\n  ")
     );
+    match meaningful {
+        Ok(()) => assert!(
+            over.is_empty(),
+            "these read no manager and still crossed {}s on an unloaded box:\n  {}",
+            budget.as_secs(),
+            over.join("\n  ")
+        ),
+        Err(control) => eprintln!(
+            "latency budget: SKIPPED the wall-clock half — `shall --version` itself took \
+             {control:?} on this box, so a clock here measures the suite and not the command. \
+             The counted half above ran; it is the claim `ConfigOnly` actually makes."
+        ),
+    }
 }
 
 /// The class table names subcommands, and a name is the thing that goes stale. `undo` sat in

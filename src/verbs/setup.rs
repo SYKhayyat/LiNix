@@ -448,6 +448,14 @@ nix_gc_age = "30d"
 # 0 disables the check entirely (not recommended).
 max_removals = 20
 
+# `purge-undeclared` deletes everything Shall does not manage, so a count is the
+# wrong shape for it — you typed the command, and on a small machine the whole
+# machine is under twenty packages. This is the check that catches it instead:
+# if what Shall manages is a smaller fraction of the sweep than this, it reads as
+# a machine you have not adopted yet, and the sweep is refused.
+# Raise it to be told sooner. 0 turns it off, for purging on purpose and often.
+# purge_ratio = 0.1
+
 # Refuse any single command that installs more than this many at once.
 # 0 (the default) leaves it off — installs are additive and far less dangerous.
 # max_installs = 500

@@ -307,6 +307,61 @@ impl Transaction {
             .map(|d| d.contains(&format!("{}:{}", backend, name)))
     }
 
+    /// The WAL entries that were already open before this run started.
+    ///
+    /// **Snapshotted so that [`close_stranded`](Self::close_stranded) can tell the two kinds of
+    /// open entry apart.** An entry left open by an *earlier* run is the record that a process
+    /// died holding it, and it is the only thing that tells `heal` a real crash happened —
+    /// closing it would erase the recovery state this log exists to keep.
+    async fn open_before_this_run(&self) -> std::collections::HashSet<String> {
+        self.journal
+            .lock()
+            .await
+            .interrupted_actions()
+            .into_iter()
+            .map(|e| e.id)
+            .collect()
+    }
+
+    /// Close every entry *this* run opened and then abandoned.
+    ///
+    /// **A batch that is aborted never reaches either of the calls that close its entry.** Both
+    /// ways out of a failed run kill their workers — `abort_all` on the first failure, and the
+    /// `JoinSet` being dropped on the way out — so a task that had called `record_start` and was
+    /// still inside the manager's command dies with its entry `InProgress`.
+    ///
+    /// That state means "a process died holding this". Left behind by a run Shall itself
+    /// stopped, it makes [`Journal::needs_recovery`] answer yes for ever and sends `heal`
+    /// looking for a crash that never happened — the same class of defect as reporting that
+    /// nothing is wrong, pointing the other way. Shall aborted these and knows it did, so it
+    /// says so.
+    ///
+    /// Measured: the macOS nightly of 2026-08-14 ran an unrefused `purge-undeclared` over 276
+    /// removals, `gem:logger` failed, `continue_on_error` was off, and the rollback aborted
+    /// every other manager's batch mid-command. The harness reported *"22 operation(s) are
+    /// still open in the write-ahead log and nothing crashed"*.
+    async fn close_stranded(&self, open_before: &std::collections::HashSet<String>, why: &Error) {
+        let mut j = self.journal.lock().await;
+        let stranded: Vec<String> = j
+            .interrupted_actions()
+            .into_iter()
+            .map(|e| e.id)
+            .filter(|id| !open_before.contains(id))
+            .collect();
+        if stranded.is_empty() {
+            return;
+        }
+        let reason = format!("abandoned when the run stopped: {}", why);
+        warn!(
+            "{} operation(s) were still open when the run stopped; closing them as failed \
+             rather than leaving them to read as a crash",
+            stranded.len()
+        );
+        for id in stranded {
+            let _ = j.record_failure(&id, &reason);
+        }
+    }
+
     pub async fn execute_with_telemetry(&mut self) -> Result<Vec<TaskResult>> {
         let total_timeout = self.config.total_timeout;
         let start_time = Instant::now();
@@ -316,10 +371,18 @@ impl Transaction {
             self.graph.node_count()
         );
 
+        // Taken before any work, and read on both failing paths below. One place, because the
+        // two ways a run can strand an entry are one bug.
+        let open_before = self.open_before_this_run().await;
+
         match tokio::time::timeout(total_timeout, self.execute_internal()).await {
-            Ok(res) => {
+            Ok(Ok(results)) => {
                 debug!("DAG closure reached in {:?}", start_time.elapsed());
-                res
+                Ok(results)
+            }
+            Ok(Err(e)) => {
+                self.close_stranded(&open_before, &e).await;
+                Err(e)
             }
             Err(_) => {
                 error!(
@@ -332,10 +395,10 @@ impl Transaction {
                         error!("{}", e);
                     }
                 }
-                Err(Error::Transaction(format!(
-                    "Transaction timed out after {:?}",
-                    total_timeout
-                )))
+                let e =
+                    Error::Transaction(format!("Transaction timed out after {:?}", total_timeout));
+                self.close_stranded(&open_before, &e).await;
+                Err(e)
             }
         }
     }
@@ -873,6 +936,16 @@ impl Transaction {
                 match j.record_start(j_action) {
                     Ok(id) => ids.push(id),
                     Err(e) => {
+                        // **Close what this batch already opened before leaving.** `ids` holds
+                        // the entries `record_start` did accept, and an early return past them
+                        // leaves each one `InProgress` for ever — which is the state that means
+                        // "a process died holding this" and sends `heal` looking for a crash
+                        // that never happened. None can already be closed: the manager has not
+                        // been invoked yet.
+                        let why = format!("WAL error before this batch ran: {}", e);
+                        for id in &ids {
+                            let _ = j.record_failure(id, &why);
+                        }
                         drop(j);
                         for i in 0..members.len() {
                             refused.push(stillborn(
@@ -917,6 +990,10 @@ impl Transaction {
         } else {
             keep.extend(0..members.len());
         }
+        // Nothing to close on the way out: the only thing that removes a member from `keep` is
+        // the `before_install` arm above, which closes that member's entry as it drops it. This
+        // is the one early return in the window between opening the WAL entries and closing
+        // them that is allowed to leave without touching them.
         if keep.is_empty() {
             return refused;
         }
@@ -985,6 +1062,27 @@ impl Transaction {
         while attempt <= config.max_retries {
             attempt += 1;
             if cancel_token.is_cancelled() {
+                // **A cancelled batch closes its entries, exactly as a failed one does.** This
+                // return sits between `record_start` and the `record_success`/`record_failure`
+                // below it and took neither, so a batch that noticed the cancellation here left
+                // its entries `InProgress` — the state that means a process died holding them.
+                //
+                // `close_stranded` is the backstop for the batches that are killed outright and
+                // never reach any code at all; this is the one that gets to say something more
+                // accurate than "abandoned", because the batch is still alive to say it.
+                //
+                // `keep`, not `ids`: a package whose `before_install` hook failed was closed
+                // above, and this is the same set the two closing paths below use.
+                {
+                    let mut j = journal.lock().await;
+                    for &i in &keep {
+                        let _ = j.record_failure(
+                            &ids[i],
+                            "cancelled before this batch ran: another operation in the same run \
+                             failed",
+                        );
+                    }
+                }
                 refused.extend(keep.iter().map(|&i| {
                     let (idx, _, name) = &members[i];
                     TaskResult {
@@ -1784,6 +1882,12 @@ mod batching_tests {
         calls: AtomicUsize,
         widest: AtomicUsize,
         listings: crate::core::installed::InstalledListings,
+        /// How long this backend takes to answer. Zero for every test but the ones that need
+        /// a batch to still be in flight when the run stops.
+        stall: Duration,
+        /// Whether this backend refuses everything, so a test can make one manager fail while
+        /// another is mid-command.
+        fails: bool,
     }
 
     #[async_trait::async_trait]
@@ -1813,7 +1917,8 @@ mod batching_tests {
         async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.widest.fetch_max(specs.len(), Ordering::SeqCst);
-            Ok(())
+            tokio::time::sleep(self.stall).await;
+            self.answer()
         }
         async fn remove(
             &self,
@@ -1823,7 +1928,17 @@ mod batching_tests {
         ) -> Result<()> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.widest.fetch_max(names.len(), Ordering::SeqCst);
-            Ok(())
+            tokio::time::sleep(self.stall).await;
+            self.answer()
+        }
+    }
+
+    impl Counting {
+        fn answer(&self) -> Result<()> {
+            match self.fails {
+                true => Err(Error::Transaction(format!("`{}` refuses", self.name))),
+                false => Ok(()),
+            }
         }
     }
 
@@ -1856,19 +1971,43 @@ mod batching_tests {
     struct Harness {
         tx: Transaction,
         counters: Vec<Arc<Counting>>,
+        /// The same log the transaction writes to, so a test can ask what it was left holding.
+        journal: Arc<Mutex<Journal>>,
         _tmp: tempfile::TempDir,
     }
 
     async fn harness(graph: StableDiGraph<GraphAction, ()>, backends: &[&str]) -> Harness {
+        harness_with(
+            graph,
+            backends,
+            Duration::ZERO,
+            Duration::from_secs(3600),
+            &[],
+        )
+        .await
+    }
+
+    async fn harness_with(
+        graph: StableDiGraph<GraphAction, ()>,
+        backends: &[&str],
+        stall: Duration,
+        total_timeout: Duration,
+        failing: &[&str],
+    ) -> Harness {
         let tmp = tempfile::tempdir().unwrap();
         let mut registry = BackendRegistry::new();
         let mut counters = Vec::new();
         for b in backends {
+            let fails = failing.contains(b);
             let counting = Arc::new(Counting {
                 name: b.to_string(),
                 calls: AtomicUsize::new(0),
                 widest: AtomicUsize::new(0),
                 listings: crate::core::installed::InstalledListings::new(),
+                // A backend that is meant to fail does it at once; the stall exists to keep the
+                // *other* one inside its command while that happens.
+                stall: if fails { Duration::ZERO } else { stall },
+                fails,
             });
             counters.push(counting.clone());
             registry.register(Arc::new(
@@ -1879,16 +2018,19 @@ mod batching_tests {
             ));
         }
         let config = crate::config::Config::default();
-        let journal = Journal::at(tmp.path().join("journal.jsonl")).unwrap();
+        let journal = Arc::new(Mutex::new(
+            Journal::at(tmp.path().join("journal.jsonl")).unwrap(),
+        ));
         let diagnostics = crate::app::diagnostics::FailureDiagnosticEngine::init(&config).await;
         let mut tx_config = TransactionConfig::patient();
         // Rollback off: it would ask each backend what was there before, which is not what
         // these tests are measuring.
         tx_config.auto_rollback = false;
+        tx_config.total_timeout = total_timeout;
         let tx = Transaction::with_config(
             graph,
             Arc::new(registry),
-            Arc::new(Mutex::new(journal)),
+            journal.clone(),
             Arc::new(diagnostics),
             Arc::new(config),
             tx_config,
@@ -1905,8 +2047,120 @@ mod batching_tests {
         Harness {
             tx,
             counters,
+            journal,
             _tmp: tmp,
         }
+    }
+
+    /// A run that outlives its own deadline closes the entries it opened.
+    ///
+    /// The timeout drops the whole `JoinSet`, so the batches are killed inside the manager's
+    /// command and reach neither of the calls that close an entry. `close_stranded` is what
+    /// stands between that and a log full of operations that read as a crash.
+    #[tokio::test]
+    async fn a_run_that_times_out_leaves_no_entry_open() {
+        let mut graph = StableDiGraph::new();
+        for name in ["jq", "ripgrep", "fd", "bat"] {
+            graph.add_node(GraphAction::Install(spec("apt", name)));
+        }
+        // Each call takes far longer than the whole run is allowed, so the deadline lands
+        // while work is outstanding — which is the only way to reach the cancellation arm.
+        let mut h = harness_with(
+            graph,
+            &["apt"],
+            Duration::from_secs(30),
+            Duration::from_millis(150),
+            &[],
+        )
+        .await;
+
+        let outcome = h.tx.execute().await;
+        assert!(outcome.is_err(), "the deadline must end the run");
+
+        let open = h.journal.lock().await.interrupted_actions();
+        assert!(
+            open.is_empty(),
+            "a timeout is not a crash, and every entry it opened must be closed — {} left \
+             open: {:?}",
+            open.len(),
+            open.iter().map(|e| e.action.key()).collect::<Vec<_>>()
+        );
+    }
+
+    /// The macOS nightly's own shape: one manager fails while another is mid-command.
+    ///
+    /// This is the path that actually stranded 22 operations. `continue_on_error` is off, so
+    /// the first failure ends the run — and every batch still inside a manager's command is
+    /// killed where it stands, having opened its WAL entries and closed none.
+    #[tokio::test]
+    async fn a_run_stopped_by_one_managers_failure_leaves_no_entry_open() {
+        let mut graph = StableDiGraph::new();
+        // The one that fails, and three the slow manager is still working through when it does.
+        graph.add_node(GraphAction::Install(spec("gem", "logger")));
+        for name in ["jq", "ripgrep", "fd"] {
+            graph.add_node(GraphAction::Install(spec("apt", name)));
+        }
+        let mut h = harness_with(
+            graph,
+            &["apt", "gem"],
+            Duration::from_secs(30),
+            Duration::from_secs(3600),
+            &["gem"],
+        )
+        .await;
+
+        assert!(h.tx.execute().await.is_err(), "the failing manager ends it");
+
+        let open = h.journal.lock().await.interrupted_actions();
+        assert!(
+            open.is_empty(),
+            "Shall stopped these itself and knows it did — leaving them open makes `heal` hunt \
+             a crash that never happened. {} left open: {:?}",
+            open.len(),
+            open.iter().map(|e| e.action.key()).collect::<Vec<_>>()
+        );
+    }
+
+    /// And the entry a *previous* run left open is not touched.
+    ///
+    /// **This is the half that makes the fix safe rather than merely quiet.** An entry open
+    /// from an earlier run is the record that a process died holding it, and it is the only
+    /// thing that tells `heal` to look. A close-everything-still-open would have erased
+    /// exactly the state this log exists to keep, and the harness assertion it was written to
+    /// satisfy would have gone green either way.
+    #[tokio::test]
+    async fn an_earlier_runs_open_entry_survives_this_runs_failure() {
+        let mut graph = StableDiGraph::new();
+        graph.add_node(GraphAction::Install(spec("gem", "logger")));
+        for name in ["jq", "ripgrep"] {
+            graph.add_node(GraphAction::Install(spec("apt", name)));
+        }
+        let mut h = harness_with(
+            graph,
+            &["apt", "gem"],
+            Duration::from_secs(30),
+            Duration::from_secs(3600),
+            &["gem"],
+        )
+        .await;
+
+        // A crash, before this run starts: opened and never closed by anybody.
+        let ghost = h
+            .journal
+            .lock()
+            .await
+            .record_start(JournalAction::Install(spec("apt", "left-by-a-crash")))
+            .unwrap();
+
+        assert!(h.tx.execute().await.is_err());
+
+        let open = h.journal.lock().await.interrupted_actions();
+        let ids: Vec<&str> = open.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![ghost.as_str()],
+            "the earlier run's entry, and only it, must still be open"
+        );
     }
 
     /// **`U41`, both halves, as one question.** Rollback does not undo work that moved the

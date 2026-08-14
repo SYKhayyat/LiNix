@@ -103,7 +103,7 @@ fn the_map_names_no_command_that_does_not_exist() {
         //
         // What makes it safe is a second gate, not this one:
         // `named_commands_exist_tests.rs` resolves every `shall <word>` in `src/`, `tests/`,
-        // `scripts/`, `docker/`, `examples/`, `.github/` and `readme.md` against clap's live
+        // `scripts/`, `docker/`, `examples/`, `.github/` and `README.md` against clap's live
         // command tree, so a *live invocation* of `undo` fails there regardless of what this
         // list says. Since 2026-08-07 it also covers `docs/`, against `target-state.md` II.17's
         // register of what was deleted — and `undo` is in that register.

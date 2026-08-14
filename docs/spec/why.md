@@ -190,6 +190,15 @@ took 14 packages and a mis-scoped `prune` scheduled all 14 for removal — **und
 limit, none protected, all things you'd cry about**. The count misses it on small machines.
 **Manage 3, delete 576 → you have made a mistake, on every machine, always.**
 
+*Why the threshold is a setting (`[guard] purge_ratio`) and not a constant, added 2026-08-14
+after it moved on its own.* The denominator is the undeclared crawl, and the crawl was correctly
+narrowed to package managers — a sweep must never propose to delete every running `service:`.
+Several hundred entries left the denominator on every host, so the same 0.1 became a far weaker
+test than the one anybody agreed to: a macOS runner went from refusing to sweeping 276 packages
+with no change to this rule at all. **A threshold whose meaning an unrelated fix can re-scale is
+one its owner has to be able to reach.** It is deliberately still 0.1 by default — the repair is
+that the number is reachable, not that it moved.
+
 **V.21 — Why `purge-undeclared` is a command and not a mode.** **Sync is then never
 dangerous** — not "safe by default", but safe permanently. No setting anyone can flip,
 inherit, or copy from a dotfiles repo makes a routine sync delete something it didn't

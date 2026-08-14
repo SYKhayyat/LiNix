@@ -24,7 +24,7 @@ use tracing::{debug, warn};
 
 /// Proof that this guard was consulted, and the only thing an effector will remove without.
 ///
-/// **`readme.md:358` promises that every path removing anything goes through one guard. Until
+/// **`README.md:358` promises that every path removing anything goes through one guard. Until
 /// this type existed, that sentence was checked by a regex over source text** —
 /// `removal_guard_enumeration_tests.rs`'s `is_removal_call`, matching `.remove(` with `sudo`
 /// on the line, `.remove_repo(`, `.remove_shim(` and `.deprovision(`. `apply/firewall.rs` closes

@@ -1,6 +1,6 @@
 //! GRADER, 2026-07-28 — RED. The security refusals exit 1, and the refusal hook never hears them.
 //!
-//! `readme.md` publishes a four-code contract "so a script can branch on them": 0 converged,
+//! `README.md` publishes a four-code contract "so a script can branch on them": 0 converged,
 //! 1 failed, 2 differences, 3 refused. E25 found one refusal returning 1 instead of 3 and it was
 //! fixed for `purge-undeclared`. The family was not swept.
 //!
@@ -105,7 +105,7 @@ fn a_security_refusal_exits_with_the_documented_refusal_code() {
     );
     assert_eq!(
         code, 3,
-        "Shall refused (its own word) and exited {code}; readme.md defines 3 as refused \
+        "Shall refused (its own word) and exited {code}; README.md defines 3 as refused \
          and 1 as failed, so a script cannot tell this from a network error.\n\
          `reset` returns 3 from the same binary.\n{out}"
     );

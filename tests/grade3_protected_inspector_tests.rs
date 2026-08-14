@@ -128,3 +128,85 @@ fn the_json_answer_matches_the_rules() {
         "`protected jq --json` reports `\"protected\": true` for a name no rule mentions:\n{out}"
     );
 }
+
+/// Every removal rule the guard holds is in the listing, both surfaces.
+///
+/// **Enumerated from `GuardSettings` rather than typed out here**, so a rule added tomorrow is
+/// covered by this test on the day it is added rather than on the day someone remembers. That
+/// distinction is not theoretical: `purge_ratio` stopped being a private constant and became a
+/// setting that refuses removals, and neither the human listing nor `--json` mentioned it — while
+/// the JSON branch carried a comment about that precise omission having happened once already
+/// ("a consumer asking *what will this machine refuse* got a third of the answer and no way to
+/// tell it was a third"). A gate naming each rule by hand would have needed the same person to
+/// remember the same thing twice.
+///
+/// The exempted seven are `[guard]`'s install/change rules, which are `shall policy`'s subject —
+/// this command's own first line is *"Removal guard — what Shall refuses to remove"*. They are
+/// listed with that reason rather than filtered by a pattern, because a pattern would silently
+/// swallow a removal rule that happened to be named like a policy one.
+#[test]
+fn the_listing_shows_every_removal_rule_the_guard_holds() {
+    /// Shown by `shall policy`, not here: these refuse an install or a change, not a removal.
+    const SHOWN_BY_POLICY: [&str; 7] = [
+        "deny_packages",
+        "pinned_only",
+        "require_snapshot",
+        "deny_vulnerable",
+        "confine_bin",
+        "require_signed_history",
+        "never_unattended",
+    ];
+
+    let guard = shall::config::Config::default().guard;
+    let all = serde_json::to_value(&guard).expect("GuardSettings serialises");
+    let fields: Vec<String> = all
+        .as_object()
+        .expect("GuardSettings is a struct")
+        .keys()
+        .cloned()
+        .collect();
+
+    // The self-test. A scan yielding nothing would make every assertion below vacuous, which is
+    // the failure mode this whole file was opened to record.
+    assert!(
+        fields.len() > 10,
+        "read {} fields off GuardSettings; the scan is broken, not the code",
+        fields.len()
+    );
+    for exempt in SHOWN_BY_POLICY {
+        assert!(
+            fields.contains(&exempt.to_string()),
+            "the exemption list names `{exempt}`, which GuardSettings no longer has — a stale \
+             exemption is how E29 shipped"
+        );
+    }
+
+    let f = Fixture::new("grade3-protected-every-rule");
+    let (json, code) = f.run(&["protected", "--json"]);
+    assert_eq!(code, 0, "`protected --json` exited {code}:\n{json}");
+    let (human, code) = f.run(&["protected"]);
+    assert_eq!(code, 0, "`protected` exited {code}:\n{human}");
+
+    let mut missing = Vec::new();
+    for field in &fields {
+        if SHOWN_BY_POLICY.contains(&field.as_str()) {
+            continue;
+        }
+        if !json.contains(&format!("\"{field}\"")) {
+            missing.push(format!("`{field}` is not in `shall protected --json`"));
+        }
+        // The human listing names its two package lists in prose rather than as keys, and says
+        // so in the closing paragraph; every other rule appears under its own name.
+        let named_in_prose = field.ends_with("_packages");
+        if !named_in_prose && !human.contains(field.as_str()) {
+            missing.push(format!("`{field}` is not in `shall protected`'s listing"));
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "the guard holds rules the command that lists the guard does not show:\n  {}\n\nAn \
+         inspector that shows some of the rules is believed about all of them.",
+        missing.join("\n  ")
+    );
+}

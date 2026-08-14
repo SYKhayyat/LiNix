@@ -1,6 +1,6 @@
 //! GRADER, 2026-07-28 — RED. A removal path with no guard, no count, and no plan line.
 //!
-//! `readme.md` — "**every path that removes anything** goes through one guard".
+//! `README.md` — "**every path that removes anything** goes through one guard".
 //! `src/app/sync/guard.rs` — "*Every* path that deletes is guarded, not just the reviewed
 //! ones. A guard on one command is a guard on nothing: the bug that motivated this arrived
 //! through `prune`, which nobody thought to check."
@@ -111,7 +111,7 @@ fn undeclaring_managed_extras_goes_through_the_removal_guard() {
          It exited {rc} and reported no changes.\n\
          --- shall --dry-run sync ---\n{}\n--- shall sync -y ---\n{}\n\n\
          src/app/apply/extras.rs:105 calls `inst.remove(...)` directly; the word `guard` does \
-         not appear in that file. readme.md says every path that removes anything goes \
+         not appear in that file. README.md says every path that removes anything goes \
          through one guard.",
         gone.len(),
         gone,

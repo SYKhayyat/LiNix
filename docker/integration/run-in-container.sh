@@ -244,7 +244,7 @@ refuses_with_3() { # description command...
     elif never_ran "$rc"; then
         _rw="rc=$rc: the command never ran"
     else
-        _rw="rc=$rc: a failure, not the documented refusal (readme.md: 3 means refused on purpose)"
+        _rw="rc=$rc: a failure, not the documented refusal (README.md: 3 means refused on purpose)"
     fi
     FAILED_NAMES="$FAILED_NAMES\n    - $desc ($_rw)"
     echo "  FAIL  $desc ($_rw)"

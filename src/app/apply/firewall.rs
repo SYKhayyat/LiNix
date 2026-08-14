@@ -139,7 +139,7 @@ impl Firewall<'_> {
         }
         // N7: drift is corrected, because it is corrected everywhere else in this model — and
         // the one exception was refused above rather than special-cased here.
-        // **The teardown that was outside the guard.** `readme.md:358` promised every path
+        // **The teardown that was outside the guard.** `README.md:358` promised every path
         // removing anything went through one guard and named six resource kinds; `firewall:` is
         // the seventh, and the word `guard` appeared nowhere in this file — not an import, not a
         // call, not a comment. `max_removals` did not count these, `protected` could not name

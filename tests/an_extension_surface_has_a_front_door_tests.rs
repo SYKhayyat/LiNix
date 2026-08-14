@@ -178,7 +178,7 @@ fn a_surface_that_cannot_be_used_is_reported_in_one_voice() {
 /// surface. The docs were the other place the list lived only by hand.
 #[test]
 fn the_readme_names_every_surface_and_the_verb_that_lists_them() {
-    let readme = std::fs::read_to_string(root().join("readme.md")).expect("readme.md");
+    let readme = std::fs::read_to_string(root().join("README.md")).expect("README.md");
     let missing: Vec<&str> = SURFACES
         .iter()
         .filter(|s| !readme.contains(&format!("adapters/{}.toml", s.name)))

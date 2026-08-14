@@ -43,7 +43,18 @@
 //! unreachable. That is fail-loud inverted — the run that can do nothing is the run that
 //! reports nothing wrong.
 //!
-//! The fix belongs in `probe_all_health`, which is where the two views already meet.
+//! The fix belongs in `probe_all_health`, which is where the two views already meet. Three
+//! promotions have now been moved into it — Q2's absent-but-wanted, the `list`-actually-works
+//! probe, and Q11's prerequisite check — each of which was a copy in the `check health` caller,
+//! and each of which was found only after the previous one was fixed.
+//!
+//! **Before hunting a fourth, check the load.** These tests compare two *separate runs* of the
+//! program, so any part of the verdict that is time-dependent can differ between them without a
+//! line of code disagreeing with itself. The `list` probe carries a 60-second timeout, and on a
+//! box running the full suite this assertion has reported `3` against `1` purely because two
+//! managers answered in one run and timed out in the other. That is the machine, not a
+//! divergence; the same tests pass on an idle host. A red run here is worth reproducing alone
+//! before anything is changed.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

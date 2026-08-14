@@ -1,5 +1,6 @@
-# The decision register — all 208, ten of them built and never ruled, none open
-**One file, six features, ten entries waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
+# The decision register — all 210, twelve of them built and never ruled, none open
+**One file, six features, 12 BUILT entries waiting to be confirmed or reversed.** Every decision
+this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
 already settled in code could be re-opened by anyone reading the register instead of the tree.
@@ -10,19 +11,27 @@ rule in [Part II](target-state.md) and its reason in [Part V](why.md), **and upd
 index in the same commit** — the index went 59 entries out of date because that last clause was
 not in this paragraph.
 
-## The five statuses
+## The seven statuses
+
+**Every status has a row, including the ones holding nothing.** The table is a breakdown of the
+whole register, so a status missing from it makes the remaining cells add up to less than the
+total while every individual cell stays correct — which is exactly what happened: DEFERRED and
+HALF RULED had no rows, the five that remained summed to 206 against 210, and
+`decision-count.sh` reported `ok` because a row that is absent states no wrong number anywhere.
 
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
-| **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **10** |
+| **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **12** |
 | **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **194** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
+| **DEFERRED** | Asked, and the owner chose to answer it later. | A ruling, when the owner returns to it. | **1** |
+| **HALF RULED** | Part of the question was answered and part was not. | A ruling on the remaining half. | **1** |
 
-**Two of these five statuses now describe nothing, and they stay.** The categories are not
+**Two of these seven statuses now describe nothing, and they stay.** The categories are not
 decoration: *OPEN — blocking* refills the moment a new feature is proposed, and *BUILT, NEVER
-RULED* refilled — with ten entries — the moment somebody implemented a work order before it
+RULED* refilled — twelve entries now — the moment somebody implemented a work order before it
 was put to the owner. Deleting an empty category is how the next one goes unnoticed.
 
 **`PARKED` needs nothing *until the thing it named arrives*.** D15 sat parked on D5 for a week
@@ -76,8 +85,8 @@ status loses that, so it is kept here:
 **Nothing is open, and nine entries are waiting.** `Q53` — what a version pin means on a manager
 that cannot express one — was raised, measured and ruled on 2026-08-10. The `G` round then ran the
 other way round: `docs/GRADE-2026-08-12.md`'s work order was implemented in one pass, and the nine
-changes in it that a user would notice shipped ahead of any ruling. All 208 are accounted
-for: **194 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 10 BUILT NEVER RULED, 0 OPEN** — and this line
+changes in it that a user would notice shipped ahead of any ruling. All 210 are accounted
+for: **194 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 12 BUILT NEVER RULED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -352,7 +361,7 @@ II.19 and the reasons in V.115–V.118.*
 | **Y18** | `named_commands_exist_tests` was built around the property rather than the artifact, and then its roots were drawn around `src/`-and-friends — so 2.5 MB of specification went unscanned, and a **CLOSED** owner ruling (`bugs.md` F4) rested its whole justification on `shall doctor`, a command `S38` folded into `check <section>`. Pointed at `docs/` under the weaker property a record can satisfy — *a dead command named here is one II.17 says is dead* — 62 raw hits reduce to three, and all three are Part II: the sync nudge says `shall clean` where the verb is `remove-orphans`; the `adopt` header says `shall forget` where the code already writes `shall unmanage`; and II.17's register never recorded `shim`, which leaves a **verified open bug against a command that does not exist**. **RULED 2026-08-09** — the first three corrected in Part II on the 8th; the fourth ruled *make `@source=` work*, and built: the shim reads the provider off its own line, and the `PATH` lookup that would have found the shim again is closed. | 2026-08-09 |
 | **Y23** | `@channel` on a `flatpak:` line reaches the machine and is never read back — the listing asked for `application,version`, so D13's drift check had nothing to compare and a channel edit did nothing for ever. Ruled *make it visible and make the repair real*: flatpak has no channel switch, so the declared ref is installed and `make-current` points the app at it, the old branch is left alone, and an app on two branches reports no channel rather than a guess. | 2026-08-09 |
 
-### G — the release-adversarial round (GRADE-2026-08-12) — 10
+### G — the release-adversarial round (GRADE-2026-08-12) — 11
 
 *Not a proposal part. `docs/GRADE-2026-08-12.md` measured this tree for release and produced
 twelve findings; the work order attached to them was implemented in one pass. Ten of those
@@ -361,6 +370,10 @@ has not ruled on any of them.** Each names the finding it came from and, where t
 not taken, says what it was. G2, G5 and G10 are the three most likely to be reversed, and G10 is
 the widest.*
 
+*`G6a` is the eleventh and was added two days later: it reverses the composer row `G6` shipped
+with, on a measurement `G6`'s own evidence could not have made. An entry that turns out to be
+wrong is corrected here rather than quietly in the code.*
+
 | | question | built |
 |---|---|---|
 | **G1** | `sync --keep-going` exited **0** with `Status: SUCCESS` over a run in which every package failed — and its batching took installable packages down with the bad name. BUILT: **continuing is not succeeding.** Non-zero after the summary; one package per command under the flag; `Metrics.errors` deleted in favour of the per-operation record that already existed. | 2026-08-12 |
@@ -368,7 +381,8 @@ the widest.*
 | **G3** | A `link:` whose source is not on disk got a symlink written to it — which exists, passes `-L`, and opens for nobody. BUILT: **refused**, at plan time and at install time, as `dotfiles:` has always refused its missing tree. A relative source is read from the config repo, which is what `dotfiles:` always did. | 2026-08-12 |
 | **G4** | An empty `priority` file was accepted silently, and an empty backend set was read as *every* backend. BUILT: **refused**, in the same words as the missing file. | 2026-08-12 |
 | **G5** | `hold` did not survive a bulk `upgrade` while `--help` claimed `apt-mark` / `versionlock` parity. BUILT: **the native whole-system upgrade is refused while anything is held**; `--ignore-holds` opts in; the parity claim is gone. Roads not taken: defaulting to per-package (narrows the verb), and pushing holds into the manager (real parity, needs an adapter per backend). | 2026-08-12 |
-| **G6** | A package name could begin with `-`, so `composer:--version` reached composer's argv as a flag. BUILT: **refused everywhere.** The terminator table stays as the mechanism; composer's row was flipped to non-terminating on the nightly's measurement. | 2026-08-12 |
+| **G6** | A package name could begin with `-`, so `composer:--version` reached composer's argv as a flag. BUILT: **refused everywhere.** The terminator table stays as the mechanism. The composer row that shipped with this entry has since been **reversed on measurement — composer honours `--`** (see `G6a`). | 2026-08-12 |
+| **G6a** | `G6` flipped composer's terminator row to *non*-terminating on three nightlies that agreed with themselves. They could not have decided it: a bogus operand makes composer answer "could not find a matching version" whether it read `--` or dropped it, and on two of the three hosts it never resolved the operand at all. BUILT: **the row is `true` again**, on a container run with a *flag-shaped* operand — `composer global search --format=json -- --version` searches packagist for the string and finds `sebastian/version`, while the same line without `--` prints the version banner and searches nothing; `require` and `remove` flip the same way. The probe that produced the wrong evidence now reports **inconclusive** instead of counting a vacuous agreement as a pass, and note the direction of what it used to do: a vacuous pass can only move a row *into* the terminating set, which is the unsafe half of the table's default. | 2026-08-14 |
 | **G7** | `pkg@version=1.6 @hold` was one option, not two: the space put the second inside the first one's value, silently, in all ten grammars. BUILT: **refused in the lexer.** An `@` inside a value stays legal; whitespace immediately before one does not. | 2026-08-12 |
 | **G8** | `shall hold` and `check drift` printed clean bills built from questions that failed, and the JSON had `resources_unverifiable` with no packages equivalent. BUILT: **neither prints a clean bill it cannot support**, and `packages_unverifiable` exists. `upgrade` keeps its tolerance: acting on the holds it can see is a different question from reporting on them. | 2026-08-12 |
 | **G9** | Three `--json` flags said "(requires --dry-run)" and none enforced it. BUILT: **enforced in `dispatch`** for `sync`/`install`/`uninstall` — clap's `requires` cannot see a global flag and breaks the working combination when asked to. `upgrade` keeps its flag and loses the sentence. | 2026-08-12 |
@@ -7945,7 +7959,45 @@ Shall believed `--` would protect and which ignores it.
 **BUILT: no, for every backend including the path-oriented ones.** No manager has a package
 called `-rf`. The terminator table is the mechanism and stays; it is fifty booleans measured on
 one image, and a guard that depends on all fifty being right is a guard with fifty ways to be
-wrong. The composer row itself was flipped to non-terminating on the nightly's measurement.
+wrong. The composer row this shipped with has since been reversed on measurement — see `G6a`.
+
+## G6a
+
+**Status: BUILT, NEVER RULED — 2026-08-14, from the nightly this entry's own change turned red.**
+
+**Does composer honour `--`?** `G6` said no and set the row to non-terminating, citing three
+consecutive nightlies of the differential probe. **None of those runs could have decided it.**
+The probe believes a tool honours the terminator when the two runs agree, and composer answers a
+bogus operand with the same "could not find a matching version" whether it read `--` or dropped
+it. On two of the three hosts it never even got that far — `composer global search` answered `[]`
+both ways, and on ubuntu-latest composer failed at `No composer.json present in the current
+directory` before reaching the operand at all. Agreement between two runs that never resolved
+anything is not evidence about a parser.
+
+**BUILT: `true`. Composer honours the terminator, on every verb the registry drives.** Measured
+with a **flag-shaped** operand, which is the only kind that makes the two hypotheses predict
+different things:
+
+| argv | answer |
+| --- | --- |
+| `composer global search --format=json --version` | `Composer version 2.10.2` — parsed as a flag |
+| `composer global search --format=json -- --version` | searches packagist for `--version`, returns `sebastian/version` |
+
+`global require` and `global remove` flip the same way: with the terminator `--version` is a
+package name they fail to resolve, without it they print the version banner and exit 0. Composer
+2.10.2, official image, 2026-08-14.
+
+**What ships with it, because the row is the smaller half.** The probe now has three verdicts
+rather than two: a pair of runs that agree is `Inconclusive` unless the run *without* the
+terminator named the operand, which is the premise that makes agreement mean anything.
+`tests/terminator_probe_tests.rs` had described this exact failure in prose — "a run that cannot
+get there fails with the same exit code, never names the operand, and is indistinguishable to all
+three signals from a parser that ate it" — and then defended only against a spurious
+*difference*.
+
+Note which way the old bug could err. A vacuous agreement can only ever move a row **into** the
+terminating set, which is the unsafe half of `src/core/argv.rs`'s "the default is does not
+terminate". It cost this row two wrong values in three days, in both directions.
 
 ## G7
 
@@ -8411,3 +8463,46 @@ TOML row naming `fwupd refresh` is a fact about `fwupd`.
 adapter file rather than as a new statement — one verb-shaped statement, not two — and require
 approval once per catalogue *version* rather than per line, so a user vouches for the catalogue
 they are on instead of for thirty rows they did not write.
+
+## J1
+
+**Status: BUILT, NEVER RULED — 2026-08-14, owner ruling by delegation, from the nightly.**
+
+**What should guard `purge-undeclared` on a machine where the ratio is the only thing guarding
+it?** Raised after the macOS nightly ran an unrefused sweep of 276 packages. Two findings, one
+question:
+
+- **The ratio silently got weaker and nobody chose that.** II.11 refuses below `managed /
+  about-to-delete = 0.1`. `d1b3618` correctly stopped the undeclared crawl surveying `service:`
+  and `link:` — a sweep must never propose to delete every running service — and that same list
+  is the ratio's denominator. Several hundred entries left it on every host. The rule did not
+  change; the population it measures did. Measured: macOS 43/276 = 0.156, cleared the bar,
+  proceeded. A Windows box after `adopt`: 133/340 = 0.391, exits 0 and sweeps 340.
+- **Outside Linux the protected list matched nothing.** It read `windows`, `win32`, `kernel32`,
+  `ntdll.dll` / `darwin`, `xnu` — the operating system's vocabulary, not any package manager's.
+  No manager has ever reported a package called `kernel32`. The effective set was the three
+  shared names, `sudo`/`bash`/`shall`.
+
+**The owner's ruling, in his words: *"do what you think, but make sure it favors power users who
+will not shoot themselves, and if it might be unsafe, just make it configurable"*,** and on the
+second: *"i dont think it is deliberate — do what you want."*
+
+**BUILT, both to that principle.**
+
+- **`[guard] purge_ratio`, defaulting to the same 0.1.** No behaviour changes by default. The
+  threshold stops being a `const` because what it measures moved underneath it once already, and
+  a number that an unrelated fix can silently re-scale is one its owner should be able to reach.
+  `0.0` turns it off, written down and tested rather than left to fall out of the arithmetic —
+  someone who purges on purpose and often should say so once in a file, not remember a flag.
+- **The platform lists name packages the managers name.** Deliberately narrow, because a name
+  here is friction for whoever genuinely manages that package. Windows gets the VC++
+  redistributables, the .NET runtimes and `git` — Windows ships none of them itself, and Shall
+  keeps the config repo's history in git, so removing it leaves the machine fine and the undo
+  gone. macOS gets only `ca-certificates` and `openssl*`: brew's `git` and `curl` are a
+  preference, since macOS ships its own in `/usr/bin`, and protecting them would be friction
+  bought with no safety.
+
+**Not built: making the ratio machine-wide.** It was the obvious repair for the first finding and
+it is the wrong one. A user who has narrowed `priority` to one manager would be weighed against
+every package on the machine and refused a purge that is entirely correct — a rule that punishes
+precisely the person who configured Shall most deliberately.

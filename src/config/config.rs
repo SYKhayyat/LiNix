@@ -71,6 +71,19 @@ pub struct GuardSettings {
     /// `0` disables the check. Counted over the whole command, not per phase.
     #[serde(default = "default_max_removals")]
     pub max_removals: usize,
+    /// How little Shall may manage, as a fraction of what `purge-undeclared` is about to
+    /// delete, before the sweep reads as a mistake (II.11). `0.0` disables the check.
+    ///
+    /// **A setting rather than a constant, because what it measures moved underneath it once
+    /// already.** It was `const PURGE_RATIO: f64 = 0.1` weighed against a crawl that also
+    /// counted every running `service:`. When the crawl was correctly narrowed to package
+    /// managers, several hundred entries left the denominator on every host, the same
+    /// threshold became a far weaker test, and nobody chose that — a macOS runner went from
+    /// refusing to sweeping 276 packages with no change to this rule at all. A number that
+    /// can be silently re-scaled by an unrelated fix is a number its owner should be able to
+    /// reach.
+    #[serde(default = "default_purge_ratio")]
+    pub purge_ratio: f64,
     /// The same ceiling for the resources a declaration put in place — a `link:`, `service:`,
     /// `setting:`, `shim:`, `schedule:` or `repo:` line leaving the model. `0` disables the
     /// check.
@@ -157,6 +170,7 @@ impl Default for GuardSettings {
             protected_packages: default_protected_packages(),
             unprotected_packages: Vec::new(),
             max_removals: default_max_removals(),
+            purge_ratio: default_purge_ratio(),
             max_extra_removals: default_max_extra_removals(),
             max_port_closures: default_max_port_closures(),
             max_installs: 0,
@@ -671,6 +685,14 @@ fn default_max_removals() -> usize {
     20
 }
 
+/// A ratio, not a count. On Alpine, `adopt` correctly took 14 packages and a mis-scoped removal
+/// scheduled all 14 — under any sane count limit, none protected, all things you would cry
+/// about. The count misses it on small machines; manage a tenth of what you are about to delete
+/// and you have made a mistake, on every machine, at every scale (II.11, V.20).
+fn default_purge_ratio() -> f64 {
+    0.1
+}
+
 /// The same twenty for the resource teardowns (`Y20`). Deliberately equal to
 /// [`default_max_removals`] and deliberately not the same number: they are two budgets, and a
 /// machine that raises one has said nothing about the other.
@@ -739,18 +761,43 @@ fn default_protected_packages() -> Vec<String> {
             "libpython3*".into(),
         ]);
     }
+    // **Named as the managers name them.** These two lists used to read `windows`, `win32`,
+    // `kernel32`, `ntdll.dll` / `darwin`, `xnu` — the operating system's own vocabulary, and not
+    // one of them is a package any manager has ever reported. They matched nothing, so outside
+    // Linux the whole protected set was the three shared names above, and the ratio was the only
+    // thing standing between `purge-undeclared` and everything installed.
+    //
+    // The test is the one the Linux list states: does removing it break the machine, or break
+    // Shall's ability to run and repair it? It is deliberately answered narrowly — a name here
+    // is friction for someone who genuinely manages that package, and `unprotected_packages`
+    // should be for surprises, not for routine work.
     #[cfg(target_os = "windows")]
     {
         packages.extend(vec![
-            "windows".into(),
-            "win32".into(),
-            "kernel32".into(),
-            "ntdll.dll".into(),
+            // Windows ships no VC++ runtime and no .NET runtime, so these are load-bearing for
+            // software that has nothing to do with Shall. `Microsoft.VCRedist.2015+.x64` and
+            // choco's `vcredist140` are the same thing under two managers' names.
+            "vcredist*".into(),
+            "microsoft.vcredist*".into(),
+            "microsoft.dotnet.desktopruntime*".into(),
+            "microsoft.dotnet.aspnetcore*".into(),
+            "microsoft.dotnet.native*".into(),
+            "microsoft.windowsdesktop.runtime*".into(),
+            // Unlike macOS and Linux, Windows has no system `git`. Shall keeps the config
+            // repo's history in git, so removing it takes `rollback`, `restore` and `diff`
+            // with it — the machine is fine and the undo is gone.
+            "git".into(),
+            "git.git".into(),
         ]);
     }
     #[cfg(target_os = "macos")]
     {
-        packages.extend(vec!["darwin".into(), "xnu".into()]);
+        // Shorter than the Windows list on purpose. macOS ships its own git, curl and shells
+        // in `/usr/bin`, so removing brew's copies costs a power user their preferred build and
+        // breaks nothing — protecting them would be friction bought with no safety. What brew
+        // does own is the TLS trust every other formula links against, and a machine that
+        // cannot verify a certificate cannot download its own fix.
+        packages.extend(vec!["ca-certificates".into(), "openssl*".into()]);
     }
     packages
 }

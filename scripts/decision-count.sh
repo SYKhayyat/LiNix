@@ -143,13 +143,26 @@ done
 # The status table's own count column. Prose greps cannot see it — it is a bare number in a
 # cell — and it was one of the three figures inside `decisions.md` that disagreed with each
 # other. A check that reads only the sentences would have passed this file while it was wrong.
-check_row() { # row-label counted-value
-    _n="$(grep -E "^\| \*\*$1\*\*" "$REG" | grep -oE '\*\*[0-9]+\*\* *\|' | grep -oE '[0-9]+')"
+#
+# **Matched on the row's opening word, not its whole label.** `BUILT, NEVER RULED` is not
+# `BUILT`, so an exact-label match found no cell for it — and `[ -n "$_n" ] || say_bad` would
+# have caught that, except the row was never checked at all. See below.
+check_row() { # row-label-prefix counted-value
+    _n="$(grep -E "^\| \*\*$1" "$REG" | grep -oE '\*\*[0-9]+\*\* *\|' | grep -oE '[0-9]+')"
     [ -n "$_n" ] || { say_bad "decisions.md has no count cell for $1"; return; }
     [ "$_n" = "$2" ] || say_bad "decisions.md's status table says $_n $1 where the register holds $2"
 }
+# **All six, because three of them were not checked and that is where it went wrong — again.**
+# This script says twice, in its own comments, that an unchecked bucket is exactly where a
+# breakdown drifts: once about the prose greps ("three of the six were checked and three were
+# not") and once about the per-series headings. The status table then repeated it. ANSWERED,
+# PARKED and OPEN were checked here; DEFERRED, HALF RULED and BUILT were not, and the table
+# read `10` against a register holding 12 for as long as anyone had been counting.
 check_row "ANSWERED" "$ANSWERED"
 check_row "PARKED" "$PARKED"
+check_row "DEFERRED" "$DEFERRED"
+check_row "HALF RULED" "$HALF"
+check_row "BUILT" "$BUILT"
 # OPEN is two rows — `OPEN — blocking` and `OPEN` — and the register counts them as one status.
 # `check_row "OPEN"` matched only the second and compared it against the total, so the first
 # blocking question in this checker's lifetime (`Q18`, 2026-07-30) made a correct table read as
@@ -158,6 +171,21 @@ _open_rows="$(grep -E '^\| \*\*OPEN' "$REG" | grep -oE '\*\*[0-9]+\*\* *\|' | gr
     | awk '{s+=$1} END {print s+0}')"
 if [ "$_open_rows" != "$OPEN" ]; then
     say_bad "decisions.md's status table says $_open_rows OPEN (both rows) where the register holds $OPEN"
+fi
+
+# The table as a whole, which is the half the per-row checks structurally cannot see.
+#
+# **A row that is absent states no wrong number.** Every check above compares a cell against a
+# count; a status with no row at all has no cell to compare, so it passes all of them silently.
+# The table carried five rows summing to 206 while the register held 210 — DEFERRED and HALF
+# RULED were simply not in it — and this script printed `ok`. That is the same defect the prose
+# breakdown check above was written for, on the table instead of on a sentence, and it is why
+# that comment says a breakdown is a claim about the *whole* register.
+_table_sum="$(grep -E '^\| \*\*(OPEN|ANSWERED|PARKED|DEFERRED|HALF|BUILT)' "$REG" \
+    | grep -oE '\*\*[0-9]+\*\* *\|' | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')"
+if [ "$_table_sum" != "$TOTAL" ]; then
+    say_bad "decisions.md's status table breaks the register down as $_table_sum, and it holds \
+$TOTAL — a status with no row of its own is a bucket nothing above can check"
 fi
 
 # --- the index's per-series counts -----------------------------------------------------

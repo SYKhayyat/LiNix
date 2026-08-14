@@ -472,7 +472,7 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
   leases were removed entirely in Phase 2 (the `lease` command, `LeaseArgs`, and both expiry
   paths are gone; timed absence is now the dated-line machinery, `@expires`/`@until`).**
 - ~~The ratio check and `purge-undeclared` (II.11).~~ **DONE — `handle_purge_undeclared` prints the
-  whole list, applies the ratio check (`PURGE_RATIO = 0.1`) with II.11's exact message before
+  whole list, applies the ratio check (`[guard] purge_ratio`, 0.1 by default) with II.11's exact message before
   anything else, uses `enforce_deliberate` (protection + OS-essential apply, `max_removals` does
   not), takes a snapshot first or prints "THERE IS NO UNDO FOR THIS", and requires a typed
   count. Tests in `main.rs::purge_tests` (3/576 and 1/14 refused, 103/476 and adopted-Alpine

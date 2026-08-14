@@ -127,7 +127,7 @@ pub trait Installable: Send + Sync {
     /// Remove these packages.
     ///
     /// **`reaped` is proof the removal guard was consulted**, and it is the reason this
-    /// signature carries a parameter it never reads. `readme.md:358` promises that every path
+    /// signature carries a parameter it never reads. `README.md:358` promises that every path
     /// removing anything goes through one guard; before this the promise was checked by a regex
     /// over source text, which could not see `apply/firewall.rs` closing a port and so did not.
     /// A token mintable only by [`guard::enforce`](crate::app::sync::guard::enforce) makes the

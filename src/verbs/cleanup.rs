@@ -246,13 +246,44 @@ pub async fn handle_clean_cache(app: &App, all: bool) -> Result<()> {
     perform_maintenance(app).await
 }
 
-/// How little Shall must manage before "delete the rest" reads as a mistake (II.11).
+/// Does "manage this much, delete that much" read as a mistake (II.11)?
 ///
-/// A ratio, not a count. On Alpine, `adopt` correctly took 14 packages and a mis-scoped
-/// removal scheduled all 14 — under any sane count limit, none protected, all things you
-/// would cry about. The count misses it on small machines. Manage a tenth of what you are
-/// about to delete and you have made a mistake, on every machine, at every scale (V.20).
-pub const PURGE_RATIO: f64 = 0.1;
+/// **One function, because the tests used to hold their own copy of the arithmetic** — a
+/// private helper in `purge_tests` commented "the ratio, as `handle_purge_undeclared` computes
+/// it", which is a claim about a second implementation rather than a test of the first.
+///
+/// The threshold is `[guard] purge_ratio`, and `0.0` turns the rule off for someone who means
+/// it. Both counts must be taken over the **same set of managers** — see
+/// [`managed_where_the_crawl_could_see`].
+fn reads_as_a_mistake(cfg: &Config, managed: usize, to_remove: usize) -> bool {
+    let floor = cfg.guard.purge_ratio;
+    floor > 0.0 && (managed as f64 / to_remove as f64) < floor
+}
+
+/// How many packages Shall manages *through the managers the crawl actually answered for*.
+///
+/// **This is the other half of [`reads_as_a_mistake`], and it has to be counted the same way
+/// the deletion list was.** `installed_but_undeclared` surveys `priority`'s managers only, and
+/// drops any that failed to list, so a package can never reach the deletion side unless its
+/// manager is in [`UndeclaredReport::answered`]. Counting the management side over the whole
+/// state file therefore weighs one machine against a different one.
+///
+/// The mismatch errs in one direction and it is the wrong one. Every manager present in the
+/// state but missing from the crawl adds to the numerator and nothing to the denominator, so
+/// the ratio rises, so the refusal is withdrawn. On the macOS nightly of 2026-08-14 that is
+/// exactly what happened: 43 managed against 276 undeclared reads as 0.156 and cleared the
+/// bar, `purge-undeclared` proceeded, and the only thing that saved the machine was that all
+/// 276 removals happened to fail.
+fn managed_where_the_crawl_could_see(
+    packages: &[crate::core::state::ManagedPackage],
+    answered: &[String],
+) -> usize {
+    let seen: std::collections::HashSet<&str> = answered.iter().map(String::as_str).collect();
+    packages
+        .iter()
+        .filter(|p| seen.contains(p.backend.as_str()))
+        .count()
+}
 
 /// `purge-undeclared` (II.11): delete everything Shall does not manage.
 ///
@@ -285,7 +316,8 @@ pub async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Resul
         return Ok(());
     }
 
-    let managed = app.state.lock().await.packages.len();
+    let managed =
+        managed_where_the_crawl_could_see(&app.state.lock().await.packages, &crawl.answered);
     let removals: Vec<(String, String)> = undeclared
         .iter()
         .map(|p| (p.backend.clone(), p.name.clone()))
@@ -304,8 +336,7 @@ pub async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Resul
     println!();
 
     // The ratio check, before anything else asks anything.
-    let ratio = managed as f64 / undeclared.len() as f64;
-    if ratio < PURGE_RATIO && !allow_mass_purge {
+    if reads_as_a_mistake(&app.config, managed, undeclared.len()) && !allow_mass_purge {
         let sample: Vec<String> = undeclared.iter().take(3).map(|p| p.name.clone()).collect();
         return Err(crate::core::Error::Refused(format!(
             "Shall manages {} packages.\n\
@@ -753,6 +784,10 @@ pub async fn handle_protected(
                 "max_port_closures": cfg.guard.max_port_closures,
                 "max_installs": cfg.guard.max_installs,
                 "max_total_changes": cfg.guard.max_total_changes,
+                // Not a ceiling — a proportion — and it refuses removals all the same. It was
+                // omitted here on the day it stopped being a private constant and became a
+                // setting, which is the same third-of-an-answer the comment above describes.
+                "purge_ratio": cfg.guard.purge_ratio,
             }))?
         );
         return Ok(());
@@ -796,6 +831,17 @@ pub async fn handle_protected(
             n => println!("  {:<20} {}", key, n),
         }
     }
+    // Separate from the ceilings because it is not one: it compares a sweep against what Shall
+    // manages rather than against a fixed number, which is the case a count cannot catch — on a
+    // machine managing fourteen packages, removing all fourteen is under every ceiling above.
+    match cfg.guard.purge_ratio {
+        r if r <= 0.0 => println!("\nProportion rule:\n  purge_ratio          off (0)"),
+        r => println!(
+            "\nProportion rule:\n  purge_ratio          {r} — refuses a sweep removing more than \
+             {:.0}x what Shall manages",
+            1.0 / r
+        ),
+    }
 
     println!(
         "\nPackages the OS itself reports as essential are also refused, on top of this list.\n\
@@ -815,9 +861,27 @@ pub async fn handle_protected(
 
 #[cfg(test)]
 mod purge_tests {
-    /// The ratio, as `handle_purge_undeclared` computes it.
+    use super::managed_where_the_crawl_could_see;
+    use crate::config::Config;
+    use crate::core::state::ManagedPackage;
+
+    /// The rule at its shipped threshold.
     fn reads_as_a_mistake(managed: usize, to_remove: usize) -> bool {
-        (managed as f64 / to_remove as f64) < super::PURGE_RATIO
+        super::reads_as_a_mistake(&Config::default(), managed, to_remove)
+    }
+
+    fn managed_pkg(backend: &str, name: &str) -> ManagedPackage {
+        ManagedPackage {
+            name: name.into(),
+            backend: backend.into(),
+            version: None,
+            installed_at: 0,
+            expires_at: None,
+            options: Default::default(),
+            source: "test".into(),
+            is_transient: false,
+            session_id: None,
+        }
     }
 
     #[test]
@@ -840,5 +904,142 @@ mod purge_tests {
         // Ubuntu after `adopt`: ~103 manual packages managed, the dependency closure and
         // whatever else is lying around unmanaged. That is the command working as intended.
         assert!(!reads_as_a_mistake(103, 476));
+    }
+
+    // ---- The two sides of the ratio count the same managers. ------------------------------
+
+    /// A manager the crawl never surveyed contributes nothing to the count it is weighed
+    /// against.
+    ///
+    /// `installed_but_undeclared` asks `priority`'s managers only, so a package managed
+    /// through one `priority` omits can never appear on the deletion side. Counting it on the
+    /// management side is how 43-against-276 cleared a bar that 12-against-276 would not
+    /// have.
+    #[test]
+    fn a_manager_the_crawl_never_asked_is_on_neither_side() {
+        let state = vec![
+            managed_pkg("brew", "ripgrep"),
+            managed_pkg("brew", "fd"),
+            managed_pkg("gem", "rails"),
+            managed_pkg("npm", "typescript"),
+        ];
+        // Only brew answered — `priority` does not name gem or npm, or they failed to list.
+        let answered = vec!["brew".to_string()];
+        assert_eq!(
+            managed_where_the_crawl_could_see(&state, &answered),
+            2,
+            "only the two brew packages are comparable with a brew-only deletion list"
+        );
+    }
+
+    /// The whole state counts when the whole state was surveyed — the control that makes the
+    /// test above a measurement rather than an artefact of filtering.
+    #[test]
+    fn every_manager_that_answered_counts() {
+        let state = vec![
+            managed_pkg("brew", "ripgrep"),
+            managed_pkg("gem", "rails"),
+            managed_pkg("npm", "typescript"),
+        ];
+        let answered = vec!["brew".to_string(), "gem".to_string(), "npm".to_string()];
+        assert_eq!(managed_where_the_crawl_could_see(&state, &answered), 3);
+    }
+
+    /// The regression, end to end and in its own numbers.
+    ///
+    /// macOS nightly, 2026-08-14: 43 packages in the state file, 276 undeclared found through
+    /// the managers `priority` names. Scoped, the management side is what those same managers
+    /// account for — and the refusal comes back.
+    #[test]
+    fn the_macos_nightly_refuses_once_both_sides_count_the_same_machine() {
+        // The unscoped count is what shipped, and it cleared the bar.
+        assert!(
+            !reads_as_a_mistake(43, 276),
+            "43/276 is 0.156 — this is the number that let the purge through"
+        );
+        // Scoped to the managers that answered, the same machine reads as a mistake. Any
+        // numerator below 27.6 does; the point is that dropping the managers which cannot
+        // appear on the deletion side can only move it down.
+        assert!(reads_as_a_mistake(12, 276));
+    }
+
+    /// The threshold is the owner's to move, in both directions.
+    ///
+    /// **`0.0` is off, and that is a deliberate escape hatch rather than an accident of the
+    /// arithmetic** — `managed / to_remove < 0.0` is false for every non-negative input, so a
+    /// bare comparison would have disabled the rule at zero by luck. It is written down and
+    /// tested because someone purging a machine on purpose, repeatedly, should be able to say
+    /// so once in a file instead of remembering a flag every time.
+    #[test]
+    fn the_purge_ratio_is_a_setting_and_zero_turns_it_off() {
+        let strict = Config {
+            guard: crate::config::GuardSettings {
+                purge_ratio: 0.5,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        // Passes at the shipped 0.1, refused once the owner asks for half.
+        assert!(!reads_as_a_mistake(43, 276));
+        assert!(super::reads_as_a_mistake(&strict, 43, 276));
+
+        let off = Config {
+            guard: crate::config::GuardSettings {
+                purge_ratio: 0.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(
+            !super::reads_as_a_mistake(&off, 0, 576),
+            "zero is off — managing nothing and deleting everything is allowed on request"
+        );
+    }
+
+    /// The platform lists name packages the managers actually report.
+    ///
+    /// They used to read `kernel32`, `ntdll.dll`, `win32`, `xnu` — the OS's vocabulary, not any
+    /// manager's, so nothing ever matched them and outside Linux the protected set was three
+    /// names. A default list that matches nothing is indistinguishable from no list, and this
+    /// is what tells the two apart.
+    #[test]
+    fn the_protected_defaults_match_names_a_manager_would_report() {
+        let cfg = Config::default();
+        let protected = |name: &str| cfg.protection_rule(name).is_some();
+
+        // Shared, on every platform.
+        assert!(protected("sudo") && protected("bash") && protected("shall"));
+
+        #[cfg(target_os = "windows")]
+        {
+            // Exactly as `winget list` and `choco list` print them.
+            assert!(protected("Microsoft.VCRedist.2015+.x64"));
+            assert!(protected("vcredist140"));
+            assert!(protected("Microsoft.DotNet.DesktopRuntime.8"));
+            assert!(protected("Git.Git"));
+            // And a name nobody should be stopped from managing.
+            assert!(!protected("GitHub.cli"));
+            assert!(!protected("dotPDN.PaintDotNet"));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert!(protected("ca-certificates"));
+            assert!(protected("openssl@3"), "the family, under its versions");
+            // brew's git and curl are a preference, not a dependency: macOS ships its own in
+            // /usr/bin, so protecting them would be friction bought with no safety.
+            assert!(!protected("git") && !protected("curl"));
+        }
+    }
+
+    /// A crawl that answered for nothing cannot license a deletion.
+    ///
+    /// Zero managed over any deletion list is a ratio of zero, which is below any threshold —
+    /// asserted rather than assumed, because `0.0 / n` is the one input where a float
+    /// comparison could plausibly have been written the other way round.
+    #[test]
+    fn managing_nothing_is_always_a_mistake() {
+        assert!(reads_as_a_mistake(0, 1));
+        assert!(reads_as_a_mistake(0, 576));
+        assert_eq!(managed_where_the_crawl_could_see(&[], &[]), 0);
     }
 }

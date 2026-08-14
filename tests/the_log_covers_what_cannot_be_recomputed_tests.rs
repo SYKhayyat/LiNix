@@ -1,6 +1,6 @@
 //! What the write-ahead log covers, and what it deliberately does not.
 //!
-//! `readme.md`'s safety section says *"a write-ahead log records every mutation before it
+//! `README.md`'s safety section says *"a write-ahead log records every mutation before it
 //! runs"*. Until this landed, `JournalAction` had two variants — `Install` and `Remove` — and
 //! all nine `apply/` modules contained zero references to the journal. Every non-package
 //! mutation a sync makes happened outside the log.

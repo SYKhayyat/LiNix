@@ -33,6 +33,16 @@ pub struct UndeclaredReport {
     pub packages: Vec<Package>,
     /// `backend: reason` for every manager that could not be listed. Never empty *and* silent.
     pub unanswered: Vec<String>,
+    /// The managers [`packages`](Self::packages) is a complete answer *about*: named by
+    /// `priority`, installed here, and they answered.
+    ///
+    /// **Carried because a count of this list is half of a ratio, and the other half must be
+    /// counted over the same managers.** `purge-undeclared` weighs what Shall manages against
+    /// what it is about to delete; the deletion side is this narrow by design, so a management
+    /// side counted over every backend in the state file compares two different machines. That
+    /// mismatch is not academic — it silently inflates the ratio, which is the direction that
+    /// *withdraws* the refusal.
+    pub answered: Vec<String>,
 }
 
 /// Inventory holds only what it uses. It is built from an [`App`](crate::app::App) by
@@ -337,9 +347,13 @@ impl Inventory<'_> {
         // never answered" both come out as an empty list, and only one of them is a clean bill.
         let mut listed = Vec::new();
         let mut unanswered = Vec::new();
+        let mut answered = Vec::new();
         for (name, answer) in names.into_iter().zip(answers) {
             match answer {
-                Ok(pkgs) => listed.push(pkgs),
+                Ok(pkgs) => {
+                    answered.push(name);
+                    listed.push(pkgs);
+                }
                 Err(e) => {
                     warn!(
                         "`{name}` could not be listed, so nothing it has counts as unmanaged \
@@ -372,6 +386,7 @@ impl Inventory<'_> {
                 .filter(|pkg| !owned.contains(&pkg.name))
                 .collect(),
             unanswered,
+            answered,
         })
     }
 
