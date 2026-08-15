@@ -153,7 +153,10 @@ pub fn detect<'a>(
     adapters: &'a [FirewallAdapter],
     present: &dyn Fn(&str) -> bool,
 ) -> Option<&'a FirewallAdapter> {
-    adapter::first_present(adapters, present)
+    // No firewall row names a liveness file yet, so this is the identity of the old behaviour.
+    // Named rather than left to a default: `firewall-cmd` present with firewalld STOPPED is the
+    // same shape as the systemd finding, and the next person to measure it has the seam here.
+    adapter::first_present(adapters, present, &|p| std::path::Path::new(p).exists())
 }
 
 #[cfg(test)]

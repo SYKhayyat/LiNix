@@ -965,6 +965,27 @@ opam, cabal, conda, mix, nix, spack, luarocks, nimble, helm, krew, pixi, dotnet,
 scoop, winget, choco, github and web on the images that carry them. btrfs, LVM and ZFS run
 against real loopback block devices on a privileged image.
 
+**How many that is, measured rather than claimed.** Every sweep records how many backends
+completed the full round trip, and `scripts/lifecycle-floor.txt` ratchets it: a run that does
+worse than its host class has done before fails. The recorded floors:
+
+| host class | backends round-tripped |
+|---|---|
+| `tools` image (the broad ecosystem sweep) | 26 |
+| native Windows runner | 13 |
+| `arch` image | 12 |
+| `ubuntu` image | 10 |
+| `fedora`, `void` images | 9 |
+| native macOS runner | 8 |
+| `alpine`, `opensuse`, `slackware` images | 7 |
+| `guix` image | 3 |
+| `storage` image (btrfs/LVM/ZFS on loopback) | 5 |
+
+No single host runs them all, because no single host *has* them all — the Windows managers do
+not exist on Linux and the reverse. These numbers may rise and never fall, and the table above
+is checked against that file by the test suite, so it cannot drift the way the sentence it
+replaced did.
+
 **These are argv-tested only** — Shall builds the command line and a test asserts it is the
 right one, and no machine in this project's CI has ever run it:
 
@@ -972,12 +993,12 @@ right one, and no machine in this project's CI has ever run it:
 |---|---|
 | `flatpak` | needs a session bus; the container matrix has none |
 | `snap` | snapd is a systemd daemon, and no image here runs systemd |
-| `macports` | a second package tree under `/opt/local`; never attempted on a runner |
+| `macports` | never attempted: CI *does* run on `macos-latest`, and no step installs MacPorts on it. Work nobody has done, not hardware nobody has |
+| `mas` | needs a signed-in Mac App Store account on real Apple hardware |
 | `pkg`, `pkg_add`, `pkgin` | FreeBSD, OpenBSD and pkgsrc — no BSD host exists in this CI |
-| `eopkg`, `slackpkg` | Solus and Slackware — no image |
-| `guix` | needs its own daemon and store |
-| `yay`, `paru` | AUR helpers build from source and refuse to run as root, which every container here is |
-| `emerge`, `stack` | reached, but smoke-only: both build the package from source, which is minutes per run for ever |
+| `eopkg` | Solus publishes no container image; re-probed 2026-08-14 and still none |
+| `emerge` | smoke-only: `gentoo/stage3` ships a binary-package host but no portage tree, so the closing move is a build-time `emerge-webrsync` nobody has paid for |
+| `stack` | its toolchain can be baked in; the per-package source build cannot, so it is minutes per run for ever |
 
 Two code paths are also unexecuted rather than untested: the `dpkg -i` / `rpm -U` local-file
 handoff, and storage removal (`U30`). An argv test proves a command line was constructed

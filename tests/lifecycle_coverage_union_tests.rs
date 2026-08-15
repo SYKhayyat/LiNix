@@ -31,7 +31,7 @@ fn read(rel: &str) -> String {
 /// `alpine|arch)` is two labels; `*)` is not a backend. A body that produces nothing for a
 /// label — `btrfs) [ -n "$STORAGE_BTRFS" ] && echo …` — still counts as *named*, because the
 /// question here is whether anyone has considered the backend, not whether today's host can.
-fn case_labels(script: &str, func: &str) -> BTreeSet<String> {
+fn case_labels(script: &str, func: &str, min: usize) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     let Some(body) = script.split_once(&format!("\n{func}() {{\n")) else {
         panic!("{func}() is not in this script, or its shape changed");
@@ -69,9 +69,15 @@ fn case_labels(script: &str, func: &str) -> BTreeSet<String> {
             }
         }
     }
+    // **The floor is per table, because the tables are different sizes on purpose.**
+    // A hard `> 3` is right for `canary`, which names dozens; it is wrong for
+    // `dependent_lifecycle`, which today names exactly one statement that is really
+    // driven. Asserting the wrong floor would force the table to be padded with
+    // statements nobody drives, which is the failure this whole file is about.
     assert!(
-        out.len() > 3,
-        "{func}() yielded only {} labels — the scan is broken, not the table",
+        out.len() >= min,
+        "{func}() yielded only {} labels, fewer than the {min} it must have — the
+         scan is broken, not the table",
         out.len()
     );
     out
@@ -186,16 +192,49 @@ fn nowhere() -> Vec<Nowhere> {
 ///
 /// May only go DOWN. Raising it is `Q4`'s item 4 happening — *no new backend is added until the
 /// current set passes* — and the failure says so.
-const NOWHERE_CEILING: usize = 15;
+///
+/// **15 → 13 on 2026-08-14**, when `yay` and `paru` stopped being unreachable. Their exemption
+/// had named its own closing move — *"closable with a non-root leg on the arch image"* — and the
+/// arch image now runs the sweep as an unprivileged user, which is the only condition an AUR
+/// helper ever asked for. Neither tool changed; the harness did.
+///
+/// **12 → 10 the same day**, when `service` and `setting` did. Each had been excused on the
+/// evidence of one row out of five: `service` on systemd's, while SysVinit needs no running init
+/// to enable or start anything, and `setting` on dconf's, while the Windows store is `reg` and
+/// wants no bus. Neither statement changed either.
+/// **9 → 8** the same day, when `guix` did. Its reason had already been rewritten twice as each
+/// version of it was measured false; the third was *"the manager works, Shall has not driven
+/// it"*, and now Shall drives it. What the image had to be taught was not about guix — a profile
+/// that starts empty owes the harness a `git` and a protected package, and a manager that tells
+/// you to put its bin on PATH yourself will not do it for you.
+///
+/// **10 → 9**, when `slackpkg` did. Its reason had been *"Slackware images exist but are
+/// community-built and ship a Rust too old to build Shall in-image"*, and both halves were wrong:
+/// `Dockerfile.slackware` bootstraps the toolchain through slackpkg itself and the Rust it
+/// installs builds Shall. Like the four above it, the tool never changed — the harness did.
+const NOWHERE_CEILING: usize = 8;
 
 fn covered_somewhere() -> BTreeSet<String> {
     let win = read("scripts/integration-windows.sh");
     let con = read("docker/integration/run-in-container.sh");
-    let mut c = case_labels(&win, "canary");
-    c.extend(case_labels(&con, "canary"));
+    let mut c = case_labels(&win, "canary", 4);
+    c.extend(case_labels(&con, "canary", 4));
+    // **The dependent statements, which have their own table because they have their own
+    // assertions.** `canary()` describes a `backend:name` package lifecycle; a `link:` is checked
+    // with `test -L` and a content read, so it could never be a row there. Reading only `canary`
+    // is what made `link` look permanently unreachable — this gate was measuring the shape of one
+    // table rather than whether anything drives the statement.
+    c.extend(case_labels(&con, "dependent_lifecycle", 1));
+    // **And the Windows sweep's own table, because a dependent statement can be unreachable on
+    // one platform and trivial on the other.** `setting:` is the case that proves it: on Linux
+    // the store is dconf and needs a session bus no image runs, and on Windows it is `reg`,
+    // which needs nothing at all. Reading only the container's table would have kept `setting`
+    // permanently exempt on the evidence of the platform that cannot do it — which is the same
+    // error as `winget` being excused on the only harness that could run it.
+    c.extend(case_labels(&win, "dependent_lifecycle", 1));
     // A distro's own manager is lifecycled by section 5 of the image built for it — a real
     // lifecycle, on a different run of the same script, which no single run can observe.
-    c.extend(case_labels(&con, "primary_manager_image"));
+    c.extend(case_labels(&con, "primary_manager_image", 4));
     c
 }
 

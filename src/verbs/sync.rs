@@ -181,8 +181,21 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
         // run that reaches this line can still have put a resource in place.
         let resources = app.extras().changes(&state).await?;
         let undone = app.extras().reconcile(&state, opts.scope).await?;
+        // **And the `exec:` teardown, for exactly the reason the paragraph above gives.** That
+        // reasoning was applied to extras here and to `exec:` inside `Execs::apply` — whose own
+        // comment says *"deleting the LAST `exec:` line is a real change, and a teardown that
+        // only runs when something is still declared can never undo the last one"* — and then
+        // this branch skipped the phase that contains it. Delete the only `exec:` line on an
+        // otherwise converged machine and the `@undo=` silently did not run: measured on the
+        // ubuntu and slackware images, both reporting the sync as exit 0.
+        //
+        // A no-op when nothing departed, and the call is cheap: it reads two lock files.
+        let undone_execs = app
+            .execs()
+            .apply(&state, crate::model::exec::Verb::Sync)
+            .await?;
         return Ok(Reconciled {
-            applied: resources.place.len() + undone,
+            applied: resources.place.len() + undone + undone_execs,
             left_in_place: changes.skipped.len(),
             not_installed: not_installed_of(&changes.skipped),
         });
@@ -398,10 +411,13 @@ pub async fn apply_non_package_phases(
             Phase::Schedules => app.schedules().apply(state).await?,
             // Phase 4b (XIII.3): the declared `exec:` scripts, after the packages and
             // dependents a script is likely to lean on. A verb, so it has no teardown phase.
+            // The undo count is dropped here and read in the converged branch above: on this
+            // path `applied` is the package plan's own total, and folding a teardown into it
+            // would make one number mean two things.
             Phase::Execs => {
                 app.execs()
                     .apply(state, crate::model::exec::Verb::Sync)
-                    .await?
+                    .await?;
             }
         }
     }

@@ -1339,15 +1339,16 @@ Both were found by *building the missing harness and running it*, which is the p
 
 ## What is still open, and what it needs
 
-`LIFECYCLE_GAP_CEILING=12` on the container harness, 15 on Windows. Lower them, do not raise:
+`LIFECYCLE_GAP_CEILING=11` on the container harness, 0 on Windows. Lower them, do not raise:
 
 | backend(s) | what it needs |
 |---|---|
 | `btrfs`, `lvm` | the storage image, wired and run — **in progress** |
 | `zfs` | a host kernel with the module. `modprobe -n zfs` says no on the WSL2 kernel; out-of-tree. Detected, not assumed. |
 | `eopkg` | no Solus image exists on any public registry (probed 2026-07-30) |
-| `guix`, `slackpkg` | an image built from an install script rather than a published base |
-| `yay`, `paru` | AUR helpers refuse to run as root (`needs_root = false`) and the container sweep runs as root. Needs a non-root leg. |
+| `guix` | an image built from an install script rather than a published base |
+| ~~`slackpkg`~~ | **landed 2026-08-14.** `Dockerfile.slackware` bootstraps the toolchain through slackpkg itself. Finding it a real manager cost two defects: it sorted below the language managers (VI.7) and it was sent a `--` it reads as the search pattern (VI.9). |
+| ~~`yay`, `paru`~~ | **landed 2026-08-14.** The non-root leg exists: the arch image runs its harness as an unprivileged user and Shall escalates through `sudo -n`. It also exposed VI.6 and VI.8. |
 | `pkg`, `pkg_add`, `pkgin` | FreeBSD / OpenBSD / NetBSD userlands. A container shares the host's **Linux** kernel; these need VMs. |
 | `mas` | a signed-in Mac |
 | `brew` | a container canary (it has a Windows one and no Linux one) |

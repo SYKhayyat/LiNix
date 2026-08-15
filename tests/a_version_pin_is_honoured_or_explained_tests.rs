@@ -114,6 +114,46 @@ fn ledger_reason(key: &str) -> Option<&'static str> {
 /// **Omitting the field counts as not pinning**, which is the point: `xbps` never wrote
 /// `version_pin` and took `Default`'s `None` in silence. A scan that only looked for the literal
 /// `version_pin: None` would have reported `xbps` clean.
+/// A top-level `fn` declaration, whatever visibility it carries: `fn`, `pub fn`,
+/// `pub(crate) fn`, `pub(super) fn`, `pub(in path) fn`. Column zero, so a nested `fn` inside a
+/// registrar's body does not end it.
+fn is_top_level_fn(line: &str) -> bool {
+    if line.starts_with(char::is_whitespace) {
+        return false;
+    }
+    let rest = line.strip_prefix("pub").map_or(line, |r| {
+        // `pub(crate)`, `pub(super)`, `pub(in crate::x)` — take everything to the closing paren.
+        r.strip_prefix('(')
+            .and_then(|r| r.split_once(')'))
+            .map_or(r, |(_, after)| after)
+    });
+    rest.trim_start().starts_with("fn ")
+}
+
+/// The terminator, both ways. A visibility this misses silently merges two functions and
+/// reports the second one's fields against the first one's name — which is how a
+/// `pub(crate)` on `base_config` produced a failure naming `register_conda`.
+#[test]
+fn the_scan_ends_a_registrar_at_a_top_level_fn_of_any_visibility() {
+    for line in [
+        "fn base_config(name: &str) -> ManagerConfig {",
+        "pub fn create_default_registry() -> BackendRegistry {",
+        "pub(crate) fn base_config(name: &str) -> ManagerConfig {",
+        "pub(super) fn register_yay(reg: &mut BackendRegistry) {",
+        "pub(in crate::backends) fn helper() {",
+    ] {
+        assert!(is_top_level_fn(line), "should end a registrar: {line}");
+    }
+    for line in [
+        "    fn inner() {}",
+        "        version_pin: None,",
+        "// fn base_config is mentioned in a comment",
+        "    pub(crate) fn nested(&self) {}",
+    ] {
+        assert!(!is_top_level_fn(line), "should NOT end a registrar: {line}");
+    }
+}
+
 fn registrars_and_their_pins() -> BTreeMap<String, bool> {
     let src = crate::harness::registry_source();
     let mut out: BTreeMap<String, bool> = BTreeMap::new();
@@ -128,7 +168,14 @@ fn registrars_and_their_pins() -> BTreeMap<String, bool> {
         }
         // A top-level `fn` that is not a registrar ends the one we were in — `base_config`'s own
         // `version_pin: None` is the default every registrar may override, not a backend's answer.
-        if line.starts_with("fn ") || line.starts_with("pub fn ") {
+        //
+        // **Every visibility, not two of them.** This read `fn ` and `pub fn ` and nothing else,
+        // so the day `base_config` became `pub(crate) fn` its body stopped ending the registrar
+        // above it — and that registrar inherited a `version_pin: None` it had never written.
+        // The test failed naming `register_conda`, which has nothing to do with either change.
+        // A scanner whose terminator is a subset of the language's spellings reports on the
+        // wrong function and says so confidently.
+        if is_top_level_fn(line) {
             current.clear();
             continue;
         }

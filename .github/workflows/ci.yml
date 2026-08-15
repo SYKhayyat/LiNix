@@ -442,10 +442,18 @@ jobs:
     #
     # The ceiling comes down when these runs report, not before — a row says what the tool
     # *said*, and an inference confirmed by somebody else's run is still an inference here.
+    # `-u 0`, and it is not a leftover. The arch image now runs its harness as an unprivileged
+    # user, because that is the only way to drive `yay` and `paru` at all — and this probe reads
+    # what a manager SAYS about an operand, which a manager that refuses before parsing one never
+    # says. Measured on that image, both ways: as root it measures seven binaries, as `shall` it
+    # measures six, and the missing one is `pacman` — whose row says `Measured` on the strength of
+    # this leg. The AUR helpers answer either way; pacman does not. So the lifecycle wants the
+    # user and the probe wants root, and they are separate runs of separate questions rather than
+    # one compromise that half-answers both.
     - name: Ask this image's managers about subcommands, flags and `--`
       if: ${{ !cancelled() }}
       run: |
-        docker run --rm --entrypoint sh \
+        docker run --rm -u 0 --entrypoint sh \
           -e TERMINATOR_PROBE=1 -e CARGO_TARGET_DIR=/tmp/target \
           -v "$PWD:/src" \
           shall-it-${{ matrix.distro }} -c \
@@ -482,15 +490,40 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { distro: tools,  backend: apt,    pkg: jq, smoke: '' }
-          - { distro: gentoo, backend: emerge, pkg: jq, smoke: '-e SMOKE_ONLY=1' }
+          - { distro: tools,     backend: apt,      pkg: jq, flags: '' }
+          - { distro: gentoo,    backend: emerge,   pkg: jq, flags: '-e SMOKE_ONLY=1' }
+          # Slackware is here rather than in the fast matrix for the reason gentoo is: the
+          # image builds for tens of minutes. `slackpkg` had never met its own manager in any
+          # harness before 2026-08-14 — it was argv-tested only, with no image to run it in.
+          #
+          # The canary is `bc`, not `jq`: Slackware's package set has no jq at all, and a
+          # canary the mirror does not carry reads as a broken backend rather than a missing
+          # package. `bc` is in the `ap` series, which this image deliberately does not
+          # install — the first canary tried was `wget`, which the image DOES ship, so the
+          # PATH assertion was vacuous, and worse, slackpkg shells out to `wget`, so removing
+          # it broke the manager for every check after it (13 failures from one canary).
+          - { distro: slackware, backend: slackpkg, pkg: bc, flags: '' }
+          # And the image the `flags` slot was renamed for. `guix` needs
+          # `--security-opt seccomp=unconfined` because its build sandbox calls `personality(2)`
+          # and Docker's default profile blocks it — without which every install dies as
+          # *"in phase setPersonality: cannot set personality"*, which reads like a broken
+          # manager rather than a syscall filter.
+          #
+          # The canary is `hello`: a guix profile starts empty, so the canary is whatever has a
+          # prebuilt substitute in guix's own cache, and `hello` is the smallest such thing. A
+          # source build here would be the whole nightly.
+          - { distro: guix,      backend: guix,     pkg: hello, flags: '--security-opt seccomp=unconfined' }
     steps:
     - uses: actions/checkout@v4
     - name: Build the ${{ matrix.distro }} image
       run: docker build -f docker/integration/Dockerfile.${{ matrix.distro }} -t shall-it-${{ matrix.distro }} .
     - name: Run the ${{ matrix.distro }} lifecycle
+      # `flags` rather than `smoke`: it was already a raw `docker run` flag string carrying
+      # `-e SMOKE_ONLY=1`, and the next image to need this slot needs it for a security option
+      # rather than a run mode. A key named for one of its values is a key that gets a second
+      # one bolted on with the wrong name.
       run: |
-        docker run --rm ${{ matrix.smoke }} \
+        docker run --rm ${{ matrix.flags }} \
           -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
           -v "$PWD/scripts/lifecycle-floor.txt:/src/scripts/lifecycle-floor.txt:ro" \
           shall-it-${{ matrix.distro }} ${{ matrix.backend }} ${{ matrix.pkg }}
@@ -632,6 +665,84 @@ jobs:
   # A harness is trustworthy because its checks CAN go red, not because they are green. This
   # replaces `shall` with a binary that does nothing and exits 0: every check that still
   # passes examined nothing. The survivor count is a ratchet — it may fall, never rise.
+  # **The front door, actually opened.**
+  #
+  # `scripts/install.sh` is the line the README tells every new user to pipe into a shell, and
+  # until this job nothing in the repository had ever RUN it. It was scanned for command names by
+  # `named_commands_exist_tests` and syntax-checked by `shellcheck`, both of which read the file
+  # without executing a line of it — so 207 lines of platform detection, release download and
+  # source-build fallback were the least-exercised code here and the most-used.
+  #
+  # A clean `debian:stable-slim` with nothing this project put there, which is closer to a new
+  # user's machine than any image in the integration matrix.
+  #
+  # **`SHALL_REF` is the BRANCH, not the commit sha, and the difference is a broken job.** Both
+  # scripts turn a set `SHALL_REF` into `cargo install --git <repo> --tag <ref>`; a sha is not a
+  # tag, so pointing this at `github.sha` would have made the job fail on its own argument every
+  # night while looking like a finding about the installer. `github.ref_name` is the branch this
+  # run is on, which is a ref `--tag`'s sibling resolution accepts and is what the script's own
+  # documented example writes: `SHALL_REF=main`.
+  #
+  # Nightly, because with no release tagged the script correctly falls through to a source build
+  # of 448 crates. That fall-through is not a detour to be mocked out — it is what every user who
+  # runs this line today actually gets, so it is what gets tested.
+  install-script:
+    name: The install script, run for real (nightly)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+    - name: Pipe install.sh into a clean container, as the README says to
+      run: |
+        docker run --rm -v "$PWD:/src:ro" -e SHALL_REF="${{ github.ref_name }}" debian:stable-slim sh -c '
+          set -e
+          apt-get update -qq >/dev/null
+          apt-get install -y -qq curl ca-certificates build-essential pkg-config libssl-dev git >/dev/null
+          sh /src/scripts/install.sh
+          # The assertion is not that the script exited 0 — it is that a user now has a working
+          # program. A script that reports success and installs nothing is the exact failure
+          # this job exists to catch.
+          command -v shall || { echo "install.sh exited 0 and left no shall on PATH"; exit 1; }
+          shall --version
+        '
+
+  # **The twin, and it needs its own job for the same reason the scripts are twins.**
+  # `install.ps1` is 175 lines of the same shape written in a language where none of the Unix
+  # job's evidence applies: a different download path, a different `--root` rule (cargo installs
+  # into `<root>\bin`, so a `SHALL_BIN_DIR` is either that directory's parent or a staged copy),
+  # and `$ErrorActionPreference = 'Stop'`, which has already turned one *optional* command into a
+  # terminating error at a step that was only ever a preference.
+  #
+  # `SHALL_BIN_DIR` is set deliberately: it is the one variable whose Windows handling has no
+  # counterpart in the twin, so the run that does not exercise it leaves the interesting half
+  # untested. `SHALL_NO_ADOPT` because the script otherwise stops at a `Read-Host` prompt and the
+  # job would time out rather than fail.
+  install-script-windows:
+    name: The Windows install script, run for real (nightly)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run install.ps1 as the README says to
+      shell: pwsh
+      env:
+        SHALL_REF: ${{ github.ref_name }}
+        SHALL_NO_ADOPT: "1"
+      run: |
+        $env:SHALL_BIN_DIR = Join-Path $env:RUNNER_TEMP 'shall-install-canary'
+        & ./scripts/install.ps1
+        # **Deliberately not asserting on the script's exit code.** Its last act is
+        # `shall check health`, and a read-only command that finds work exits 2 by design (U21,
+        # H2) — a machine with drift is the normal case, so an exit-code assertion here would
+        # fail nightly on correct behaviour. The assertion is the artifact, same as the Unix
+        # twin: not that it exited 0, but that a user now has a working program — and at the
+        # path they asked for, which is the half only this job sees.
+        $binary = Join-Path $env:SHALL_BIN_DIR 'shall.exe'
+        if (-not (Test-Path $binary)) { throw "install.ps1 left no shall.exe in SHALL_BIN_DIR" }
+        & $binary --version
+        if ($LASTEXITCODE -ne 0) { throw "the installed binary does not run" }
   harness-mutation:
     name: Harness mutation (can the checks fail?)
     runs-on: ubuntu-latest
@@ -661,28 +772,39 @@ jobs:
   # mutants out of eleven, including `GuardScope::reconciles` in both directions — a load-bearing
   # safety predicate that is in fact asserted for all twelve scopes by a **lib** test. A mutation
   # score is exactly as trustworthy as the claim that its test command represents the suite.
+  # **One job per file, because all four in one job never finished.** The four were a single step
+  # under `timeout-minutes: 360`, and the arithmetic in the comment above says why that could not
+  # work: ~90 minutes for one file of 125 mutants, four files, one job. Runs 31771331606 and
+  # 31821620442 both ended `cancelled` at six hours and two seconds — a gate that has never once
+  # reported a result, which is worse than a gate nobody wrote, because the job list says it ran.
+  #
+  # Sharded by file rather than by `--shard k/n`: the files are the unit the comment reasons in,
+  # each shard's name says which safety property it covers, and a file that grows past the limit
+  # tells you which one it is instead of moving an anonymous fraction of the work.
   rust-mutation:
-    name: Mutation (the safety files, nightly)
+    name: Mutation (${{ matrix.what }}, nightly)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { what: the removal guard, file: src/app/sync/guard.rs, slug: guard }
+          - { what: the exit codes, file: src/core/exit.rs, slug: exit }
+          - { what: the data lock, file: src/core/datalock.rs, slug: datalock }
+          - { what: the transaction, file: src/core/transaction.rs, slug: transaction }
     steps:
     - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@stable
     - uses: Swatinem/rust-cache@v2
     - name: Install cargo-mutants
       run: cargo install cargo-mutants --locked
-    - name: Mutate the files where a silent mutation is a safety failure
-      run: |
-        cargo mutants --no-shuffle -j2 \
-          --file src/app/sync/guard.rs \
-          --file src/core/exit.rs \
-          --file src/core/datalock.rs \
-          --file src/core/transaction.rs \
-          -- --no-fail-fast
+    - name: Mutate ${{ matrix.file }}, where a silent mutation is a safety failure
+      run: cargo mutants --no-shuffle -j2 --file ${{ matrix.file }} -- --no-fail-fast
     - name: The survivors, kept whether the run passed or failed
       if: ${{ !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: mutants-out
+        name: mutants-out-${{ matrix.slug }}
         path: mutants.out/

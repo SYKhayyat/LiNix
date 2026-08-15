@@ -93,7 +93,11 @@ pub const MANAGER_LOCKS: &[ManagerLock] = &[
     ManagerLock {
         holders: &["pacman"],
         // The AUR helpers drive pacman for the write, so pacman's lock is what stops them, and
-        // the process holding it is called `pacman` whichever of them started it.
+        // the process holding it is called `pacman` whichever of them started it. **This list is
+        // what decides a lock is stale**, so a helper that held it under its own name would be a
+        // live lock deleted — asked rather than reasoned about, in the arch image: 435 samples
+        // taken while `yay -Sy` and `paru -Sy` held the lock, a live `pacman` in every one, none
+        // with the helper running and no pacman anywhere.
         backends: &["pacman", "yay", "paru"],
         paths: &["/var/lib/pacman/db.lck"],
         // pacman's db.lck is empty. Its own message says so: *"if you're sure a package manager
@@ -287,11 +291,53 @@ pub fn says_the_lock_is_taken(backend: &str, message: &str) -> bool {
 /// on a machine with no `/proc` — deliberately, because for *clearing* a lock that is the safe
 /// direction — so on Windows every row read as held, and the settle step `heal` runs would have
 /// waited the full budget on each of four locks that do not exist. Twenty minutes of nothing.
-pub fn held_for(
-    backend: &str,
-    procs: &dyn Processes,
-    read: &dyn Fn(&Path) -> Option<String>,
-) -> Held {
+/// What looking at a lock file found.
+///
+/// **Three states, because two of them were sharing a spelling and it cost a machine its
+/// recovery.** Both readers here took `Option<String>` and treated `None` as *absent*, and
+/// `None` is also what an existing file returns when the caller may not read it. pacman's
+/// `db.lck` is created mode `0000` and owned by root; every command Shall sends pacman is
+/// elevated, but the *look* at the lock is not — so as an unprivileged user a stale lock read
+/// as no lock at all.
+///
+/// Measured in the arch image, which is the one harness that runs as a normal user: a SIGKILL
+/// mid-transaction left `db.lck` behind, `heal` said *"left it alone — it is there and could
+/// not be read, so nothing can be proved about it"*, `held_for` reported `Free`, and every sync
+/// afterwards exhausted its retries on `could not lock database: File exists`. The machine
+/// could not be recovered by any Shall command, on a lock Shall already knew how to remove —
+/// `clear_stale_manager_locks` runs `rm -f` through the elevating executor.
+///
+/// **Unreadable is only evidence for a lock that carries a pid.** pacman's is empty by design;
+/// its own error message says so, because it wrote no pid to read. Demanding readable contents
+/// that are then never used is asking for a permission in order to ignore what it grants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LockFile {
+    /// Not on disk. No lock.
+    Absent,
+    /// On disk, and its contents could not be read.
+    Unreadable,
+    /// On disk and read; the body may be empty.
+    Body(String),
+}
+
+impl LockFile {
+    /// Whether a file is there at all, whatever could be read of it.
+    pub fn present(&self) -> bool {
+        !matches!(self, LockFile::Absent)
+    }
+}
+
+/// Look at a path on the real filesystem. `exists()` is a `stat`, which needs a traversable
+/// parent and not a readable file — which is the whole distinction being drawn.
+fn look(p: &Path) -> LockFile {
+    match std::fs::read_to_string(p) {
+        Ok(body) => LockFile::Body(body),
+        Err(_) if p.exists() => LockFile::Unreadable,
+        Err(_) => LockFile::Absent,
+    }
+}
+
+pub fn held_for(backend: &str, procs: &dyn Processes, read: &dyn Fn(&Path) -> LockFile) -> Held {
     let Some(lock) = lock_of(backend) else {
         return Held::Free;
     };
@@ -299,7 +345,7 @@ pub fn held_for(
         .paths
         .iter()
         .map(Path::new)
-        .filter(|p| read(p).is_some())
+        .filter(|p| read(p).present())
         .collect();
     if present.is_empty() {
         return Held::Free;
@@ -313,11 +359,15 @@ pub fn held_for(
         return Held::Free;
     }
     for path in present {
-        let Some(body) = read(path) else { continue };
+        // The existence check is the answer for a pid-less lock, so it is made before the read
+        // rather than behind it: nothing below reads `body` on that branch.
         if !lock.carries_pid {
             // Its existence is the lock, and nothing of the manager's is running.
             return Held::Stale(path.to_path_buf());
         }
+        let LockFile::Body(body) = read(path) else {
+            continue;
+        };
         // A pid file still naming a live process is held even when no process carries the
         // manager's name — `dnf` behind PackageKit is the case, and it is why the pid is read
         // rather than assumed to agree with the process list.
@@ -336,7 +386,7 @@ pub fn held_for(
 
 /// The same question against the real machine.
 pub fn held_for_on_this_machine(backend: &str) -> Held {
-    held_for(backend, &ProcFs, &|p| std::fs::read_to_string(p).ok())
+    held_for(backend, &ProcFs, &look)
 }
 
 /// How a wait for someone else's manager ended.
@@ -389,7 +439,7 @@ fn running_holder(lock: &ManagerLock, procs: &dyn Processes) -> Option<String> {
 /// `read` is how the file's contents are obtained, so the decision can be tested without a
 /// filesystem. Nothing here removes anything — finding and acting are separate so `heal
 /// --dry-run` can report exactly what the real run would do.
-pub fn find(procs: &dyn Processes, read: &dyn Fn(&Path) -> Option<String>) -> Survey {
+pub fn find(procs: &dyn Processes, read: &dyn Fn(&Path) -> LockFile) -> Survey {
     let mut out = Survey::default();
     for lock in MANAGER_LOCKS {
         // The `flock(2)` rows are skipped whole, and silently. They are present on every Debian
@@ -401,18 +451,26 @@ pub fn find(procs: &dyn Processes, read: &dyn Fn(&Path) -> Option<String>) -> Su
         }
         for path in lock.paths {
             let path = Path::new(path);
-            let Some(body) = read(path) else {
+            let body = match read(path) {
+                LockFile::Absent => continue,
                 // A lock that is there and unreadable is not a lock to be silent about — it is
-                // the strongest hint a reader could get about why a manager is refusing.
-                if path.exists() {
+                // the strongest hint a reader could get about why a manager is refusing. But
+                // it is only *undecidable* where the contents were going to decide it: a
+                // pid-less lock is answered by its existence and the process list, neither of
+                // which needs the file opened. Treating those as unprovable left pacman's
+                // `db.lck` in place after every killed run on a machine where Shall was not
+                // root, and the elevated `rm` that would have cleared it was never reached.
+                LockFile::Unreadable if lock.carries_pid => {
                     out.left.push(LeftAlone {
                         path: path.to_path_buf(),
-                        because: "it is there and could not be read, so nothing can be proved \
-                                  about it"
+                        because: "it should name a pid and could not be read, so nothing can be \
+                                  proved about it"
                             .into(),
                     });
+                    continue;
                 }
-                continue;
+                LockFile::Unreadable => String::new(),
+                LockFile::Body(body) => body,
             };
             let because = match (lock.carries_pid, body.trim().parse::<u32>()) {
                 // A pid that is still running: the lock is held, and this is the case the whole
@@ -464,7 +522,7 @@ pub fn find(procs: &dyn Processes, read: &dyn Fn(&Path) -> Option<String>) -> Su
 
 /// The same question against the real machine.
 pub fn find_on_this_machine() -> Survey {
-    find(&ProcFs, &|p| std::fs::read_to_string(p).ok())
+    find(&ProcFs, &look)
 }
 
 #[cfg(test)]
@@ -486,12 +544,28 @@ mod tests {
         }
     }
 
-    fn reader(files: &[(&str, &str)]) -> impl Fn(&Path) -> Option<String> {
+    fn reader(files: &[(&str, &str)]) -> impl Fn(&Path) -> LockFile {
         let map: HashMap<String, String> = files
             .iter()
             .map(|(p, b)| (p.to_string(), b.to_string()))
             .collect();
-        move |p: &Path| map.get(&p.to_string_lossy().replace('\\', "/")).cloned()
+        move |p: &Path| {
+            map.get(&p.to_string_lossy().replace('\\', "/"))
+                .map_or(LockFile::Absent, |b| LockFile::Body(b.clone()))
+        }
+    }
+
+    /// A file that is on disk and cannot be opened — pacman's `db.lck`, mode 0000 and owned by
+    /// root, seen by the unprivileged user the arch harness runs as.
+    fn unreadable(files: &[&str]) -> impl Fn(&Path) -> LockFile {
+        let set: Vec<String> = files.iter().map(|p| p.to_string()).collect();
+        move |p: &Path| {
+            if set.contains(&p.to_string_lossy().replace('\\', "/")) {
+                LockFile::Unreadable
+            } else {
+                LockFile::Absent
+            }
+        }
     }
 
     /// The case this exists for: a killed run, and pacman's empty lock left behind.
@@ -507,6 +581,75 @@ mod tests {
         assert_eq!(found.stale.len(), 1, "{found:?}");
         assert_eq!(found.stale[0].holder, "pacman");
         assert!(found.stale[0].because.contains("no `pacman` is running"));
+    }
+
+    /// The same lock, seen by a user who may not open it — which is every Shall run that is not
+    /// root, and pacman's `db.lck` is mode 0000 and owned by root.
+    ///
+    /// Measured before this held: the arch harness (the one image that runs unprivileged)
+    /// SIGKILLed a sync, and the three checks that follow all failed on
+    /// `could not lock database: File exists`. `heal` had said *"left it alone — it is there
+    /// and could not be read"* about a file with nothing in it to read.
+    #[test]
+    fn an_unreadable_pidless_lock_is_still_stale_when_nothing_holds_it() {
+        let found = find(
+            &Fake {
+                alive: vec![],
+                running: vec![],
+            },
+            &unreadable(&["/var/lib/pacman/db.lck"]),
+        );
+        assert_eq!(found.stale.len(), 1, "{found:?}");
+        assert_eq!(found.stale[0].holder, "pacman");
+        assert!(found.left.is_empty(), "{found:?}");
+    }
+
+    /// And the guard that stops it becoming "delete every lock you cannot read": a live holder
+    /// still wins, unreadable or not.
+    #[test]
+    fn an_unreadable_pidless_lock_is_left_alone_while_its_manager_runs() {
+        let found = find(
+            &Fake {
+                alive: vec![],
+                running: vec!["pacman"],
+            },
+            &unreadable(&["/var/lib/pacman/db.lck"]),
+        );
+        assert!(found.stale.is_empty(), "{found:?}");
+        assert_eq!(found.left.len(), 1, "{found:?}");
+        assert!(found.left[0].because.contains("is running, so it is held"));
+    }
+
+    /// A lock whose contents ARE the evidence keeps the old answer: unreadable proves nothing
+    /// about a pid file, and "proves nothing" must not become "go and delete it".
+    #[test]
+    fn an_unreadable_pid_lock_is_still_left_alone() {
+        let found = find(
+            &Fake {
+                alive: vec![],
+                running: vec![],
+            },
+            &unreadable(&["/var/cache/dnf/metadata_lock.pid"]),
+        );
+        assert!(found.stale.is_empty(), "{found:?}");
+        assert_eq!(found.left.len(), 1, "{found:?}");
+        assert!(found.left[0].because.contains("could not be read"));
+    }
+
+    /// The waiter's half of the same conflation: `held_for` filtered on "could the file be
+    /// read", so an unreadable stale lock reported `Free` and the retry loop backed off four
+    /// times into `exhausted` instead of sending the user to `heal`.
+    #[test]
+    fn held_for_calls_an_unreadable_pidless_lock_stale_rather_than_free() {
+        let held = held_for(
+            "pacman",
+            &Fake {
+                alive: vec![],
+                running: vec![],
+            },
+            &unreadable(&["/var/lib/pacman/db.lck"]),
+        );
+        assert!(matches!(held, Held::Stale(_)), "{held:?}");
     }
 
     /// **And the case that must never be got wrong.** A pacman is mid-transaction; the lock is

@@ -210,7 +210,10 @@ pub async fn create_default_registry(
 // ============================================================================
 
 /// A `ManagerConfig` with everything defaulted to "off"; callers set the fields they use.
-fn base_config(name: &str) -> ManagerConfig {
+///
+/// `pub(crate)` because a test fixture that spells out all thirty-odd fields by hand is a
+/// second copy of this list, and the copy stops matching the day a field is added.
+pub(crate) fn base_config(name: &str) -> ManagerConfig {
     ManagerConfig {
         name: name.into(),
         binary: None,

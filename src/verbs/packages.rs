@@ -701,6 +701,8 @@ async fn absent_targets(
                 silence
             );
         }
+        // Every holder is named, but three clients of one database are one holder.
+        crate::backends::capability::one_backend_per_shared_database(&mut holders);
         out.extend(holders.into_iter().map(|b| (b, name.clone())));
     }
     Ok(out)
@@ -746,7 +748,12 @@ async fn unmanaged_targets(
                 // again to widen, and after W4 each of those is a PATH walk per manager.
                 let usable = backends.usable()?;
                 if !usable.iter().any(|b| state.is_managed(b.name(), &name)) {
-                    out.extend(usable.iter().map(|b| (b.name().to_string(), name.clone())));
+                    let mut widened: Vec<String> =
+                        usable.iter().map(|b| b.name().to_string()).collect();
+                    // One database is one manager to name in the refusal that follows, or the
+                    // sentence lists `pacman:jq`, `paru:jq` and `yay:jq` for one jq.
+                    crate::backends::capability::one_backend_per_shared_database(&mut widened);
+                    out.extend(widened.into_iter().map(|b| (b, name.clone())));
                 }
             }
         }

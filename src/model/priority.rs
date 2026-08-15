@@ -141,9 +141,27 @@ impl Priority {
 /// Anything unrecognised sorts with the language managers rather than ahead of them: a
 /// backend the onboarder added is not known to be safe to prefer over your distro.
 pub fn starter_order(available: &[String]) -> Vec<String> {
+    // **Eight of these were missing, and the eight were every system manager added after this
+    // list was written.** `slackpkg`, `emerge`, `eopkg` and `guix` are data rows rather than
+    // registrars; `macports`, `pkg`, `pkg_add` and `pkgin` are registrars for platforms with no
+    // image in the matrix. All eight fell to the "anything unrecognised" branch below and sorted
+    // *with the language managers*, which is the exact inverse of the one distinction this
+    // function exists to make.
+    //
+    // Measured on the slackware image: `init` wrote `appimage, cargo, gem, github, go, setting,
+    // slackpkg, …`, so a bare `shall install bc` resolved to `cargo:bc` — a crates.io library
+    // with no binaries — while slackpkg had `bc-1.07.1-x86_64-5` sitting uninstalled in its own
+    // package list. On a Slackware, Gentoo, Solus, Guix, MacPorts or BSD machine, every bare
+    // name went to a language manager before the distro's own.
+    //
+    // The "unrecognised sorts low" rule below is right and stays: it is about backends the
+    // *onboarder* added, which nobody has vetted. A manager this project ships is vetted by
+    // definition, and leaving it to that branch is not caution, it is an omission wearing
+    // caution's clothes.
     const SYSTEM: &[&str] = &[
         "apt", "dnf", "pacman", "zypper", "apk", "xbps", "yay", "paru", "winget", "scoop", "choco",
-        "brew", "nix", "flatpak", "snap",
+        "brew", "nix", "flatpak", "snap", "slackpkg", "emerge", "eopkg", "guix", "macports", "pkg",
+        "pkg_add", "pkgin",
     ];
 
     // `service:` and `link:` are dependent STATEMENTS, not package managers: they never

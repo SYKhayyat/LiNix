@@ -62,7 +62,11 @@ fn print_skipped_backends(skipped: &[(String, String)]) {
     if skipped.is_empty() {
         return;
     }
-    println!("Not asked: {}", skipped.len());
+    // "Not asked" was accurate while every row here was a backend adoption skipped. A client
+    // of another backend's database IS asked and its answer is folded into the owner's, so the
+    // header has to describe both — what these rows share is that no declaration came from
+    // them, and each says why.
+    println!("Nothing taken from: {}", skipped.len());
     for (backend, reason) in skipped {
         println!("  {}: {}", backend, reason);
     }
@@ -254,10 +258,13 @@ impl Adopter {
         // What Shall uses. An adopted line naming a manager outside `priority` is a line the
         // next command refuses, so offering it would be offering a wedge.
         let backends = self.backends.usable()?;
-        let (owned_system, manual) = tokio::join!(
+        let (owned_system, mut manual) = tokio::join!(
             self.owned_system_names(&backends),
             self.manual_listings(&backends, scope)
         );
+        // Whether this run sweeps `name` at all: everything, unless the command line named
+        // backends, in which case only those.
+        let sweeping = |name: &str| scope.backends.is_empty() || scope.asked_for(name);
         for backend in &backends {
             let Some(q) = backend.as_queryable() else {
                 continue;
@@ -271,18 +278,62 @@ impl Adopter {
                         backend.name()
                     ),
                 ));
+                continue;
+            }
+            // Said once per client, not once per package: forty rows of "pacman already has
+            // this one" is noise, and saying nothing about forty declarations that did not
+            // appear is worse.
+            let owner = crate::backends::capability::package_database(backend.name());
+            if owner != backend.name()
+                && sweeping(backend.name())
+                && sweeping(owner)
+                && backends.iter().any(|b| b.name() == owner)
+            {
+                found.skipped_backends.push((
+                    backend.name().to_string(),
+                    format!(
+                        "reads {0}'s package database — the same packages, taken once under {0}",
+                        owner
+                    ),
+                ));
             }
         }
+
+        // **One database, three clients.** `yay` and `paru` read pacman's libalpm database, so
+        // all three answer `-Qe` with the same set. The backend that keeps the database is asked
+        // first and claims each name; the clients that follow find it taken. Sorted rather than
+        // left to whichever backend replied first, because which backend owns a declaration must
+        // not depend on the order the answers happened to arrive in.
+        manual.sort_by(|a, b| {
+            let key = |n: &str| {
+                (
+                    !crate::backends::capability::owns_its_database(n),
+                    n.to_string(),
+                )
+            };
+            key(&a.0).cmp(&key(&b.0))
+        });
 
         for (name, source, pkgs) in manual {
             found.sources.insert(name, source);
             let state_guard = self.state.lock().await;
             let managed = state_guard.managed_index();
             for pkg in pkgs {
-                let key = format!("{}:{}", pkg.backend, pkg.name);
+                // Keyed on the database, not the client. A name claimed here is claimed for
+                // every backend that shares the database — including when the claim is a skip,
+                // which is why the insert comes before the two filters rather than after them:
+                // `install jq` declares `pacman:jq`, so pacman skipped it as already managed,
+                // and the two clients then adopted the same jq under their own names.
+                let key = format!(
+                    "{}:{}",
+                    crate::backends::capability::package_database(&pkg.backend),
+                    pkg.name
+                );
+                if !seen_keys.insert(key.clone()) {
+                    continue;
+                }
                 if !managed.contains(&(pkg.backend.as_str(), pkg.name.as_str()))
                     && !owned_system.contains(&pkg.name)
-                    && seen_keys.insert(key.clone())
                 {
                     trace!("candidate: {}", key);
                     candidates.push(pkg);
@@ -1230,5 +1281,151 @@ mod tests {
         assert_eq!(audited, discovered);
         // Sorted, because the manifest is a file people diff.
         assert_eq!(audited, vec!["htop", "jq"]);
+    }
+
+    /// One backend of an Arch machine's three, all reading the same libalpm database and so
+    /// all answering `-Qe` with the same lines.
+    fn alpm_client(
+        reg: &mut BackendRegistry,
+        exec: &CommandExecutor,
+        name: &'static str,
+        installed_fn: fn(&str) -> crate::parsers::ParseResult,
+        search_fn: fn(&str) -> Vec<crate::core::Package>,
+    ) {
+        let core = Arc::new(GenericBackendCore {
+            name: name.into(),
+            executor: exec.clone(),
+            config: ManagerConfig {
+                list_args: vec!["-Q".into()],
+                manual: ManualListing::Command {
+                    binary: None,
+                    args: vec!["-Qe".into()],
+                    format: ManualFormat::SameAsInstalled,
+                },
+                ..crate::backends::registry::base_config(name)
+            },
+            parser: Arc::new(crate::parsers::LambdaParser {
+                installed_fn,
+                search_fn,
+            }),
+        });
+        reg.register(Arc::new(
+            BackendCapabilities::builder(core.clone())
+                .with_queryable(Arc::new(GenericQueryable { core }))
+                .build(),
+        ));
+    }
+
+    /// `order` is the order the backends are registered in, which is the order they answer in.
+    fn alpm_registry(mock: Arc<MockExecutor>, order: [&'static str; 3]) -> Arc<BackendRegistry> {
+        let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
+        let exec =
+            CommandExecutor::with_layer(true, false, mock.clone(), vfs, Arc::new(DashMap::new()));
+        let mut reg = BackendRegistry::new();
+        for name in order {
+            mock.set_command_exists(name, true);
+            // The same three lines from all three, because there is one database under them.
+            mock.set_response(
+                &format!("{} -Qe", name),
+                Ok(DryRunOutput {
+                    stdout: b"bash 5.2.037-1\njq 1.8.2-1\nyay 13.0.1-1\n".to_vec(),
+                    stderr: vec![],
+                }
+                .into()),
+            );
+            match name {
+                "pacman" => alpm_client(
+                    &mut reg,
+                    &exec,
+                    "pacman",
+                    |o| crate::parsers::pacman::parse_list_for(o, "pacman"),
+                    |o| crate::parsers::pacman::parse_search_for(o, "pacman"),
+                ),
+                "yay" => alpm_client(
+                    &mut reg,
+                    &exec,
+                    "yay",
+                    |o| crate::parsers::pacman::parse_list_for(o, "yay"),
+                    |o| crate::parsers::pacman::parse_search_for(o, "yay"),
+                ),
+                _ => alpm_client(
+                    &mut reg,
+                    &exec,
+                    "paru",
+                    |o| crate::parsers::pacman::parse_list_for(o, "paru"),
+                    |o| crate::parsers::pacman::parse_search_for(o, "paru"),
+                ),
+            }
+        }
+        Arc::new(reg)
+    }
+
+    /// Three clients of one database must adopt each package once, not once each.
+    ///
+    /// Measured on the arch image before this held: 20 installed packages became 60
+    /// declarations, and the `uninstall jq` that followed planned three removals — pacman
+    /// removed jq and the two clients were then asked to remove a package that was gone,
+    /// which is `error: target not found: jq` and a sync that cannot converge again.
+    #[tokio::test]
+    async fn three_clients_of_one_package_database_adopt_each_package_once() {
+        let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs));
+        let found = adopter(alpm_registry(mock, ["pacman", "yay", "paru"]))
+            .discover()
+            .await
+            .unwrap();
+        let keys: Vec<String> = found
+            .adopt
+            .iter()
+            .map(|p| format!("{}:{}", p.backend, p.name))
+            .collect();
+        assert_eq!(keys, vec!["pacman:bash", "pacman:jq", "pacman:yay"]);
+    }
+
+    /// And the backend that keeps the database claims them however the answers are ordered.
+    /// Registration order is the order the crawl replies in, and which backend owns a
+    /// declaration must not depend on it.
+    #[tokio::test]
+    async fn the_database_owner_claims_the_name_whichever_client_answers_first() {
+        let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs));
+        let found = adopter(alpm_registry(mock, ["yay", "paru", "pacman"]))
+            .discover()
+            .await
+            .unwrap();
+        let backends: Vec<&str> = found.adopt.iter().map(|p| p.backend.as_str()).collect();
+        assert_eq!(backends, vec!["pacman", "pacman", "pacman"]);
+    }
+
+    /// A package already declared under the database's owner is not re-adopted under a client.
+    ///
+    /// This is the exact shape the container hit: `install jq` writes `pacman:jq`, so pacman
+    /// skipped it as already managed — and the two clients, filtered separately, adopted the
+    /// same jq under their own names. The name has to be claimed by the skip as well as by
+    /// the take.
+    #[tokio::test]
+    async fn a_name_the_owner_already_manages_is_not_adopted_under_a_client() {
+        let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs));
+        let reg = alpm_registry(mock, ["pacman", "yay", "paru"]);
+        let config = Config {
+            guard: crate::config::GuardSettings {
+                protected_packages: vec![],
+                ..Default::default()
+            },
+            ..Config::default()
+        };
+        let mut state = StateRegistry::default();
+        state.add("pacman", "jq", None, Default::default(), "test", false);
+        let m = Adopter::new(over(reg), Arc::new(Mutex::new(state)), &config);
+        let keys: Vec<String> = m
+            .discover()
+            .await
+            .unwrap()
+            .adopt
+            .iter()
+            .map(|p| format!("{}:{}", p.backend, p.name))
+            .collect();
+        assert_eq!(keys, vec!["pacman:bash", "pacman:yay"]);
     }
 }

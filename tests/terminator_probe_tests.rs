@@ -590,6 +590,31 @@ async fn every_terminator_claim_still_holds_where_the_tool_is_installed() {
         eprintln!("  divergent: {b}");
     }
 
+    // **Learning nothing is not the same as finding nothing wrong.** `wrong` is empty both when
+    // every row was confirmed and when no row could be read at all, and only one of those is a
+    // pass — the vacuous pass this file's header warns about, with nothing asserting against it.
+    //
+    // **This has not been observed, and the honest note is that it has not.** What prompted it
+    // was narrower: the arch image began running its harness unprivileged so `yay` and `paru`
+    // could be driven, and on that user `pacman` — whose row reads `Measured` on the strength of
+    // this leg — comes back inconclusive while six other binaries still answer. So the leg went
+    // on passing while it had quietly stopped checking one row, and the run that catches THAT is
+    // the one nobody has written. This assertion catches only the whole-leg version of it, and
+    // is here because it costs nothing and the partial version proved the shape is reachable.
+    //
+    // Nothing installed at all is a different case and stays quiet: `inconclusive` is only
+    // populated by a binary that was present, was driven, and still would not answer.
+    assert!(
+        !confirmed.is_empty() || inconclusive.is_empty(),
+        "this probe drove {} installed binaries and could measure none of them: {:?}\n\n\
+         Every one was present and answered nothing this gate could read, so it proved no row \
+         on this host while passing. The usual cause is privileges — a manager that refuses \
+         before it parses an operand echoes no operand either way — and the fix is to run the \
+         probe as root (CI passes `-u 0` for exactly this), not to relax this assertion.",
+        inconclusive.len(),
+        inconclusive
+    );
+
     assert!(
         wrong.is_empty(),
         "the terminator table disagrees with the tools themselves:\n\n{}\n\n\

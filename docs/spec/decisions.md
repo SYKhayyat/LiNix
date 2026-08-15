@@ -1,6 +1,6 @@
-# The decision register — all 210, twelve of them built and never ruled, none open
-**One file, six features, 12 BUILT entries waiting to be confirmed or reversed.** Every decision
-this design forces lives here, with its
+# The decision register — 211 entries: 210 ruled, one open
+**One file, six features, nothing waiting on the owner.** Every decision this design forces lives
+here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
 already settled in code could be re-opened by anyone reading the register instead of the tree.
@@ -22,17 +22,36 @@ HALF RULED had no rows, the five that remained summed to 206 against 210, and
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
-| **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **12** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **194** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
+| **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **1** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **206** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 | **DEFERRED** | Asked, and the owner chose to answer it later. | A ruling, when the owner returns to it. | **1** |
 | **HALF RULED** | Part of the question was answered and part was not. | A ruling on the remaining half. | **1** |
 
 **Two of these seven statuses now describe nothing, and they stay.** The categories are not
 decoration: *OPEN — blocking* refills the moment a new feature is proposed, and *BUILT, NEVER
-RULED* refilled — twelve entries now — the moment somebody implemented a work order before it
-was put to the owner. Deleting an empty category is how the next one goes unnoticed.
+RULED* has refilled three times — once with twelve entries at once, and again on 2026-08-14 with
+`J3` — the moment somebody implemented a work order, or a defect fix with a visible choice inside
+it, before it was put to the owner. Deleting an empty category is how the next one goes
+unnoticed.
+
+**The twelve were confirmed on 2026-08-14, by delegation rather than by review of each.** The
+owner was given the round's findings and the three entries that nominate themselves as the ones
+to reverse — `G2`, `G5`, `G10` — and answered *"i trust you"*. Confirming is the zero-change
+option: every one of the twelve is already built and running, so a reversal is what costs a
+change now and more later. Two carry a cost their own entries name, and those costs are hereby
+**knowingly accepted rather than mitigated**:
+
+* `G2` — a machine carrying `setting:` or `@decrypt`ed `link:` declarations reports `check` as
+  needing attention permanently, and no command clears it. Accepted as honesty. If it proves to
+  be noise once real users exist, the mitigation is a way to silence a row that is unreadable *by
+  construction* rather than by failure — and that is a new entry, not a reversal of this one.
+* `G10` — on a machine carrying managers `priority` does not name, `list`, `search`, `info`,
+  `check drift`, `adopt` and `update` report on fewer of them. Accepted, because it is what the
+  file has always claimed to mean and because the alternative measured 12.4 s where the wanted
+  query took 0.02 s. If a user's model turns out to be "priority orders, it does not hide", the
+  answer is an explicit opt-in on the read-only verbs, not a reversal.
 
 **`PARKED` needs nothing *until the thing it named arrives*.** D15 sat parked on D5 for a week
 after D5 was ruled and built, because "needs nothing" was read as a permanent property of the
@@ -82,11 +101,11 @@ status loses that, so it is kept here:
 
 ## Index
 
-**Nothing is open, and nine entries are waiting.** `Q53` — what a version pin means on a manager
+**One question is open, and nine entries are waiting.** `Q53` — what a version pin means on a manager
 that cannot express one — was raised, measured and ruled on 2026-08-10. The `G` round then ran the
 other way round: `docs/GRADE-2026-08-12.md`'s work order was implemented in one pass, and the nine
-changes in it that a user would notice shipped ahead of any ruling. All 210 are accounted
-for: **194 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 12 BUILT NEVER RULED, 0 OPEN** — and this line
+changes in it that a user would notice shipped ahead of any ruling. All 212 are accounted
+for: **206 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 1 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -7866,7 +7885,7 @@ Rule in **II.56**, reasoning in **V.186**.
 
 ## G1
 
-**Status: BUILT, NEVER RULED — 2026-08-12, from `docs/GRADE-2026-08-12.md` B1.**
+**Status: ANSWERED — confirmed 2026-08-14, owner ruling by delegation. Built 2026-08-12, from `docs/GRADE-2026-08-12.md` B1.**
 
 **Does `--keep-going` change the exit code?** It did. Without the flag a failed sync exits 1;
 with it, the identical failure exited **0** under `Status: SUCCESS`, and `--keep-going --quiet`
@@ -7888,7 +7907,7 @@ which costs invocations — the thing this flag is explicitly willing to spend.
 
 ## G2
 
-**Status: BUILT, NEVER RULED — 2026-08-12, from `docs/GRADE-2026-08-12.md` B0b.**
+**Status: ANSWERED — confirmed 2026-08-14, owner ruling by delegation. Built 2026-08-12, from `docs/GRADE-2026-08-12.md` B0b.**
 
 **Is "Shall cannot read back" an `ok` row in `check`?** It was, and `ok` is also what decides the
 exit code — so a dotfile no program could open printed as a green row at exit 0, repeatedly.
@@ -7904,7 +7923,7 @@ is noise rather than honesty, this is the entry to reverse.
 
 ## G3
 
-**Status: BUILT, NEVER RULED — 2026-08-12, from `docs/GRADE-2026-08-12.md` B0b.**
+**Status: ANSWERED — confirmed 2026-08-14, owner ruling by delegation. Built 2026-08-12, from `docs/GRADE-2026-08-12.md` B0b.**
 
 **What happens to a `link:` whose source file is not there?** A symlink was written to it. The
 result exists, satisfies an `-L` test, and cannot be opened by anything.
@@ -7917,7 +7936,7 @@ what `dotfiles:` always did and `link:` never did.
 
 ## G4
 
-**Status: BUILT, NEVER RULED — 2026-08-12, from `docs/GRADE-2026-08-12.md` B8.**
+**Status: ANSWERED — confirmed 2026-08-14, owner ruling by delegation. Built 2026-08-12, from `docs/GRADE-2026-08-12.md` B8.**
 
 **Is an empty `priority` file an answer?** It was accepted without a word, while a *missing* one
 produced the best error in the program. Empty does not mean "no backends" either: an empty
@@ -7929,7 +7948,7 @@ state as no file, and the premise the fallback rested on is now true.
 
 ## G5
 
-**Status: BUILT, NEVER RULED — 2026-08-12, from `docs/GRADE-2026-08-12.md` B9. The one here most
+**Status: ANSWERED — confirmed 2026-08-14, owner ruling by delegation. Built 2026-08-12, from `docs/GRADE-2026-08-12.md` B9. The one here most
 likely to be reversed.**
 
 **What does a hold mean under a bulk `upgrade`?** Nothing. `upgrade` filters its own plan against
@@ -7950,7 +7969,7 @@ manager state it does not currently touch.
 
 ## G6
 
-**Status: BUILT, NEVER RULED — 2026-08-12, from `docs/GRADE-2026-08-12.md` B5.**
+**Status: ANSWERED — confirmed 2026-08-14, owner ruling by delegation. Built 2026-08-12, from `docs/GRADE-2026-08-12.md` B5.**
 
 **May a package name begin with `-`?** It could. `PACKAGE_NAME_REGEX` admitted a leading hyphen,
 so `composer:--version` passed every check and reached composer's argv as a flag — on a manager
@@ -7963,7 +7982,7 @@ wrong. The composer row this shipped with has since been reversed on measurement
 
 ## G6a
 
-**Status: BUILT, NEVER RULED — 2026-08-14, from the nightly this entry's own change turned red.**
+**Status: ANSWERED — confirmed 2026-08-14, owner ruling by delegation. Built 2026-08-14, from the nightly this entry's own change turned red.**
 
 **Does composer honour `--`?** `G6` said no and set the row to non-terminating, citing three
 consecutive nightlies of the differential probe. **None of those runs could have decided it.**
@@ -8001,7 +8020,7 @@ terminate". It cost this row two wrong values in three days, in both directions.
 
 ## G7
 
-**Status: BUILT, NEVER RULED — 2026-08-12, from `docs/GRADE-2026-08-12.md` B2.**
+**Status: ANSWERED — confirmed 2026-08-14, owner ruling by delegation. Built 2026-08-12, from `docs/GRADE-2026-08-12.md` B2.**
 
 **Is `pkg@version=1.6 @hold` two options or one?** One, silently: the lexer splits on the first
 `@` and separates options on commas, so everything after a space was absorbed into the previous
@@ -8016,7 +8035,7 @@ does not, because nothing writes that on purpose.
 
 ## G8
 
-**Status: BUILT, NEVER RULED — 2026-08-12, from `docs/GRADE-2026-08-12.md` B3 and B4.**
+**Status: ANSWERED — confirmed 2026-08-14, owner ruling by delegation. Built 2026-08-12, from `docs/GRADE-2026-08-12.md` B3 and B4.**
 
 **May a read verb print a clean bill built from a question that failed?** Two did. `shall hold`
 answered `No packages are held.` at exit 0 over a manifest it could not resolve; `check drift`
@@ -8031,7 +8050,7 @@ it can see beats acting on none, and that is a different question from reporting
 
 ## G9
 
-**Status: BUILT, NEVER RULED — 2026-08-12, from `docs/GRADE-2026-08-12.md` B7.**
+**Status: ANSWERED — confirmed 2026-08-14, owner ruling by delegation. Built 2026-08-12, from `docs/GRADE-2026-08-12.md` B7.**
 
 **Do the flags whose help says "(requires --dry-run)" require it?** Three of the four did not
 enforce it — `shall sync --json` printed the human summary or nothing at all and exited 0, so a
@@ -8047,7 +8066,7 @@ own arguments and `--dry-run` is global, so the constraint compiles, never fires
 is meant to catch, and turns the documented working combination into a usage error — measured.
 ## G10
 
-**Status: BUILT, NEVER RULED — 2026-08-12, from `docs/GRADE-2026-08-12.md` W4/P1. The widest
+**Status: ANSWERED — confirmed 2026-08-14, owner ruling by delegation. Built 2026-08-12, from `docs/GRADE-2026-08-12.md` W4/P1. The widest
 behaviour change in the `G` round.**
 
 **Does `priority` gate anything except resolution?** It did not. A declaration naming an unlisted
@@ -8466,7 +8485,7 @@ they are on instead of for thirty rows they did not write.
 
 ## J1
 
-**Status: BUILT, NEVER RULED — 2026-08-14, owner ruling by delegation, from the nightly.**
+**Status: ANSWERED — confirmed 2026-08-14, owner ruling by delegation. Built 2026-08-14, owner ruling by delegation, from the nightly.**
 
 **What should guard `purge-undeclared` on a machine where the ratio is the only thing guarding
 it?** Raised after the macOS nightly ran an unrefused sweep of 276 packages. Two findings, one
@@ -8506,3 +8525,108 @@ second: *"i dont think it is deliberate — do what you want."*
 it is the wrong one. A user who has narrowed `priority` to one manager would be weighed against
 every package on the machine and refused a purge that is entirely correct — a rule that punishes
 precisely the person who configured Shall most deliberately.
+
+## J2
+
+**Status: OPEN.**
+
+**A `setting:` is never read back, so a sync that changes one reports that it changed nothing.**
+Measured on Windows 11 with `target/debug/shall.exe` against the real registry, three syncs over
+one declaration:
+
+| | declaration | registry after | what Shall printed |
+|---|---|---|---|
+| A | `@value=alpha`, key absent | `alpha` | *nothing* |
+| B | `@value=alpha`, unchanged | `alpha` | `already up to date` |
+| C | `@value=beta` | **`beta`** | `already up to date` |
+
+C is the finding: the machine changed and the report says it did not. `plan` is worse, because it
+contradicts itself in two consecutive lines — *"system already matches desired state (no
+changes)"*, then *"the plan written to shall-plan.json is not empty"*, exit 2.
+
+**Why.** `apply::extras::in_effect` answers `None` for `ResourceKind::Setting`, and `None` means
+*unverifiable*, which places. The reason it gives is:
+
+> `setting:` reads back through an adapter that has no "current value" command; the only way to
+> know is to write and see.
+
+**That sentence is false, and the code one layer down proves it.** Every row in
+`setting_stores.toml` carries `read` (and `system_read`), `backends/setting.rs` has `already_set`
+to compare a store's answer against a declaration, and its own `install` calls exactly that pair
+before deciding whether to write. The probe `in_effect` says does not exist is the probe the
+installer already uses.
+
+**Three things follow from the same `None`,** which is why this is one question and not three: the
+change is invisible in the summary; the value is re-written on every sync for ever; and `check`
+can never come clean on a machine with a `setting:` line — which is the cost `G2` recorded when it
+ruled that *"Shall cannot read back"* may not be an `ok` row.
+
+**The question.** Should `in_effect` answer for `setting:` by running the store's `read` and
+comparing with `already_set` — the same pair `K::Link` above it was already given?
+
+**Recommendation: yes.** It is the fix `link:` got for the identical shape, it removes a write per
+setting per sync, and it makes `check` answerable. It is raised rather than built because it
+changes what a user sees: `check` goes clean where it never could before, and a converged sync
+stops touching the store. **Do not build it before this is ruled** — that is what the OPEN status
+means here.
+
+**One caveat that belongs with the ruling.** `read` can fail for reasons that are not "the value
+differs" — a schema `gsettings` does not know, a registry hive the user cannot open. Those must
+stay `None`, not become `Some(false)`; a failed read that reported *not in effect* would make
+every sync rewrite the key it cannot see, which is the current behaviour wearing a confident face.
+
+## J3
+
+**Status: BUILT, NEVER RULED — 2026-08-14. The defect is not in question; the choice of winner
+is, and reversing it is a one-line change to one table.**
+
+**Three backends over one package database made every Arch machine unconvergeable.** `pacman`,
+`yay` and `paru` are three clients of one libalpm database: all three answer `-Qe` with the same
+lines. Measured in the arch integration image, `pacman -Qe`, `yay -Qe` and `paru -Qe` each
+returned the same 20 packages, and every surface that enumerates installed software across
+backends counted each package once per client.
+
+What that cost, in the order it happened:
+
+| step | what Shall did |
+|---|---|
+| `install jq` | wrote one line, `jq`, resolving to `pacman` — correct |
+| `adopt` | skipped `pacman:jq` as already declared, then wrote `paru:jq` **and** `yay:jq` |
+| `uninstall jq` | planned `install 0 remove 3`, backends `pacman, paru, yay` |
+| the removal | pacman removed jq; paru and yay were then asked to remove a package that was gone |
+
+The second and third removals returned `error: `paru` failed (exit 1): error: target not found:
+jq`, which failed the sync. Every later section of the harness failed against the same two
+declarations — 40 of 45 checks in one run, none of them about the thing being tested.
+
+**The same shape, three more places.** `shall list` printed 203 packages as 609 rows. The
+undeclared crawl — which `purge-undeclared` deletes from and whose ratio is the guard on that
+deletion — counted every package three times. And `shall uninstall jq --absent` asks which
+managers hold jq and writes an `absent:` line per holder, so it wrote three; an `absent:` line is
+permanent, so that machine would have failed *every* subsequent sync, for ever, with no line to
+delete that would fix it.
+
+**What was built.** One table, `READS_THE_DATABASE_OF` in `backends/capability.rs`, naming the
+client and the backend whose database it reads (`yay → pacman`, `paru → pacman`), and three
+functions over it. Adopt keys candidates on the database rather than the client; the crawl and
+`list` collapse rows the same way; `--absent` collapses holders. The claim is made **before** the
+already-declared filter, not after, because that filter is what let the clients through:
+`pacman:jq` was declared, so pacman skipped it, and nothing had claimed the name by the time the
+clients were asked.
+
+**The rule for what belongs in that table: a shared *installed* database, not similar software.**
+`npm` and `pnpm` have their own global prefixes and `pip` and `pipx` their own directories — two
+installs of one name, where removing one leaves the other. Those are not this relation and a
+`npm:jq` row survives beside a `pacman:jq` row.
+
+**The reversible part.** Where a client and the owner both hold a package, the **owner** wins the
+row. That is what makes the surviving row actionable — `pacman -Rs` removes an AUR package that
+`yay` installed, and a row naming `yay` would be a removal the user cannot repeat with the manager
+printed next to it. Where no owner answered (`shall list --backend yay`), the first client stands,
+so filtering to a client never returns an empty listing.
+
+**What this does not do, and it is worth stating.** An AUR-only package is now adopted as
+`pacman:<name>`. pacman can remove it and cannot reinstall it, so deleting that line and putting
+it back needs an AUR helper. The alternative — attributing AUR packages to `yay` by asking
+`pacman -Qm` for the foreign set — is a real design and is not built here; it belongs with a
+ruling, not with a defect fix.

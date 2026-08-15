@@ -22,6 +22,16 @@
 name = "systemd"
 os = "linux"
 detect = "systemctl"
+# **`systemctl` on PATH does not mean systemd is running it**, and every Debian-family container
+# is the counter-example: the binary is installed, systemd is PID 1 in none of them, so this row
+# won detection and every `service:` line failed with *"System has not been booted with systemd
+# as init system (PID 1). Can't operate. Failed to connect to bus: Host is down"* — on hosts that
+# had `service` and `update-rc.d` sitting right there. Measured on the ubuntu image, 2026-08-14.
+#
+# `/run/systemd/system` is not a guess: it is exactly what `sd_booted(3)` checks, and systemd
+# creates it when it boots. On a real systemd machine this changes nothing; where systemd is
+# merely installed, the sysvinit row below now gets its turn.
+detect_file = "/run/systemd/system"
 # `--no-pager` on every row, not only the two that print a screenful. systemctl decides to page
 # from the terminal and from $SYSTEMD_PAGER, and a pager waits for a keypress that a captured
 # child never receives — `shall check health` hung there, on a read-only command.

@@ -196,6 +196,37 @@ if ($SkipIntegration) {
         & $bashExe "scripts/integration-windows.sh" $Backend $Package $Package2
         if ($LASTEXITCODE -eq 0) { Pass "native Windows integration sweep PASS" } else { Fail "native Windows integration sweep FAILED" }
     }
+
+    # **install.ps1, run the way the README tells a stranger to run it.** The twin of the
+    # `install.sh` gate in `release-check.sh`, and it needs its own because none of that one's
+    # evidence carries: a different download path, a different `--root` rule, and
+    # `$ErrorActionPreference = 'Stop'`, which has already turned an optional command into a
+    # terminating error here.
+    #
+    # `SHALL_BIN_DIR` is set on purpose — it is the one variable with no counterpart in the
+    # Unix twin, so a run without it leaves the interesting half untested. `SHALL_NO_ADOPT`
+    # because the script otherwise waits at a `Read-Host` and a gate that hangs is a gate
+    # that gets skipped.
+    #
+    # The exit code is deliberately not the assertion: install.ps1's last act is
+    # `shall check health`, and a read-only command that finds work exits 2 by design (U21,
+    # H2). The artifact is the assertion — a binary at the path the user asked for, that runs.
+    Step "2b. THE INSTALL SCRIPT (install.ps1), RUN FOR REAL"
+    $canary = Join-Path $env:TEMP 'shall-install-canary'
+    Remove-Item -Recurse -Force $canary -ErrorAction SilentlyContinue
+    $env:SHALL_BIN_DIR = $canary
+    $env:SHALL_NO_ADOPT = "1"
+    & ./scripts/install.ps1
+    $installed = Join-Path $canary 'shall.exe'
+    if (Test-Path $installed) {
+        & $installed --version | Out-Null
+        if ($LASTEXITCODE -eq 0) { Pass "install.ps1 left a working shall.exe in SHALL_BIN_DIR" }
+        else { Fail "install.ps1 left a shall.exe that does not run" }
+    } else {
+        Fail "install.ps1 left no shall.exe in SHALL_BIN_DIR"
+    }
+    Remove-Item -Env:SHALL_BIN_DIR -ErrorAction SilentlyContinue
+    Remove-Item -Env:SHALL_NO_ADOPT -ErrorAction SilentlyContinue
 }
 
 # ------------------------------------------------------------------ verdict

@@ -158,3 +158,58 @@ fn the_method_that_answered_both_questions_at_once_stays_deleted() {
         );
     }
 }
+
+/// **Every distro image's native manager outranks a language manager.**
+///
+/// `starter_order`'s one real distinction is *system manager beats language manager*, and it is
+/// implemented by a hand-kept list. Eight managers were missing from that list, and the eight
+/// were every system manager added after it was written — `slackpkg`, `emerge`, `eopkg`,
+/// `guix`, `macports`, `pkg`, `pkg_add`, `pkgin`. All eight fell through to the "unrecognised
+/// sorts low" branch, which is meant for backends the *onboarder* added and nobody has vetted.
+///
+/// Measured on the slackware image: `init` wrote `appimage, cargo, gem, github, go, setting,
+/// slackpkg`, so a bare `shall install bc` became `cargo install bc` — a crates.io library with
+/// no binaries — while slackpkg had the package sitting in its own list.
+///
+/// The source of truth is `run.sh`'s own `backend_for()`: the backend a distro image is driven
+/// with IS that distro's system manager, by construction. So the day someone adds an image for
+/// Solus, this fails until `eopkg` is ranked with the system managers — which is the drift that
+/// produced the bug, caught by the table that already knows the answer.
+#[test]
+fn every_images_native_manager_outranks_a_language_manager() {
+    let run_sh = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docker/integration/run.sh"),
+    )
+    .expect("docker/integration/run.sh is readable");
+
+    // The `case` arms of `backend_for`, which are `<distro>)   echo <backend> ;;`.
+    let natives: Vec<String> = run_sh
+        .lines()
+        .skip_while(|l| !l.contains("backend_for()"))
+        .take_while(|l| !l.trim_start().starts_with('}'))
+        .filter_map(|l| l.split_once("echo "))
+        // First token only: the arm carries `;;` and, on the gentoo row, a trailing comment.
+        .filter_map(|(_, rest)| rest.split_whitespace().next())
+        .map(|b| b.trim_end_matches(";;").to_string())
+        .filter(|b| !b.is_empty() && b != "\"\"")
+        .collect();
+    assert!(
+        natives.len() >= 8,
+        "found only {} native manager(s) in run.sh's backend_for; this scan has stopped \
+         matching it: {natives:?}",
+        natives.len()
+    );
+
+    // Ranked against a language manager that is on every one of those images.
+    for native in &natives {
+        let ordered = shall::model::priority::starter_order(&["cargo".to_string(), native.clone()]);
+        assert_eq!(
+            ordered.first().map(String::as_str),
+            Some(native.as_str()),
+            "`{native}` is a distro's own package manager (run.sh drives an image with it) and \
+             sorts below `cargo`. On that machine every bare name resolves to a language \
+             manager before the distro's — which is the inverse of the one distinction \
+             `starter_order` exists to make. Add it to that function's SYSTEM list."
+        );
+    }
+}

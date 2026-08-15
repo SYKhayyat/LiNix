@@ -635,6 +635,25 @@ $BACKEND manual set=$MANUAL  $BACKEND installed=$INSTALLED_TOTAL"
     else
         soft "$BACKEND could not report its manual set — the upper-bound proof skipped"
     fi
+
+    # **One package, one declaration — however many managers can see it** (J3).
+    #
+    # pacman, yay and paru are three clients of one libalpm database, so all three answer
+    # `-Qe` with the same lines. `adopt` took each package once per client: 20 packages
+    # became 60 declarations, and the `uninstall` in section 10 then planned three removals
+    # of one package. The first took it and the other two were told `target not found`, which
+    # failed the sync and every section after it.
+    #
+    # Asserted on arch alone because arch is the only image in the matrix with a second client
+    # of anybody's database. Elsewhere the same name under two backends is two real installs —
+    # `npm:jq` and `pacman:jq` are different files and removing one leaves the other — so this
+    # would be a false alarm rather than a check.
+    if [ "$SHALL_IT_IMAGE" = arch ]; then
+        DUPES=$(sed -n 's/^[a-z][a-z0-9-]*:\([^ @]*\).*/\1/p' "$ADOPTED_FILE" 2>/dev/null \
+            | sort | uniq -d | tr '\n' ' ')
+        ok "adopt takes a package once, not once per client of the same database (got: ${DUPES:-none})" \
+            test -z "$DUPES"
+    fi
 fi
 
 # --- 9. The guard (Part IV proofs) ----------------------------------------
@@ -745,8 +764,16 @@ if [ -n "$SMOKE" ]; then
 else
 BEFORE_COMMITS=$(commits)
 # "unchanged" proves nothing if there was no history to change, and nothing if
-# the rebuild never ran: both read 0 == 0. Require a commit to exist first.
-ok "there is history for a rebuild to leave alone" test "$BEFORE_COMMITS" -ge 1
+# the rebuild never ran: both read 0 == 0. Require a commit to exist first —
+# **where an image can have one.** Section 11 softens its own history checks on
+# an image with no `git`, and this sibling asserted regardless, so the guix image
+# failed here for the reason section 11 had already accepted twelve lines up. The
+# same unguarded-twin shape as the crash fixture in 16d/16e, found the same way.
+if on_path git; then
+    ok "there is history for a rebuild to leave alone" test "$BEFORE_COMMITS" -ge 1
+else
+    soft "the rebuild's no-commit proof — this image has no git, so there is no history to leave alone and \`commits\` reads 0 either way"
+fi
 # Scoped to $PKG, not --all: the machine was adopted in section 8, so `--all`
 # would churn every manual package on the image to prove a claim about one.
 ok "rebuild $PKG runs" lx_slow -y rebuild "$PKG"
@@ -754,7 +781,14 @@ cp /tmp/it.out /tmp/it-rebuild.out 2>/dev/null || true
 ok "$PKG is reinstalled, not left removed" binary_present "$BACKEND" "$PKG" /tmp/it-rebuild.out
 AFTER_COMMITS=$(commits)
 echo "        commits before=$BEFORE_COMMITS after=$AFTER_COMMITS"
-ok "rebuild wrote no git commit (K14)" test "$BEFORE_COMMITS" = "$AFTER_COMMITS"
+# Guarded by the same question, because `0 = 0` is what this reads on an image with no git —
+# a pass that proves K14 exactly as well as running nothing would. The comment above has said
+# so since the check was written, and only the first half of the pair acted on it.
+if on_path git; then
+    ok "rebuild wrote no git commit (K14)" test "$BEFORE_COMMITS" = "$AFTER_COMMITS"
+else
+    soft "K14's no-commit proof — no git here, so before and after are both 0 and the comparison asserts nothing"
+fi
 fi
 
 # --- 13. Backend chains, the per-host lock, and unlock (II.7b) ------------
@@ -1111,6 +1145,18 @@ canary() {
         # presence proof, as it is for `mise` and `helm`.
         appimage) echo "https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-x86_64.AppImage||full|appimagetool" ;;
         web)      echo "" ;;
+        # **The AUR helpers, driven for real on the arch image, which now runs unprivileged.**
+        #
+        # A REPO package, not an AUR one, and that is the whole design of these two rows. `yay`
+        # and `paru` pass a package the repositories carry straight through to pacman, so this
+        # exercises the backend's own install → list → remove without paying the source build
+        # that keeps `emerge` and `stack` at smoke-only. Driving the wrapper is the point; the
+        # AUR's build system is not Shall's code.
+        #
+        # Distinct binaries per the rule at the top of this table: both wrap pacman, so a shared
+        # canary would let whichever ran first satisfy the other's PATH check.
+        yay)      echo "ncdu|ncdu|full|" ;;
+        paru)     echo "pv|pv|full|" ;;
         *)        echo "" ;;
     esac
 }
@@ -1135,7 +1181,30 @@ primary_manager_image() {
         apk)    echo "alpine" ;;
         zypper) echo "opensuse" ;;
         xbps)   echo "void" ;;
+        slackpkg) echo "slackware" ;;
+        guix)   echo "guix" ;;
         *)      echo "" ;;
+    esac
+}
+
+# The dependent statements this harness drives for REAL, as case labels.
+#
+# **A separate table from `canary()` on purpose.** A canary row is `package|binary|mode|token|opts`
+# — a shape built for `backend:name` package declarations, and the shape whose absence was read
+# for months as proof that `link:` could not be driven at all. A dependent statement needs its own
+# assertions (a symlink is checked with `-L`, not with `command -v`), so what generalises is the
+# DECLARATION of coverage, not the mechanics of it.
+#
+# `lifecycle_coverage_union_tests` reads these labels exactly as it reads `canary`'s, so a
+# statement driven here counts as covered and needs no exemption in `proving.rs`.
+dependent_lifecycle() {
+    case "$1" in
+        link)     echo "section 14b: declared, synced, asserted on disk, undeclared, gone" ;;
+        shim)     echo "section 14c: deployed, byte-identical to the binary, RUN, undeclared, gone" ;;
+        dotfiles) echo "section 14c: a two-level tree placed, nested file checked, undeclared, gone" ;;
+        exec)     echo "section 14c: refused unapproved, locked, run once, not twice, undo on departure" ;;
+        service)  echo "section 14c: SysVinit enable+start, asserted in /etc/rc?.d and by the daemon, then disable+stop" ;;
+        *)        echo "" ;;
     esac
 }
 
@@ -1143,8 +1212,19 @@ primary_manager_image() {
 # Each is NAMED with the reason: an unexplained skip is the vacuous check again.
 no_lifecycle_reason() {
     case "$1" in
-        link)     echo "a dependent statement (link:SRC), not a package name — smoked in 15" ;;
-        service)  echo "a dependent statement (service:NAME), not a package name — smoked in 15" ;;
+        # `link` was here. Section 14b drives it for real now — declared in
+        # `dependent_lifecycle` below, which is what the union gate reads. A reason here
+        # would be the harness contradicting itself eight lines apart, and it did for one
+        # run: `soft link: no real lifecycle here` printed directly above six passing
+        # assertions that were a real lifecycle.
+        # Detected, exactly like `pip` below, because whether this image can drive a service is
+        # a fact about the image and not about the statement. Section 14c runs the real
+        # enable → start → disable → stop wherever SysVinit is present; only the images without
+        # it get a reason, and the reason names what is missing rather than calling the whole
+        # statement unreachable.
+        service)  command -v update-rc.d >/dev/null 2>&1 && command -v service >/dev/null 2>&1 \
+                      && [ "$BACKEND" = apt ] \
+                      || echo "no SysVinit here (needs update-rc.d + service on a Debian-family image) — smoked in 15" ;;
         setting)  echo "a dependent statement (setting:K @value=), not a package name — smoked in 15" ;;
         # btrfs, lvm and zfs are install targets — `btrfs:PATH` runs `subvolume create`,
         # `lvm:VG/LV` runs `lvcreate`. The old text here said btrfs was "a snapshot provider, not
@@ -1189,10 +1269,16 @@ no_lifecycle_reason() {
         # the pacman family are the exceptions and say why in their own line.
         brew)     echo "Homebrew is lifecycled on the macOS runner (scripts/integration-windows.sh brew); Linuxbrew is a second install of the same manager and no image in this matrix builds it" ;;
         emerge)   echo "Portage runs on the gentoo image and runs there SMOKE_ONLY — a real emerge builds the package from source, which is minutes per canary on every run for ever" ;;
-        yay|paru) echo "an AUR helper builds from source AND refuses to run as root, which is what every container in this matrix is; the arch image lifecycles pacman underneath it — argv-tested only" ;;
+        # `yay` and `paru` used to be here, reading: "an AUR helper builds from source AND
+        # refuses to run as root, which is what every container in this matrix is". Both halves
+        # were answerable. Refusing to run as root is a fact about the *harness* — the arch image
+        # now runs unprivileged and escalates through `sudo -n`, which is what Shall does anyway
+        # for a backend whose `needs_root` is true. Building from source is avoided by giving
+        # them a repository package as their canary, which they hand to pacman. They have rows
+        # in `canary()` now, so a reason here would be a claim contradicted one function away.
         eopkg)    echo "Solus's native manager, and there is no Solus image in this matrix — argv-tested only" ;;
-        slackpkg) echo "Slackware's native manager, and there is no Slackware image in this matrix — argv-tested only" ;;
-        guix)     echo "GNU Guix needs its own daemon and store, the same shape as the nix finding (Q17) and without nix's answer — argv-tested only" ;;
+        slackpkg) echo "Slackware's native manager, driven for real on the slackware image and absent from this one" ;;
+        guix)     echo "GNU Guix's own manager, driven for real on the guix image and absent from this one" ;;
         pkg)      echo "FreeBSD's native manager, and there is no FreeBSD host anywhere in this project's CI — argv-tested only" ;;
         pkg_add)  echo "OpenBSD's native manager, and there is no OpenBSD host anywhere in this project's CI — argv-tested only" ;;
         pkgin)    echo "the pkgsrc binary manager (NetBSD, SmartOS), and there is no pkgsrc host anywhere in this project's CI — argv-tested only" ;;
@@ -1368,6 +1454,22 @@ if [ -n "$SMOKE" ]; then
 else
     for be in $READY_LIST; do
         [ "$be" = "$BACKEND" ] && continue          # section 5 already did this one
+        # **Asked before the two complaints below, because a dependent statement has no
+        # `canary()` row and never will.** `canary` is `package|binary|mode|token|opts` — the
+        # shape of a `backend:name` package declaration — so `link`, `service` and `setting` fall
+        # straight through to "READY and no canary", which this loop printed one screen above the
+        # sections that drive all three for real. The harness contradicting itself is what made
+        # `link` look permanently unreachable in the first place.
+        _dep="$(dependent_lifecycle "$be")"
+        if [ -n "$_dep" ]; then
+            # Says where it is driven, and credits NOTHING. The ledger row is written by the
+            # section that drives it, and only if its assertions passed — crediting here would
+            # have recorded `service` as round-tripped in a run where its three assertions
+            # failed, which is the ratchet being told a number by the table instead of by the
+            # machine.
+            echo "        $be: driven as a dependent statement — $_dep"
+            continue
+        fi
         reason="$(no_lifecycle_reason "$be")"
         if [ -n "$reason" ]; then
             soft "$be: no real lifecycle here — $reason"
@@ -1525,6 +1627,233 @@ storage_resize_lifecycle() {
 storage_resize_lifecycle
 
 # ==========================================================================
+# ==========================================================================
+# 14b. REAL lifecycle for a DEPENDENT statement — `link:`
+# ==========================================================================
+# `link` was exempted in `proving.rs` as *"not a package statement ... a harness lifecycle —
+# which builds a `backend:name` package declaration — cannot express one"*. That is a fact about
+# the shape of `canary()`, not about the statement. A symlink is the most drivable thing in this
+# entire harness: it needs no manager, no network, no init system and no privileges, so every
+# image could always have run this and none did — the exemption described the table rather than
+# the subject, and the table is ours.
+#
+# The other two dependent statements are not here, and their reasons survive re-derivation:
+# `service:` needs an init system a container does not run, and `setting:` writes to a settings
+# store with no bus here. Both are drivable on the NATIVE sweeps, which are not containers.
+echo "[14b] A dependent statement driven for real: link:"
+if [ -n "$SMOKE" ]; then
+    skip_smoke "the link: lifecycle"
+else
+    _dep_f0=$FAILC
+    LINK_SRC_NAME=link-canary.txt
+    LINK_SRC="$SHALL_CONFIG_DIR/$LINK_SRC_NAME"
+    LINK_DST=/tmp/shall-link-canary
+    printf 'link-canary-payload
+' > "$LINK_SRC"
+    rm -f "$LINK_DST"
+    _limp="$SHALL_CONFIG_DIR/modules/imperative.txt"
+    # The imperative module is already reached by the active profile — `shall install` writes
+    # here — so appending needs no profile wiring, which would be a second way to do it.
+    printf 'link:./%s @target=%s
+' "$LINK_SRC_NAME" "$LINK_DST" >> "$_limp"
+
+    # The control: the target must not exist before the sync that creates it, or every
+    # assertion below passes over a file somebody else left behind.
+    ok "the link target does not exist before sync" test ! -e "$LINK_DST"
+    ok "sync applies a declared link" lx -y sync
+    ok "the declared link is a symlink on disk" test -L "$LINK_DST"
+    ok "and it resolves to the declared source" grep -q "link-canary-payload" "$LINK_DST"
+
+    # Teardown: the declaration goes and the file must go with it. This is the half that makes
+    # it a lifecycle rather than an install, and it is the half `link:` had no coverage for
+    # outside a hermetic Rust test.
+    grep -v -F "link:./$LINK_SRC_NAME" "$_limp" > "$_limp.tmp" 2>/dev/null
+    mv "$_limp.tmp" "$_limp"
+    ok "sync tears down a link whose declaration is gone" lx -y sync
+    ok "the link is gone from disk" test ! -e "$LINK_DST"
+    # Credited by the section that drove it, and only when nothing in it failed.
+    [ "$FAILC" = "$_dep_f0" ] && echo link >> "$LEDGER/be-life"
+fi
+
+# ==========================================================================
+# 14c. THREE MORE DECLARATIONS DRIVEN FOR REAL — shim:, dotfiles:, exec:
+# ==========================================================================
+# 14b's argument about `link:`, made three more times. None of these needs a package manager, a
+# network, an init system or a privilege: a shim is a copy of the shall binary, a dotfiles tree is
+# a directory walk, and an `exec:` is a script the configuration carries. Every image in this
+# matrix could always have driven all three, and the only thing that ever had was a hermetic Rust
+# test against a temp directory.
+#
+# **What that left unobserved is not the happy path — it is II.12.** `exec:` is the one statement
+# that runs code the configuration carries, and whether a real `shall sync` on a real machine
+# REFUSES an unapproved script, then runs it once approved, then declines to run it twice under
+# `@runs=1`, then runs its `@undo=` when the line goes away, had never been seen outside a
+# fixture. Four rules, one lifecycle, and a container is exactly where it belongs.
+echo "[14c] shim:, dotfiles: and exec: driven for real"
+if [ -n "$SMOKE" ]; then
+    skip_smoke "the shim:, dotfiles: and exec: lifecycles"
+else
+    _c14="$SHALL_CONFIG_DIR/modules/imperative.txt"
+    _bindir="${HOME:-/root}/.local/bin"
+
+    # ---- shim: --------------------------------------------------------------
+    # A shim IS the shall binary under another name — `ShimManager`'s header says the name is the
+    # entire mechanism — so byte identity is the assertion, and then that running it re-enters
+    # Shall and reaches the real tool rather than itself. That second half is the one no unit test
+    # can reach: it needs a process whose `current_exe()` really is the deployed file.
+    #
+    # `@source=` is what keeps this from provisioning: without it a bare `$PKG` resolves through
+    # the priority list, and the shim's job here is to dispatch, not to install.
+    ok "the package the shim wraps is installed" lx_slow -y install "$BACKEND:$PKG"
+    printf 'shim:%s @source=%s:%s\n' "$PKG" "$BACKEND" "$PKG" >> "$_c14"
+    ok "no shim exists before the sync that deploys it" test ! -e "$_bindir/$PKG"
+    ok "sync deploys a declared shim" lx -y sync
+    ok "the shim is on disk" test -f "$_bindir/$PKG"
+    _shallbin="$(command -v "$SHALL" 2>/dev/null)"
+    if [ -n "$_shallbin" ]; then
+        ok "the shim is byte-identical to the shall binary" cmp -s "$_shallbin" "$_bindir/$PKG"
+    else
+        soft "cannot locate the shall binary to compare the shim against"
+    fi
+    # The end-to-end: the shim runs, Shall recognises the name it was invoked under, skips itself
+    # on PATH (`real_program`) and executes the real tool. A shim that resolved to itself would
+    # hang or loop, so this assertion is also the loop check.
+    #
+    # The pattern accepts either case of the first letter because the tool decides how it spells
+    # itself and the images disagree — `jq --version` says `jq`, `wget --version` says `GNU Wget`.
+    # `grep_ok` greps case-sensitively on purpose everywhere else, so the allowance is written
+    # into this one pattern rather than loosened for every check in the file.
+    _pkg_rest="$(printf '%s' "$PKG" | cut -c2-)"
+    _pkg_either="$(printf '%s' "$PKG" | cut -c1)$(printf '%s' "$PKG" | cut -c1 | tr 'a-z' 'A-Z')"
+    grep_ok "running the shim reaches the real tool" "[$_pkg_either]$_pkg_rest" \
+        "$_bindir/$PKG" --version
+    grep -v -F "shim:$PKG " "$_c14" > "$_c14.tmp" 2>/dev/null
+    mv "$_c14.tmp" "$_c14"
+    ok "sync removes a shim whose declaration is gone" lx -y sync
+    ok "the shim is gone from disk" test ! -e "$_bindir/$PKG"
+    ok "the wrapped package uninstalls" lx_slow -y uninstall "$BACKEND:$PKG"
+
+    # ---- dotfiles: ----------------------------------------------------------
+    # One line standing for as many `link:` lines as the tree holds (U22), and the nested file is
+    # the half that matters: a tree that placed only its top level would pass a one-file check.
+    _dtree="$SHALL_CONFIG_DIR/dotcanary"
+    _dtarget=/tmp/shall-dotfiles-target
+    rm -rf "$_dtree" "$_dtarget"
+    mkdir -p "$_dtree/nested" "$_dtarget"
+    printf 'alpha\n' > "$_dtree/alpha.conf"
+    printf 'beta\n' > "$_dtree/nested/beta.conf"
+    printf 'dotfiles:./dotcanary @target=%s\n' "$_dtarget" >> "$_c14"
+    ok "the tree's destinations are empty before sync" test ! -e "$_dtarget/alpha.conf"
+    ok "sync places a declared dotfiles tree" lx -y sync
+    ok "a top-level file is placed" test -e "$_dtarget/alpha.conf"
+    ok "a NESTED file keeps its path under the target" test -e "$_dtarget/nested/beta.conf"
+    ok "the placed file resolves to the tree's copy" grep -q alpha "$_dtarget/alpha.conf"
+    grep -v -F "dotfiles:./dotcanary" "$_c14" > "$_c14.tmp" 2>/dev/null
+    mv "$_c14.tmp" "$_c14"
+    ok "sync tears down a tree whose declaration is gone" lx -y sync
+    ok "every file the tree placed is gone" test ! -e "$_dtarget/alpha.conf"
+    ok "including the nested one" test ! -e "$_dtarget/nested/beta.conf"
+
+    # ---- exec: --------------------------------------------------------------
+    # The approval gate first, because it is the rule with teeth: an unapproved script is a
+    # REFUSAL of the whole sync, not a skipped line, and `-y` cannot approve it.
+    _ebin="$SHALL_CONFIG_DIR/bin"
+    _emark=/tmp/shall-exec-canary
+    _eundo_script=/tmp/shall-exec-undo.sh
+    _eundo_mark=/tmp/shall-exec-undone
+    mkdir -p "$_ebin"
+    rm -f "$_emark" "$_eundo_mark"
+    printf '#!/bin/sh\necho ran > %s\n' "$_emark" > "$_ebin/exec-canary.sh"
+    chmod 0755 "$_ebin/exec-canary.sh"
+    printf '#!/bin/sh\necho undone > %s\n' "$_eundo_mark" > "$_eundo_script"
+    chmod 0755 "$_eundo_script"
+    # **Two options are `@a=1,b=2`, never `@a=1 @b=2`** — `G7` refuses the second in the lexer,
+    # because a space put the following option inside the preceding one's value silently in all
+    # ten grammars. Written the wrong way here first, and the product was right: every line below
+    # failed with *"`runs=once @undo=…` runs two options together"*.
+    #
+    # No spaces and no commas in the `@undo=` VALUE either: it is a shell command, and a comma
+    # inside it would start a third option. A path is one token.
+    # **`@runs=1`, not `@runs=once`.** The ceiling is a positive NUMBER or the word `always`;
+    # `once` is not a spelling it has, and the grammar says so by name. Written the wrong way
+    # first, which is how the `nok_saying` two lines down earned its keep on the very next run:
+    # it refused to accept a config error as the approval refusal it was asserting.
+    printf 'exec:./bin/exec-canary.sh @runs=1,undo=%s\n' "$_eundo_script" >> "$_c14"
+    # `nok_saying`, not `nok`. The first version asserted only "non-zero", and the syntax error
+    # above satisfied it — so a refusal-to-run check reported PASS over a config that never
+    # reached the approval gate at all. A negative assertion that cannot tell WHICH refusal it
+    # got is the vacuous check this harness exists to not contain.
+    nok_saying "an unapproved exec: refuses the sync" "has never been approved" lx -y sync
+    ok "and the unapproved script did NOT run" test ! -e "$_emark"
+    ok "shall lock approves it" lx lock
+    ok "sync runs an approved exec:" lx -y sync
+    ok "the script really ran" test -f "$_emark"
+    rm -f "$_emark"
+    ok "a second sync is clean under @runs=1" lx -y sync
+    ok "and the script did not run a second time" test ! -e "$_emark"
+    grep -v -F "exec:./bin/exec-canary.sh" "$_c14" > "$_c14.tmp" 2>/dev/null
+    mv "$_c14.tmp" "$_c14"
+    ok "sync undoes an exec: whose line has gone" lx -y sync
+    ok "the @undo= really ran" test -f "$_eundo_mark"
+    rm -f "$_eundo_mark" "$_eundo_script"
+
+    # ---- service: -----------------------------------------------------------
+    # The exemption read *"a dependent statement, AND starting one needs an init system a plain
+    # container does not run"*. The second half is true of systemd and FALSE of SysVinit, which
+    # is the other Linux row in `init_providers.toml`: its enable is `update-rc.d` writing rc
+    # symlinks and its start is a shell script being executed. Neither asks what PID 1 is. The
+    # Debian-family images ship both commands, so the wall was systemd's and got written down as
+    # every init's — the same mistake `nix` taught this file to re-derive rather than inherit.
+    #
+    # Gated on the commands rather than on the image name: an image that stops shipping
+    # `update-rc.d` reports a skip instead of a failure, and one that starts shipping it is
+    # covered without anybody remembering to add it here.
+    if command -v update-rc.d >/dev/null 2>&1 && command -v service >/dev/null 2>&1 \
+       && [ "$BACKEND" = apt ]; then
+        _svc=cron
+        _svc_f0=$FAILC
+        ok "a service with an init script is installed" lx_slow -y install "$BACKEND:$_svc"
+        # The control: `cron`'s package enables it on install, so a check that only asserted
+        # "enabled after sync" would pass over a sync that did nothing at all.
+        service "$_svc" stop >/dev/null 2>&1
+        update-rc.d "$_svc" disable >/dev/null 2>&1
+        ok "the service is disabled and stopped before the declaration" \
+            sh -c '! ls /etc/rc[2-5].d/S*cron >/dev/null 2>&1 && ! service cron status >/dev/null 2>&1'
+        # `@a=1,b=2`, never `@a=1 @b=2` — see the `exec:` block above and `G7`.
+        printf 'service:%s @enabled=true,status=started\n' "$_svc" >> "$_c14"
+        ok "sync enables and starts a declared service" lx -y sync
+        ok "the init system really enabled it" sh -c 'ls /etc/rc[2-5].d/S*cron >/dev/null 2>&1'
+        ok "and the daemon is really running" sh -c 'service cron status >/dev/null 2>&1'
+        # Declared the other way round: a `service:` is converged to what the line says, so
+        # flipping the line is the teardown. Removing it entirely would leave the service in
+        # whatever state it was in, which proves nothing about the second direction.
+        grep -v -F "service:$_svc " "$_c14" > "$_c14.tmp" 2>/dev/null
+        mv "$_c14.tmp" "$_c14"
+        printf 'service:%s @enabled=false,status=stopped\n' "$_svc" >> "$_c14"
+        ok "sync disables and stops it when the line says so" lx -y sync
+        ok "the init system really disabled it" sh -c '! ls /etc/rc[2-5].d/S*cron >/dev/null 2>&1'
+        ok "and the daemon really stopped" sh -c '! service cron status >/dev/null 2>&1'
+        grep -v -F "service:$_svc " "$_c14" > "$_c14.tmp" 2>/dev/null
+        mv "$_c14.tmp" "$_c14"
+        ok "the service's package uninstalls" lx_slow -y uninstall "$BACKEND:$_svc"
+        [ "$FAILC" = "$_svc_f0" ] && echo service >> "$LEDGER/be-life"
+    else
+        soft "service: no SysVinit here (update-rc.d + service on a Debian-family image) — plan-smoked in 15"
+    fi
+
+    # **Housekeeping, and it is not cosmetic.** This section installs and removes two real
+    # packages, and apt pulls dependencies for both — so it hands section 16 a machine with a
+    # pile of orphans it did not have. `remove-orphans` then met a removal large enough for the
+    # mass-removal guard to refuse it (exit 3), and the harness scored *the guard working
+    # correctly* as a failure of `remove-orphans`. Measured: `pass=374 fail=10`, and this was the
+    # tenth.
+    #
+    # Run through the package manager rather than through Shall, deliberately: this is the
+    # harness putting back what the harness disturbed, and routing it through the program under
+    # test would make a later assertion depend on an earlier command nobody meant to assert.
+    command -v apt-get >/dev/null 2>&1 && apt-get -y autoremove >/dev/null 2>&1
+fi
+
 # 15. PLAN-SMOKE — every backend this image cannot run for real
 # ==========================================================================
 # A manager that is not installed here still has argv, a parser and a planner
@@ -1871,8 +2200,10 @@ journal_open_names() {
         | awk '{ last[$1] = $2 } END { for (k in last) if (last[k] == "InProgress" || last[k] == "Abandoned") print "        | " k }'
 }
 
-# Candidates: package name == binary name, present in the repos of all six distros this
-# harness images, and none of them a section-14 canary. `figlet` was the first draft and it is
+# Candidates: package name == binary name, present in the repos of six of the seven distros this
+# harness images, and none of them a section-14 canary. Six of seven and not all of them:
+# Slackware's mirror carries none of the three, which is why availability is asked below rather
+# than asserted here — the list is a good default, not a guarantee about the next image. `figlet` was the first draft and it is
 # `nix`'s canary on the tools image — two canaries sharing a binary name is the G-3 collision,
 # and this section's cleanup would then be deciding nix's result.
 #
@@ -1885,6 +2216,16 @@ for _c in pv dos2unix ncdu; do
 done
 CRASH_N=0
 for _c in $CRASH_PKGS; do CRASH_N=$((CRASH_N + 1)); done
+
+# Whether this image can actually INSTALL that fixture, which is a different question from
+# whether the binaries are absent from PATH — and the one the comment above got wrong. The
+# candidates were chosen as "present in the repos of all six distros this harness images", and
+# slackware is the seventh: its mirror carries none of the three, so `slackpkg` answers *No
+# packages match the pattern for install* and every check that declared them fails for a reason
+# that is not its own subject. 16d asks the question with its control sync; 16e declared the
+# same fixture and asserted the recovery sync's exit code without ever asking. Set where the
+# control answers, read wherever the fixture is a premise.
+CRASH_FIXTURE_OK=0
 
 # Asked, not assumed: busybox `sleep` takes a fraction and some builtins do not. A poll that
 # silently rounds up to a whole second walks straight past the window this section aims at.
@@ -2285,6 +2626,7 @@ else
     crash_declare
     if lx_slow -y sync >/tmp/crash-control.out 2>&1 && [ "$(crash_installed)" -eq "$CRASH_N" ]; then
         PASS=$((PASS + 1)); echo "  PASS  crash/heal: the control sync installs all $CRASH_N canaries ($CRASH_PKGS)"
+        CRASH_FIXTURE_OK=1
         crash_wipe
 
         # The log is open and the manager has done nothing yet.
@@ -2303,7 +2645,7 @@ else
             soft "crash/groupkill: this image has no \`setsid\`, so Shall cannot be put in a process group of its own and the package manager cannot be killed with it"
         fi
     else
-        soft "crash/heal: the control sync did not install$CRASH_PKGS on this image, so the crash loop has no fixture — $(tr '\n' ' ' < /tmp/crash-control.out | tail -c 300)"
+        soft "crash/heal: the control sync did not install$CRASH_PKGS on this image, so the crash loop has no fixture — $(tail -c 300 /tmp/crash-control.out | tr '\n' ' ')"
         crash_wipe
     fi
 fi
@@ -2474,10 +2816,16 @@ else
             grep -q "shall: waiting for" /tmp/lock-corpse.out 2>/dev/null && _why=" (it waited for the package manager the killed run had started, and said so)"
             PASS=$((PASS + 1)); echo "  PASS  lock: a killed holder's lock died with it — the next run took ${_took}s, took the lock and released it${_why}"
         fi
-        # The other question, asked separately because it is a different question.
-        if [ "$_rc" -ne 0 ] && [ "$_rc" -ne 2 ]; then
+        # The other question, asked separately because it is a different question — and asked at
+        # all only where the fixture it syncs is installable here. The sentence claims a *sync*
+        # defect, so a run that failed because this image's mirror does not carry the fixture
+        # would be that sentence about something else entirely: the exact confusion the comment
+        # above records paying for twice already, once on macOS for six nights.
+        if [ "$CRASH_FIXTURE_OK" -eq 0 ]; then
+            soft "crash-recovery sync: the fixture ($CRASH_PKGS) does not install on this image, so the recovery sync's exit code says nothing about recovery"
+        elif [ "$_rc" -ne 0 ] && [ "$_rc" -ne 2 ]; then
             hard "crash-recovery sync: the run after a killed holder failed (rc=$_rc) — the lock was free, so this is a sync defect and not a lock defect"
-            echo "        heal said: $(tr '\n' ' ' < /tmp/lock-corpse-heal.out | tail -c 300)"
+            echo "        heal said: $(tail -c 300 /tmp/lock-corpse-heal.out | tr '\n' ' ')"
             excerpt /tmp/lock-corpse.out 6
         fi
     fi
@@ -2739,7 +3087,7 @@ EOF
             _asks=$(grep -c "password for" /tmp/sudo-onerun.out 2>/dev/null)
             [ -n "$_asks" ] || _asks=0
             if [ "$_rc" -ne 0 ]; then
-                soft "sudo: the two-operation run did not complete (rc=$_rc), so the prompt count says nothing — $(tr '\n' ' ' < /tmp/sudo-onerun.out | tail -c 200)"
+                soft "sudo: the two-operation run did not complete (rc=$_rc), so the prompt count says nothing — $(tail -c 200 /tmp/sudo-onerun.out | tr '\n' ' ')"
             elif [ "$_asks" -le 1 ]; then
                 PASS=$((PASS + 1)); echo "  PASS  sudo: one run that installed and removed asked for a password $_asks time(s)"
             else
@@ -2853,7 +3201,7 @@ else
     mkdir -p "$LVM_MNT"
     if ! lvcreate -y -n "$LVM_ORIGIN" -L 128M "$STORAGE_LVM" >/tmp/restore-setup.out 2>&1 \
        || ! mkfs.ext4 -q -F "/dev/$STORAGE_LVM/$LVM_ORIGIN" >>/tmp/restore-setup.out 2>&1; then
-        soft "restore: could not build an origin volume with a filesystem here — $(tr '\n' ' ' < /tmp/restore-setup.out | tail -c 200)"
+        soft "restore: could not build an origin volume with a filesystem here — $(tail -c 200 /tmp/restore-setup.out | tr '\n' ' ')"
         LVM_ORIGIN=""
     fi
 fi
@@ -3075,6 +3423,11 @@ fi
 NO_PATH=""
 for be in $ALL_BACKENDS; do
     [ -n "$(canary "$be")" ] && continue
+    # A dependent statement is driven by 14b/14c and can never have a `canary` row — that shape
+    # is a `backend:name` package declaration. Missing here, this loop reported `link service`
+    # as having *no path to a real lifecycle* in the same run whose section 14c drove both of
+    # them end to end, and the release-blocker count said 2 where the truth was 0.
+    [ -n "$(dependent_lifecycle "$be")" ] && continue
     [ -n "$(no_lifecycle_reason "$be")" ] && continue
     # A distro's own manager is lifecycled by section 5 of the image built for it, which is a
     # real lifecycle and not a plan-smoke — but it happens on a DIFFERENT run of this same

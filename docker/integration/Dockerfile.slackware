@@ -1,0 +1,89 @@
+# Shall integration image — Slackware 15.0 (slackpkg). Build context = repo root.
+#   docker build -f docker/integration/Dockerfile.slackware -t shall-it-slackware .
+#   docker run --rm shall-it-slackware              # defaults to: slackpkg bc
+#
+# `slackpkg` was a registered backend that had never met its manager anywhere, exempted in
+# `proving.rs` as "Slackware's native manager, and there is no Slackware image in this matrix".
+# That was true and it was not a wall: `aclemons/slackware:15.0` is published and current. The
+# exemption was a missing image, which is a thing one writes rather than a thing one accepts.
+FROM aclemons/slackware:15.0
+ENV SHALL_IT_IMAGE=slackware
+
+# The base image is deliberately minimal — it ships `slackpkg` and one uncommented mirror, and
+# no compiler at all. Bootstrapping the toolchain THROUGH slackpkg is not a detour: it is the
+# first real exercise of the manager this image exists to test, and a failure here is a failure
+# of the backend's own subject rather than of some unrelated setup step.
+#
+# `update gpg` before `update`: without the key, `update` refuses the package lists and the
+# error names GPG rather than the mirror. Batch flags on every call because the tool is
+# interactive by default and a prompt in a build is a hang, not a failure.
+#
+# `nghttp2` is in the list because `curl` without it is a binary that exists and cannot run:
+# `curl: error while loading shared libraries: libnghttp2.so.14`. slackpkg installs exactly what
+# it is asked for and resolves no dependencies, which is a property of the manager rather than an
+# accident — so every shared library a listed tool needs has to be listed too.
+#
+# **Series, not package names, and that is the lesson rather than a shortcut.** slackpkg resolves
+# no dependencies at all: asking for `curl` gives a binary that cannot start, first for want of
+# `libnghttp2`, then `libbrotlidec`, and the next name after that is unknowable without another
+# twenty-minute build. Slackware's answer to this is its series — `l` libraries, `n` networking,
+# `d` development — which are curated to be internally complete. Naming three series is one
+# decision; chasing shared objects one image build at a time is a loop with no stated end.
+#
+# `curl --version` closes the layer because a manager that installs a binary which cannot execute
+# is exactly the failure mode this image exists to be able to see.
+RUN slackpkg -batch=on -default_answer=y update gpg \
+    && slackpkg -batch=on -default_answer=y update \
+    && slackpkg -batch=on -default_answer=y install d l n \
+    && curl --version
+
+# **Installing the CA bundle is not the same as trusting it.** The series bring the certificates
+# in as loose files and leave `/etc/ssl/certs` unhashed, so the first HTTPS fetch after the layer
+# above died with `unable to get local issuer certificate` — thirty-eight minutes of package
+# installation, then a TLS failure that reads like a network fault and is one missing command.
+#
+# Its own layer rather than a line appended above, because the layer above costs those thirty-
+# eight minutes: a fix folded into it re-runs all of it, and this is the shape of every later fix
+# to this image too.
+#
+# The `curl https://` is the assertion. `--version` proves the binary starts and says nothing
+# about trust, which is exactly the gap that let this through: the next layer fetches a toolchain
+# over TLS, and a failure belongs where its cause is rather than eight steps downstream.
+RUN /usr/sbin/update-ca-certificates --fresh \
+    && curl -sSf -o /dev/null https://static.rust-lang.org/rustup/release-stable.toml
+
+# Rust from rustup rather than from Slackware: 15.0 predates the declared MSRV, so the distro's
+# own toolchain cannot build this tree at all. Outside any home directory for the same reason
+# the arch image does it — nothing here depends on which user runs cargo.
+#
+# **Downloaded to a file and then run, never `curl … | sh`.** A pipeline reports the exit status
+# of its LAST command, so when `curl` died on a missing shared library the `sh` at the end read
+# empty input, exited 0, and the layer was recorded as `DONE 0.8s`. The build then failed eight
+# steps later with `cargo: command not found`, which points at the wrong thing entirely. An
+# install step that cannot fail is not an install step, and the two-line form costs nothing.
+ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo
+RUN mkdir -p /opt/cargo /opt/rustup \
+    && curl --proto '=https' --tlsv1.2 -sSfo /tmp/rustup-init.sh https://sh.rustup.rs \
+    && sh /tmp/rustup-init.sh -y --no-modify-path --default-toolchain stable \
+    && rm -f /tmp/rustup-init.sh \
+    && chmod -R a+rwX /opt/rustup /opt/cargo \
+    && /opt/cargo/bin/cargo --version
+ENV PATH="/opt/cargo/bin:${PATH}"
+
+COPY docker/integration/retry.sh /usr/local/bin/retry
+RUN chmod 0755 /usr/local/bin/retry
+
+WORKDIR /src
+COPY . /src
+RUN cargo build --release && cp target/release/shall /usr/local/bin/shall && chmod 0755 /usr/local/bin/shall \
+    && rm -rf /src/target
+ENTRYPOINT ["sh", "/src/docker/integration/run-in-container.sh"]
+# **`bc`, and the reasoning is worth more than the name.** Slackware has no `jq`, so the first
+# choice was `wget` — which the `n` series above installs at BUILD time, so the harness
+# correctly refused to credit it: *"wget resolves to /usr/bin/wget, which was already there
+# before this install — nothing here shows slackpkg installed anything"*. A canary the image
+# already ships proves the manager can be asked and not that it can do anything.
+#
+# `bc` is in the `ap` series, which this image does NOT install, and it puts `/usr/bin/bc` on
+# PATH — so the binary check means what it says.
+CMD ["slackpkg", "bc"]

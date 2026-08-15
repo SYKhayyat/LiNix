@@ -53,9 +53,19 @@ windows-native-windows-local 5
 # the benefit of the doubt.
 windows-native-windows-ci 13
 windows-native-darwin-ci 8
-container-linux-ubuntu-local 7
+# Raised 7 -> 10 on 2026-08-14, measured on a run with no failures (pass=393 fail=0). The gain
+# is four dependent statements that had been plan-smoked and are now driven end to end —
+# `shim:`, `dotfiles:`, `exec:` and `service:` — and none of them touches the network, so the
+# "wait for two runs" caution recorded against the windows line does not apply: there is no
+# flaky manager here to give the benefit of the doubt to.
+container-linux-ubuntu-local 10
 container-linux-fedora-local 9
-container-linux-arch-local 7
+# Raised 7 -> 12 on 2026-08-14, measured on a run with no failures (pass=395 fail=0). The image
+# now runs its harness as an unprivileged user, which is what `yay` and `paru` require, so two
+# backends that had never met their manager anywhere are driven end to end here; the rest of the
+# gain is the dependent statements that stopped being plan-smoked. Nothing in it is a network
+# flake, so the "wait for two runs" caution on the windows line does not apply.
+container-linux-arch-local 12
 container-linux-alpine-local 7
 # Raised 25 -> 26 on 2026-07-31: `nix`, which this file's own harness had recorded as a
 # backend with NO PATH TO A REAL LIFECYCLE ANYWHERE for months. The truth was that the image's
@@ -73,5 +83,14 @@ container-linux-tools-local 26
 # `zfs` is still not in it: this kernel has no ZFS module, which `Q4` counts as a release
 # blocker rather than an exemption.
 container-linux-opensuse-local 7
+# Added 2026-08-14 from that image's first run with no failures (pass=322 fail=1 -> the one
+# failure was a fixture this mirror does not carry, now softened, and the number below was read
+# from the same run). Slackware is the seventh distro image and the first whose native manager
+# had never met its own packages anywhere.
+container-linux-slackware-local 7
+# Added 2026-08-14 from that image's first clean run (pass=340 fail=0). Three and not more
+# because a guix profile starts empty and this image carries almost nothing else — the number is
+# small, honest, and the only one that can rise as canaries land.
+container-linux-guix-local 3
 container-linux-void-local 9
 container-linux-storage-local 5

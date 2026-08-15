@@ -169,9 +169,30 @@ elif command -v docker >/dev/null 2>&1; then
     # Every image CI drives, plus gentoo, which is nightly there. `opensuse`, `void` and
     # `storage` were missing: CI has run all three on every push since 2026-07-31, and the
     # parity checker could not see it because a matrix row is not a script name (G-4).
-    export DISTROS="${DISTROS:-ubuntu fedora arch alpine opensuse void storage tools gentoo}"
+    # `slackware` joined on 2026-08-14, when `slackpkg` stopped being argv-tested-only and got
+    # an image that installs and removes for real. It is in CI's nightly matrix for the same
+    # reason `gentoo` is — the image builds for tens of minutes — and in this one because a
+    # release gate that skips an image is a release nobody checked that backend for.
+    export DISTROS="${DISTROS:-ubuntu fedora arch alpine opensuse void storage tools gentoo slackware guix}"
     if ./docker/integration/run.sh; then pass "integration matrix ($DISTROS) PASS"
     else fail "integration matrix ($DISTROS) had FAILURES"; fi
+
+    # **The install script, run the way the README tells a stranger to run it.** CI has done
+    # this nightly since `S-19`; nothing local did, so the one gate that answers *"does a
+    # person who has never seen this repo end up with a working program"* was unreachable from
+    # a developer's machine. Same container, same assertion: not the exit code, but a `shall`
+    # on PATH afterwards. A script that reports success and installs nothing is the failure
+    # this exists to catch.
+    step "2b. THE INSTALL SCRIPT, IN A CLEAN CONTAINER"
+    if docker run --rm -v "$REPO_ROOT:/src:ro" -e SHALL_REF="${SHALL_REF:-}" debian:stable-slim sh -c '
+            set -e
+            apt-get update -qq >/dev/null
+            apt-get install -y -qq curl ca-certificates build-essential pkg-config libssl-dev git >/dev/null
+            sh /src/scripts/install.sh
+            command -v shall || { echo "install.sh exited 0 and left no shall on PATH"; exit 1; }
+            shall --version
+        '; then pass "install.sh leaves a working shall on PATH"
+    else fail "install.sh did not leave a working shall on PATH"; fi
 else
     fail "Docker not found — cannot run the real integration matrix (install Docker, or SKIP_DOCKER=1 for hermetic-only)"
 fi

@@ -276,7 +276,12 @@ fn every_row_has_an_argv_row() {
 /// the day the column was added, and the only legal edit to this line is downward. An unverified
 /// fixture is bytes somebody typed from an upstream README: better than the seven hand-typed
 /// words that served eight managers before it, and not the same thing as evidence.
-const UNVERIFIED_CEILING: usize = 7;
+///
+/// **7 → 6 on 2026-08-14**, when `guix` stopped being one. Its fixture said *"no guix image was
+/// reachable"* and `metacall/guix:latest` had been published the whole time; the captured bytes
+/// disagree with the typed ones in a way that matters, too — guix pads each field with spaces
+/// before its tab, which the hand-written fixture had tidied away.
+const UNVERIFIED_CEILING: usize = 6;
 
 #[test]
 fn every_row_that_reads_a_listing_carries_its_manager_s_bytes() {

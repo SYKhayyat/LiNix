@@ -147,7 +147,13 @@ impl Execs<'_> {
         &self,
         state: &crate::model::DesiredState,
         verb: crate::model::exec::Verb,
-    ) -> Result<()> {
+        // The count is the number of UNDOS this pass performed. It exists because a
+        // converged sync reports `already up to date` from a branch that can still run one,
+        // and a summary that says nothing happened over a script that ran is the disease
+        // `G8` is about. Scripts that RUN are not counted here: `Reconciled::applied` is
+        // built from the package plan on every other path, and adding them only on this one
+        // would make the number mean two things.
+    ) -> Result<usize> {
         use crate::core::hook_lock::HookLedger;
 
         // No early return when nothing is declared: deleting the LAST `exec:` line is a real
@@ -235,9 +241,7 @@ impl Execs<'_> {
             runs.save(&runs_path)?;
         }
 
-        self.undo_departed_execs(state, &mut runs, &runs_path)
-            .await?;
-        Ok(())
+        self.undo_departed_execs(state, &mut runs, &runs_path).await
     }
     /// Run the `@undo=` of every `exec:` whose line has gone away, then forget it (U3).
     ///
@@ -253,17 +257,18 @@ impl Execs<'_> {
         state: &crate::model::DesiredState,
         runs: &mut crate::core::ExecLedger,
         runs_path: &std::path::Path,
-    ) -> Result<()> {
+    ) -> Result<usize> {
         let declared = self.declared_exec_paths()?;
         // An unreadable configuration yields an empty set, which must never be read as "every
         // script departed" — that would run every undo on the machine because of a stray brace.
         if declared.is_empty() && state.has_execs() {
-            return Ok(());
+            return Ok(0);
         }
         let departed = runs.departed(&declared);
         if departed.is_empty() {
-            return Ok(());
+            return Ok(0);
         }
+        let mut undone = 0usize;
         for (hash, record) in departed {
             let name = record.script.as_deref().unwrap_or(&hash);
             let Some(undo) = record.undo.as_deref().filter(|u| !u.trim().is_empty()) else {
@@ -290,7 +295,10 @@ impl Execs<'_> {
             let outcome = self.run_shell_command(undo).await;
             self.resolve(started, &outcome).await;
             match outcome {
-                Ok(()) => runs.forget(&hash),
+                Ok(()) => {
+                    runs.forget(&hash);
+                    undone += 1;
+                }
                 // Kept in the ledger on failure, so the next sync tries again rather than
                 // forgetting an undo that never happened.
                 Err(e) => warn!(
@@ -300,7 +308,8 @@ impl Execs<'_> {
                 ),
             }
         }
-        runs.save(runs_path)
+        runs.save(runs_path)?;
+        Ok(undone)
     }
     /// Every `exec:` script path the configuration contains — read from the FILES, ignoring
     /// `when` and ignoring which profiles are active.

@@ -224,6 +224,16 @@ fn every_ci_job_has_something_local_that_runs_it() {
         // stops being run. `exit.rs` is the file chosen precisely because `--lib` is the whole
         // of its coverage rather than a slice of it, so the local score means what it says.
         ("rust-mutation", "cargo mutants"),
+        // Added with the jobs, and the only two rows whose needle is a script this repo
+        // *ships to users* rather than one it tests with. Both were unreachable locally on the
+        // day they were written: CI asked nightly whether a stranger following the README ends
+        // up with a working program, and no developer could ask it at all.
+        //
+        // Two rows and not one, because the scripts are twins in shape and share none of their
+        // evidence — `install.ps1` has a `--root` rule, a `SHALL_BIN_DIR`, and an
+        // `$ErrorActionPreference` that the Unix half has no equivalent of.
+        ("install-script", "scripts/install.sh"),
+        ("install-script-windows", "scripts/install.ps1"),
     ];
     let drives_nothing = ["release"];
 

@@ -712,17 +712,25 @@ searches = "guix"
 manual = "all_installed"
 version_pin = { kind = "inline", template = "{name}@{version}" }
 
-# Tab-separated `name version output store-path`. The third and fourth columns are the
-# output name and the store path, and neither is a version.
+# Four columns, tab-separated -- `name version output store-path` -- and each field is PADDED
+# WITH SPACES to a column width before its tab. The literal shape is `hello    <TAB>2.12.3 <TAB>
+# out<TAB>...`, so a reader that split on the tab alone would carry `hello    ` as the name.
+# `ws_name_version` splits on whitespace and is right; the fixture below is the real bytes
+# rather than the tidy ones, because the tidy ones would have agreed with a wrong reader too.
+#
+# The third and fourth columns are the output name and the store path, and neither is a
+# version.
 [backend.fixture]
-source = "UNVERIFIED: written from `guix package -I`'s documented four-column layout; no guix image was reachable"
+source = "captured from `guix package -I` in metacall/guix:latest (guix 43833af) on 2026-08-14 -- the run that also closed this backend's proving.rs exemption"
 list = '''
-hello	2.12	out	/gnu/store/xxxx-hello-2.12
-emacs	29.1	out	/gnu/store/yyyy-emacs-29.1
+nss-certs	3.101.4	out	/gnu/store/v9i76lmhx0rlq46wyypv62wh2s3igqcf-nss-certs-3.101.4
+hello    	2.12.3 	out	/gnu/store/ab584kfyc7pymc1cmdrkwzz3lwv86yf6-hello-2.12.3
+sed      	4.9    	out	/gnu/store/w7cxnqm5g12jnn1nm86dapmc6l4k40aa-sed-4.9
 '''
 expect = [
-    "hello@2.12",
-    "emacs@29.1",
+    "nss-certs@3.101.4",
+    "hello@2.12.3",
+    "sed@4.9",
 ]
 
 # Gentoo Portage. Installed packages come from `qlist -I` (portage-utils).

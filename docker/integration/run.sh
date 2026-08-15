@@ -41,7 +41,15 @@ fi
 rm -f "$probe"
 # The floor file is mounted into the container and parsed there too, so it is in this list even
 # though it is data rather than a script.
-for f in docker/integration/*.sh scripts/*.sh scripts/lifecycle-floor.txt; do
+#
+# The Dockerfiles are here for the reason this whole check is: `.gitattributes` pins them
+# `eol=lf`, and that governs what *checkout* writes, not what an editor writes afterwards.
+# Five of them were CRLF in this working tree on 2026-08-14 while every `.sh` beside them was
+# clean, so the existing scan said nothing. BuildKit tolerates a CR at the end of a plain `RUN`
+# line and a heredoc inside one does not, which is a failure that arrives with the next
+# Dockerfile somebody writes rather than with this one.
+for f in docker/integration/*.sh scripts/*.sh scripts/lifecycle-floor.txt \
+         docker/integration/Dockerfile.*; do
     [ -f "$f" ] || continue
     if has_cr "$f"; then
         crlf="$crlf $f"
@@ -52,10 +60,11 @@ if [ -n "$crlf" ]; then
     for f in $crlf; do echo "    $f"; done
     cat <<'EOM'
 
-These are bind-mounted into the container and read there. dash reads `set -u<CR>` in a script
-and aborts with `set: Illegal option -` before any check runs; in the mounted floor file a
-trailing CR makes the ratchet compare against a value that is not a number. Git stores them
-with LF, so something in this working tree rewrote them. Fix, from the repo root:
+These are read by Linux tooling — bind-mounted into the container, or fed to BuildKit. dash
+reads `set -u<CR>` in a script and aborts with `set: Illegal option -` before any check runs;
+in the mounted floor file a trailing CR makes the ratchet compare against a value that is not
+a number; in a Dockerfile it survives a plain `RUN` and not a heredoc inside one. Git stores
+them with LF, so something in this working tree rewrote them. Fix, from the repo root:
 
     sed -i 's/\r$//' <the files above>          # or: git add --renormalize . && git checkout -- .
 
@@ -88,7 +97,23 @@ backend_for() {
         storage)  echo apt ;;   # Ubuntu base; the point of this image is btrfs/lvm/zfs in 13b
         tools)    echo apt ;;   # Ubuntu base; native lifecycle on apt, plan-smoke for the rest
         gentoo)   echo emerge ;;  # SMOKE-ONLY (baked into the image); no source builds
+        slackware) echo slackpkg ;;
+        guix)     echo guix ;;
         *)        echo "" ;;
+    esac
+}
+
+# The canary this image's own manager can actually install.
+#
+# `$PKG` is `jq` for everything that has a `jq`, and two images do not: Slackware's package set
+# has none, and guix's smallest thing with a prebuilt substitute is `hello`. A canary the mirror
+# does not carry makes the whole lifecycle read as a backend failure, which is the most expensive
+# kind of wrong answer this harness can give.
+package_for() {
+    case "$1" in
+        slackware) echo bc ;;
+        guix)      echo hello ;;
+        *)         echo "$PKG" ;;
     esac
 }
 
@@ -119,7 +144,16 @@ for d in $DISTROS; do
     # The one image that gets `--privileged`, and it is named rather than inferred from a
     # variable the image could set: a Dockerfile must not be able to ask for privilege.
     # It needs real block devices for btrfs/lvm/zfs, which no other check here does (Q17).
+    #
+    # `guix` is the second, and it asks for far less: `--security-opt seccomp=unconfined`, because
+    # guix's build sandbox calls `personality(2)` and Docker's default profile blocks it. Without
+    # it every install dies as "in phase setPersonality: cannot set personality: Operation not
+    # permitted" — a syscall filter that reads like a broken package manager, and the reason this
+    # backend spent months exempted as needing a daemon it runs perfectly well.
     PRIV=""
+    if [ "$d" = guix ]; then
+        PRIV="--security-opt seccomp=unconfined"
+    fi
     if [ "$d" = storage ]; then
         PRIV="--privileged"
         # A container borrows the host's kernel but NOT its module files, so `modprobe btrfs`
@@ -134,7 +168,8 @@ for d in $DISTROS; do
     [ "$d" = gentoo ] && smoke=1
     [ -n "$smoke" ] && ENVFLAGS="$ENVFLAGS -e SMOKE_ONLY=$smoke"
     # shellcheck disable=SC2086
-    if docker run --rm $PRIV $ENVFLAGS -v "$SCRIPT_MOUNT" -v "$FLOOR_MOUNT" "shall-it-$d" "$be" "$PKG"; then
+    if docker run --rm $PRIV $ENVFLAGS -v "$SCRIPT_MOUNT" -v "$FLOOR_MOUNT" \
+            "shall-it-$d" "$be" "$(package_for "$d")"; then
         summary="${summary}\n  ${d} (${be}): PASS"
     else
         summary="${summary}\n  ${d} (${be}): FAIL"; overall=1

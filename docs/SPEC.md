@@ -13,7 +13,7 @@ which point nobody could find a decision in it and 84 of them had no recorded an
 | [`spec/why.md`](spec/why.md) | V | The reason behind every Part II rule — each one the scar of a real bug. | **Before changing any Part II rule.** |
 | [`spec/plan.md`](spec/plan.md) | III + IV | The work in dependency order, each phase with its exit condition; then the proofs. | When picking up work. |
 | [`spec/bugs.md`](spec/bugs.md) | VI | Bugs killed by this design, and bugs carried forward. | Before building anything. |
-| [`spec/decisions.md`](spec/decisions.md) | — | **All 210 decisions. 194 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 12 BUILT NEVER RULED, 0 OPEN.** Counted, not typed — `scripts/decision-count.sh --check`. | Before proposing anything. |
+| [`spec/decisions.md`](spec/decisions.md) | — | **All 212 decisions. 206 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 1 OPEN.** Counted, not typed — `scripts/decision-count.sh --check`. | Before proposing anything. |
 | [`attic/lessons.md`](attic/lessons.md) | — | Thirty-one lessons, each the residue of a shipped defect. For a person, once. | **Never.** It says so at the top, and it means agents. |
 
 **Parts VIII–XIII were proposal documents — artifacts and channels (`D1`–`D17`), `when`
@@ -50,9 +50,17 @@ the binary where S33 lived.
 
 **Build state is not readiness, and this file should stop implying it is.** The register is at
 zero unbuilt items; the *validation* surface is far narrower than the build surface. **62 backends
-exist across all platforms** and 23 have ever been run against a real package manager — 7 per
-distro image, 18 in the `tools` image, `scoop` on the native Windows sweep, `brew` on the macOS
-one, **45 plan-smoked** on any one image.
+exist across all platforms**, and how many have completed a real install → list → binary → remove
+round trip is measured per host class rather than asserted here — the ratchet in
+[`scripts/lifecycle-floor.txt`](../scripts/lifecycle-floor.txt) is the number, and
+`the_stated_lifecycle_coverage_matches_the_ratchet` fails when a document disagrees with it. The
+best-covered image reaches **26**; the rest are smaller. **45 plan-smoked** on any one image.
+
+*This sentence used to carry the count itself, and the count went stale.* It read "23 have ever
+been run against a real package manager — 7 per distro image, 18 in the `tools` image" while the
+ratchet recorded 26 for that image and 13 for the Windows runner, and the README's own list of
+driven managers implied a third number again. A figure that a passing CI run raises is a figure no
+document should be storing by hand.
 
 *"Registered" meant two things and three documents counted two different ones.* This file said 52
 while the grades said 48 (Windows) and 56 (Ubuntu), and no two agreed because the word did not

@@ -12,9 +12,17 @@ ENV DEBIAN_FRONTEND=noninteractive
 # (`chpasswd`, from `passwd`) and a real terminal (`script -e`, from `util-linux`) — without
 # them that section reports "not driven here" and the most-used code path in the program stays
 # unrun on every platform.
+# `cron` and `init-system-helpers` are here so the harness can drive a `service:` statement
+# without INSTALLING anything to do it. Section 14c installed cron itself at first, and apt
+# upgraded `libsystemd0` and `libudev1` to satisfy it — which left the adoption manifest
+# pinning versions the index no longer carried, so the next sync failed with
+# `E: Version '255.4-1ubuntu8.16' for 'libsystemd0' was not found` and four assertions about
+# services went red for a reason that had nothing to do with services. The image provides the
+# subject; the harness drives Shall against it. That is the arrangement every other backend
+# here already has.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates build-essential pkg-config libssl-dev git unzip \
-    sudo util-linux passwd \
+    sudo util-linux passwd cron init-system-helpers \
     nodejs npm python3 python3-pip pipx ruby
 # Every network install below goes through this. One attempt was the wrong number: a
 # best-effort install that fails once takes its manager out of the image, and `|| true`

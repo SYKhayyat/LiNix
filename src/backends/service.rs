@@ -37,6 +37,14 @@ pub struct InitProvider {
     pub name: String,
     /// The command whose presence means this init drives the host.
     pub detect: String,
+    /// A path whose existence means this init is **running**, not merely installed.
+    ///
+    /// `detect` alone picked systemd inside every Debian-family container — `systemctl` is on
+    /// `PATH` there and systemd is PID 1 in none of them — so `service:` failed with *"Can't
+    /// operate. Failed to connect to bus: Host is down"* on hosts that had a working SysVinit
+    /// sitting beside it. See [`Detected::detect_file`](crate::core::adapter::Detected::detect_file).
+    #[serde(default)]
+    pub detect_file: Option<String>,
     /// Restrict to one OS (`std::env::consts::OS`). Absent means any.
     #[serde(default)]
     pub os: Option<String>,
@@ -223,6 +231,10 @@ impl Detected for InitProvider {
     fn detect_command(&self) -> &str {
         &self.detect
     }
+
+    fn detect_file(&self) -> Option<&str> {
+        self.detect_file.as_deref()
+    }
 }
 
 /// Every init adapter this machine knows: the shipped rows, then the user's. A user row that
@@ -279,7 +291,11 @@ impl ServiceBackendCore {
     /// command is present. Built-ins are considered before user rows, so a niche row only wins
     /// where no built-in matched.
     pub fn detect_init(&self) -> Option<&InitProvider> {
-        adapter::first_present(&self.providers, &|c| self.executor.command_exists_sync(c))
+        adapter::first_present(
+            &self.providers,
+            &|c| self.executor.command_exists_sync(c),
+            &|p| std::path::Path::new(p).exists(),
+        )
     }
 
     /// The executor to run one action's command on: this backend's, unless the action has exit
@@ -571,6 +587,54 @@ mod tests {
             .into_iter()
             .find(|p| p.name == name)
             .unwrap_or_else(|| panic!("{} must ship", name))
+    }
+
+    /// systemd installed is not systemd running, and every Debian-family container proves it.
+    ///
+    /// `systemctl` is on `PATH` in all of them and systemd is PID 1 in none, so detection picked
+    /// this row and `service:` failed with *"System has not been booted with systemd as init
+    /// system (PID 1). Can't operate. Failed to connect to bus: Host is down"* — on a host that
+    /// had `service` and `update-rc.d` sitting right beside it. Measured on the ubuntu image,
+    /// 2026-08-14, as three failures in section 14c.
+    ///
+    /// Both directions are asserted, because the fix is only right if it is invisible on a real
+    /// systemd machine: with `/run/systemd/system` there, systemd still wins.
+    #[test]
+    fn systemd_installed_but_not_booted_loses_to_the_init_that_is_running() {
+        use crate::core::adapter::first_present_on;
+        let rows = providers(vec![]);
+        // Both clients on PATH, which is exactly what a Debian container has.
+        let both_installed = |c: &str| matches!(c, "systemctl" | "service");
+
+        let in_a_container = first_present_on(&rows, "linux", &both_installed, &|_| false);
+        assert_eq!(
+            in_a_container.map(|r| r.name.as_str()),
+            Some("sysvinit"),
+            "systemd was chosen on a machine where it is installed and not running"
+        );
+
+        let on_a_real_box = first_present_on(&rows, "linux", &both_installed, &|p| {
+            p == "/run/systemd/system"
+        });
+        assert_eq!(
+            on_a_real_box.map(|r| r.name.as_str()),
+            Some("systemd"),
+            "the liveness check changed the answer on a machine that HAS booted systemd"
+        );
+    }
+
+    /// The row must name the path, or the test above passes over a table that says nothing.
+    #[test]
+    fn the_systemd_row_names_the_file_sd_booted_checks() {
+        assert_eq!(
+            shipped("systemd").detect_file.as_deref(),
+            Some("/run/systemd/system"),
+            "sd_booted(3) checks this path; a different one here is a guess"
+        );
+        assert!(
+            shipped("sysvinit").detect_file.is_none(),
+            "SysVinit has no daemon to be running — its command IS the whole test"
+        );
     }
 
     #[test]

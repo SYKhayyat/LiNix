@@ -1,34 +1,125 @@
-# Shall integration image — Arch Linux (pacman). Build context = repo root.
+# Shall integration image — Arch Linux (pacman, yay, paru). Build context = repo root.
 #   docker build -f docker/integration/Dockerfile.arch -t shall-it-arch .
 #   docker run --rm shall-it-arch              # defaults to: pacman jq
+#
+# **This image runs the harness as a non-root user, and it is the only one that does.**
+#
+# `register_aur_helper` says it outright: *"AUR helpers must run as an unprivileged user and
+# escalate internally; running them as root is unsupported and unsafe"* — so `needs_root` is
+# false for `yay` and `paru`, and Shall drives them correctly. What made them undrivable was
+# this harness, which ran every container as root; the coverage table recorded them as
+# "argv-tested only — refuses to run as root, which is what every container in this matrix is".
+# That is a fact about the image, not about the tools, and it is fixed here rather than
+# described.
+#
+# Everything else keeps working because Shall escalates by itself: `sudo -n pacman` for a
+# backend whose `needs_root` is true, nothing for one whose is false. `CommandExecutor::
+# escalates` is `sudo && !windows && !is_root`, so as root it never escalated and the
+# distinction had never been exercised anywhere in this matrix. Now it is — on every pacman
+# write this image performs.
 FROM archlinux:latest
 ENV SHALL_IT_IMAGE=arch
-# Essential toolchain + a broad set of language package managers so the harness can sweep
-# many backends in one container (pacman + npm + yarn + pnpm + pipx + uv + bun + cargo + gem).
+
+# `base-devel` and `go` are for building the AUR helpers; `sudo` is what the unprivileged user
+# escalates through, and what Shall's own `sudo -n` needs present.
 RUN pacman -Syu --noconfirm \
     && pacman -S --noconfirm --needed curl gcc make pkgconf openssl perl git rustup unzip \
-       nodejs npm python-pipx ruby \
-    && rustup default stable
-# Extra managers via their own installers. Tolerant (`|| true`): a build-time network hiccup
-# leaves the image usable; that backend just won't be READY and is auto-skipped by the sweep.
+       nodejs npm python-pipx ruby base-devel sudo go
+
+# **The toolchain lives outside anybody's home**, because two users need it: root builds the
+# release binary, and the unprivileged user runs `cargo` as one of the swept backends. Putting
+# rustup in `/root` is what would have made this image's language-manager coverage collapse the
+# moment the harness stopped being root.
 #
-# **The tolerance is why `unzip` is in the list above.** bun's installer needs it, none of
-# these images had it, and `|| true` turned `error: unzip is required to install bun` into a
-# successful build with one manager missing from every run afterwards. A skip the sweep
-# reports honestly is still a skip nobody reads, so the dependencies of these installers
-# belong in the package list rather than in the tolerance.
-RUN corepack enable || true
-# Every network install below goes through this. One attempt was the wrong number: a
-# best-effort install that fails once takes its manager out of the image, and `|| true`
-# means nothing says so until the coverage ratchet goes red. See `retry.sh`.
+# `CARGO_HOME` is created here rather than left to `rustup`, which does not make it: Arch ships
+# `cargo` as a shim in `/usr/bin` that dispatches through `RUSTUP_HOME`, so nothing ever touches
+# `CARGO_HOME` during install and the build died on `chmod: cannot access '/opt/cargo'`. It has
+# to exist and be group-writable regardless, because it is where the `cargo` backend's canary
+# lands when the unprivileged user runs `cargo install`.
+ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo
+RUN mkdir -p /opt/cargo /opt/rustup \
+    && rustup default stable \
+    && chmod -R a+rwX /opt/rustup /opt/cargo
+
+# The user the harness runs as. Passwordless sudo because Shall runs `sudo -n` — a prompt is a
+# hang, and `-n` turns a missing rule into an immediate refusal rather than a wedged run.
+RUN useradd --create-home --shell /bin/bash shall \
+    && echo 'shall ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/shall \
+    && chmod 0440 /etc/sudoers.d/shall \
+    && mkdir -p /opt/gems && chmod -R a+rwX /opt/gems
+
 COPY docker/integration/retry.sh /usr/local/bin/retry
 RUN chmod 0755 /usr/local/bin/retry
 
+# Built and installed as the unprivileged user, which is the only way `makepkg` will run at all.
+# `--noconfirm` twice: once for makepkg's own prompts and once for the pacman call it makes.
+#
+# Tolerant like the installers below, and for the same reason — an AUR build that fails on a
+# network hiccup leaves the image usable and that backend simply is not READY. The coverage
+# ratchet is what notices if it stops being built.
+USER shall
+WORKDIR /home/shall
+RUN retry 'git clone --depth 1 https://aur.archlinux.org/yay-bin.git /tmp/yay-bin && cd /tmp/yay-bin && makepkg -si --noconfirm' || true
+# `paru` from SOURCE, where `yay-bin` is fine prebuilt. A `-bin` AUR package is compiled
+# against whatever libalpm its packager had: `paru-bin` here died with `error while loading
+# shared libraries: libalpm.so.15`, because `pacman -Syu` in the layer above moved pacman
+# underneath it. Building it in-image links it against the pacman this image actually ships.
+RUN retry 'git clone --depth 1 https://aur.archlinux.org/paru.git /tmp/paru && cd /tmp/paru && makepkg -si --noconfirm' || true
+
+# The per-user managers, installed as the user that will run them.
 RUN retry 'curl -LsSf https://astral.sh/uv/install.sh | sh' || true
 RUN retry 'curl -fsSL https://bun.sh/install | bash' || true
-ENV PATH="/root/.local/bin:/root/.bun/bin:/root/.cargo/bin:${PATH}"
+
+# **Two managers put their global bin somewhere else the moment the user is not root**, and both
+# would have gone quiet rather than failed loudly.
+#
+# `pnpm` REFUSES a global install when its global bin directory is off PATH — the Void image
+# records the exact message and the fact that `corepack enable` does not set it. As root that
+# directory is under `/root` and the base image's PATH happened to cover it; as `shall` it is
+# under this home and nothing covered it.
+#
+# `gem` as a non-root user installs into the user's gem directory rather than `/usr/bin`. Its
+# canary declares no binary to check, so a broken `gem` here would not have failed the PATH
+# assertion — it would have failed `list` later, or worse, quietly stopped being swept.
+# `GEM_HOME` is pinned to a fixed path rather than derived, because the derived one carries the
+# Ruby minor version and would change under the image without anything noticing.
+# npm's global prefix is `/usr/lib/node_modules`, which root owns — so `npm install -g`
+# fails for this user with EACCES. The same switch that made the AUR helpers possible
+# takes npm away unless it is given a prefix of its own.
+ENV NPM_CONFIG_PREFIX="/home/shall/.npm-global"
+ENV PNPM_HOME="/home/shall/.local/share/pnpm"
+ENV GEM_HOME="/opt/gems"
+ENV PATH="/home/shall/.npm-global/bin:/home/shall/.local/share/pnpm/bin:/home/shall/.local/bin:/home/shall/.bun/bin:/opt/gems/bin:/opt/cargo/bin:${PATH}"
+
+# The release build runs as root: it writes into `/src/target`, and `/src` is a root-owned copy.
+USER root
 WORKDIR /src
 COPY . /src
-RUN cargo build --release && cp target/release/shall /usr/local/bin/shall && chmod 0755 /usr/local/bin/shall
+RUN corepack enable || true
+# **Root builds into its OWN `CARGO_HOME`, so `/opt/cargo` is never touched by root at all.**
+#
+# The first version of this re-ran `chmod -R a+rwX /opt/cargo /opt/rustup` after the build,
+# because root's build fills `CARGO_HOME` with a `registry/` and a `.package-cache` it owns, and
+# `cargo install` as `shall` then failed on paths that had not existed when the first chmod ran.
+# That fix worked and cost more than the problem: `chmod -R` over a populated cargo registry is
+# ~100,000 files, and on overlayfs every one of them is COPIED into the new layer. Measured: the
+# release build finished in 32 minutes and the layer after it had not returned half an hour later.
+#
+# Overriding the variable for this one command removes the conflict instead of repairing it.
+# `/opt/cargo` stays exactly as the near-empty `chmod` above left it — world-writable, ready for
+# the unprivileged `cargo install` the sweep performs — and root's registry is thrown away with
+# the rest of the build tree on the same line.
+#
+# `/src/target` goes with it, for the same reason and the same arithmetic: it is ~10 GB, and the
+# `chown -R` below walks every file in `/src`. Nothing after this point reads either one — the
+# binary is in `/usr/local/bin`, and `/src` exists here only as the harness's mount point.
+RUN CARGO_HOME=/tmp/root-cargo cargo build --release \
+    && cp target/release/shall /usr/local/bin/shall && chmod 0755 /usr/local/bin/shall \
+    && rm -rf /tmp/root-cargo /src/target
+
+# The harness itself needs to write its config and data directories, and it runs as `shall`.
+RUN chown -R shall:shall /src
+
+USER shall
 ENTRYPOINT ["sh", "/src/docker/integration/run-in-container.sh"]
 CMD ["pacman", "jq"]

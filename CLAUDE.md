@@ -87,6 +87,24 @@ One reported symptom, two live siblings.
 - Prefer deleting to fixing. Two of everything is how this repo got into trouble; when you
   find a second implementation of something, the task is to remove one, not to reconcile them.
 
+## Never wait
+
+**Never run a command over ~30 seconds in the foreground.** Background it and start the next
+independent piece of work in the same message. Waiting, polling and status-reporting are not
+work, and a foreground long command blocks everything until it returns.
+
+This repo is full of them — the suite is ~20 minutes, an image build 15-30, the container harness
+another 10, `cargo mutants` longer than all of it. Completion arrives as a notification either
+way, so backgrounding costs nothing and foregrounding costs the whole duration.
+
+Two corollaries, both learned the hard way here:
+
+- **Launch in the same breath as the edit that precedes it.** Do not finish the edit, narrate it,
+  and launch afterwards.
+- **Order by what unblocks the most.** Two image builds and a harness run have no reason to be
+  sequential; a `cargo` command and another `cargo` command do, because they share the target
+  lock. Contention is the only thing to schedule around.
+
 ## Verify
 
 `cargo build --all-targets` → `cargo test --no-fail-fast` → `cargo clippy --all-targets` →

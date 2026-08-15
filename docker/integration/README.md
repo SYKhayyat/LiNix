@@ -78,8 +78,10 @@ makes a backend or command added next year fail until it is covered.
   into the image): discovery + plan-smoke + read-only, no source builds. A SMOKE run says so
   in its summary and names every check it skipped, so a narrower sweep cannot be mistaken for
   a full one.
-- **Guix / eopkg / slackpkg** are distro-locked — run the harness on a Guix System / Solus /
-  Slackware host and their real rows light up automatically; elsewhere they plan-smoke.
+- **Guix / eopkg** are distro-locked — run the harness on a Guix System / Solus host and their
+  real rows light up automatically; elsewhere they plan-smoke. `slackpkg` was in this list until
+  `Dockerfile.slackware` bootstrapped a toolchain through slackpkg itself; it is now an image
+  like any other.
 
 Toggle: `SMOKE_ONLY=1` skips real mutation entirely (discovery + plan-smoke + read-only).
 `run.sh` forwards it into the container.

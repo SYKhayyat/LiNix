@@ -88,6 +88,27 @@ pub trait AdapterRow {
 pub trait Detected: AdapterRow {
     /// The command whose presence on `PATH` means this machine runs this thing.
     fn detect_command(&self) -> &str;
+
+    /// A path whose existence means the thing is not merely INSTALLED but **running**.
+    ///
+    /// **`command_exists` answers the wrong question for anything with a daemon,** and the
+    /// ubuntu container measured it: `systemctl` is on `PATH` in every Debian image, systemd is
+    /// not PID 1 in any of them, so `detect_init` picked systemd and every `service:` line
+    /// failed with *"System has not been booted with systemd as init system (PID 1). Can't
+    /// operate. Failed to connect to bus: Host is down"* — on a host that also had `service` and
+    /// `update-rc.d` sitting there, ready to do the job.
+    ///
+    /// That is not a container quirk. It is every machine where a daemon's client is installed
+    /// and its daemon is not running: a chroot, WSL1, a Debian box on sysvinit with
+    /// systemd-shim, a host whose firewalld is stopped.
+    ///
+    /// `None` means the command's presence IS the whole test, which is right for a row that
+    /// drives something with no daemon behind it. A row that names a file must name one the
+    /// tool's own documentation vouches for — `/run/systemd/system` is what `sd_booted(3)`
+    /// checks, and guessing a path here would replace a wrong answer with an unfalsifiable one.
+    fn detect_file(&self) -> Option<&str> {
+        None
+    }
 }
 
 /// The rows Shall will act on, in the order given, each dropped row saying why.
@@ -134,17 +155,38 @@ pub fn merge<R: AdapterRow>(rows: impl IntoIterator<Item = R>) -> Vec<R> {
     out
 }
 
-/// The first row that describes this machine: it applies to this OS, and the command it is
-/// detected by is on `PATH`.
+/// The first row that describes this machine: it applies to this OS, its command is on `PATH`,
+/// and — where the row names one — its liveness file is there.
 ///
-/// `present` is injected rather than probed here so the choice is testable without a machine
-/// that has ufw on it.
+/// Both predicates are injected rather than probed here so the choice is testable without a
+/// machine that has ufw on it, and without one that has booted systemd.
 pub fn first_present<'a, R: Detected>(
     rows: &'a [R],
     present: &dyn Fn(&str) -> bool,
+    exists: &dyn Fn(&str) -> bool,
 ) -> Option<&'a R> {
-    rows.iter()
-        .find(|r| r.applies_here() && present(r.detect_command()))
+    first_present_on(rows, std::env::consts::OS, present, exists)
+}
+
+/// [`first_present`] against a named OS, so the choice is testable on every platform.
+///
+/// The same move [`AdapterRow::applies_to`] makes, and for the same reason this module's header
+/// records: a search that reads `std::env::consts::OS` itself can only ever be exercised for the
+/// platform the test runs on — which is how the Windows arm of five tables went unexercised
+/// everywhere but Windows. The systemd-installed-but-not-booted case is a *Linux* question, and
+/// this repository's suite runs on Windows.
+pub fn first_present_on<'a, R: Detected>(
+    rows: &'a [R],
+    os: &str,
+    present: &dyn Fn(&str) -> bool,
+    exists: &dyn Fn(&str) -> bool,
+) -> Option<&'a R> {
+    rows.iter().find(|r| {
+        r.applies_to(os)
+            && present(r.detect_command())
+            // A row with no liveness file is unchanged: its command being there is the answer.
+            && r.detect_file().is_none_or(exists)
+    })
 }
 
 /// Fill an argv template's `{placeholder}`s, left to right.
@@ -183,6 +225,7 @@ mod tests {
         name: String,
         os: Option<String>,
         broken: Option<&'static str>,
+        live: Option<String>,
     }
 
     impl AdapterRow for Row {
@@ -202,6 +245,9 @@ mod tests {
         fn detect_command(&self) -> &str {
             &self.name
         }
+        fn detect_file(&self) -> Option<&str> {
+            self.live.as_deref()
+        }
     }
 
     fn row(name: &str, os: Option<&str>) -> Row {
@@ -209,6 +255,7 @@ mod tests {
             name: name.into(),
             os: os.map(str::to_string),
             broken: None,
+            live: None,
         }
     }
 
@@ -234,6 +281,7 @@ mod tests {
             name: "ufw".into(),
             os: None,
             broken: Some("it cannot both open and close a port"),
+            live: None,
         };
         assert_eq!(
             broken.unusable(),
@@ -266,6 +314,7 @@ mod tests {
                 name: "broken".into(),
                 os: None,
                 broken: Some("it cannot list its rules"),
+                live: None,
             },
             row("ufw", None),
         ]);
@@ -286,16 +335,16 @@ mod tests {
     fn the_first_row_this_machine_has_is_the_one_chosen() {
         let rows = vec![row("ufw", None), row("firewalld", None)];
         assert_eq!(
-            first_present(&rows, &|c| c == "firewalld").map(|r| r.name.as_str()),
+            first_present(&rows, &|c| c == "firewalld", &|_| true).map(|r| r.name.as_str()),
             Some("firewalld"),
             "a row whose detect command is absent is skipped, not chosen and then failed on"
         );
-        assert!(first_present(&rows, &|_| false).is_none());
+        assert!(first_present(&rows, &|_| false, &|_| true).is_none());
 
         // The OS filter is part of the search, not a separate step a caller can forget.
         let elsewhere = vec![row("netsh", Some("definitely-not-this-os"))];
         assert!(
-            first_present(&elsewhere, &|_| true).is_none(),
+            first_present(&elsewhere, &|_| true, &|_| true).is_none(),
             "a row for another platform is not chosen even when its command is on PATH"
         );
     }

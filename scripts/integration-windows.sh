@@ -1240,6 +1240,66 @@ for be in $READY_LIST; do
     lifecycle "$be"
 done
 
+# The dependent statements this harness drives for REAL, as case labels.
+#
+# Its twin in `docker/integration/run-in-container.sh` holds the same table for the container
+# matrix, and `lifecycle_coverage_union_tests` reads BOTH — because a dependent statement can be
+# unreachable on one platform and trivial on the other, which is exactly the case here.
+dependent_lifecycle() {
+    case "$1" in
+        setting)  echo "section 12b: written to HKCU, read back, changed, undeclared, reset" ;;
+        *)        echo "" ;;
+    esac
+}
+
+# ==========================================================================
+# 12b. A DEPENDENT STATEMENT DRIVEN FOR REAL — setting:
+# ==========================================================================
+# `setting:` was exempted in both harnesses as *"it writes to a live desktop settings store
+# (dconf/gsettings) that no image here runs a bus for"*. True of Linux, and it was never asked
+# of Windows: `setting_stores.toml` says the store here is `reg`, which needs no bus, no session
+# and no desktop. A per-user value under a key nothing else reads is as harmless as the temp
+# directory this harness already writes into.
+#
+# **The teardown is the half worth having.** Removing a `setting:` line runs the store's `reset`,
+# which returns the key to the store's own default — on Windows, `reg delete`. Nothing had ever
+# observed that happen against a real registry.
+echo "[12b] setting: driven for real, through the Windows registry"
+if command -v reg >/dev/null 2>&1; then
+    _set_f0=$FAILC
+    SET_SUBKEY='Software\ShallIntegrationCanary'
+    SET_NAME=Mode
+    SET_MOD="$SHALL_CONFIG_DIR/modules/imperative.txt"
+    reg delete "HKCU\\$SET_SUBKEY" /f >/dev/null 2>&1
+    # The control: the value must be absent before the sync that writes it, or every assertion
+    # below passes over whatever a previous run left behind.
+    nok "the registry value does not exist before sync" \
+        reg query "HKCU\\$SET_SUBKEY" /v "$SET_NAME"
+    printf 'setting:%s/%s @value=prefer-dark\n' "$SET_SUBKEY" "$SET_NAME" >> "$SET_MOD"
+    ok "sync applies a declared setting" lx -y sync
+    grep_ok "the value is really in the registry" "prefer-dark" \
+        reg query "HKCU\\$SET_SUBKEY" /v "$SET_NAME"
+    # A changed declaration must reach the store. A `setting:` that only ever wrote on first
+    # sight would look identical to a working one until the day somebody edited the value.
+    grep -v -F "setting:$SET_SUBKEY/$SET_NAME " "$SET_MOD" > "$SET_MOD.tmp" 2>/dev/null
+    mv "$SET_MOD.tmp" "$SET_MOD"
+    printf 'setting:%s/%s @value=prefer-light\n' "$SET_SUBKEY" "$SET_NAME" >> "$SET_MOD"
+    ok "sync applies a CHANGED setting" lx -y sync
+    grep_ok "the new value replaced the old one" "prefer-light" \
+        reg query "HKCU\\$SET_SUBKEY" /v "$SET_NAME"
+    grep -v -F "setting:$SET_SUBKEY/$SET_NAME " "$SET_MOD" > "$SET_MOD.tmp" 2>/dev/null
+    mv "$SET_MOD.tmp" "$SET_MOD"
+    ok "sync resets a setting whose declaration is gone" lx -y sync
+    nok "the value is really gone from the registry" \
+        reg query "HKCU\\$SET_SUBKEY" /v "$SET_NAME"
+    reg delete "HKCU\\$SET_SUBKEY" /f >/dev/null 2>&1
+    # Credited only when the whole block passed: a ledger row written before the assertions
+    # is the harness telling the ratchet a number the machine did not give it.
+    [ "$FAILC" = "$_set_f0" ] && echo "setting" >> "$LEDGER/be-life"
+else
+    soft "setting: no \`reg\` on this host, which is not a Windows host — nothing to drive"
+fi
+
 # ==========================================================================
 # 13. PLAN-SMOKE — every backend this host cannot (or must not) run for real
 # ==========================================================================
@@ -1586,6 +1646,15 @@ done
 CRASH_N=0
 for _c in $CRASH_PKGS; do CRASH_N=$((CRASH_N + 1)); done
 
+# Whether this host can actually INSTALL that fixture, which is a different question from
+# whether the binaries are absent from PATH. Set by the control sync below, read by the
+# killed-holder recovery check — which declares the same fixture and judges a *sync* by its exit
+# code, so a run that failed because the fixture is unavailable would be that sentence about
+# something else. Found on the container side, where slackware carries none of its three
+# candidates; kept in step here because the two harnesses have the same section and the same
+# premise.
+CRASH_FIXTURE_OK=0
+
 CRASH_POLL=0.1
 sleep 0.1 2>/dev/null || CRASH_POLL=1
 
@@ -1823,6 +1892,7 @@ else
     crash_declare
     if lx -y sync >/tmp/crash-control-win.out 2>&1 && [ "$(crash_installed)" -eq "$CRASH_N" ]; then
         PASS=$((PASS + 1)); echo "  PASS  crash/heal: the control sync installs all $CRASH_N canaries ($CRASH_PKGS)"
+        CRASH_FIXTURE_OK=1
         crash_wipe
         crash_run open open
         crash_run midway 1
@@ -1831,7 +1901,7 @@ else
         crash_run completed completed
         soft "crash/groupkill: Windows has no \`setsid\`, so Shall cannot be put in a process group of its own and the package manager cannot be killed with it — the container twin runs that iteration"
     else
-        soft "crash/heal: the control sync did not install$CRASH_PKGS on this host, so the crash loop has no fixture — $(tr '\n' ' ' < /tmp/crash-control-win.out | tail -c 300)"
+        soft "crash/heal: the control sync did not install$CRASH_PKGS on this host, so the crash loop has no fixture — $(tail -c 300 /tmp/crash-control-win.out | tr '\n' ' ')"
         crash_wipe
     fi
 fi
@@ -1958,10 +2028,13 @@ else
             else
                 PASS=$((PASS + 1)); echo "  PASS  lock: a killed holder's lock died with it — the next run took ${_took}s, took the lock and released it"
             fi
-            # The other question, asked separately because it is a different question.
-            if [ "$_rc" -ne 0 ] && [ "$_rc" -ne 2 ]; then
+            # The other question, asked separately because it is a different question — and asked
+            # at all only where the fixture it syncs is installable here.
+            if [ "$CRASH_FIXTURE_OK" -eq 0 ]; then
+                soft "crash-recovery sync: the fixture ($CRASH_PKGS) does not install on this host, so the recovery sync's exit code says nothing about recovery"
+            elif [ "$_rc" -ne 0 ] && [ "$_rc" -ne 2 ]; then
                 hard "crash-recovery sync: the run after a killed holder failed (rc=$_rc) — the lock was free, so this is a sync defect and not a lock defect"
-                echo "        heal said: $(tr '\n' ' ' < /tmp/lock-corpse-heal-win.out | tail -c 300)"
+                echo "        heal said: $(tail -c 300 /tmp/lock-corpse-heal-win.out | tr '\n' ' ')"
                 excerpt /tmp/lock-corpse-win.out 6
             fi
         fi

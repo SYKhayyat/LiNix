@@ -1,0 +1,62 @@
+# Shall integration image — GNU Guix. Build context = repo root.
+#   docker build -f docker/integration/Dockerfile.guix -t shall-it-guix .
+#   docker run --rm --security-opt seccomp=unconfined shall-it-guix     # defaults to: guix hello
+#
+# **`--security-opt seccomp=unconfined` is required, and it is the whole reason this image did
+# not exist.** `guix` was exempted in `proving.rs` as *"no published base image; Guix installs via
+# a script that needs a running guix-daemon"*. Both halves were wrong, and the second was wrong in
+# an interesting way — measured 2026-08-14:
+#
+#   - `metacall/guix:latest` is published and current (`guix (GNU Guix) 43833af`, 2026).
+#   - The daemon runs fine in a container. What fails is the BUILD it starts: Docker's default
+#     seccomp profile blocks `personality(2)`, and guix's build sandbox calls it, so
+#     `guix install hello` dies with *"in phase setPersonality: cannot set personality: Operation
+#     not permitted"* — a message about a syscall filter that reads like a broken package manager.
+#
+# So the wall is a run flag, the same kind the storage image already takes (`--privileged`), and
+# with it the full lifecycle runs: install → `/root/.guix-profile/bin/hello` on disk and executing
+# → `guix package -I` lists it → `guix remove` → gone.
+#
+# The binary is built on Ubuntu and copied in, the same arrangement `Dockerfile.gentoo` uses and
+# for the same reason: building Rust inside the runtime image would mean pulling a toolchain
+# through the very manager under test, which turns a toolchain problem into a backend failure.
+FROM ubuntu:24.04 AS builder
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl ca-certificates build-essential pkg-config libssl-dev git \
+    ; rm -rf /var/lib/apt/lists/*
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+WORKDIR /src
+COPY . /src
+RUN cargo build --release && cp target/release/shall /usr/local/bin/shall && chmod 0755 /usr/local/bin/shall
+
+FROM metacall/guix:latest
+ENV SHALL_IT_IMAGE=guix
+COPY --from=builder /usr/local/bin/shall /usr/local/bin/shall
+COPY docker/integration/retry.sh /usr/local/bin/retry
+COPY docker/integration/guix-entrypoint.sh /usr/local/bin/guix-entrypoint
+RUN chmod 0755 /usr/local/bin/retry /usr/local/bin/guix-entrypoint
+
+# **The fixtures this image needs are installed at RUN time, not here, and that is forced.**
+# A fresh guix profile contains nothing at all, which costs the harness two checks — `git`, which
+# section 11 and 12 both want for the history proofs, and any package from Shall's protected list,
+# which the removal guard needs as a victim.
+#
+# The obvious fix is a `RUN guix install git bash` layer, and it does not work: `guix install`
+# builds in a sandbox that calls `personality(2)`, Docker's default seccomp profile blocks it,
+# and `docker build` takes no `--security-opt`. Measured — the layer failed with the same
+# *"in phase setPersonality: cannot set personality: Operation not permitted"* this file's header
+# describes, which is the wall that kept the image from existing in the first place. `run.sh`
+# passes `--security-opt seccomp=unconfined` at run time, so the install goes in the entrypoint
+# where that flag is in force.
+# run-in-container.sh is .dockerignored on purpose (bind-mounted at run time by run.sh, so
+# editing it never busts the build cache). Create the mount target only.
+RUN mkdir -p /src/docker/integration
+WORKDIR /src
+# The daemon has to be up before the harness asks guix anything, and nothing else here can start
+# it — see the header of `guix-entrypoint.sh`.
+ENTRYPOINT ["sh", "/usr/local/bin/guix-entrypoint"]
+# `hello` and not `jq`: it is the smallest thing with a substitute in guix's own binary cache, so
+# the canary is a download rather than a source build.
+CMD ["guix", "hello"]

@@ -150,8 +150,26 @@ const TERMINATORS: &[Terminator] = &[
              which is exactly why the inference it replaced was worth confirming.",
         ),
     ),
-    row("yay", true, GETOPT),
-    row("paru", true, GETOPT),
+    row(
+        "yay",
+        true,
+        Evidence::Measured(
+            "asked in the arch integration image, 2026-08-14, the first run in which the AUR \
+             helpers were installed anywhere: every verb that resolved the operand read it as a \
+             package name behind a `--`. Measured both as root and as the unprivileged harness \
+             user, which is worth recording — `pacman` on the same image is measurable only as \
+             root, because it refuses before naming the operand, and the helpers do not.",
+        ),
+    ),
+    row(
+        "paru",
+        true,
+        Evidence::Measured(
+            "asked in the arch integration image, 2026-08-14, alongside `yay` — same answer, and \
+             asked separately because it is a different binary with its own parser (Rust, where \
+             `yay` is Go; neither links getopt(3), which is what GETOPT had claimed of both).",
+        ),
+    ),
     row("pamac", true, GETOPT),
     // ---- Alpine, Void, SUSE, Gentoo.
     row(
@@ -338,7 +356,18 @@ const TERMINATORS: &[Terminator] = &[
     row("pkg_add", true, GETOPT),
     row("pkg_delete", true, GETOPT),
     row("eopkg", true, GETOPT),
-    row("slackpkg", true, GETOPT),
+    row(
+        "slackpkg",
+        false,
+        Evidence::Measured(
+            "`slackpkg search -- bc` answers `search: Ignoring extra arguments: bc`, then \
+             `Looking for -- in package list ... No package name matches the pattern` — exit 0, \
+             empty result, no error (slackware image, 2026-08-14). It is a shell script that \
+             reads $1 as the pattern, so GETOPT was inferred from a parser it does not link \
+             against. `install` survives the terminator only because it takes a list and drops \
+             the operand that matches nothing; `search` takes one and the terminator IS that one.",
+        ),
+    ),
     // ---- Kubernetes, Dart, editors, init.
     row(
         "helm",
@@ -681,7 +710,20 @@ mod tests {
     /// probe deliberately left this at 54 with the reasoning that `Evidence::Measured` carries
     /// what the tool said, and a summary of nine confirmations is not nine sentences. The lines
     /// were read out of the five job logs before this number moved.
-    const UNASKED_CEILING: usize = 48;
+    ///
+    /// Lowered 48 → 47 on 2026-08-14: `slackpkg`, the first row an image disproved before that
+    /// image had ever run in CI. It is a shell script reading `$1` as the pattern, so the GETOPT
+    /// inference — *"from the parser it links against"* — was made about a program that links
+    /// against nothing. `scoop` is the same sentence about a PowerShell script and is already
+    /// listed as refusing; this row was listed as terminating on the strength of the family it
+    /// is not in.
+    ///
+    /// Lowered 47 → 45 the same day: `yay` and `paru`, which no image had ever had installed —
+    /// the arch image acquired them in this round. Both terminate, as GETOPT guessed, and both
+    /// were guesses about a Go program and a Rust one that link getopt(3) no more than slackpkg
+    /// does. Two right answers and one wrong one from the same inference is the argument for
+    /// counting it as unasked rather than as nearly-measured.
+    const UNASKED_CEILING: usize = 45;
 
     /// A row whose hosts disagree takes the answer that sends no terminator.
     ///

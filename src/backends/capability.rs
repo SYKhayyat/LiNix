@@ -36,6 +36,97 @@ const VERIFIES_ITSELF: &[(&str, &str)] = &[("helm", "--verify=false")];
 /// Backends that publish one artifact in several version streams.
 const HAS_CHANNELS: &[&str] = &["snap", "flatpak"];
 
+/// Backends that read another backend's package database instead of keeping one of their own,
+/// and the backend whose database they read.
+///
+/// `pacman -Qe`, `yay -Qe` and `paru -Qe` print the same lines on the same machine, because
+/// there is one libalpm database and three clients of it. Anything that enumerates installed
+/// packages across backends and keys the result on `backend:name` therefore sees a single
+/// installed package once per client, and treats the copies as separate software.
+///
+/// Measured on the arch integration image: 20 packages became 60 declarations, and the
+/// `uninstall jq` that followed planned three removals. The first removed jq; the second and
+/// third asked a client to remove a package that was no longer there and got
+/// `error: target not found: jq`, which failed the sync and every later section of the run.
+///
+/// A pair belongs here when the two managers share the *installed* database — not when they
+/// merely install similar software. `pipx` and `pip` have their own directories; `npm` and
+/// `pnpm` have their own global prefixes; those are separate installs of the same name and
+/// removing one leaves the other, which is the opposite of this relation.
+const READS_THE_DATABASE_OF: &[(&str, &str)] = &[("yay", "pacman"), ("paru", "pacman")];
+
+/// The backend whose installed-package database `backend` speaks for: itself, unless it is a
+/// client of another backend's.
+pub fn package_database(backend: &str) -> &str {
+    READS_THE_DATABASE_OF
+        .iter()
+        .find(|(client, _)| *client == backend)
+        .map_or(backend, |(_, owner)| *owner)
+}
+
+/// Whether `backend` keeps the database it reads rather than sharing another backend's.
+pub fn owns_its_database(backend: &str) -> bool {
+    package_database(backend) == backend
+}
+
+/// Collapse a list of backends that all hold the *same* package down to one per database,
+/// preferring the backend that keeps each.
+///
+/// `shall uninstall jq --absent` asks which managers hold jq and writes an `absent:` line per
+/// holder. On Arch all three pacman clients say yes, so three lines get written and the next
+/// sync schedules three removals of one package: the first takes jq and the other two are told
+/// `error: target not found: jq`. An `absent:` line is permanent, so that failure is permanent
+/// too — the machine can never sync clean again.
+pub fn one_backend_per_shared_database(holders: &mut Vec<String>) {
+    let owning: std::collections::HashSet<String> = holders
+        .iter()
+        .filter(|b| owns_its_database(b))
+        .cloned()
+        .collect();
+    let mut kept = std::collections::HashSet::new();
+    holders.retain(|b| {
+        let db = package_database(b);
+        if b != db && owning.contains(db) {
+            return false;
+        }
+        kept.insert(db.to_string())
+    });
+}
+
+/// Collapse a cross-backend listing so that one installed package is one row, however many
+/// clients of its database answered.
+///
+/// The surviving row names the backend that **keeps** the database wherever one answered, so
+/// what comes back is a package a caller can act on: `pacman` removes an AUR package that `yay`
+/// installed, and a row saying `yay` would be a removal the user cannot repeat with the manager
+/// named in it. Where no owner answered — `shall list --backend yay` asks one client and
+/// nobody else — the first client's row stands, so filtering to a client never empties the
+/// listing.
+///
+/// Order is the caller's, preserved: `list` prints in registry order and the undeclared crawl
+/// counts in it.
+pub fn one_row_per_shared_database(rows: Vec<crate::core::Package>) -> Vec<crate::core::Package> {
+    // Most machines have no such pair, and this is on the path of every listing.
+    if rows.iter().all(|p| owns_its_database(&p.backend)) {
+        return rows;
+    }
+    let owner_answered: std::collections::HashSet<(String, String)> = rows
+        .iter()
+        .filter(|p| owns_its_database(&p.backend))
+        .map(|p| (p.backend.clone(), p.name.clone()))
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    rows.into_iter()
+        .filter(|p| {
+            let db = package_database(&p.backend).to_string();
+            if p.backend != db && owner_answered.contains(&(db.clone(), p.name.clone())) {
+                return false;
+            }
+            seen.insert((db, p.name.clone()))
+        })
+        .collect()
+}
+
 /// Backends whose install command takes something other than the package's own name, and the
 /// option key that carries it (U39). `helm plugin install` takes a URL while `plugin list` and
 /// `plugin uninstall` speak the name in the plugin's `plugin.yaml`, so the name has to stay the
@@ -485,5 +576,80 @@ mod tests {
         for b in ["apt", "cargo", "npm", "krew", "github", "web"] {
             assert!(install_source_key(b).is_none(), "{}", b);
         }
+    }
+
+    /// Both directions, because the table is only useful if the default is "its own".
+    #[test]
+    fn only_the_aur_helpers_read_another_backends_database() {
+        assert_eq!(package_database("yay"), "pacman");
+        assert_eq!(package_database("paru"), "pacman");
+        for b in [
+            "pacman", "apt", "dnf", "apk", "zypper", "xbps", "npm", "pnpm", "pip", "pipx", "cargo",
+            "brew", "winget",
+        ] {
+            assert!(
+                owns_its_database(b),
+                "{} was folded into another backend",
+                b
+            );
+            assert_eq!(package_database(b), b);
+        }
+    }
+
+    /// The owner wins wherever it answered, and a listing filtered to a client is not emptied.
+    #[test]
+    fn a_shared_database_yields_one_holder_and_never_none() {
+        let mut all = vec!["pacman".to_string(), "yay".into(), "paru".into()];
+        one_backend_per_shared_database(&mut all);
+        assert_eq!(all, vec!["pacman"]);
+
+        // No owner in the list: the first client stands, so the answer is never empty.
+        let mut clients = vec!["yay".to_string(), "paru".into()];
+        one_backend_per_shared_database(&mut clients);
+        assert_eq!(clients, vec!["yay"]);
+
+        // Backends with databases of their own are all kept, in the caller's order.
+        let mut unrelated = vec!["npm".to_string(), "apt".into(), "cargo".into()];
+        one_backend_per_shared_database(&mut unrelated);
+        assert_eq!(unrelated, vec!["npm", "apt", "cargo"]);
+    }
+
+    fn pkg(backend: &str, name: &str) -> crate::core::Package {
+        crate::core::Package {
+            backend: backend.into(),
+            name: name.into(),
+            version: None,
+            properties: Default::default(),
+        }
+    }
+
+    #[test]
+    fn one_installed_package_is_one_row_however_many_clients_answered() {
+        let rows = vec![
+            pkg("pacman", "jq"),
+            pkg("pacman", "bash"),
+            pkg("yay", "jq"),
+            pkg("yay", "bash"),
+            pkg("paru", "jq"),
+            pkg("paru", "bash"),
+            pkg("npm", "jq"),
+        ];
+        let kept: Vec<String> = one_row_per_shared_database(rows)
+            .into_iter()
+            .map(|p| format!("{}:{}", p.backend, p.name))
+            .collect();
+        // `npm:jq` survives: a global npm package named jq is a different install, and
+        // removing the pacman one leaves it. Sharing a *name* is not sharing a database.
+        assert_eq!(kept, vec!["pacman:jq", "pacman:bash", "npm:jq"]);
+    }
+
+    #[test]
+    fn a_listing_from_a_client_alone_keeps_its_rows() {
+        let kept: Vec<String> =
+            one_row_per_shared_database(vec![pkg("yay", "jq"), pkg("yay", "bash")])
+                .into_iter()
+                .map(|p| p.name)
+                .collect();
+        assert_eq!(kept, vec!["jq", "bash"]);
     }
 }

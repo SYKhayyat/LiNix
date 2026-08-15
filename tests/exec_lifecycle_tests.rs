@@ -618,3 +618,110 @@ async fn an_unknown_step_name_is_refused_with_the_list_of_real_ones() {
         "the refusal did not list what this machine offers: {msg}"
     );
 }
+
+/// `shall lock` must not go looking for a file a catalogued step never had.
+///
+/// The approval walk read every `exec:` line as a path under the config repo and opened it. A
+/// step is a row compiled into the binary — there is no `<config>/step/rustup` and there never
+/// will be — so the one command that approves scripts failed outright, with a message about a
+/// file the user did not write, on any configuration that used `H8` at all. The feature and the
+/// command that gates every other script could not both be used.
+///
+/// Two lines on purpose: the step must be passed over AND the real script beside it must still
+/// be approved, because "skip everything when a step is present" would be the same outage
+/// wearing a quieter face.
+#[tokio::test]
+async fn lock_approves_the_scripts_beside_a_catalogued_step_and_asks_nothing_of_the_step() {
+    let kernel = TestKernel::new().await;
+    let root = kernel.app.config.config_root();
+    let body = "#!/bin/sh\ntrue\n";
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::write(root.join("bin/real.sh"), body).unwrap();
+    std::fs::write(
+        root.join("modules/tools.txt"),
+        "exec:step/rustup\nexec:./bin/real.sh\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("profiles/Main"), "use tools\n").unwrap();
+
+    let state = resolve(&kernel).await;
+    let approved = shall::verbs::plan::approve_exec_scripts(&kernel.app.config, &state)
+        .await
+        .expect("`shall lock` must not fail on a config that names a shipped step");
+    assert_eq!(
+        approved, 1,
+        "a step counted as an approved script, or the real one beside it did not"
+    );
+
+    let ledger = HookLedger::load(&HookLedger::path_in(
+        &kernel.app.config.layout().locks_dir(),
+    ))
+    .unwrap();
+    assert!(
+        ledger.get(&exec_id("./bin/real.sh")).is_some(),
+        "the script declared beside a step was not approved"
+    );
+    assert!(
+        ledger.get(&exec_id("step/rustup")).is_none(),
+        "a shipped step was given an approval row; it needs none, and one would rot the moment \
+         the catalogue changed"
+    );
+}
+
+/// Deleting the LAST `exec:` line runs its `@undo=` — through the verb, not through the loop.
+///
+/// **The lesson was learned inside `Execs::apply` and re-created in its caller.** That function's
+/// own comment says it: *"No early return when nothing is declared: deleting the LAST `exec:` line
+/// is a real change, and a teardown that only runs when something is still declared can never undo
+/// the last one (S20 taught this for extras; it is the same shape here)."* And
+/// `verbs::sync::reconcile` returns early when `changes.is_empty() && !state.has_non_package_work()`
+/// — a branch that reconciles the extras ledger, so a deleted `link:` is undone, and never reaches
+/// the execs phase at all. Delete the only `exec:` line on an otherwise converged machine and the
+/// undo silently does not happen.
+///
+/// `removing_an_exec_runs_the_undo_it_declared` above passes over the same state, because it calls
+/// `execs().apply()` itself. That is exactly how this hid: the unit test drives the function that
+/// is careful, and the caller that skips it was tested by nothing. Measured twice on real
+/// machines first — the ubuntu and slackware images both reported `sync undoes an exec: whose line
+/// has gone` PASS with `the @undo= really ran` FAIL, which is a sync that exited 0 and did nothing.
+#[tokio::test]
+async fn deleting_the_last_exec_line_runs_its_undo_through_the_sync_verb() {
+    let kernel = TestKernel::new().await;
+    let body = "echo enrol\n";
+    declare_exec(
+        &kernel,
+        "exec:./enrol.sh@undo=echo unenrol",
+        "./enrol.sh",
+        body,
+    )
+    .await;
+    approve(&kernel, "./enrol.sh", body);
+
+    shall::app::sync::resolver::new_resolution();
+    shall::verbs::sync::watch_reconcile(&kernel.app)
+        .await
+        .expect("the first sync runs the script");
+    assert_eq!(
+        runs_of(&kernel, body),
+        1,
+        "the script did not run, so the ledger has no row for the teardown to read"
+    );
+
+    // The only declaration in the repo goes. Nothing else is declared, so this sync is converged
+    // on packages AND has no non-package work — which is the branch under test.
+    std::fs::write(
+        kernel.app.config.config_root().join("modules/tools.txt"),
+        "# gone\n",
+    )
+    .unwrap();
+    shall::app::sync::resolver::new_resolution();
+    shall::verbs::sync::watch_reconcile(&kernel.app)
+        .await
+        .expect("the second sync undoes it");
+
+    let calls = kernel.mock_executor.get_calls().await;
+    assert!(
+        calls.iter().any(|c| c.contains("unenrol")),
+        "the sync exited 0 over a deleted `exec:` line and never ran its `@undo=`: {calls:?}"
+    );
+}

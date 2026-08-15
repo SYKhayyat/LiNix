@@ -116,7 +116,12 @@ impl Inventory<'_> {
                 );
             }
         }
-        Ok(rows)
+        // One installed package is one row, however many clients of its database answered.
+        // Three pacman clients on an Arch box turn 203 packages into 609 lines, each triple
+        // identical but for the backend column.
+        Ok(crate::backends::capability::one_row_per_shared_database(
+            rows,
+        ))
     }
 
     pub async fn get_info(&self, package_name: &str) -> Result<Option<Package>> {
@@ -379,12 +384,17 @@ impl Inventory<'_> {
         let state = self.state.lock().await;
         let managed = state.managed_index();
         Ok(UndeclaredReport {
-            packages: listed
-                .into_iter()
-                .flatten()
-                .filter(|pkg| !managed.contains(&(pkg.backend.as_str(), pkg.name.as_str())))
-                .filter(|pkg| !owned.contains(&pkg.name))
-                .collect(),
+            // Collapsed BEFORE the managed check, not after: `pacman:jq` being declared is
+            // what makes jq declared, and a `yay:jq` row surviving that filter would report a
+            // declared package as undeclared — and offer `purge-undeclared` a second removal
+            // of something the first one already took.
+            packages: crate::backends::capability::one_row_per_shared_database(
+                listed.into_iter().flatten().collect(),
+            )
+            .into_iter()
+            .filter(|pkg| !managed.contains(&(pkg.backend.as_str(), pkg.name.as_str())))
+            .filter(|pkg| !owned.contains(&pkg.name))
+            .collect(),
             unanswered,
             answered,
         })

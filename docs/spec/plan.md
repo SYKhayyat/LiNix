@@ -1929,10 +1929,13 @@ same lie as a check that cannot fail.
 ## IV.2 Where it runs
 
 **The hermetic gates and the fast half of the matrix run in CI, on every change.** `cargo build`,
-`cargo test`, `cargo clippy -D warnings`, and the **ubuntu, alpine and arch** images. The slow
-ones — `tools`, `gentoo`, and the macOS and Windows native sweeps — run nightly and on dispatch,
-because a 40-minute image gating every push is a gate people learn to skip, and one that runs
-only when somebody presses a button is coverage nobody consults (0b).
+`cargo test`, `cargo clippy -D warnings`, and the **ubuntu, fedora, alpine, arch, opensuse and
+void** images — six, not the three this line named until 2026-08-14. `zypper` and `xbps` were put
+in the fast matrix rather than the nightly one deliberately, and the reason generalises: *an image
+that runs only when someone remembers it closes nothing.* The slow ones — `tools`, `gentoo`, and
+the macOS and Windows native sweeps — run nightly and on dispatch, because a 40-minute image
+gating every push is a gate people learn to skip, and one that runs only when somebody presses a
+button is coverage nobody consults (0b).
 
 **Verification that only ever ran by hand on one machine is a claim, not a gate.** Every green
 number in Part VII was produced through WSL on the owner's box; nothing made those runs

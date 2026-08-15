@@ -286,3 +286,244 @@ was written by someone who had checked the thing they were writing about. The de
 seam between them, and no seam has a comment.
 
 ---
+
+## VI.5 A daemon's client on `PATH` is not a daemon running, and three tables believed it
+
+**FIXED 2026-08-14, found by running the thing.** `service:` picked systemd inside every
+Debian-family container, and every line failed:
+
+```
+Error: `systemctl` failed (exit 1): System has not been booted with systemd as init system
+(PID 1). Can't operate.
+Failed to connect to bus: Host is down
+```
+
+`systemctl` is installed in those images. systemd is PID 1 in none of them. And the machine had
+`service` and `update-rc.d` sitting right there — a working SysVinit that the adapter table
+never reached, because it stops at the first row whose `detect` command is on `PATH`.
+
+**Not a container quirk, which is the part worth keeping.** It is every machine where a daemon's
+client is installed and its daemon is not running: a chroot, WSL1, a Debian box on sysvinit with
+systemd-shim, a host whose firewalld is stopped. The container is simply where somebody finally
+ran it.
+
+**Three tables shared the predicate.** `Detected::detect_command` is `init_providers.toml`'s,
+`firewall_adapters.toml`'s and `setting_stores.toml`'s — the K17 mechanism, doing what it was
+built to do, with a question that was wrong for all three. `firewall-cmd` present with firewalld
+stopped is the same bug; so is `gsettings` present with no session bus.
+
+**The fix is a second, optional predicate on the mechanism**, not a special case in the init
+backend: `Detected::detect_file` names a path whose existence means the thing is *running*.
+Only the systemd row uses it, and the path is not a guess — `/run/systemd/system` is what
+`sd_booted(3)` checks. On a machine that has booted systemd nothing changes at all; where systemd
+is merely installed, the row below it gets its turn. The other two tables get the seam and a
+comment, because naming a liveness path for firewalld or dconf without measuring which one would
+replace a wrong answer with an unfalsifiable one.
+
+**And the search became testable on a named OS.** `first_present` read `std::env::consts::OS`
+itself, so a *Linux* question could not be asked from this repository's Windows suite —
+`adapter.rs`'s own header records that exact failure for four other copies of the OS filter, and
+this was the fifth. `first_present_on(rows, os, …)` is the same move `AdapterRow::applies_to`
+already made.
+
+**What it says about the harnesses.** The hermetic suite could not have caught this: it drives
+mock providers, and a mock's `command_exists` answers whatever the fixture says. Only a real
+machine with `systemctl` installed and systemd not running could, and this repository has run one
+on every push for months — with `service:` plan-smoked rather than driven, because its exemption
+said starting a service needs an init a container does not run. The exemption was true of systemd
+and false of SysVinit, and the two facts never met.
+
+---
+
+## VI.6 Three clients of one package database counted as three machines' worth of software
+
+`pacman`, `yay` and `paru` are three programs over one libalpm database. `-Qe` from any of them
+returns the same lines. Every surface in Shall that enumerates installed software across backends
+keyed its answer on `backend:name`, so on an Arch machine one installed package was three
+different packages — and the arithmetic that follows from that is not a display problem.
+
+**Adopt manufactured a configuration that could not be synced.** `shall install jq` wrote one
+line. `shall adopt` skipped `pacman:jq` because that line already declared it, then wrote
+`paru:jq` and `yay:jq`, because each client was filtered separately and nothing had claimed the
+name. `shall uninstall jq` then planned `remove 3`: pacman removed jq, and paru and yay were asked
+to remove a package that was already gone. `error: target not found: jq`, twice, and the sync
+failed. Forty of the arch harness's forty-five checks after that point failed on those two
+declarations, none of them about what they were testing.
+
+**The permanent one is `--absent`.** `shall uninstall jq --absent` asks which managers hold the
+package and writes an `absent:` line per holder, deliberately — *"every holder is named, because
+`uninstall jq` means the jq I have"*. On Arch that wrote three lines for one jq, and an `absent:`
+line is not consumed by the sync that acts on it. The machine fails every sync from then on, and
+deleting the line that "fails" does not help, because the failing removal is the *second* one.
+
+**The other two were counting.** `shall list` printed 609 rows for 203 packages. The
+installed-but-undeclared crawl tripled, which is the list `purge-undeclared` deletes from and the
+ratio that guards that deletion.
+
+**Why no test saw it.** Every one of these is correct on a machine with one client per database,
+which is every host in the matrix except Arch — and the arch image only grew `yay` and `paru` when
+it stopped running the harness as root, three weeks before this. The unit tests register one
+backend; the property is about two backends agreeing, and a fixture with one of anything cannot
+state it.
+
+**The fix is a table, not a special case.** `READS_THE_DATABASE_OF` in `backends/capability.rs`
+names the client and the database's owner. Everything else asks it: adopt claims a name for the
+database rather than the client, the crawl and `list` collapse to one row, `--absent` collapses to
+one holder. The choice of *which* backend survives is `J3`, and it is the owner's to reverse.
+
+**The ordering lesson, which is the transferable part.** The claim has to be made before the
+already-declared filter, not after it. Filtering first is what let the clients through: pacman was
+dropped as "already managed" and left the name unclaimed for the two backends behind it. A dedup
+that runs after a skip is not a dedup.
+
+**And two more of the same family, found in the same run and not by looking for them.**
+`shall update` fans its refresh out concurrently over `priority`, above a comment stating that a
+refresh *"changes no package, so concurrent runs cannot contend on a package database"*. On Arch
+that is wrong twice: all three clients take `/var/lib/pacman/db.lck`, and all three fetch the same
+repositories. The container reported it plainly — `yay: could not refresh — failed to synchronize
+all databases (unable to lock database)` — a command failing because it did one job three times at
+once. `update` now refreshes once per database; a client's `-Sy` refreshes the owner's
+repositories and none of its own, so nothing is lost by not asking it.
+
+`shall upgrade` had the same collision through a different door. It partitions the managers into
+a strictly-sequential half and a concurrent half, and the discriminator was `needs_root` — a good
+proxy for "does this contend with another manager", and the AUR helpers are exactly where a good
+proxy breaks. `yay` and `paru` are `needs_root = false` on purpose, because they must run
+unprivileged and escalate internally, so they went into the *concurrent* half while `pacman` ran
+in the sequential one, over the database all three of them lock. The partition now asks the
+question it wanted rather than a proxy for it.
+
+**The pattern worth carrying forward: a proxy predicate fails at the entry you added last.**
+`needs_root` was true of every contending manager in this tree until two arrived that contend
+without needing root, and nothing about adding them said "go and re-check what needs_root was
+standing in for".
+
+---
+
+## VI.7 Eight system managers sorted below the language managers
+
+`starter_order` makes exactly one distinction, and its own comment states it: *"a system manager
+beats a language manager, because your distro maintains that build and updates it with everything
+else."* It implements that with a hand-kept list of fifteen names, and everything not on the list
+falls to a branch whose comment reads *"anything unrecognised sorts with the language managers
+rather than ahead of them: a backend the onboarder added is not known to be safe to prefer over
+your distro."*
+
+Eight shipped system managers were taking that branch: `slackpkg`, `emerge`, `eopkg` and `guix`,
+which are data rows rather than registrars, and `macports`, `pkg`, `pkg_add` and `pkgin`, whose
+platforms have no image in the matrix. The caution in that branch is right and is about backends
+*the onboarder* added, which nobody has vetted. A manager this project ships is vetted by
+definition; leaving it there is not caution, it is an omission wearing caution's clothes.
+
+**What it did.** On the slackware image, `init` wrote:
+
+```
+appimage
+cargo
+gem
+github
+go
+setting
+slackpkg
+```
+
+so `shall install bc` resolved to `cargo:bc` and failed with *"there is nothing to install in
+`bc v0.1.17`, because it has no binaries"* — while `slackpkg search bc` had
+`[uninstalled] - bc-1.07.1-x86_64-5` waiting. Every bare name on a Slackware, Gentoo, Solus,
+Guix, MacPorts or BSD machine went to a language manager before the distro's own, which is the
+exact inverse of the rule.
+
+**The guard is a table that already knew the answer.** `docker/integration/run.sh`'s
+`backend_for()` maps each distro image to the backend it is driven with, and that backend *is*
+that distro's system manager, by construction. The test reads those arms and asserts each one
+outranks `cargo`. Nobody has to remember to update a second list: adding a Solus image is what
+makes `eopkg` required.
+
+---
+
+## VI.8 The lock file Shall could remove, would not look at, and therefore could not remove
+
+pacman's `db.lck` is created mode `0000` and owned by root, and it is empty — it is a pure
+existence lock, which pacman's own error says outright: *"if you're sure a package manager is not
+already running"*, because it wrote no pid to check.
+
+Both readers in `stale_lock.rs` took `&dyn Fn(&Path) -> Option<String>` and treated `None` as
+*absent*. `None` is also what an existing file returns to a caller who may not open it. So on any
+machine where Shall is not root, a stale `db.lck` read as **no lock at all**.
+
+The two halves of the consequence:
+
+- `find`, which `heal` uses, pushed it onto the *left alone* list: *"it is there and could not be
+  read, so nothing can be proved about it"* — about a file with nothing in it to read.
+- `held_for`, which the retry loop uses, filtered on "could it be read" and answered `Free`, so
+  the sync backed off four times and reported `exhausted` instead of sending the user to `heal`.
+
+Meanwhile `clear_stale_manager_locks` removes these with `rm -f` **through the elevating
+executor**. The privilege to fix it was already there; the look that would have authorised it was
+the one thing not elevated.
+
+**Measured on the arch image, which is the only harness in the matrix that runs as a normal
+user.** A SIGKILL mid-transaction left the lock behind and three checks failed on it —
+`crash/open: the sync after the crash did not converge — still missing: pv dos2unix ncdu`,
+`two-writers: the second run never recovered after the holder released`, and `crash-recovery
+sync: the run after a killed holder failed — the lock was free, so this is a sync defect and not
+a lock defect`. That last sentence is the harness diagnosing it correctly before anybody read it.
+
+**The fix names the third state.** `LockFile::{Absent, Unreadable, Body}`. Unreadable is evidence
+only where the contents were going to be the evidence — a pid file. For a lock answered by its
+existence and the process list, demanding readable contents is asking for a permission in order
+to ignore what it grants. The live-holder guard is untouched: a running `pacman` still wins,
+readable or not.
+
+**Why it survived this long.** Every other image in the matrix runs the harness as root, where
+reading a 0000 root-owned file works. The arch image stopped running as root three weeks before
+this — so that yay and paru could be driven at all — and the first fault-injection run under the
+new user found it. The same commit that unlocked two backends' coverage exposed a defect in a
+third area entirely, which is the argument for changing one thing about a harness and then
+reading everything it says.
+
+## VI.9 A terminator sent to a shell script, and the empty answer nobody could see
+
+`core/argv.rs` records, per binary, whether Shall may put a `--` between the subcommand and the
+package names. `slackpkg` was listed as terminating under `GETOPT`, whose own text says what kind
+of claim that is: *"delegates option parsing to getopt(3)/argp, where `--` is the terminator by
+definition. Inferred from the parser it links against, not asked of the tool itself."*
+
+slackpkg links against nothing. It is a shell script, and it reads `$1` as the pattern.
+
+Measured in the slackware image, 2026-08-14:
+
+```
+$ slackpkg search -- bc
+search: Ignoring extra arguments: bc
+Looking for -- in package list. Please wait... DONE
+No package name matches the pattern.
+$ echo $?
+0
+```
+
+**Exit 0, empty result, nothing on stderr.** So `Searchable::search` returned `Ok(vec![])` and
+every caller read it as *slackpkg does not carry this package* — a wrong answer with the shape of
+a right one. `shall search bc` printed cargo and gem rows and no slackpkg row; the trace says
+`Backend 'slackpkg' returned 0 results` with no error beside it.
+
+**What it cost is the second half of VI.7.** Ranking slackpkg above the language managers is
+necessary and does nothing on its own: resolution asks who carries the name, and slackpkg was
+answering *not me* about a package sitting in its own list. So `shall install bc` still became
+`cargo install bc` on a machine with `bc-1.07.1-x86_64-5` one subcommand away. Two independent
+defects produced one symptom, and fixing either alone leaves it standing.
+
+**`install` hid it.** `slackpkg install -- bc` installs bc, because install takes a *list* of
+patterns and quietly drops the one that matched nothing. Search takes exactly one, and the
+terminator is that one. A row is one boolean per binary, so a verb that survives the terminator
+says nothing about the verb beside it — and the surviving verb is the one anybody would test.
+
+Removing the terminator opens no injection hole: a name beginning with `-` is refused by
+`Validator` and again by the grammar, before any argv is built.
+
+**The gate that will not miss the next one.** CI runs `terminator_probe_tests` against each
+distro image's own managers, so this row was unasked only because no Slackware image existed to
+ask it. Wiring slackware into that matrix arms it. Every remaining `GETOPT` row belongs to a
+manager with an image (asked nightly) or to one with no image at all — `emerge`, `guix`, `port`,
+`pkgin`, `pkg`, `pkg_add`, `pkg_delete`, `eopkg`, `pamac` — which is the same list as the
+unproven-lifecycle table, and for the same reason.

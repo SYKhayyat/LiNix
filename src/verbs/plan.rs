@@ -1158,6 +1158,15 @@ pub async fn approve_exec_scripts(
     let mut ledger = HookLedger::load(&path)?;
     let mut approved = 0usize;
     for (script, _opts, origin) in state.execs() {
+        // A catalogued step (`H8`) has no file to hash and no approval to give: it is a row
+        // compiled into this binary, the same status `builtin_backends.toml` has, and
+        // `Execs::exec_plan` treats it as approved without asking. Reading it as a path sent
+        // this walk after `<config>/step/rustup`, which nobody wrote — so `shall lock` failed
+        // outright on any configuration that used the catalogue, taking every OTHER script's
+        // approval down with it.
+        if crate::model::step::named(script).is_some() {
+            continue;
+        }
         let declared = std::path::Path::new(script);
         let full = if declared.is_absolute() {
             declared.to_path_buf()

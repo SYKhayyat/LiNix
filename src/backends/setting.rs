@@ -242,7 +242,14 @@ impl SettingBackendCore {
     /// silently unapplied is worse than a refusal, because the whole point is that the file
     /// is the truth (X.4).
     pub fn adapter(&self) -> Option<&SettingAdapter> {
-        adapter::first_present(&self.adapters, &|c| self.executor.command_exists_sync(c))
+        // Same seam as the init table's, unused by any settings row today: `gsettings` on `PATH`
+        // with no session bus behind it is the same wrong answer `systemctl` gave, and a store
+        // row can name a liveness path the day someone measures which one it should be.
+        adapter::first_present(
+            &self.adapters,
+            &|c| self.executor.command_exists_sync(c),
+            &|p| std::path::Path::new(p).exists(),
+        )
     }
 
     fn split(spec_name: &str) -> Result<(&str, &str)> {
