@@ -595,6 +595,30 @@ jobs:
           -v "$PWD/scripts/lifecycle-floor.txt:/src/scripts/lifecycle-floor.txt:ro" \
           shall-it-storage apt jq
 
+    # **The one image with `btrfs`, `lvm` and `zfs` on it had never been asked an argv question.**
+    # `scripts/terminator-floor.txt` listed `container-storage` among the classes owing a line, on
+    # the assumption that every class prints one on its next run. This job printed nothing, because
+    # nothing here ever pointed the probe at this image — the probe runs in the container matrix
+    # and the nightly one, and storage is neither. A class that no job asks is not a gap waiting on
+    # a run; it is a gap waiting on a step, and it would have waited indefinitely.
+    #
+    # Worth having for more than the missing line: these three backends are the most destructive
+    # in the program — `btrfs:PATH` runs `subvolume create`, `lvm:VG/LV` runs `lvcreate` — and
+    # this is the only image that has their tools, so it is the only place their argv can be
+    # checked against the tools themselves rather than against the table's own belief.
+    #
+    # `--privileged` and `/lib/modules` as above: the probe drives the same binaries the lifecycle
+    # does, and a `zfs` that cannot load its module answers differently from one that can.
+    - name: Ask the storage image's managers about subcommands, flags and `--`
+      if: ${{ !cancelled() }}
+      run: |
+        docker run --rm --privileged --entrypoint sh \
+          -e TERMINATOR_PROBE=1 -e CARGO_TARGET_DIR=/tmp/target \
+          -v /lib/modules:/lib/modules:ro \
+          -v "$PWD:/src" \
+          shall-it-storage -c \
+          "cd /src && cargo test --test suite -- argv_drift_tests:: terminator_probe_tests:: --nocapture"
+
   # macOS, run rather than compiled. A Darwin build passing `cargo test` says the code
   # compiles there; it says nothing about whether `brew install` reaches brew, whether the
   # parser reads `brew list --versions`, or whether a removal comes back. This is the same
@@ -740,9 +764,17 @@ jobs:
           fi
         '
 
+    # **`SHALL_NO_ADOPT` and the un-asserted exit code are both the twin's rules, arriving here
+    # late.** `install.ps1`'s job has carried each with a comment for as long as it has existed:
+    # the script's last acts are `shall check health`, which exits 2 by design when it finds work
+    # (`U21`, `H2`), and an adopt prompt that blocks on a container with no TTY. This job had
+    # neither, so the first run that got far enough to *succeed* at installing died at the prompt
+    # and reported exit 2 — a green install read as a red job. Exactly the twin-that-diverged
+    # shape `CLAUDE.md` is about, and the rule is in both jobs now.
     - name: Pipe install.sh into a clean container, as the README says to
       run: |
-        docker run --rm -v "$PWD:/src:ro" -e SHALL_REF="${{ github.ref_name }}" debian:stable-slim sh -c '
+        docker run --rm -v "$PWD:/src:ro" \
+          -e SHALL_REF="${{ github.ref_name }}" -e SHALL_NO_ADOPT=1 debian:stable-slim sh -c '
           set -e
           apt-get update -qq >/dev/null
           apt-get install -y -qq curl ca-certificates build-essential pkg-config libssl-dev git >/dev/null
@@ -751,11 +783,12 @@ jobs:
           # it is the path that has to compile.
           curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal >/dev/null
           . "$HOME/.cargo/env"
-          sh /src/scripts/install.sh
+          # Deliberately not asserting on the exit code, for the reason the comment above gives.
+          sh /src/scripts/install.sh || echo "install.sh exited $? — asserting on the artifact, not the code"
           # The assertion is not that the script exited 0 — it is that a user now has a working
           # program. A script that reports success and installs nothing is the exact failure
           # this job exists to catch.
-          command -v shall || { echo "install.sh exited 0 and left no shall on PATH"; exit 1; }
+          command -v shall || { echo "install.sh left no shall on PATH"; exit 1; }
           shall --version
         '
 

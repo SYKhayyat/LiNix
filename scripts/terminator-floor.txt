@@ -68,3 +68,17 @@ container-slackware cargo gem pip slackpkg
 #
 # Read off a local run of the probe step as `ci.yml` spells it, with the daemon script mounted in.
 container-guix apt guix
+
+# THE THREE RUNNER CLASSES, from dispatch 31944591924 (2026-08-16). These are what the nightly
+# argv-drift job can ask on a hosted runner, and they are the only lines here not measured inside
+# a container — so they are also the only ones whose managers a GitHub image upgrade can change
+# underneath them. A row that stops being measurable here is a finding about the runner image
+# first and about `src/core/argv.rs` second; read the failure's own message, which names why each
+# missing row could not be measured.
+#
+# `sc` on windows-ci is the Windows service controller, and it is here rather than in a container
+# for the obvious reason. `snap` on linux-ci likewise: no image in the container matrix runs
+# systemd, and snap will not answer without it.
+linux-ci cabal cargo composer conda dotnet gem helm pip pipx snap stack yarn
+macos-ci brew cargo dotnet gem pip pipx yarn
+windows-ci cabal cargo choco composer dotnet gem helm pip pipx sc stack yarn
