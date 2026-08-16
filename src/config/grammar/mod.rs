@@ -5,6 +5,7 @@
 //! `re:`) was a thing they read as a backend name instead (C13).
 
 pub mod error;
+pub mod exec;
 pub mod gated;
 pub mod options;
 pub mod statement;

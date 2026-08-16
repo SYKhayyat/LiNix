@@ -147,6 +147,12 @@ impl Execs<'_> {
         &self,
         state: &crate::model::DesiredState,
         verb: crate::model::exec::Verb,
+        // How many packages this run actually moved, or `None` when the run cannot know —
+        // a native whole-system `apt upgrade` reports no per-package count. `None` is NOT
+        // zero: an `@after=` step is run rather than skipped, because the path that cannot
+        // count is the path that moves the most, and skipping a firmware step after a
+        // whole-system upgrade is the wrong direction to be wrong in.
+        moved: Option<usize>,
         // The count is the number of UNDOS this pass performed. It exists because a
         // converged sync reports `already up to date` from a branch that can still run one,
         // and a summary that says nothing happened over a script that ran is the disease
@@ -172,6 +178,23 @@ impl Execs<'_> {
             // and the server has nothing to do rather than something to report. Said out loud
             // rather than silently, because a step that never runs and never says so is
             // indistinguishable from one that is quietly broken.
+            // `@after=N` — the step asked to wait for a run that moved enough to be worth
+            // its while. Said out loud: a step that silently does not run is indistinguishable
+            // from one that is broken, which is the same argument the skip below makes.
+            if let Some(threshold) = opts
+                .one("after")
+                .and_then(|v| v.trim().parse::<usize>().ok())
+            {
+                if let Some(count) = moved {
+                    if count < threshold {
+                        info!(
+                            "skipping exec:{} — it runs after {} package(s) move and this run                              moved {} ({})",
+                            script, threshold, count, origin
+                        );
+                        continue;
+                    }
+                }
+            }
             if let Planned::Step(step) = &planned {
                 if !self.executor.command_exists_sync(&step.detect) {
                     info!(

@@ -366,10 +366,18 @@ it stopped running the harness as root, three weeks before this. The unit tests 
 backend; the property is about two backends agreeing, and a fixture with one of anything cannot
 state it.
 
-**The fix is a table, not a special case.** `READS_THE_DATABASE_OF` in `backends/capability.rs`
-names the client and the database's owner. Everything else asks it: adopt claims a name for the
-database rather than the client, the crawl and `list` collapse to one row, `--absent` collapses to
-one holder. The choice of *which* backend survives is `J3`, and it is the owner's to reverse.
+**The fix is a table, not a special case.** `READS_THE_DATABASE_OF` in
+`backends/shared_database.rs` names the client and the database's owner. Everything else asks it:
+adopt claims a name for the database rather than the client, the crawl and `list` collapse to one
+row, `--absent` collapses to one holder.
+
+**Which backend survives turned out not to be a constant** (`J3`, ruled 2026-08-16). The owner
+was the first answer and it is right for a repository package: `pacman -Rs` removes an AUR
+package that `yay` installed, so the surviving row is one the user can act on. It is wrong for
+the *other* direction, which a manifest needs just as much — pacman cannot reinstall a package
+that is in no sync repository, so a `pacman:` row for one is a line you cannot delete and put
+back. So the owner wins the repository set and the helper wins the foreign set, which
+`pacman -Qmq` names.
 
 **The ordering lesson, which is the transferable part.** The claim has to be made before the
 already-declared filter, not after it. Filtering first is what let the clients through: pacman was

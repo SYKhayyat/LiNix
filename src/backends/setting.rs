@@ -283,6 +283,33 @@ impl SettingBackendCore {
         Ok(scope)
     }
 
+    /// Whether the store already holds `want` for `SCHEMA/KEY`, read in the scope the
+    /// declaration names.
+    ///
+    /// **`None` is "Shall could not ask", and it is never `Some(false)`.** A read fails for
+    /// reasons that have nothing to do with the value: a schema `gsettings` has never heard of,
+    /// a registry hive this account cannot open, a machine with no settings store on it at all.
+    /// Reported as *not in effect*, each of those would make the key look permanently drifted —
+    /// `check` red for ever on a key nobody can see, and a write attempted every sync against a
+    /// store that just said no. So the read must exit clean to count, which is `probe_output`'s
+    /// contract and not `run_output`'s: the latter hands back `Ok("")` for a command that
+    /// failed but explained itself, and an empty reading compares unequal to every value there
+    /// is.
+    ///
+    /// The scope refusal is the same shape. A `@scope=system` line against a store with no
+    /// machine-wide commands has no readable state at all, and answering from the *user* key
+    /// would compare the wrong setting — which is exactly the bug `@scope=` was carried into
+    /// the ledger to fix. `scope_of` refuses it by name at apply time; here it is unanswerable.
+    pub async fn holds(&self, spec_name: &str, want: &str, scope: Option<&str>) -> Option<bool> {
+        let (schema, key) = Self::split(spec_name).ok()?;
+        let adapter = self.adapter()?;
+        let scope = self.scope_of(adapter, scope, spec_name).ok()?;
+        let (prog, args) = adapter.read_command(scope, schema, key);
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let current = self.executor.probe_output(&prog, &refs).await.ok()?;
+        Some(already_set(&current, want))
+    }
+
     fn no_adapter(&self, name: &str) -> Error {
         let known: Vec<&str> = self.adapters.iter().map(|a| a.name.as_str()).collect();
         Error::Validation(format!(
@@ -346,15 +373,17 @@ impl Installable for SettingInstallable {
                 .scope_of(adapter, spec.options.one("scope"), &spec.name)?;
 
             // Read before write: only touch the store when it does not already hold `want`,
-            // so a settled sync runs no command at all. Read in the SAME scope it will write:
-            // reading the user value and writing the machine one would compare two different
-            // settings and call them equal.
-            let (rprog, rargs) = adapter.read_command(scope, schema, key);
-            let refs: Vec<&str> = rargs.iter().map(String::as_str).collect();
-            if let Ok(current) = self.core.executor.run_output(&rprog, &refs, false).await {
-                if already_set(&current, want) {
-                    continue;
-                }
+            // so a settled sync runs no command at all. Through the same probe `plan` and
+            // `check` ask — one read, one comparison, one set of scope rules — because two
+            // answers to "is this key already right" is how the reporting half came to say
+            // *nothing to do* about a key this half was rewriting.
+            if self
+                .core
+                .holds(&spec.name, want, spec.options.one("scope"))
+                .await
+                == Some(true)
+            {
+                continue;
             }
 
             let (prog, args) = adapter.write_command(scope, schema, key, want);
@@ -687,6 +716,102 @@ mod tests {
         // A value with spaces (a path) survives — everything after the type word is the value.
         let path = "    Wallpaper    REG_SZ    C:\\Users\\me\\a b.jpg\r\n";
         assert!(already_set(path, "C:\\Users\\me\\a b.jpg"));
+    }
+
+    /// A store driven by a real child process, so the read is parsed rather than handed over.
+    /// `{schema}` and `{key}` are substituted and then ignored — what this fixture controls is
+    /// the *reading*, which is the half `holds` has to get right.
+    fn store_reading(reading: &str) -> SettingBackendCore {
+        #[cfg(windows)]
+        let read = vec!["cmd".into(), "/C".into(), format!("echo {}", reading)];
+        #[cfg(not(windows))]
+        let read = vec![
+            "sh".into(),
+            "-c".into(),
+            format!("printf '%s' '{}'", reading),
+        ];
+        let mut a = row("probe", if cfg!(windows) { "cmd" } else { "sh" });
+        a.read = read;
+        SettingBackendCore::new(CommandExecutor::new(false, false), vec![a])
+    }
+
+    /// The J2 fix, in one assertion: the reporting half asks the store the same question the
+    /// installer has always asked it. Before this, every `setting:` line was *unverifiable* —
+    /// which places — so `check` and `plan` named a settled key as work on every run.
+    #[tokio::test]
+    async fn a_key_the_store_already_holds_reads_back_as_in_effect() {
+        let core = store_reading("prefer-dark");
+        assert_eq!(
+            core.holds(
+                "org.gnome.desktop.interface/color-scheme",
+                "prefer-dark",
+                None
+            )
+            .await,
+            Some(true)
+        );
+        assert_eq!(
+            core.holds(
+                "org.gnome.desktop.interface/color-scheme",
+                "prefer-light",
+                None
+            )
+            .await,
+            Some(false),
+            "a different value is drift, and drift places"
+        );
+    }
+
+    /// **The caveat that ships with the ruling.** A read fails for reasons that are not "the
+    /// value differs": a schema `gsettings` has never heard of, a hive this account cannot
+    /// open. Read as *not in effect*, each would make `check` permanently red on a key nobody
+    /// can see and make every sync rewrite it. Only a clean read counts.
+    #[tokio::test]
+    async fn a_read_the_store_refuses_is_unanswerable_not_absent() {
+        let mut a = row("probe", if cfg!(windows) { "cmd" } else { "sh" });
+        a.read = if cfg!(windows) {
+            vec!["cmd".into(), "/C".into(), "exit 1".into()]
+        } else {
+            vec!["sh".into(), "-c".into(), "exit 1".into()]
+        };
+        let core = SettingBackendCore::new(CommandExecutor::new(false, false), vec![a]);
+        assert_eq!(
+            core.holds("org.gnome.x/k", "anything", None).await,
+            None,
+            "a refused read must not be reported as a value that differs"
+        );
+    }
+
+    /// The other two ways the question is unanswerable, each for its own reason and neither of
+    /// them "the value differs". A machine with no store cannot be asked; a name that is not
+    /// `SCHEMA/KEY` addresses nothing to ask about.
+    #[tokio::test]
+    async fn a_machine_with_no_store_and_a_name_with_no_key_are_both_unanswerable() {
+        let none = SettingBackendCore::new(CommandExecutor::new(false, false), vec![]);
+        assert_eq!(none.holds("org.gnome.x/k", "v", None).await, None);
+
+        let core = store_reading("prefer-dark");
+        assert_eq!(core.holds("dark", "prefer-dark", None).await, None);
+    }
+
+    /// U19's rule, on the reading side: a `@scope=system` line against a store with no
+    /// machine-wide commands is unanswerable, not answered from the per-user key. Reading one
+    /// scope and writing the other is the bug `@scope=` was carried into the ledger to fix, and
+    /// it would arrive here as a confident `Some`.
+    #[tokio::test]
+    async fn system_scope_on_a_user_only_store_is_unanswerable() {
+        let core = store_reading("prefer-dark");
+        assert_eq!(
+            core.holds("org.gnome.x/k", "prefer-dark", Some("system"))
+                .await,
+            None
+        );
+        // ...and the same store answers the scope it does have.
+        assert_eq!(
+            core.holds("org.gnome.x/k", "prefer-dark", Some("user"))
+                .await,
+            Some(true)
+        );
     }
 
     /// The refusal names what Shall looked for, so a machine running an unlisted store learns

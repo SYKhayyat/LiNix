@@ -1201,6 +1201,12 @@ pub(crate) fn build_capabilities(
         update_args: def.update_args,
         purge_args: def.purge_args,
         orphan_dry_run: def.orphan_dry_run.map(Into::into),
+        // Deliberately not a field an onboarded row can set. The distinction only means
+        // something where two backends share one installed database, and that relation is a
+        // compiled table (`READS_THE_DATABASE_OF`) rather than something a definition file can
+        // claim about itself — a row that named a foreign query with nothing reading it would
+        // be a setting that does nothing.
+        foreign_args: None,
         repo_add_args: def.repo_add_args,
         repo_remove_args: def.repo_remove_args,
         repo_list_args: def.repo_list_args,

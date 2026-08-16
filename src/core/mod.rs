@@ -20,6 +20,7 @@ pub mod journal;
 pub mod latency;
 pub mod launch;
 pub mod ledger;
+pub mod lock_kind;
 pub mod manager;
 pub mod output;
 pub mod package;

@@ -119,9 +119,12 @@ impl Inventory<'_> {
         // One installed package is one row, however many clients of its database answered.
         // Three pacman clients on an Arch box turn 203 packages into 609 lines, each triple
         // identical but for the backend column.
-        Ok(crate::backends::capability::one_row_per_shared_database(
-            rows,
-        ))
+        Ok(
+            crate::backends::shared_database::one_row_per_shared_database(
+                rows,
+                &crate::backends::shared_database::ForeignSets::probe(self.registry).await,
+            ),
+        )
     }
 
     pub async fn get_info(&self, package_name: &str) -> Result<Option<Package>> {
@@ -379,6 +382,9 @@ impl Inventory<'_> {
         // name: the installer is `dpkg`/`rpm`, the lister is `apt`/`dnf`, and the name is the one
         // identity they share.
         let owned = self.owned_system_package_names().await;
+        // Probed before the state lock is taken: it runs a child process, and holding a mutex
+        // across one is how a lock becomes a bottleneck nobody can see.
+        let foreign = crate::backends::shared_database::ForeignSets::probe(self.registry).await;
         // The managed check touches the state lock once, after the process work is done,
         // rather than holding it across every backend's query.
         let state = self.state.lock().await;
@@ -388,8 +394,9 @@ impl Inventory<'_> {
             // what makes jq declared, and a `yay:jq` row surviving that filter would report a
             // declared package as undeclared — and offer `purge-undeclared` a second removal
             // of something the first one already took.
-            packages: crate::backends::capability::one_row_per_shared_database(
+            packages: crate::backends::shared_database::one_row_per_shared_database(
                 listed.into_iter().flatten().collect(),
+                &foreign,
             )
             .into_iter()
             .filter(|pkg| !managed.contains(&(pkg.backend.as_str(), pkg.name.as_str())))

@@ -21,6 +21,7 @@ pub mod mise;
 pub mod nix;
 pub mod service;
 pub mod setting;
+pub mod shared_database;
 pub mod snap;
 pub mod storage;
 pub mod vscode;

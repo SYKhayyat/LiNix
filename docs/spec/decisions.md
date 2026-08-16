@@ -1,4 +1,4 @@
-# The decision register — 213 entries: 211 ruled, two open
+# The decision register — 213 entries, none open
 **One file, six features, nothing waiting on the owner.** Every decision this design forces lives
 here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -22,19 +22,19 @@ HALF RULED had no rows, the five that remained summed to 206 against 210, and
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **2** |
-| **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **1** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **206** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
+| **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **208** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 | **DEFERRED** | Asked, and the owner chose to answer it later. | A ruling, when the owner returns to it. | **1** |
-| **HALF RULED** | Part of the question was answered and part was not. | A ruling on the remaining half. | **1** |
+| **HALF RULED** | Part of the question was answered and part was not. | A ruling on the remaining half. | **2** |
 
-**Two of these seven statuses now describe nothing, and they stay.** The categories are not
-decoration: *OPEN — blocking* refills the moment a new feature is proposed, and *BUILT, NEVER
+**Four of these seven statuses now describe nothing, and they stay.** The categories are not
+decoration: both *OPEN* rows refill the moment a new feature is proposed, and *BUILT, NEVER
 RULED* has refilled three times — once with twelve entries at once, and again on 2026-08-14 with
-`J3` — the moment somebody implemented a work order, or a defect fix with a visible choice inside
-it, before it was put to the owner. Deleting an empty category is how the next one goes
-unnoticed.
+`J3`, which was ruled on 2026-08-16 and emptied it — the moment somebody implemented a work
+order, or a defect fix with a visible choice inside it, before it was put to the owner. Deleting
+an empty category is how the next one goes unnoticed.
 
 **The twelve were confirmed on 2026-08-14, by delegation rather than by review of each.** The
 owner was given the round's findings and the three entries that nominate themselves as the ones
@@ -107,7 +107,7 @@ the same coin and is not ruled: what a version pin means when *Shall* recorded i
 has since dropped it. The `G` round then ran the
 other way round: `docs/GRADE-2026-08-12.md`'s work order was implemented in one pass, and the nine
 changes in it that a user would notice shipped ahead of any ruling. All 213 are accounted
-for: **206 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 2 OPEN** — and this line
+for: **208 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -8530,7 +8530,8 @@ precisely the person who configured Shall most deliberately.
 
 ## J2
 
-**Status: OPEN.**
+**Status: ANSWERED — 2026-08-16. Owner: *"yes, of course. this is a bug."* Built in the same
+commit; the caveat below shipped with it.**
 
 **A `setting:` is never read back, so a sync that changes one reports that it changed nothing.**
 Measured on Windows 11 with `target/debug/shall.exe` against the real registry, three syncs over
@@ -8563,24 +8564,36 @@ change is invisible in the summary; the value is re-written on every sync for ev
 can never come clean on a machine with a `setting:` line — which is the cost `G2` recorded when it
 ruled that *"Shall cannot read back"* may not be an `ok` row.
 
-**The question.** Should `in_effect` answer for `setting:` by running the store's `read` and
-comparing with `already_set` — the same pair `K::Link` above it was already given?
+**The question, and the ruling.** Should `in_effect` answer for `setting:` by running the store's
+`read` and comparing with `already_set` — the same pair `K::Link` above it was already given?
+**Yes.** `check` goes clean where it never could before, and a converged sync stops touching the
+store.
 
-**Recommendation: yes.** It is the fix `link:` got for the identical shape, it removes a write per
-setting per sync, and it makes `check` answerable. It is raised rather than built because it
-changes what a user sees: `check` goes clean where it never could before, and a converged sync
-stops touching the store. **Do not build it before this is ruled** — that is what the OPEN status
-means here.
+**What was built.** `SettingBackendCore::holds` is the one question — split the name, pick the
+adapter, resolve the scope, read, compare — and both halves ask it: `in_effect` for the report
+and `SettingInstallable::install` for the write. Two answers to *is this key already right* is
+how the reporting half came to say **nothing to do** about a key the other half was rewriting, so
+the fix is one function rather than a second copy of the comparison.
 
-**One caveat that belongs with the ruling.** `read` can fail for reasons that are not "the value
-differs" — a schema `gsettings` does not know, a registry hive the user cannot open. Those must
-stay `None`, not become `Some(false)`; a failed read that reported *not in effect* would make
-every sync rewrite the key it cannot see, which is the current behaviour wearing a confident face.
+**The caveat shipped with the ruling.** `read` fails for reasons that are not "the value differs"
+— a schema `gsettings` does not know, a registry hive the user cannot open, a `@scope=system`
+line against a store with no machine-wide commands. Those stay `None`, never `Some(false)`: a
+failed read reported as *not in effect* would make every sync rewrite the key it cannot see,
+which is the old behaviour wearing a confident face. So the read must **exit clean** to count,
+which is `probe_output`'s contract and not `run_output`'s — the latter hands back `Ok("")` for a
+command that failed but explained itself, and an empty reading compares unequal to every value
+there is. That distinction is one of the four tests.
+
+**What it does not close.** A store whose read fails on an *unset* key — `reg query` on a value
+that is not there — is still unanswerable rather than absent, so it is placed. That is exactly
+what it did before, and `gsettings`, which returns the schema default for an unset key, answers
+properly. Distinguishing "unset" from "unreadable" needs a per-store rule no adapter row carries.
 
 ## J3
 
-**Status: BUILT, NEVER RULED — 2026-08-14. The defect is not in question; the choice of winner
-is, and reversing it is a one-line change to one table.**
+**Status: ANSWERED — 2026-08-16. Owner: *"i dont get this so much, but do what a user would want
+— make it intuitive, easy, flexible and powerful."* The winner is no longer one answer: it is
+the owner for a repository package and the helper for a foreign one, built in the same commit.**
 
 **Three backends over one package database made every Arch machine unconvergeable.** `pacman`,
 `yay` and `paru` are three clients of one libalpm database: all three answer `-Qe` with the same
@@ -8608,7 +8621,8 @@ managers hold jq and writes an `absent:` line per holder, so it wrote three; an 
 permanent, so that machine would have failed *every* subsequent sync, for ever, with no line to
 delete that would fix it.
 
-**What was built.** One table, `READS_THE_DATABASE_OF` in `backends/capability.rs`, naming the
+**What was built.** One table, `READS_THE_DATABASE_OF` (then in `backends/capability.rs`,
+now in `backends/shared_database.rs`), naming the
 client and the backend whose database it reads (`yay → pacman`, `paru → pacman`), and three
 functions over it. Adopt keys candidates on the database rather than the client; the crawl and
 `list` collapse rows the same way; `--absent` collapses holders. The claim is made **before** the
@@ -8627,15 +8641,43 @@ row. That is what makes the surviving row actionable — `pacman -Rs` removes an
 printed next to it. Where no owner answered (`shall list --backend yay`), the first client stands,
 so filtering to a client never returns an empty listing.
 
-**What this does not do, and it is worth stating.** An AUR-only package is now adopted as
-`pacman:<name>`. pacman can remove it and cannot reinstall it, so deleting that line and putting
-it back needs an AUR helper. The alternative — attributing AUR packages to `yay` by asking
-`pacman -Qm` for the foreign set — is a real design and is not built here; it belongs with a
-ruling, not with a defect fix.
+**The ruling, and what a user wants.** A declaration is a thing you can delete and put back —
+that is what a manifest *is*. `pacman:<aur package>` fails that test in one direction: pacman
+removes it and cannot reinstall it, because it is in no sync repository. So the winner is not a
+constant. It is **the owner for a package the repositories supply and the helper for one they do
+not**, which is the `pacman -Qm` foreign set the previous entry named as the alternative.
+
+**What was built.** `Queryable::foreign_to_repositories` — `None` from every manager that draws
+no such distinction, `pacman -Qmq` for the one that does — and `ForeignSets`, which asks it once
+per run and only on a machine where an owner *and* one of its clients are both present. Both
+collapses consult it: the cross-backend listing (`list`, the undeclared crawl) and the holder
+list (`--absent`), so the two cannot answer one question differently. `adopt` stands the owner
+aside on the foreign set, and its already-declared check moved to the **database** rather than
+the client — otherwise a `pacman:jq` written by an earlier run would let `yay:jq` in beside it,
+which is the duplicate this whole relation exists to stop.
+
+**Three bounds, stated rather than left to be found.**
+
+- **The owner only stands aside when a client is answering in the same run.** On an Arch box
+  with no helper installed, `pacman:<aur package>` is still the best row there is; losing it
+  would drop the package from the listing entirely.
+- **The manager-level collapse is untouched.** `check health` refreshes managers, not packages,
+  and there is no package there to ask about — so `pacman -Sy` still stands for all three.
+- **A probe that fails leaves the owner speaking for everything**, which is the behaviour this
+  replaced. It is read through `probe_output`, so a refused flag is *unknown* rather than
+  *nothing is foreign*: an empty answer read out of a failure would attribute every AUR package
+  to pacman again, quietly.
+
+Moved out of `capability.rs` in the same change: that module's header says it is deliberately a
+static table rather than a question put to the registry, and this is now a question put to the
+registry. It is `backends/shared_database.rs`.
 
 ## J4
 
-**Status: OPEN.**
+**Status: HALF RULED 2026-08-16.** The owner ruled the substance — selective pinning, a config
+switch for each part, an error that explains itself, and selective upgrade. **The remaining half
+is one question: does a bare `shall lock` keep freezing all three axes?** It does today and it
+still does; `[lock] axes` is how a machine narrows it. See *What was ruled* below.
 
 **A plain `sync` honours a version lockfile that `shall lock` writes as a side effect, so a
 machine stops syncing the day its archive drops a recorded version.** Found by the storage leg of
@@ -8684,3 +8726,49 @@ typed is a decision"*. A version Shall recorded on their behalf is not.
 
 **Raised rather than built because every option changes what a user sees** — which sync fails,
 which command records what, and what a machine does the morning after a security update.
+
+### What was ruled, 2026-08-16
+
+**Half of what this entry asked for already existed, and saying so is part of the ruling** — the
+gap was never "Shall cannot scope a pin", it was that the scope had no name for a whole manager
+and no home in the config. `shall lock versions curl` pinned one package before this change;
+`shall lock scripts` approved an `exec:` without pinning anything, and would have prevented the
+reproduction above outright. `shall upgrade curl`, `shall upgrade --backend apt`, `--security`
+and `--except` all shipped long ago, and `upgrade` already re-records the pins it moved past.
+
+Four things were built:
+
+1. **`--backend` on `lock` and `unlock`.** A class is a manager, and it goes on a flag rather
+   than being inferred from a bare word, because `apt:apt` is a real package on every Debian
+   machine — `shall lock versions apt` has to keep meaning the package called `apt`. Names and a
+   class intersect: `--backend apt curl` is apt's curl and not cargo's. The flag needs the
+   `versions` axis and is **refused** on the others rather than silently matching nothing, since
+   a backend lock's keys are bare names and a script id's prefix (`after_install:`) is a ledger
+   namespace, not a manager.
+
+2. **A `[lock]` table in `preferences.toml`, three keys, every default the shipped behaviour.**
+   `axes` narrows what a bare `lock` freezes; `versions` names which managers get pins (`["*"]`
+   by default); `replay` is whether an ordinary `sync` installs recorded versions. That third
+   key is the root of the reproduction above and had no name at all before — `prefer_locks` was
+   hardcoded `true`, so the only way to decline it was `--upgrade` on every sync for ever.
+   `replay = false` keeps the file as a drift record, which `check` still reads and `sync
+   --locked` still reproduces from, without a recorded version becoming an install argument.
+
+3. **The failure explains itself.** A manager that cannot get a pinned version now says the pin
+   is in `locks/versions.json`, that Shall recorded it, and names `shall upgrade <pkg>`, `shall
+   unlock versions <pkg>`, `sync --upgrade` and `[lock] replay = false`. It is **derived from
+   disk, not carried on the spec**: the lockfile is read at the moment of failure and asked
+   whether the version the manager quoted is the one recorded for that package. `V`'s rule
+   against a `was_hand_written` bit stands untouched, and nothing here is set by anybody.
+   Advice is withheld when the manager's complaint does not quote the pin, so a dead mirror or a
+   full disk is never blamed on a lockfile.
+
+4. **`[lock] versions` is enforced in `build_and_write_locks`, not in the `lock` command** —
+   `heal` reconciles the same file, and a class filter on one writer would have `heal` quietly
+   put back every pin `lock` was configured not to write.
+
+**What was deliberately not changed.** A version somebody *typed* still fails hard, on the
+reasoning `pins.rs` already gives: a version you typed is a decision. Only the recorded kind gets
+the explanation. And `refresh_version_locks` still moves an existing pin even for a manager
+`[lock] versions` now excludes — the pin exists, and refusing to move it would freeze it at a
+stale version, which is the Z2 bug the function was written to prevent.

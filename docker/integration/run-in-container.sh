@@ -1785,7 +1785,12 @@ else
     # got is the vacuous check this harness exists to not contain.
     nok_saying "an unapproved exec: refuses the sync" "has never been approved" lx -y sync
     ok "and the unapproved script did NOT run" test ! -e "$_emark"
-    ok "shall lock approves it" lx lock
+    # **`lock exec`, not a bare `lock`.** A bare one freezes everything, which here meant
+    # recording the installed version of every apt package on the image — including
+    # `apt:libudev1`, whose version the archive dropped a week later, after which every sync
+    # in this section failed with `E: Version '...' was not found`. Approving a script is not
+    # a decision about package versions, and now it does not have to be one.
+    ok "shall lock exec approves it" lx lock exec
     ok "sync runs an approved exec:" lx -y sync
     ok "the script really ran" test -f "$_emark"
     rm -f "$_emark"
@@ -1983,10 +1988,10 @@ grep_ok "adapters refuses a name that is not a surface, and lists the real ones"
 mkdir -p "$SHALL_CONFIG_DIR/adapters"
 printf '[[backends]]\nname = "mymgr"\n' > "$SHALL_CONFIG_DIR/adapters/backends.toml"
 grep_ok "an adapter file nobody approved is reported unapproved" "unapproved" lx adapters backends
-lx lock >/dev/null 2>&1
+lx lock adapters >/dev/null 2>&1
 grep_ok "a table nobody opens is 'no rows', not 'in use'" "no rows" lx adapters backends
 printf '[[backend]]\nname = "mymgr"\ninstall = "true --"\n' > "$SHALL_CONFIG_DIR/adapters/backends.toml"
-lx lock >/dev/null 2>&1
+lx lock adapters >/dev/null 2>&1
 grep_ok "a row of the right kind is in force" "in use" lx adapters backends
 # Malformed degrades rather than refusing (owner ruling, 2026-08-10), and `check adapters` is
 # where that fact is an exit code instead of a warning nobody re-reads.
@@ -1994,7 +1999,7 @@ printf 'this is not toml at all\n' > "$SHALL_CONFIG_DIR/adapters/backends.toml"
 # Approved first, and that ordering is the point: `standing_of` asks II.12 before it asks the
 # parser, so an unapproved file reads `unapproved` whatever is inside it. Without this line the
 # check below tests the approval ledger and calls it a parse result.
-lx lock >/dev/null 2>&1
+lx lock adapters >/dev/null 2>&1
 grep_ok "an unreadable adapter file is reported malformed" "malformed" lx adapters backends
 # The ruling: `sync` degrades rather than refusing. Asserted on the words Shall prints, not on
 # exit 0 — a check that only wants exit 0 is a check a do-nothing binary passes, which is what
@@ -2767,54 +2772,75 @@ else
             soft "lock: the stamp was already gone after the kill, so the corpse case below is weaker than intended"
         fi
 
-        # **The subject here is Shall's own lock, so the package manager's is cleared first.**
-        # Killing a holder mid-sync also orphans the `pacman` it had started, which keeps its own
-        # `db.lck` and then leaves it behind — so the sync below failed on *that* lock and this
-        # check reported it as a Shall lock that was not released. A check that can fail for a
-        # reason unrelated to its own sentence proves nothing when it passes either. `heal` is
-        # the command whose job that repair is (II.50), and it is untimed: what is being measured
-        # is the sync, and specifically that it does not wait 120s on a corpse.
-        $TO "$SHALL" -y heal >/tmp/lock-corpse-heal.out 2>&1 || true
-        _t0=$(date +%s)
-        $TO "$SHALL" -y sync >/tmp/lock-corpse.out 2>&1
-        _rc=$?
-        _took=$(since "$_t0")
-        # **What must not happen is a wait on the DATA DIRECTORY**, and that is what is
-        # asserted — not a stopwatch, and NOT the exit code. A killed holder also orphans the
-        # package manager it had started, and the next run legitimately waits for that manager
-        # to finish (II.51), announcing it as it goes. On opensuse that was 62 seconds of
-        # correct behaviour, and a bare `>= 30` reported it as "the stale stamp file was
-        # believed over the lock" — a sentence about a mechanism that had not run. The wait
-        # Shall is forbidden from making here is the one on its own lock, and it says which
-        # wait it is making.
+        # **The lock is timed by a command whose entire cost IS the lock.**
         #
-        # **The exit code is asked LAST, and under its own name.** It used to be asked first,
-        # so any failure of the sync — a package that no longer exists upstream, a repository
-        # that was down — was reported as `lock: a run after a killed holder failed … instead
-        # of taking the free lock`. The macOS nightly failed exactly that way for six nights
-        # over a version pin naming a Homebrew formula that does not exist: the lock was taken
-        # correctly, and the check that reported a lock defect was the only red line in the run.
-        # A check whose name and whose cause are unrelated is the defect `GRADER.md` exists to
-        # catch. The lock question and the sync question are separate questions and now have
-        # separate sentences.
-        if grep -q "waiting for the data directory" /tmp/lock-corpse.out 2>/dev/null; then
-            hard "lock: the next run waited on the data directory after the holder was killed — the stale stamp file was believed over the lock (${_took}s)"
-            excerpt /tmp/lock-corpse.out 6
-        elif [ "$_took" -ge 120 ]; then
-            hard "lock: the next run took ${_took}s, which is the data-lock timeout, without saying it was waiting for anything"
-            excerpt /tmp/lock-corpse.out 6
+        # `unlock backends <a name nothing froze>` takes the data lock, writes a ledger and asks
+        # no package manager anything, so its duration is the acquisition and nothing else. A
+        # sync cannot answer this question: on opensuse one `zypper` command installing three
+        # packages took 121 seconds of entirely correct work, and a stopwatch over the sync
+        # called that the 120-second data-lock timeout. That was the second time — the first was
+        # at `>= 30`, answered by raising the number, which moves a false failure to a slower
+        # mirror instead of removing it. A duration only means something when nothing else can
+        # spend it.
+        #
+        # **It runs before `heal`, and that ordering is the positive control.** `heal` is a
+        # `Writer`: it takes the data lock for its whole run and `Drop` deletes the stamp. So
+        # with `heal` first, the "is the corpse's stamp gone" branch below could never fire — the
+        # step added to clear the *manager's* orphaned lock had silently disabled the only
+        # evidence that Shall's own lock was ever taken. The probe needs no `heal`, because it
+        # never goes near a manager.
+        _t0=$(date +%s)
+        $TO "$SHALL" -y unlock backends shall-never-frozen-zzz >/tmp/lock-corpse-probe.out 2>&1
+        _probe=$(since "$_t0")
+        if grep -q "waiting for the data directory" /tmp/lock-corpse-probe.out 2>/dev/null; then
+            hard "lock: taking the lock after a killed holder waited on the data directory — the stale stamp file was believed over the lock (${_probe}s)"
+            excerpt /tmp/lock-corpse-probe.out 6
+        elif [ "$_probe" -ge 30 ]; then
+            hard "lock: taking the lock after a killed holder cost ${_probe}s, and this command has no manager work to spend it on"
+            excerpt /tmp/lock-corpse-probe.out 6
         # **Positive evidence that the lock was taken, not merely that nothing complained.**
         # `DataLock`'s `Drop` deletes the stamp, so the corpse's file is gone once something has
         # taken and released the lock — and is still there if nothing did. Without this the
         # whole branch passed against a stub that does nothing and exits 0, which is a check
         # that cannot fail and therefore proves nothing when it passes.
         elif [ -s "$LOCKOWNER" ]; then
-            hard "lock: the killed holder's stamp is still on disk after the next run — nothing took and released the lock, so this check had nothing to measure"
+            hard "lock: the killed holder's stamp is still on disk after a run that takes the lock — nothing took and released it, so this check had nothing to measure"
+            excerpt /tmp/lock-corpse-probe.out 6
+        else
+            PASS=$((PASS + 1)); echo "  PASS  lock: a killed holder's lock died with it — the next run took it in ${_probe}s and released it"
+        fi
+
+        # **The subject here is Shall's own lock, so the package manager's is cleared first.**
+        # Killing a holder mid-sync also orphans the `pacman` it had started, which keeps its own
+        # `db.lck` and then leaves it behind — so the sync below failed on *that* lock and this
+        # check reported it as a Shall lock that was not released. A check that can fail for a
+        # reason unrelated to its own sentence proves nothing when it passes either. `heal` is
+        # the command whose job that repair is (II.50).
+        $TO "$SHALL" -y heal >/tmp/lock-corpse-heal.out 2>&1 || true
+        _t0=$(date +%s)
+        $TO "$SHALL" -y sync >/tmp/lock-corpse.out 2>&1
+        _rc=$?
+        _took=$(since "$_t0")
+        # The sync is still run and still asked one lock question — it is the realistic path, and
+        # a run that announces a data-directory wait here is the defect however long it took. It
+        # is **not** timed: see the probe above for why a sync's duration belongs to whichever
+        # manager it drove.
+        #
+        # **The exit code is asked LAST, and under its own name** (below). It used to be asked
+        # first, so any failure of the sync — a package that no longer exists upstream, a
+        # repository that was down — was reported as `lock: a run after a killed holder failed …
+        # instead of taking the free lock`. The macOS nightly failed exactly that way for six
+        # nights over a version pin naming a Homebrew formula that does not exist: the lock was
+        # taken correctly, and the check reporting a lock defect was the only red line in the
+        # run. A check whose name and whose cause are unrelated is the defect `GRADER.md` exists
+        # to catch.
+        if grep -q "waiting for the data directory" /tmp/lock-corpse.out 2>/dev/null; then
+            hard "lock: the sync after a killed holder waited on the data directory — the stale stamp file was believed over the lock (${_took}s)"
             excerpt /tmp/lock-corpse.out 6
         else
             _why=""
             grep -q "shall: waiting for" /tmp/lock-corpse.out 2>/dev/null && _why=" (it waited for the package manager the killed run had started, and said so)"
-            PASS=$((PASS + 1)); echo "  PASS  lock: a killed holder's lock died with it — the next run took ${_took}s, took the lock and released it${_why}"
+            PASS=$((PASS + 1)); echo "  PASS  lock: the sync after a killed holder claimed no wait on the data directory (${_took}s)${_why}"
         fi
         # The other question, asked separately because it is a different question — and asked at
         # all only where the fixture it syncs is installable here. The sentence claims a *sync*
@@ -3226,7 +3252,7 @@ restores_running_system = true
 EOSNAP
     # II.12: a row in a pulled config is argv a shared repo can run, so it passes the hook
     # ledger. Approving it is part of the path a real user walks, not a step around it.
-    ok "restore: \`lock\` approves the snapshot provider row" lx lock
+    ok "restore: \`lock adapters\` approves the snapshot provider row" lx lock adapters
 
     _marker_before="$LVM_MNT/before-the-snapshot"
     _marker_after="$LVM_MNT/after-the-snapshot"

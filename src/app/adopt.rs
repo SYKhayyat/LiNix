@@ -283,7 +283,7 @@ impl Adopter {
             // Said once per client, not once per package: forty rows of "pacman already has
             // this one" is noise, and saying nothing about forty declarations that did not
             // appear is worse.
-            let owner = crate::backends::capability::package_database(backend.name());
+            let owner = crate::backends::shared_database::package_database(backend.name());
             if owner != backend.name()
                 && sweeping(backend.name())
                 && sweeping(owner)
@@ -307,15 +307,27 @@ impl Adopter {
         manual.sort_by(|a, b| {
             let key = |n: &str| {
                 (
-                    !crate::backends::capability::owns_its_database(n),
+                    !crate::backends::shared_database::owns_its_database(n),
                     n.to_string(),
                 )
             };
             key(&a.0).cmp(&key(&b.0))
         });
 
-        for (name, source, pkgs) in manual {
-            found.sources.insert(name, source);
+        // **Which client speaks for a package depends on the package** (`J3`). pacman removes
+        // an AUR package and cannot put it back, so a `pacman:` line for one is a declaration
+        // that cannot be deleted and re-added — which is the whole thing a manifest is for. The
+        // helper does both, so it claims the foreign set and pacman claims the rest.
+        let foreign =
+            crate::backends::shared_database::ForeignSets::probe(self.backends.registry()).await;
+        let clients_here: std::collections::HashSet<&str> = manual
+            .iter()
+            .map(|(n, _, _)| n.as_str())
+            .filter(|n| !crate::backends::shared_database::owns_its_database(n))
+            .collect();
+
+        for (name, source, pkgs) in &manual {
+            found.sources.insert(name.clone(), source.clone());
             let state_guard = self.state.lock().await;
             let managed = state_guard.managed_index();
             for pkg in pkgs {
@@ -324,19 +336,33 @@ impl Adopter {
                 // which is why the insert comes before the two filters rather than after them:
                 // `install jq` declares `pacman:jq`, so pacman skipped it as already managed,
                 // and the two clients then adopted the same jq under their own names.
-                let key = format!(
-                    "{}:{}",
-                    crate::backends::capability::package_database(&pkg.backend),
-                    pkg.name
-                );
+                let db = crate::backends::shared_database::package_database(&pkg.backend);
+                let key = format!("{}:{}", db, pkg.name);
+                // The owner stands aside on a package it cannot reinstall, but only when a
+                // client that can is answering in this same run — on a box with no helper
+                // installed, `pacman:<aur package>` is still the best row there is.
+                if pkg.backend == db
+                    && foreign.is_foreign(db, &pkg.name)
+                    && clients_here
+                        .iter()
+                        .any(|c| crate::backends::shared_database::package_database(c) == db)
+                {
+                    continue;
+                }
                 if !seen_keys.insert(key.clone()) {
                     continue;
                 }
-                if !managed.contains(&(pkg.backend.as_str(), pkg.name.as_str()))
-                    && !owned_system.contains(&pkg.name)
-                {
+                // Managed under **any** client of this database, not under this one. A
+                // `pacman:jq` an earlier run declared is jq declared, and asking about
+                // `yay:jq` would adopt a second line for the same package — which is the
+                // duplicate this whole relation exists to stop.
+                let already = managed.iter().any(|(b, n)| {
+                    *n == pkg.name.as_str()
+                        && crate::backends::shared_database::package_database(b) == db
+                });
+                if !already && !owned_system.contains(&pkg.name) {
                     trace!("candidate: {}", key);
-                    candidates.push(pkg);
+                    candidates.push(pkg.clone());
                 }
             }
         }
@@ -811,6 +837,7 @@ mod tests {
             update_args: None,
             purge_args: None,
             orphan_dry_run: None,
+            foreign_args: None,
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,

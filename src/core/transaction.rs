@@ -517,6 +517,7 @@ impl Transaction {
                 let journal = self.journal.clone();
                 let cancel_token = self.cancellation_token.clone();
                 let config = self.config.clone();
+                let app_config = self.app_config.clone();
                 let reaped = self.reaped;
                 let hooks = self.hooks.clone();
 
@@ -527,6 +528,7 @@ impl Transaction {
                         registry,
                         journal,
                         config,
+                        app_config,
                         reaped,
                         hooks,
                         cancel_token,
@@ -838,6 +840,9 @@ impl Transaction {
         registry: Arc<BackendRegistry>,
         journal: Arc<Mutex<Journal>>,
         config: TransactionConfig,
+        // The user's configuration, for the one question a failed install asks of it: was the
+        // version this batch could not get a version Shall recorded rather than one they typed?
+        app_config: Arc<crate::config::Config>,
         reaped: Option<crate::app::sync::guard::Reaped>,
         hooks: Option<Arc<LuaHooks>>,
         cancel_token: CancellationToken,
@@ -1234,10 +1239,24 @@ impl Transaction {
             }
         }
 
-        let final_err = falsify_transience(
+        let mut final_err = falsify_transience(
             last_error.unwrap_or(Error::Transaction("Unknown error".into())),
             attempt,
         );
+        // **A version the user never typed must not fail in the user's face unexplained.** The
+        // batch names one manager and up to `batch_size` packages, and the manager's complaint
+        // quotes whichever of them it choked on — so each member is asked, and only the one
+        // whose recorded pin appears in the text answers.
+        if let Some(advice) = keep.iter().find_map(|&i| {
+            crate::app::sync::pin_advice::on_install_failure(
+                &app_config,
+                &b_name,
+                &members[i].2,
+                &final_err.to_string(),
+            )
+        }) {
+            final_err = Error::Transaction(format!("{}{}", final_err, advice));
+        }
         {
             let mut j = journal.lock().await;
             for &i in &keep {

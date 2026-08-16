@@ -83,8 +83,8 @@ pub mod prelude {
     // The ledger file rules are a trait, so `HookLedger::load` needs it in scope. In the
     // prelude rather than per verb for the reason the prelude exists.
     pub use crate::cli::{
-        Cli, ConfigCommand, GitCommand, HooksCommand, LockAxis, ModuleCommand, ProfileCommand,
-        RepoCommand, ScheduleCommand, ServiceCommand, SnapshotCommand,
+        Cli, ConfigCommand, GitCommand, HooksCommand, ModuleCommand, ProfileCommand, RepoCommand,
+        ScheduleCommand, ServiceCommand, SnapshotCommand,
     };
     pub use crate::core::LockFile;
     // Every handler that takes `--json` takes it as this, so it belongs here for the same

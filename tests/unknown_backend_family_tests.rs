@@ -57,6 +57,18 @@ const NOT_A_PACKAGE_SPEC: &[(&str, &str)] = &[
     ("run", "a program to execute"),
     ("shell", "a shell to open"),
     ("fleet", "a fleet subcommand"),
+    // The first positional is what to freeze — a group, a kind, or `kind:qualifier` — and the
+    // package names come after it. The `backend:name` question is still asked of *those*:
+    // `handle_lock` and `handle_unlock` both run `require_known_spec_backends` when the
+    // selection is the backends kind, which is the namespace where a prefix is a manager.
+    (
+        "lock",
+        "what to freeze — a group, a kind, or `kind:qualifier`",
+    ),
+    (
+        "unlock",
+        "what to release — a group, a kind, or `kind:qualifier`",
+    ),
     // Reads rather than resolves: `search` is the command for "which manager has this?", so a
     // prefix is not part of its question.
     ("search", "a search term"),

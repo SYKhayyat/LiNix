@@ -55,7 +55,7 @@ impl Managers<'_> {
             .iter()
             .map(|b| b.name().to_string())
             .collect();
-        crate::backends::capability::one_backend_per_shared_database(&mut refreshing);
+        crate::backends::shared_database::one_backend_per_shared_database(&mut refreshing);
         let refreshing: std::collections::HashSet<String> = refreshing.into_iter().collect();
         for b in self.backends.usable()? {
             if !refreshing.contains(b.name()) {
@@ -63,7 +63,7 @@ impl Managers<'_> {
                     "{}: not refreshed separately — it reads {}'s repositories, which this run \
                      already refreshed",
                     b.name(),
-                    crate::backends::capability::package_database(b.name())
+                    crate::backends::shared_database::package_database(b.name())
                 );
             }
         }
@@ -131,7 +131,7 @@ impl Managers<'_> {
             .into_iter()
             .filter(|b| b.is_upgradable())
             .partition(|b| {
-                b.needs_root() || !crate::backends::capability::owns_its_database(b.name())
+                b.needs_root() || !crate::backends::shared_database::owns_its_database(b.name())
             });
 
         let mut failed: Vec<String> = Vec::new();

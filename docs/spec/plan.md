@@ -5,9 +5,10 @@
 ## What is left to build — the ordered list (re-derived from `src/`, 2026-07-26)
 
 **This is the single view of remaining work, in the order to build it.** Every decision it
-depends on is ruled. `decisions.md` holds **one open question — `D15`**, `.flatpak`/`.snap`
-assets in a GitHub release, which blocks nothing here: it was parked on D5, D5 was ruled and
-built, and the entry went a week without anyone re-reading its condition. Detail for each item is
+depends on is ruled. **As of 2026-08-16 `decisions.md` holds no open question at all** — the last
+two, `J2` (a `setting:` is never read back) and `J3` (which client of a shared package database a
+row should name), were ruled and shipped that day, and `J4` is HALF RULED with its built half
+recorded. Counted rather than typed: `scripts/decision-count.sh --check`. Detail for each item is
 in its Phase section below; this list is the sequence, not the spec.
 
 > **The previous version of this list was written from the session record and was wrong about

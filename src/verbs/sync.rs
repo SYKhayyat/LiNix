@@ -192,7 +192,7 @@ pub async fn reconcile(app: &App, opts: Reconcile) -> Result<Reconciled> {
         // A no-op when nothing departed, and the call is cheap: it reads two lock files.
         let undone_execs = app
             .execs()
-            .apply(&state, crate::model::exec::Verb::Sync)
+            .apply(&state, crate::model::exec::Verb::Sync, None)
             .await?;
         return Ok(Reconciled {
             applied: resources.place.len() + undone + undone_execs,
@@ -416,7 +416,7 @@ pub async fn apply_non_package_phases(
             // would make one number mean two things.
             Phase::Execs => {
                 app.execs()
-                    .apply(state, crate::model::exec::Verb::Sync)
+                    .apply(state, crate::model::exec::Verb::Sync, None)
                     .await?;
             }
         }

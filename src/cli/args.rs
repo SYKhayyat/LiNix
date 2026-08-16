@@ -376,15 +376,25 @@ pub enum Commands {
     /// hook, event hook, adapter, `exec:`, `generate:`, health-check command and `vars` provider
     /// at its current hash, without which none of them may run.
     ///
-    /// With no axis, all three. Name packages or ledger entries to scope it; `--list` shows what
-    /// is locked and changes nothing.
+    /// With no argument, everything. `--list` shows what is locked and changes nothing.
     Lock {
-        /// What to lock (default: all three)
-        #[arg(value_enum, default_value_t = LockAxis::All)]
-        axis: LockAxis,
+        /// What to freeze: `everything` (the default), a group, a kind, or a comma-separated
+        /// list of them. Narrow a kind with `kind:sub` — `versions:apt`, `hooks:after_install`.
+        ///
+        /// Groups: everything, packages (versions + backends), scripts (the seven approvals).
+        /// Kinds: versions, backends, hooks, events, adapters, exec, generate, health, vars.
+        #[arg(default_value = "everything")]
+        what: String,
 
-        /// Name(s) to scope to. Empty = everything on this axis.
+        /// Name(s) to scope to. Empty = every entry of whatever `what` selected.
         names: Vec<String>,
+
+        /// Leave these out, in the same vocabulary. Repeatable.
+        ///
+        /// The reason the scope is a word rather than a flag: `--except versions:cargo` keeps
+        /// every other manager's pins, and no per-command flag can express that.
+        #[arg(long, value_name = "WHAT")]
+        except: Vec<String>,
 
         /// List what is locked and change nothing
         #[arg(long)]
@@ -402,12 +412,17 @@ pub enum Commands {
     ///
     /// With no axis, all three.
     Unlock {
-        /// What to unlock (default: all three)
-        #[arg(value_enum, default_value_t = LockAxis::All)]
-        axis: LockAxis,
+        /// What to release, in the same vocabulary `lock` takes. A scope you can freeze with
+        /// and cannot release with is a one-way door, so the two accept exactly the same words.
+        #[arg(default_value = "everything")]
+        what: String,
 
-        /// Name(s) to scope to. Empty = everything on this axis.
+        /// Name(s) to scope to. Empty = every entry of whatever `what` selected.
         names: Vec<String>,
+
+        /// Leave these out, in the same vocabulary. Repeatable.
+        #[arg(long, value_name = "WHAT")]
+        except: Vec<String>,
 
         /// List what is locked and change nothing
         #[arg(long)]
@@ -470,6 +485,19 @@ pub enum Commands {
         /// Package name(s) to hold back / exclude from this upgrade (repeatable)
         #[arg(long, value_name = "PACKAGE")]
         except: Vec<String>,
+
+        /// Run the declared non-package steps too, on a run that named a package
+        ///
+        /// The `@on=upgrade` steps — firmware, `rustup`, a plugin manager — belong to "bring
+        /// this whole machine forward", so a bare `shall upgrade` runs them and a run narrowed
+        /// to one package, one manager or `--security` does not. This asks for them anyway;
+        /// `--no-steps` declines them on a run that would otherwise have had them.
+        #[arg(long, overrides_with = "no_steps")]
+        steps: bool,
+
+        /// Skip the declared non-package steps on a whole-machine upgrade
+        #[arg(long = "no-steps", overrides_with = "steps")]
+        no_steps: bool,
 
         /// Run the native whole-system upgrade even though it cannot honour holds
         ///
@@ -1392,30 +1420,6 @@ pub struct FleetArgs {
     /// Push `shall sync` to EVERY reachable machine, whether or not it drifted (fleet-wide apply)
     #[arg(long)]
     pub apply: bool,
-}
-
-/// Which of the three ledgers a `lock`/`unlock` acts on.
-///
-/// They were all once called "the lock", and `lock` and `unlock` acted on different ones — so
-/// the obvious undo for `lock` discarded the recorded backend resolution and the next sync
-/// uninstalled a package (Z2). Naming the axis is what makes the pair inverses.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
-pub enum LockAxis {
-    /// Version pins — `locks/versions.json`
-    Versions,
-    /// Which manager each unpinned bare name resolved to — `locks/bare.HOST.toml`
-    Backends,
-    /// Approval hashes for everything the config can execute — `locks/hooks.toml`
-    Scripts,
-    /// All three
-    All,
-}
-
-impl LockAxis {
-    /// Whether this axis covers `other`. `All` covers everything; anything else covers itself.
-    pub fn covers(self, other: LockAxis) -> bool {
-        self == LockAxis::All || self == other
-    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]

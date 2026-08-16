@@ -1,4 +1,5 @@
 use crate::app::sync::resolver::StateResolver;
+use crate::core::lock_kind::{self, LockKind, LockSelection};
 use crate::verbs::perform_maintenance;
 use crate::verbs::prelude::*;
 use crate::verbs::sync::{enforce_policy, print_vars_changed};
@@ -615,12 +616,20 @@ pub(crate) async fn scan_installed_versions(
 /// Build and write `locks/versions.json` from the current managed state. Returns the number of
 /// versions pinned. Shared by `shall lock versions` and by `shall heal` (which reconciles the
 /// lockfile).
+///
+/// **`[lock] versions` is applied here rather than in `lock`, because both writers are here.**
+/// `heal` reconciles the same file, so a class filter enforced only on the `lock` command would
+/// have `heal` quietly put back every pin `lock` had been configured not to write.
 pub async fn build_and_write_locks(
     config: &Config,
     registry: &Arc<BackendRegistry>,
     state: &tokio::sync::Mutex<crate::core::StateRegistry>,
 ) -> Result<(usize, bool)> {
-    let locks = scan_installed_versions(state, registry).await;
+    let mut locks = scan_installed_versions(state, registry).await;
+    locks.retain(|key, _| {
+        key.split_once(':')
+            .is_none_or(|(backend, _)| config.lock.pins(backend))
+    });
     let count = locks.len();
     let written = write_version_locks(&version_lock_path(config), &locks).await?;
     Ok((count, written))
@@ -711,6 +720,17 @@ fn tense(label: &str, done: &'static str, would: &'static str) -> (String, &'sta
     }
 }
 
+/// What a "nothing matched" warning says it was looking for. The names, the selection, or both
+/// — a message that quoted only the names would leave `versions:apt` out of the one sentence
+/// explaining why nothing was found.
+fn scope_description(names: &[String], selection: &LockSelection) -> String {
+    if names.is_empty() {
+        format!("is selected by `{}`", selection)
+    } else {
+        format!("matches {} within `{}`", quoted(names), selection)
+    }
+}
+
 /// The names a "nothing matched" warning quotes back.
 fn quoted(names: &[String]) -> String {
     names
@@ -721,35 +741,58 @@ fn quoted(names: &[String]) -> String {
 }
 
 /// `shall lock [AXIS] [NAME…]` — freeze what a sync would otherwise decide again (Z2).
-pub async fn handle_lock(app: &App, axis: LockAxis, names: &[String], list: bool) -> Result<()> {
+pub async fn handle_lock(
+    app: &App,
+    selection: &LockSelection,
+    names: &[String],
+    list: bool,
+) -> Result<()> {
     if list {
-        return list_locks(&app.config, &app.registry, axis);
+        return list_locks(&app.config, &app.registry, selection);
     }
-    // Scripts before either axis that resolves the model, and generators first within scripts:
+    // A manager named in the selection is checked before anything runs. `upgrade --backend aptt`
+    // once scoped to nothing and reported everything up to date (`Q9`); `versions:aptt` is the
+    // same typo with the same silence available to it.
+    for manager in selection.managers_named() {
+        app.resolver().await.require_known_backend(Some(&manager))?;
+    }
+    // `unlock`'s twin, under the same bound and for the same reason (see `handle_unlock`).
+    if selection.includes(LockKind::Backends) && !selection.includes(LockKind::Versions) {
+        app.resolver()
+            .await
+            .require_known_spec_backends(names)
+            .await?;
+    }
+
+    // Scripts before either kind that resolves the model, and generators first within scripts:
     // resolving *runs* generators, so a command that resolved first could never reach the
     // generator it exists to approve (U33).
-    if axis.covers(LockAxis::Scripts) {
-        lock_scripts(&app.config, &app.hooks, &app.registry, names).await?;
+    if lock_kind::SCRIPTS.iter().any(|k| selection.includes(*k)) {
+        lock_scripts(&app.config, &app.hooks, &app.registry, names, selection).await?;
     }
-    if axis.covers(LockAxis::Versions) {
-        lock_versions(&app.config, &app.registry, &app.state, names).await?;
+    if selection.includes(LockKind::Versions) {
+        lock_versions(&app.config, &app.registry, &app.state, names, selection).await?;
     }
-    if axis.covers(LockAxis::Backends) {
-        lock_backends(&app.config, &app.registry, names).await?;
+    if selection.includes(LockKind::Backends) {
+        lock_backends(&app.config, &app.registry, names, selection).await?;
     }
     Ok(())
 }
 
-/// Pin the installed version of every managed package, or of the ones `names` picks out.
+/// Pin the installed version of every managed package, or of the ones the scope picks out.
+///
+/// A scope is a set of names, a sub-category (`versions:apt`), or both — and both together
+/// intersect, so `lock versions:apt curl` pins apt's curl and not cargo's.
 async fn lock_versions(
     config: &Config,
     registry: &Arc<BackendRegistry>,
     state: &tokio::sync::Mutex<crate::core::StateRegistry>,
     names: &[String],
+    selection: &LockSelection,
 ) -> Result<()> {
     let (tag, pinned) = tense("Lock", "pinned", "would pin");
     let path = version_lock_path(config);
-    if names.is_empty() {
+    if names.is_empty() && selection.takes_all_of(LockKind::Versions) {
         let (count, _) = build_and_write_locks(config, registry, state).await?;
         println!(
             "{} {} {} package version(s) to {}",
@@ -765,15 +808,16 @@ async fn lock_versions(
     let mut locks = load_version_locks(&path);
     let mut hit: Vec<String> = Vec::new();
     for (key, version) in scan_installed_versions(state, registry).await {
-        if scoped_by(&key, names) {
+        let allowed = key.split_once(':').is_none_or(|(b, _)| config.lock.pins(b));
+        if allowed && selection.admits(LockKind::Versions, &key, None) && scoped_by(&key, names) {
             locks.insert(key.clone(), version);
             hit.push(key);
         }
     }
     if hit.is_empty() {
         warn!(
-            "no managed package matches {} — nothing pinned.",
-            quoted(names)
+            "no managed package {} — nothing pinned.",
+            scope_description(names, selection)
         );
         return Ok(());
     }
@@ -791,6 +835,7 @@ async fn lock_backends(
     config: &Config,
     registry: &Arc<BackendRegistry>,
     names: &[String],
+    selection: &LockSelection,
 ) -> Result<()> {
     use crate::core::BareLock;
 
@@ -803,11 +848,13 @@ async fn lock_backends(
     let after = BareLock::load(&path)?;
 
     let (tag, recorded) = tense("Lock", "recorded", "would record");
-    if !names.is_empty() {
+    if !names.is_empty() || !selection.takes_all_of(LockKind::Backends) {
         let mut scoped = before.clone();
         let mut hit: Vec<String> = Vec::new();
         for (name, backend) in after.entries().map(|(n, b)| (n.to_string(), b.to_string())) {
-            if scoped_by(&name, names) {
+            if selection.admits(LockKind::Backends, &name, Some(&backend))
+                && scoped_by(&name, names)
+            {
                 scoped.record(&name, &backend);
                 hit.push(format!("{} -> {}", name, backend));
             }
@@ -819,14 +866,18 @@ async fn lock_backends(
             .map(|(n, _)| n.to_string())
             .collect::<Vec<_>>()
         {
-            if scoped_by(&name, names) && after.get(&name).is_none() {
+            let was = before.get(&name).map(|b| b.to_string());
+            if selection.admits(LockKind::Backends, &name, was.as_deref())
+                && scoped_by(&name, names)
+                && after.get(&name).is_none()
+            {
                 scoped.forget(&name);
             }
         }
         if hit.is_empty() {
             warn!(
-                "no unpinned name matches {} — nothing recorded.",
-                quoted(names)
+                "no unpinned name {} — nothing recorded.",
+                scope_description(names, selection)
             );
             return Ok(());
         }
@@ -860,6 +911,7 @@ async fn lock_scripts(
     hooks: &Arc<crate::app::LuaHooks>,
     registry: &Arc<BackendRegistry>,
     names: &[String],
+    selection: &LockSelection,
 ) -> Result<()> {
     use crate::core::hook_lock::HookLedger;
 
@@ -868,7 +920,10 @@ async fn lock_scripts(
     let (tag, approved) = tense("Lock", "approved", "would approve");
     // Scoped runs report from the ledger afterwards: each approver counts what it read, which is
     // everything, and printing those counts beside a scope would be a false sentence.
-    let scoped = !names.is_empty();
+    // Anything short of "all seven, whole" is a scoped run: the per-approver counts below each
+    // report what that approver read, which is everything it owns, so printing them beside a
+    // narrower request would be a true number attached to a false sentence.
+    let scoped = !names.is_empty() || !selection.includes_all_whole(&lock_kind::SCRIPTS);
 
     // Generators are approved FIRST, by scanning the files — before anything calls
     // `resolve_model`, which now runs generators and would refuse an unapproved one, so the very
@@ -960,10 +1015,15 @@ async fn lock_scripts(
     // nothing on disk to put back and nothing to count — it says what it would do and stops.
     if crate::core::dry_run::active() {
         println!(
-            "{} {} the entries matching {}",
+            "{} {} the entries selected by `{}`{}",
             tag,
             approved,
-            quoted(names)
+            selection,
+            if names.is_empty() {
+                String::new()
+            } else {
+                format!(" matching {}", quoted(names))
+            }
         );
         return Ok(());
     }
@@ -974,7 +1034,7 @@ async fn lock_scripts(
         .collect();
     let mut hit: Vec<String> = Vec::new();
     for (id, _) in entries {
-        if scoped_by(&id, names) {
+        if selection.admits(LockKind::of_ledger_id(&id), &id, None) && scoped_by(&id, names) {
             hit.push(id);
         } else {
             match before.get(&id) {
@@ -990,9 +1050,9 @@ async fn lock_scripts(
     }
     if hit.is_empty() {
         warn!(
-            "nothing the configuration can run matches {} — nothing approved. \
+            "nothing the configuration can run {} — nothing approved. \
              `shall lock scripts --list` names what is approvable.",
-            quoted(names)
+            scope_description(names, selection)
         );
     }
     ledger.save(&ledger_path)?;
@@ -1003,15 +1063,27 @@ async fn lock_scripts(
 }
 
 /// `shall lock --list` / `shall unlock --list` — what is locked on this axis, changing nothing.
-fn list_locks(config: &Config, registry: &Arc<BackendRegistry>, axis: LockAxis) -> Result<()> {
+///
+/// `--backend` narrows this too. A scope you can pin with and cannot *look* with sends the
+/// reader to read the raw file, which is the state this listing exists to replace.
+fn list_locks(
+    config: &Config,
+    registry: &Arc<BackendRegistry>,
+    selection: &LockSelection,
+) -> Result<()> {
     use crate::core::hook_lock::HookLedger;
     use crate::core::BareLock;
 
     let locks_dir = config.layout().locks_dir();
-    if axis.covers(LockAxis::Versions) {
-        let locks = load_version_locks(&version_lock_path(config));
+    if selection.includes(LockKind::Versions) {
+        let mut locks = load_version_locks(&version_lock_path(config));
+        locks.retain(|key, _| selection.admits(LockKind::Versions, key, None));
         if locks.is_empty() {
-            println!("versions: nothing is pinned.");
+            if selection.takes_all_of(LockKind::Versions) {
+                println!("versions: nothing is pinned.");
+            } else {
+                println!("versions: nothing selected by `{}` is pinned.", selection);
+            }
         } else {
             for (key, version) in &locks {
                 // **Say which of these can actually be put back** (`Q53`). A lockfile does two
@@ -1037,23 +1109,42 @@ fn list_locks(config: &Config, registry: &Arc<BackendRegistry>, axis: LockAxis) 
             }
         }
     }
-    if axis.covers(LockAxis::Backends) {
+    if selection.includes(LockKind::Backends) {
         let lock = BareLock::load(&BareLock::path_in(&locks_dir))?;
-        if lock.is_empty() {
+        let shown: Vec<(String, String)> = lock
+            .entries()
+            .filter(|(name, backend)| selection.admits(LockKind::Backends, name, Some(backend)))
+            .map(|(n, b)| (n.to_string(), b.to_string()))
+            .collect();
+        if shown.is_empty() {
             println!("backends: nothing is frozen on this host.");
         } else {
-            for (name, backend) in lock.entries() {
+            for (name, backend) in shown {
                 println!("backends: {} -> {}", name, backend);
             }
         }
     }
-    if axis.covers(LockAxis::Scripts) {
+    // **The seven approval kinds print under their own names, not one heading.** A listing that
+    // called every row `scripts:` was the same conflation the vocabulary exists to undo: the
+    // reader could see `after_install:nginx` was approved and had no way to learn that `hooks`
+    // is the word that selects it.
+    if lock_kind::SCRIPTS.iter().any(|k| selection.includes(*k)) {
         let ledger = HookLedger::load(&HookLedger::path_in(&locks_dir))?;
-        if ledger.is_empty() {
+        let shown: Vec<(String, String)> = ledger
+            .entries()
+            .filter(|(id, _)| selection.admits(LockKind::of_ledger_id(id), id, None))
+            .map(|(id, hash)| (id.to_string(), hash.to_string()))
+            .collect();
+        if shown.is_empty() {
             println!("scripts: nothing is approved.");
         } else {
-            for (id, hash) in ledger.entries() {
-                println!("scripts: {} -> sha256:{}", id, &hash[..hash.len().min(12)]);
+            for (id, hash) in shown {
+                println!(
+                    "{}: {} -> sha256:{}",
+                    LockKind::of_ledger_id(&id),
+                    id,
+                    &hash[..hash.len().min(12)]
+                );
             }
         }
     }
@@ -1311,40 +1402,48 @@ pub async fn handle_unlock(
     config: &Config,
     registry: &Arc<BackendRegistry>,
     resolver: &StateResolver<'_>,
-    axis: LockAxis,
+    selection: &LockSelection,
     names: &[String],
     list: bool,
 ) -> Result<()> {
     if list {
-        return list_locks(config, registry, axis);
+        return list_locks(config, registry, selection);
     }
     // Q9: an unknown prefix reported "was not frozen on this host — nothing to unlock", which is
     // what a real name that is not frozen also reports.
     //
-    // **This axis only.** A backend prefix here is a question about the managers *this* host
-    // uses, which is what the check answers. It is not that question on the other two: a version
+    // **This kind only.** A backend prefix here is a question about the managers *this* host
+    // uses, which is what the check answers. It is not that question on the others: a version
     // pin names whichever manager wrote it and `locks/` travels between machines, so
     // `apt:curl` is an ordinary entry on a host with no apt; a script id's prefix
-    // (`after_install:`, `adapters:`) is not a backend at all; and on `all` the names span all
-    // three namespaces at once. Those rely on each axis warning when a name picks nothing out —
-    // which is a louder answer than this one, because it names the ledger as well as the name.
-    if axis == LockAxis::Backends {
+    // (`after_install:`, `adapters:`) is not a backend at all; and on a selection spanning both
+    // groups the names span both namespaces at once, where a backend rule would refuse a hook
+    // name. Those rely on each kind warning when a name picks nothing out — which is a louder
+    // answer than this one, because it names the ledger as well as the name.
+    if selection.includes(LockKind::Backends) && !selection.includes(LockKind::Versions) {
         resolver.require_known_spec_backends(names).await?;
     }
-    if axis.covers(LockAxis::Backends) {
-        unlock_backends(config, names).await?;
+    for manager in selection.managers_named() {
+        resolver.require_known_backend(Some(&manager))?;
     }
-    if axis.covers(LockAxis::Versions) {
-        unlock_versions(config, names).await?;
+    if selection.includes(LockKind::Backends) {
+        unlock_backends(config, names, selection).await?;
     }
-    if axis.covers(LockAxis::Scripts) {
-        unlock_scripts(config, names)?;
+    if selection.includes(LockKind::Versions) {
+        unlock_versions(config, names, selection).await?;
+    }
+    if lock_kind::SCRIPTS.iter().any(|k| selection.includes(*k)) {
+        unlock_scripts(config, names, selection)?;
     }
     Ok(())
 }
 
 /// Forget which manager an unpinned name resolved to, so the next sync asks again (II.6).
-async fn unlock_backends(config: &Config, names: &[String]) -> Result<()> {
+async fn unlock_backends(
+    config: &Config,
+    names: &[String],
+    selection: &LockSelection,
+) -> Result<()> {
     let path = crate::core::BareLock::path_in(&config.layout().locks_dir());
     let mut lock = crate::core::BareLock::load(&path)?;
     if lock.is_empty() {
@@ -1354,11 +1453,34 @@ async fn unlock_backends(config: &Config, names: &[String]) -> Result<()> {
 
     let (tag, forgot) = tense("Unlock", "forgot", "would forget");
     let changed = if names.is_empty() {
-        let n = lock.entries().count();
-        lock.clear();
+        // **`clear()` only when the whole kind was asked for.** `unlock backends:cargo` selects
+        // one manager's resolutions and names no packages, so it reaches this branch — and
+        // clearing the file here would forget every other manager's too, which is the shape of
+        // Z2: an undo wider than the thing it undid.
+        let doomed: Vec<String> = lock
+            .entries()
+            .filter(|(name, backend)| selection.admits(LockKind::Backends, name, Some(backend)))
+            .map(|(name, _)| name.to_string())
+            .collect();
+        if doomed.is_empty() {
+            warn!(
+                "no frozen name {} — nothing unlocked.",
+                scope_description(names, selection)
+            );
+            return Ok(());
+        }
+        if selection.takes_all_of(LockKind::Backends) {
+            lock.clear();
+        } else {
+            for name in &doomed {
+                lock.forget(name);
+            }
+        }
         println!(
             "{} backends: {} {} name(s). The next sync asks again.",
-            tag, forgot, n
+            tag,
+            forgot,
+            doomed.len()
         );
         true
     } else {
@@ -1393,7 +1515,11 @@ async fn unlock_backends(config: &Config, names: &[String]) -> Result<()> {
 }
 
 /// Drop the version pins, so the next sync takes what the managers offer.
-async fn unlock_versions(config: &Config, names: &[String]) -> Result<()> {
+async fn unlock_versions(
+    config: &Config,
+    names: &[String],
+    selection: &LockSelection,
+) -> Result<()> {
     let path = version_lock_path(config);
     let mut locks = load_version_locks(&path);
     if locks.is_empty() {
@@ -1402,11 +1528,14 @@ async fn unlock_versions(config: &Config, names: &[String]) -> Result<()> {
     }
     let dropped: Vec<String> = locks
         .keys()
-        .filter(|key| scoped_by(key, names))
+        .filter(|key| selection.admits(LockKind::Versions, key, None) && scoped_by(key, names))
         .cloned()
         .collect();
     if dropped.is_empty() {
-        warn!("no pin matches {} — nothing unpinned.", quoted(names));
+        warn!(
+            "no pin {} — nothing unpinned.",
+            scope_description(names, selection)
+        );
         return Ok(());
     }
     for key in &dropped {
@@ -1425,7 +1554,7 @@ async fn unlock_versions(config: &Config, names: &[String]) -> Result<()> {
 
 /// Withdraw script approvals, so a sync that reaches one refuses to run it until `lock scripts`
 /// approves it again (II.12).
-fn unlock_scripts(config: &Config, names: &[String]) -> Result<()> {
+fn unlock_scripts(config: &Config, names: &[String], selection: &LockSelection) -> Result<()> {
     use crate::core::hook_lock::HookLedger;
 
     let path = HookLedger::path_in(&config.layout().locks_dir());
@@ -1436,11 +1565,16 @@ fn unlock_scripts(config: &Config, names: &[String]) -> Result<()> {
     }
     let revoked: Vec<String> = ledger
         .entries()
-        .filter(|(id, _)| scoped_by(id, names))
+        .filter(|(id, _)| {
+            selection.admits(LockKind::of_ledger_id(id), id, None) && scoped_by(id, names)
+        })
         .map(|(id, _)| id.to_string())
         .collect();
     if revoked.is_empty() {
-        warn!("no approval matches {} — nothing withdrawn.", quoted(names));
+        warn!(
+            "no approval {} — nothing withdrawn.",
+            scope_description(names, selection)
+        );
         return Ok(());
     }
     for id in &revoked {
@@ -1515,6 +1649,41 @@ mod lock_axis_tests {
     fn any_of_the_names_selects() {
         assert!(scoped_by("apt:curl", &names(&["jq", "curl", "fd"])));
         assert!(!scoped_by("apt:curl", &names(&["jq", "fd"])));
+    }
+
+    /// **`versions:apt` means every apt package, and `apt` still means the package called
+    /// `apt`.** Both readings are live at once — `apt:apt` is a real entry on every Debian
+    /// machine — which is the whole reason the class is a qualifier and not a bare word.
+    #[test]
+    fn a_class_and_a_name_that_spell_the_same_word_stay_different_questions() {
+        let apt_class = LockSelection::parse("versions:apt", &[]).unwrap();
+        assert!(apt_class.admits(LockKind::Versions, "apt:curl", None));
+        assert!(apt_class.admits(LockKind::Versions, "apt:apt", None));
+        assert!(!apt_class.admits(LockKind::Versions, "cargo:apt", None));
+
+        // The name reading, unchanged: `apt` picks out `apt:apt` and `cargo:apt` by their tail
+        // and leaves `apt:curl` alone. The opposite of what the class reading selects.
+        assert!(scoped_by("apt:apt", &names(&["apt"])));
+        assert!(scoped_by("cargo:apt", &names(&["apt"])));
+        assert!(!scoped_by("apt:curl", &names(&["apt"])));
+    }
+
+    /// A "nothing matched" warning has to say what it looked for, and the selection is half of
+    /// that. Both shapes, because a message that quoted only the names would leave a
+    /// class-scoped run explaining nothing.
+    #[test]
+    fn the_empty_scope_warning_describes_whichever_scope_was_given() {
+        let apt = LockSelection::parse("versions:apt", &[]).unwrap();
+        assert!(scope_description(&[], &apt).contains("versions:apt"));
+
+        let both = scope_description(&names(&["curl"]), &apt);
+        assert!(
+            both.contains("versions:apt") && both.contains("curl"),
+            "{both}"
+        );
+
+        let plain = scope_description(&names(&["curl"]), &LockSelection::everything());
+        assert!(plain.contains("curl"), "{plain}");
     }
 
     /// Z2's second half: after an upgrade the pin names the version that was replaced, and the

@@ -87,6 +87,7 @@ pub(super) fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor
                 args: vec!["autoremove".into(), "--dry-run".into()],
                 removes_line_prefix: "Remv ".into(),
             }),
+            foreign_args: None,
             repo_add_args: Some(vec!["-y".into(), "{url}".into()]),
             repo_remove_args: Some(vec!["--remove".into(), "-y".into(), "{name}".into()]),
             repo_list_args: None,
@@ -169,6 +170,11 @@ pub(super) fn register_pacman(reg: &mut BackendRegistry, executor: &CommandExecu
     // pacman has no per-package essential flag: `base` is a convention and `HoldPkg` is user
     // config, so there is nothing authoritative to query. The same `None` the AUR rows carry.
     cfg.essential_args = None;
+    // `-Qmq` prints the installed packages no sync database carries — the AUR set, plus
+    // anything built by hand. pacman can remove every one of them and put none of them back,
+    // which is why a shared-database row for a foreign package names the helper instead
+    // (`J3`). Bare names, one per line.
+    cfg.foreign_args = Some(vec!["-Qmq".into()]);
     cfg.search_args = vec!["-Ss".into()];
     // `-Ssq` is the search form that prints bare names from the sync databases with no query —
     // the catalogue, which is what II.15's `re:` expands against. `-Ss` matches descriptions
@@ -516,6 +522,7 @@ pub(super) fn register_aur_helper(
             // Orphan cleanup semantics differ per helper; leave it to the pacman backend
             // rather than guess, so we report Unsupported honestly instead of misfiring.
             orphan_dry_run: None,
+            foreign_args: None,
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,
@@ -584,6 +591,7 @@ pub(super) fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor
             upgrade_args: vec!["upgrade".into()],
             update_args: Some(vec!["update".into()]),
             orphan_dry_run: None,
+            foreign_args: None,
             repo_add_args: Some(vec![
                 "-c".into(),
                 "echo '{url}' >> /etc/apk/repositories".into(),
@@ -686,6 +694,7 @@ pub(super) fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecu
             upgrade_args: vec!["update".into(), "-y".into()],
             update_args: Some(vec!["refresh".into()]),
             orphan_dry_run: None,
+            foreign_args: None,
             repo_add_args: Some(vec!["addrepo".into(), "{url}".into(), "{name}".into()]),
             repo_remove_args: Some(vec!["removerepo".into(), "{name}".into()]),
             repo_list_args: Some(vec!["repos".into()]),
@@ -771,6 +780,7 @@ pub(super) fn register_macports(reg: &mut BackendRegistry, executor: &CommandExe
             upgrade_args: vec!["upgrade".into(), "outdated".into()],
             update_args: Some(vec!["selfupdate".into()]),
             orphan_dry_run: None,
+            foreign_args: None,
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,
@@ -835,6 +845,7 @@ pub(super) fn register_pkgin(reg: &mut BackendRegistry, executor: &CommandExecut
             upgrade_args: vec!["-y".into(), "full-upgrade".into()],
             update_args: Some(vec!["update".into()]),
             orphan_dry_run: None,
+            foreign_args: None,
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,
@@ -910,6 +921,7 @@ pub(super) fn register_pkg_freebsd(reg: &mut BackendRegistry, executor: &Command
             upgrade_args: vec!["upgrade".into(), "-y".into()],
             update_args: Some(vec!["update".into()]),
             orphan_dry_run: None,
+            foreign_args: None,
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,
@@ -987,6 +999,7 @@ pub(super) fn register_pkg_add_openbsd(reg: &mut BackendRegistry, executor: &Com
             upgrade_args: vec!["-u".into()],
             update_args: None,
             orphan_dry_run: None,
+            foreign_args: None,
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,

@@ -19,9 +19,25 @@ pub struct UpgradeRequest<'a> {
     pub out: Output,
     pub canary: bool,
     pub test: &'a Option<String>,
+    /// `--steps` / `--no-steps`: whether to run the declared non-package steps. `None` is the
+    /// default, which is "yes on a whole-machine upgrade, no on a narrowed one".
+    pub steps: Option<bool>,
 }
 
 impl UpgradeRequest<'_> {
+    /// Did the caller narrow this run to less than the whole machine?
+    ///
+    /// **Not the same question as `scope()`**, which answers only about a profile or a module.
+    /// Naming a package, a manager, or `--security` narrows the run just as surely, and it was
+    /// the package case that made `shall upgrade curl` fire every firmware step in the config.
+    fn narrowed(&self) -> bool {
+        !self.packages.is_empty()
+            || self.backend.is_some()
+            || self.security
+            || self.canary
+            || self.scope().is_some()
+    }
+
     fn scope(&self) -> Option<PlannerScope> {
         if let Some(p) = self.profile {
             Some(PlannerScope::Profile(p.clone()))
@@ -100,7 +116,7 @@ pub async fn upgrade_targeted(
     packages: &[String],
     backend: Option<&str>,
     except: &[String],
-) -> Result<()> {
+) -> Result<Option<usize>> {
     // Snapshot the managed set once so we can resolve names → backends without holding the lock.
     let managed: Vec<(String, String)> = {
         let state = app.state.lock().await;
@@ -141,7 +157,7 @@ pub async fn upgrade_targeted(
         }
         if targets.is_empty() {
             println!("No managed packages under backend '{}'.", scope);
-            return Ok(());
+            return Ok(Some(0));
         }
     }
 
@@ -179,7 +195,7 @@ pub async fn upgrade_targeted(
         if n == 0 {
             println!("  (nothing)");
         }
-        return Ok(());
+        return Ok(Some(0));
     }
 
     let mut upgraded = 0usize;
@@ -234,12 +250,13 @@ pub async fn upgrade_targeted(
             String::new()
         }
     );
-    perform_maintenance(app).await
+    perform_maintenance(app).await?;
+    Ok(Some(upgraded))
 }
 
 /// Upgrade exactly the packages `audit` reports as vulnerable, to a non-vulnerable version.
 /// Honors `--except`. This is the `audit → upgrade` bridge.
-pub async fn upgrade_security(app: &App, except: &[String], out: Output) -> Result<()> {
+pub async fn upgrade_security(app: &App, except: &[String], out: Output) -> Result<Option<usize>> {
     let report = crate::app::insight::audit(&app.config, &app.registry, &app.state).await?;
     if report.findings.is_empty() {
         if out.is_json() {
@@ -250,7 +267,7 @@ pub async fn upgrade_security(app: &App, except: &[String], out: Output) -> Resu
                 report.scanned
             );
         }
-        return Ok(());
+        return Ok(Some(0));
     }
 
     // Aggregate advisories per package. A package can have several; to be safe from ALL of
@@ -336,7 +353,7 @@ pub async fn upgrade_security(app: &App, except: &[String], out: Output) -> Resu
                 println!("  (nothing)");
             }
         }
-        return Ok(());
+        return Ok(Some(0));
     }
 
     let mut upgraded = Vec::new();
@@ -380,7 +397,9 @@ pub async fn upgrade_security(app: &App, except: &[String], out: Output) -> Resu
             upgraded.len()
         );
     }
-    perform_maintenance(app).await
+    let moved = upgraded.len();
+    perform_maintenance(app).await?;
+    Ok(Some(moved))
 }
 
 /// `shall upgrade` — move packages forward, then record where they landed.
@@ -392,12 +411,14 @@ pub async fn upgrade_security(app: &App, except: &[String], out: Output) -> Resu
 /// touched — an upgrade is not a `lock`.
 pub async fn handle_upgrade(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
     let out = req.out;
-    upgrade_modes(app, req).await?;
-    upgrade_steps(app).await?;
-    let moved =
+    // Whether the steps run is decided from the request, before the modes consume it.
+    let run_steps = req.steps.unwrap_or(!req.narrowed());
+    let moved = upgrade_modes(app, req).await?;
+    upgrade_steps(app, moved, run_steps).await?;
+    let repinned =
         crate::verbs::plan::refresh_version_locks(&app.config, &app.registry, &app.state).await?;
-    if moved > 0 && out.is_human() {
-        println!("Lock: re-recorded {} version pin(s).", moved);
+    if repinned > 0 && out.is_human() {
+        println!("Lock: re-recorded {} version pin(s).", repinned);
     }
     Ok(())
 }
@@ -419,18 +440,34 @@ pub async fn handle_upgrade(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
 /// After the packages, deliberately: a firmware tool or a `rustup` component is usually the
 /// thing you want brought forward *once the packages under it have moved*, which is the same
 /// order `sync` runs its verb phase in.
-async fn upgrade_steps(app: &App) -> Result<()> {
+///
+/// **A scoped upgrade runs none of them.** `shall upgrade curl` asks for one package, and
+/// firing every `@on=upgrade` step in the config alongside it — firmware, `rustup`, whatever
+/// else the machine declares — is a great deal more than was asked for. The steps belong to
+/// "bring this machine forward", which is what a bare `upgrade` means and a named package does
+/// not. `--steps` asks for them anyway on a scoped run, and `--no-steps` declines them on an
+/// unscoped one, so neither direction is unreachable.
+async fn upgrade_steps(app: &App, moved: Option<usize>, run_them: bool) -> Result<()> {
     use crate::model::exec::Verb;
 
+    if !run_them {
+        return Ok(());
+    }
     let state = app.resolver().await.resolve_model().await?;
     if state.execs_for(Verb::Upgrade).next().is_none() {
         return Ok(());
     }
-    app.execs().apply(&state, Verb::Upgrade).await?;
+    app.execs().apply(&state, Verb::Upgrade, moved).await?;
     Ok(())
 }
 
-async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
+/// Returns how many packages moved, or `None` where the mode cannot know.
+///
+/// The native whole-system path hands the work to `apt upgrade` and its siblings, which report
+/// no per-package count Shall can trust — so it answers `None`, and `None` is not zero. An
+/// `@after=` step is run on an uncountable path rather than skipped, because that path is the
+/// one that moves the most.
+async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<Option<usize>> {
     // First, before any mode: `upgrade --backend aptt` used to scope to nothing and report
     // that everything was up to date (Q9).
     app.resolver().await.require_known_backend(req.backend)?;
@@ -447,12 +484,14 @@ async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
 
     // Canary keeps its own health-gated, scoped path.
     if req.canary {
-        return handle_canary(app, req.scope(), req.test).await;
+        return handle_canary(app, req.scope(), req.test)
+            .await
+            .map(|()| None);
     }
 
     // Mode 1: audit-driven security upgrade.
     if req.security {
-        return upgrade_security(app, req.except, req.out).await;
+        return upgrade_security(app, req.except, req.out).await; // counts its own
     }
 
     // Mode 2: explicit packages, or a --backend scope → targeted managed upgrade.
@@ -526,9 +565,18 @@ async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
             crate::would_print!(
                 "would run each backend's native whole-system upgrade (e.g. `apt upgrade`)."
             );
-            return Ok(());
+            return Ok(None);
         }
-        return app.managers().await.upgrade().await.map_err(Into::into);
+        // **`None`, not `Some(0)`.** Each manager's own upgrade-all reports no per-package
+        // count Shall can trust, and reporting zero here would make every `@after=` step skip
+        // after the run that moves the most.
+        return app
+            .managers()
+            .await
+            .upgrade()
+            .await
+            .map(|()| None)
+            .map_err(Into::into);
     }
 
     // Mode 4: scoped declarative upgrade (profile/module/group) via the change planner.
@@ -575,22 +623,102 @@ async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
             print_flight_plan(&app.config, &app.registry, &changes);
             println!("(dry-run: scoped upgrade previewed; nothing applied.)");
         }
-        return Ok(());
+        return Ok(Some(0));
     }
 
     if out.is_human() && !changes.is_empty() {
         print_flight_plan(&app.config, &app.registry, &changes);
     }
 
+    // The plan is the count: this mode goes through the change planner, so what it intends to
+    // move is enumerable before it runs, unlike the native path below it.
+    let moved = changes.total_install();
     if !changes.is_empty() {
         app.sync_engine()
             .sync(changes, crate::app::sync::guard::GuardScope::Upgrade)
             .await?;
         perform_maintenance(app).await?;
     }
-    Ok(())
+    Ok(Some(moved))
 }
 
 pub async fn handle_update(managers: &crate::app::Managers<'_>) -> Result<()> {
     managers.update().await.map_err(|e| e.into())
+}
+
+#[cfg(test)]
+mod steps_scope_tests {
+    use super::*;
+
+    fn req<'a>(
+        packages: &'a [String],
+        backend: Option<&'a str>,
+        security: bool,
+        steps: Option<bool>,
+    ) -> UpgradeRequest<'a> {
+        const NONE: &Option<String> = &None;
+        UpgradeRequest {
+            packages,
+            backend,
+            all: false,
+            security,
+            except: &[],
+            ignore_holds: false,
+            profile: NONE,
+            module: NONE,
+            out: Output::Human,
+            canary: false,
+            test: NONE,
+            steps,
+        }
+    }
+
+    fn named(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// **`shall upgrade curl` is not a whole-machine upgrade**, so it does not run the
+    /// `@on=upgrade` steps. Every way of narrowing a run, because the one that caused this —
+    /// naming a package — was not what `scope()` was asking about, and a check written against
+    /// `scope()` alone would still fire firmware for `upgrade curl`.
+    #[test]
+    fn every_way_of_narrowing_a_run_stops_the_steps() {
+        let curl = named(&["curl"]);
+        assert!(req(&curl, None, false, None).narrowed(), "a named package");
+        assert!(
+            req(&[], Some("apt"), false, None).narrowed(),
+            "a named manager"
+        );
+        assert!(req(&[], None, true, None).narrowed(), "--security");
+    }
+
+    /// And a bare `shall upgrade` is the whole machine, which is what the steps belong to.
+    /// The control: without it, `narrowed()` returning true unconditionally passes the test
+    /// above and silently removes the feature.
+    #[test]
+    fn an_unscoped_upgrade_is_not_narrowed() {
+        assert!(!req(&[], None, false, None).narrowed());
+    }
+
+    /// Neither direction is unreachable: `--steps` asks for them on a narrowed run, `--no-steps`
+    /// declines them on a whole-machine one. A default that cannot be overridden is a rule.
+    #[test]
+    fn the_flags_reach_both_answers_the_default_does_not_give() {
+        let curl = named(&["curl"]);
+
+        let default_narrow = req(&curl, None, false, None);
+        assert!(!default_narrow.steps.unwrap_or(!default_narrow.narrowed()));
+
+        let asked = req(&curl, None, false, Some(true));
+        assert!(
+            asked.steps.unwrap_or(!asked.narrowed()),
+            "`--steps` must run them on a run that named a package"
+        );
+
+        let declined = req(&[], None, false, Some(false));
+        assert!(
+            !declined.steps.unwrap_or(!declined.narrowed()),
+            "`--no-steps` must decline them on a whole-machine run"
+        );
+    }
 }

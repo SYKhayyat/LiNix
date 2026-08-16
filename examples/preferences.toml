@@ -77,6 +77,30 @@ show_progress = true
 # Enable verbose logging for debugging.
 verbose = false
 
+# The [lock] table: what `shall lock` freezes, and whether a sync replays it.
+# Every value below is the default, so deleting the whole table changes nothing.
+[lock]
+# What a bare `shall lock` freezes, in the same words the command takes.
+#   groups: everything, packages (versions + backends), scripts (the seven
+#           approval kinds below)
+#   kinds:  versions, backends, hooks, events, adapters, exec, generate,
+#           health, vars
+#   narrow a kind with kind:sub — "versions:apt", "hooks:after_install"
+# Naming a kind on the command line always overrides this for that one run.
+freeze = ["everything"]
+# Kinds left out of a bare `shall lock`, subtracted from `freeze`. Prefer this
+# to listing eight of nine kinds: a tenth kind added later is still frozen.
+#   except = ["versions"]
+except = []
+# Which managers get version pins. "*" is all of them. Naming managers instead
+# — ["apt"] — pins apt's packages and leaves everything else floating.
+versions = ["*"]
+# Whether an ordinary `sync` installs the versions locks/versions.json recorded.
+# Set false to keep the file as a drift record only: `check` still reports
+# against it and `sync --locked` still reproduces from it, but a recorded
+# version stops being an install argument on every run.
+replay = true
+
 # The [guard] table (II.10): the nine refusals, one home. Protected packages,
 # the removal/install ceilings, and the install/change rules all live here.
 [guard]

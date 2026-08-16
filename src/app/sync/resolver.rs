@@ -106,6 +106,12 @@ pub struct StateResolver<'a> {
     /// was published since. `--upgrade` turns it off for the run that means to move forward.
     /// Unlike `locked`, a package with no recorded version is not an error here — it simply
     /// resolves, which is what a machine that has never run `shall lock` does for everything.
+    ///
+    /// The default is unchanged; what changed is that it is now reachable. `[lock] replay =
+    /// false` turns it off for the machine rather than for one run, which is the only way to
+    /// keep `locks/versions.json` as a drift record without it also being an install argument.
+    /// Before that key existed the sole alternative was typing `--upgrade` on every sync for
+    /// ever, so a preference that had a name in the code had no name a user could write.
     prefer_locks: bool,
     /// "backend:package" -> version.
     locks: HashMap<String, String>,
@@ -160,7 +166,7 @@ impl<'a> StateResolver<'a> {
             registry,
             layout: config.layout(),
             locked,
-            prefer_locks: true,
+            prefer_locks: config.lock.replay,
             locks,
             vars_override: None,
             active_override: None,
@@ -1751,6 +1757,7 @@ mod tests {
                 update_args: None,
                 purge_args: None,
                 orphan_dry_run: None,
+                foreign_args: None,
                 repo_add_args: None,
                 repo_remove_args: None,
                 depends: None,

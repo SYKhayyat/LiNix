@@ -72,7 +72,7 @@ async fn a_script_runs_once_then_not_again_until_its_content_changes() {
     kernel
         .app
         .execs()
-        .apply(&state, shall::model::exec::Verb::Sync)
+        .apply(&state, shall::model::exec::Verb::Sync, None)
         .await
         .expect("first run");
     assert_eq!(runs_of(&kernel, v1), 1, "the first run was not recorded");
@@ -81,7 +81,7 @@ async fn a_script_runs_once_then_not_again_until_its_content_changes() {
     kernel
         .app
         .execs()
-        .apply(&state, shall::model::exec::Verb::Sync)
+        .apply(&state, shall::model::exec::Verb::Sync, None)
         .await
         .expect("second pass");
     assert_eq!(runs_of(&kernel, v1), 1, "the script ran twice");
@@ -94,7 +94,7 @@ async fn a_script_runs_once_then_not_again_until_its_content_changes() {
     kernel
         .app
         .execs()
-        .apply(&state, shall::model::exec::Verb::Sync)
+        .apply(&state, shall::model::exec::Verb::Sync, None)
         .await
         .expect("post-edit run");
     assert_eq!(runs_of(&kernel, v2), 1, "the edited script did not run");
@@ -115,7 +115,7 @@ async fn runs_always_runs_every_time() {
         kernel
             .app
             .execs()
-            .apply(&state, shall::model::exec::Verb::Sync)
+            .apply(&state, shall::model::exec::Verb::Sync, None)
             .await
             .expect("always runs");
         assert_eq!(runs_of(&kernel, body), expected);
@@ -135,7 +135,7 @@ async fn an_unapproved_script_refuses_the_sync_and_never_runs() {
     let err = kernel
         .app
         .execs()
-        .apply(&state, shall::model::exec::Verb::Sync)
+        .apply(&state, shall::model::exec::Verb::Sync, None)
         .await
         .expect_err("an unapproved script must stop the sync");
     let msg = err.to_string();
@@ -161,7 +161,7 @@ async fn a_script_edited_after_approval_is_refused_until_reapproved() {
     let err = kernel
         .app
         .execs()
-        .apply(&state, shall::model::exec::Verb::Sync)
+        .apply(&state, shall::model::exec::Verb::Sync, None)
         .await
         .expect_err("changed");
     let msg = err.to_string();
@@ -197,7 +197,7 @@ async fn a_false_when_runs_nothing_and_keeps_the_count() {
     kernel
         .app
         .execs()
-        .apply(&state, shall::model::exec::Verb::Sync)
+        .apply(&state, shall::model::exec::Verb::Sync, None)
         .await
         .expect("runs");
     assert_eq!(runs_of(&kernel, body), 1);
@@ -209,7 +209,7 @@ async fn a_false_when_runs_nothing_and_keeps_the_count() {
     kernel
         .app
         .execs()
-        .apply(&state, shall::model::exec::Verb::Sync)
+        .apply(&state, shall::model::exec::Verb::Sync, None)
         .await
         .expect("no-op");
 
@@ -250,7 +250,7 @@ async fn a_failed_script_is_not_recorded_and_runs_again() {
     let err = kernel
         .app
         .execs()
-        .apply(&state, shall::model::exec::Verb::Sync)
+        .apply(&state, shall::model::exec::Verb::Sync, None)
         .await
         .expect_err("a failing script must surface, not be swallowed");
     assert!(err.to_string().contains("exited 1"), "{}", err);
@@ -285,7 +285,7 @@ async fn removing_an_exec_runs_the_undo_it_declared() {
     kernel
         .app
         .execs()
-        .apply(&state, shall::model::exec::Verb::Sync)
+        .apply(&state, shall::model::exec::Verb::Sync, None)
         .await
         .unwrap();
     assert_eq!(runs_of(&kernel, body), 1);
@@ -299,7 +299,7 @@ async fn removing_an_exec_runs_the_undo_it_declared() {
     kernel
         .app
         .execs()
-        .apply(&state, shall::model::exec::Verb::Sync)
+        .apply(&state, shall::model::exec::Verb::Sync, None)
         .await
         .unwrap();
 
@@ -330,7 +330,7 @@ async fn removing_an_exec_without_an_undo_runs_nothing() {
     kernel
         .app
         .execs()
-        .apply(&state, shall::model::exec::Verb::Sync)
+        .apply(&state, shall::model::exec::Verb::Sync, None)
         .await
         .unwrap();
     let before = kernel.mock_executor.get_calls().await.len();
@@ -344,7 +344,7 @@ async fn removing_an_exec_without_an_undo_runs_nothing() {
     kernel
         .app
         .execs()
-        .apply(&state, shall::model::exec::Verb::Sync)
+        .apply(&state, shall::model::exec::Verb::Sync, None)
         .await
         .unwrap();
 
@@ -378,7 +378,7 @@ async fn a_false_when_does_not_run_the_undo() {
     kernel
         .app
         .execs()
-        .apply(&state, shall::model::exec::Verb::Sync)
+        .apply(&state, shall::model::exec::Verb::Sync, None)
         .await
         .unwrap();
     assert_eq!(runs_of(&kernel, body), 1);
@@ -389,7 +389,7 @@ async fn a_false_when_does_not_run_the_undo() {
     kernel
         .app
         .execs()
-        .apply(&state, shall::model::exec::Verb::Sync)
+        .apply(&state, shall::model::exec::Verb::Sync, None)
         .await
         .unwrap();
 
@@ -440,7 +440,7 @@ async fn a_step_names_the_verb_that_runs_it_and_the_other_verb_leaves_it_alone()
     kernel
         .app
         .execs()
-        .apply(&state, Verb::Sync)
+        .apply(&state, Verb::Sync, None)
         .await
         .expect("sync runs its steps");
     assert_eq!(
@@ -460,7 +460,7 @@ async fn a_step_names_the_verb_that_runs_it_and_the_other_verb_leaves_it_alone()
     kernel
         .app
         .execs()
-        .apply(&state, Verb::Upgrade)
+        .apply(&state, Verb::Upgrade, None)
         .await
         .expect("upgrade runs its steps");
     assert_eq!(
@@ -493,14 +493,19 @@ async fn a_step_can_belong_to_both_verbs() {
     approve(&kernel, "./bin/both.sh", body);
 
     let state = resolve(&kernel).await;
-    kernel.app.execs().apply(&state, Verb::Sync).await.unwrap();
+    kernel
+        .app
+        .execs()
+        .apply(&state, Verb::Sync, None)
+        .await
+        .unwrap();
     assert_eq!(runs_of(&kernel, body), 1);
 
     let state = resolve(&kernel).await;
     kernel
         .app
         .execs()
-        .apply(&state, Verb::Upgrade)
+        .apply(&state, Verb::Upgrade, None)
         .await
         .unwrap();
     assert_eq!(
@@ -537,7 +542,7 @@ async fn a_catalogued_step_runs_from_its_name_without_a_script_or_an_approval() 
     kernel
         .app
         .execs()
-        .apply(&state, Verb::Sync)
+        .apply(&state, Verb::Sync, None)
         .await
         .expect("sync runs its own steps");
     let calls = kernel.mock_executor.get_calls().await;
@@ -549,7 +554,7 @@ async fn a_catalogued_step_runs_from_its_name_without_a_script_or_an_approval() 
     kernel
         .app
         .execs()
-        .apply(&state, Verb::Upgrade)
+        .apply(&state, Verb::Upgrade, None)
         .await
         .expect("a shipped step needs no approval — that is the whole point of shipping it");
     let calls = kernel.mock_executor.get_calls().await;
@@ -578,7 +583,7 @@ async fn a_step_whose_tool_is_absent_is_skipped_rather_than_failed() {
     kernel
         .app
         .execs()
-        .apply(&state, Verb::Upgrade)
+        .apply(&state, Verb::Upgrade, None)
         .await
         .expect("an absent tool is not an error");
     let calls = kernel.mock_executor.get_calls().await;

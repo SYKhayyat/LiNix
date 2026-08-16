@@ -134,7 +134,7 @@ mod ledger_file_rules_tests;
 mod lifecycle_coverage_union_tests;
 mod lock_default_tests;
 mod lock_scope_tests;
-mod lock_unlock_axis_tests;
+mod lock_unlock_scope_tests;
 mod named_commands_exist_tests;
 mod one_parser_reads_a_removal_target_tests;
 mod option_table_coverage_tests;

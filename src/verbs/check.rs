@@ -703,6 +703,22 @@ pub async fn check_config(config: &Config, registry: &Arc<BackendRegistry>) -> R
         state.extras.len()
     );
 
+    // `preferences.toml` is the other half of "does this configuration hold up", and nothing was
+    // reading it here. A `[lock] freeze` that will not parse is deliberately not fatal — it
+    // narrows a default, and a typo in it must not stop a machine approving a script — so the
+    // only way a user learns of it is a warning on a `lock` run they may not make for weeks.
+    // This is the command whose job is to find that before then.
+    if let Err(e) = crate::core::lock_kind::LockSelection::parse(
+        &config.lock.freeze.join(","),
+        &config.lock.except,
+    ) {
+        println!(
+            "\n`[lock]` in preferences.toml does not parse, so a bare `shall lock` freezes \
+             everything:\n  {}",
+            e
+        );
+    }
+
     // `H8`: the shipped steps this machine can name, because a catalogue you cannot list is one
     // you read the source for. Only the ones actually usable here — the row's OS matches and its
     // tool is on `PATH` — so this answers *what can I write*, not *what exists somewhere*. A

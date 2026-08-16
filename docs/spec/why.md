@@ -6477,3 +6477,151 @@ so the grammar gained a name form rather than a keyword. The two arms meet in `P
 everything downstream of it is shared: the ceiling, the ledger, the write-ahead record, the
 dry-run note. Two spellings over one implementation is not the thing this repo bans; two
 implementations is.
+
+**V.187 — Why a version Shall recorded is not a decision the user made.**
+
+*(Rule in II.57. Ruling `J4`.)*
+
+The storage leg went red on five checks and the cause was three weeks upstream of the failure.
+The harness runs `shall lock` to approve an `exec:`. With no axis, `lock` freezes all three — so
+approving one script recorded the installed version of 106 packages, including
+`"apt:libudev1": "255.4-1ubuntu8.17"`. Nothing asked for that. Then the archive moved, and
+`StateResolver::prefer_locks` — hardcoded `true`, cleared only by `--upgrade` — fed the recorded
+version back to apt as an install argument. `E: Version '…' was not found`, exit 100, every sync
+from then on.
+
+**The failure is invisible from the config, which is what makes it different from an ordinary
+bad pin.** A user reading their own modules sees no version anywhere. The number in the error is
+in a file they did not write, produced by a command they ran for an unrelated reason, and the
+recovery is a flag they have no reason to know exists. Three mechanisms were ruled out before
+this one — the adoption manifest carries no version, the state registry records `null`, and
+`adopt` followed by `sync` never writes the lockfile at all — and each of those wrong turns was
+taken because the real chain crosses two commands and several weeks.
+
+**Why the fix is not "stop pinning".** A recorded version is the point of recording one, and
+`sync --locked` reproducing a machine exactly is a feature nobody asked to lose. Nor is it
+"default `prefer_locks` to false": that makes a machine you deliberately pinned drift unless you
+remember a flag every time, which for a tool whose pitch is *declare it once* is the wrong
+direction. The defect is not that versions are recorded or replayed. It is that neither was
+scopable, neither was configurable, and the failure explained none of it.
+
+**Why the scope is in the word and not on a flag.** The first design put the manager on
+`--backend NAME`. It reads well in isolation and it cannot express the thing the owner asked for
+by name: *everything except cargo's pins*. An exclusion is a **list of scopes**, and a flag is
+not a member of a list — `--except versions --backend cargo` says something else entirely, and
+`--except-backend` is a second flag for the same idea. Meanwhile a bare word cannot carry the
+class either: `shall lock versions apt` is genuinely ambiguous, because `apt:apt` exists on every
+Debian box, and reading a bare word that matches a manager *as* the manager would take away the
+only way to name that package. So the scope needs a syntax of its own that reads identically on
+both sides of the subtraction, which is `kind:qualifier`. One grammar, and the `--backend` flag
+was deleted from these two verbs rather than kept beside it: two ways to say one thing is how
+three ledgers came to be called "the lock".
+
+**Why the provenance is derived and not carried.** The obvious design puts a bit on each
+`PackageSpec` saying who wrote the version. V.183 already banned that, and the reasoning holds
+here: a bit is one more thing to set wrong, and it has to survive every path that builds or
+copies a spec. The two records that answer the question — what the manager complained about, and
+what the lockfile holds — are both available at the moment of failure, and neither can drift out
+of sync with itself. Reading them costs one file open on a path that has already failed.
+
+**Why advice is withheld unless the failure quotes the pin.** An install fails for many reasons,
+and a suggestion to unpin a package would send the reader after the wrong thing on most of them.
+Matching the recorded version against the manager's own words is the cheapest available proof
+that the pin is implicated, and a check that cannot decline is not a check.
+
+**V.188 — Why a setting is read back before it is called work.**
+
+*(Rule in II.19's convergence half, alongside V.133. Ruling `J2`, owner 2026-08-16: "yes, of
+course. this is a bug.")*
+
+**A sync that changed a setting reported that it changed nothing.** Measured on Windows 11
+against the real registry, three syncs over one declaration: with the key absent the write
+happened and nothing was printed; with the key already right the summary said `already up to
+date`; and with the declaration changed to a new value the registry took the new value and the
+summary *still* said `already up to date`. `plan` was worse, contradicting itself in two
+consecutive lines — "system already matches desired state (no changes)" and then "the plan
+written to shall-plan.json is not empty", exit 2.
+
+**The reason it gave for not asking was false, and the code one layer down proved it.**
+`in_effect` answered `None` for `setting:` with the comment *"reads back through an adapter that
+has no current value command; the only way to know is to write and see"*. Every row in
+`setting_stores.toml` carries `read`, and a row whose `read` is empty is refused at load — a
+store Shall cannot read is not an adapter, because it would be a command that runs every sync,
+which is the thing `setting:` exists not to be. `already_set` was already written, and the
+installer was already calling that exact pair before deciding whether to write. The probe the
+comment said did not exist was the probe the other half used.
+
+**So the fix is one function rather than a second copy of the comparison.** Two answers to *is
+this key already right* — one in the installer, one that shrugged in the reporter — is the whole
+defect. `holds` splits the name, picks the adapter, resolves the scope, reads and compares, and
+both halves call it. A scope refusal (`@scope=system` on a store with no machine-wide commands)
+is unanswerable here for the same reason it is refused there: reading the user key to answer for
+the machine key compares two different settings and calls them equal, which is the bug `@scope=`
+was carried into the ledger to fix.
+
+**Why a failed read must not be `Some(false)`.** A read fails for reasons that have nothing to
+do with the value — a schema `gsettings` has never heard of, a hive this account cannot open, a
+machine with no store on it at all. Reported as *not in effect*, each of those would make `check`
+permanently red on a key nobody can see and make every sync attempt a write against a store that
+has just said no. That is the old behaviour wearing a confident face, which is worse than the old
+behaviour: the old one at least said *unverifiable*.
+
+**Which is why the read goes through `probe_output` and not `run_output`.** `run_output`
+deliberately keeps a non-zero reply that said something, because *"no such package"* is a real
+answer from a package manager. A settings read is the other shape: the store's complaint is not
+the key's value, and `run_output` hands it back as `Ok("")`, which compares unequal to every
+value there is. The distinction between the two primitives is the difference between "the value
+differs" and "I could not ask", and it is one of the four tests.
+
+**What this does not close, stated rather than left to be discovered.** A store whose read fails
+on an *unset* key — `reg query` on a value that is not there — is still unanswerable rather than
+absent, so it is placed. That is exactly what it did before. `gsettings`, which returns the
+schema default for an unset key, answers properly. Telling "unset" from "unreadable" needs a
+per-store rule that no adapter row carries, and inventing one from the exit code would be
+guessing in the direction this entry just argued against.
+
+**V.189 — Why the manager a shared-database row names depends on the package.**
+
+*(Rule in II.30's neighbourhood — see `bugs.md` VI.6. Ruling `J3`, owner 2026-08-16: "do what a
+user would want — make it intuitive, easy, flexible and powerful.")*
+
+`pacman`, `yay` and `paru` are three clients of one libalpm database, so one installed package
+answered three times and Shall counted three. VI.6 records what that cost. The collapse that
+fixed it had to pick a winner, and the first answer was **the owner, always** — because a row is
+a thing a user acts on, and `pacman -Rs` removes an AUR package that `yay` installed, where a
+row saying `yay` on a machine without yay would name a removal nobody can perform.
+
+**That answer is right for removal and wrong for a manifest.** A declaration is not a removal;
+it is a line you can delete and add back, and the adding back is the half `pacman:` cannot do
+for an AUR package, because it is in no sync repository. `pacman -S shall-git` fails. So the
+question "which manager speaks for this package" has two correct answers depending on where the
+package came from, and pretending it has one meant picking which half of the round trip to
+break.
+
+**`pacman -Qm` is the line between them**, and it is a query the manager already answers: the
+installed packages no sync database carries. One invocation per run, on a machine that has both
+an owner and a client — which is an Arch box with an AUR helper and nothing else.
+
+**Why it is a `Queryable` method and not a string in the table.** The table says *these two
+share a database*, which is a fact about a pair. The query says *ask this manager what it did
+not supply*, which is a fact about one manager and belongs where its other queries are — beside
+`essential`, which is the same shape (a listing most managers have no notion of, defaulting to
+nothing). Putting a command string in the pair table would also have made it unreadable for the
+one caller that has no pair in hand.
+
+**Why an onboarded backend cannot set it.** A definition file can claim anything about itself,
+and this one would be a claim with no reader: the relation it feeds is a compiled table, so a
+custom row naming a foreign query would be a setting that silently does nothing. A field that
+does nothing is worse than an absent one, because it reads as support.
+
+**Why a failed probe leaves the owner in place.** It restores exactly the previous behaviour,
+which was wrong in one direction and never wrong in a *new* direction. The alternative — read a
+failed probe as "nothing is foreign" — is the same outcome by accident rather than by decision,
+and would have hidden a broken pacman behind a listing that still looked right. `probe_output`
+draws that line, so a refused flag is unknown rather than empty.
+
+**And the ordering lesson from VI.6 applies again, one filter over.** `adopt`'s already-declared
+check asked whether *this client* holds a declaration for the name. Once the owner can stand
+aside, that question lets a `pacman:jq` written last week sit beside a `yay:jq` written today —
+the exact duplicate the collapse exists to stop, arriving through the filter VI.6 already had to
+move once. It asks about the database now.

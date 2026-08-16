@@ -270,6 +270,23 @@ pub trait Queryable: Send + Sync {
         Ok(None)
     }
 
+    /// The installed packages this manager's own repositories did not supply.
+    ///
+    /// `None` from a manager with no such distinction, which is nearly all of them: `cargo`
+    /// installs from crates.io and from a git URL and calls both its own, and `apt` calls
+    /// everything in `dpkg` its own whatever archive it came from.
+    ///
+    /// **It exists because pacman has three clients and only two of them can reinstall.** An
+    /// AUR package is in pacman's database — `pacman -Rs` removes it — and pacman cannot put it
+    /// back, because it is in no sync repository. `yay` and `paru` can do both. So which
+    /// backend a shared-database row should name is not one answer: it is pacman for a
+    /// repository package and the helper for a foreign one, and this is the question that tells
+    /// them apart. Asked once per run, per owning backend, and never at all on a machine with
+    /// no such pair.
+    async fn foreign_to_repositories(&self) -> Result<Option<Vec<String>>> {
+        Ok(None)
+    }
+
     /// How `list_manual` decided what the user chose, phrased so a person can judge it.
     ///
     /// Adoption writes an estimate into a file the user is then asked to trust. An

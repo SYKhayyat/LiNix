@@ -208,6 +208,87 @@ pub struct RemoveSettings {
     pub purge: bool,
 }
 
+/// The `[lock]` table: what gets frozen, and whether a sync replays it.
+///
+/// **Every default here is the behaviour that shipped before the table existed**, so a machine
+/// with no `[lock]` section behaves exactly as it did. The table exists because none of these
+/// three were reachable at all: `lock` froze all three axes, pinned every manager, and a plain
+/// `sync` replayed the result, with no way to ask for anything else short of typing `--upgrade`
+/// on every invocation for ever.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LockSettings {
+    /// What a bare `shall lock` freezes, in the same vocabulary the command takes — a group, a
+    /// kind, or `kind:sub`. Naming a kind on the command line still overrides this for that run.
+    #[serde(default = "LockSettings::everything")]
+    pub freeze: Vec<String>,
+
+    /// Kinds a bare `shall lock` leaves alone, subtracted from `freeze`. The config half of
+    /// `--except`, and the reason both exist: `freeze = ["everything"]` with one subtraction
+    /// stays correct when a tenth kind is added, where an explicit list of nine silently would
+    /// not freeze it.
+    #[serde(default)]
+    pub except: Vec<String>,
+
+    /// Which managers get version pins. `["*"]` is every manager, which is the default and what
+    /// `lock` has always done. Naming managers restricts it: `["apt"]` pins apt's packages and
+    /// leaves cargo's floating, without needing `--backend` on every run.
+    #[serde(default = "LockSettings::every_manager")]
+    pub versions: Vec<String>,
+
+    /// Whether an ordinary `sync` installs the versions `locks/versions.json` recorded.
+    ///
+    /// **True is the shipped behaviour and stays the default.** False keeps the file as a record
+    /// — `check` still reports drift against it and `sync --locked` still reproduces from it —
+    /// without a recorded version becoming an install argument on every run. That distinction is
+    /// not cosmetic: a pin only fails when the version leaves the archive, which is weeks after
+    /// the run that recorded it and on a machine nobody is watching.
+    #[serde(default = "default_true")]
+    pub replay: bool,
+}
+
+impl LockSettings {
+    fn everything() -> Vec<String> {
+        vec!["everything".to_string()]
+    }
+
+    fn every_manager() -> Vec<String> {
+        vec!["*".to_string()]
+    }
+
+    /// Whether this manager's packages may be pinned.
+    pub fn pins(&self, backend: &str) -> bool {
+        self.versions.iter().any(|m| m == "*" || m == backend)
+    }
+
+    /// Which kinds a bare `shall lock` freezes on this machine.
+    ///
+    /// **A `[lock]` section that will not parse falls back to everything rather than refusing
+    /// the command.** The preference narrows a default; a typo in it must not be the thing that
+    /// stops a machine approving a script. The mistake is still reported — `shall check config`
+    /// reads the same parser and says so — but not by making `lock` unusable.
+    pub fn freezes(&self) -> Vec<crate::core::lock_kind::LockKind> {
+        match crate::core::lock_kind::LockSelection::parse(&self.freeze.join(","), &self.except) {
+            Ok(selection) => selection.targets().iter().map(|t| t.kind).collect(),
+            Err(e) => {
+                tracing::warn!("[lock] freeze/except: {e}; freezing everything instead.");
+                crate::core::lock_kind::ALL.to_vec()
+            }
+        }
+    }
+}
+
+impl Default for LockSettings {
+    fn default() -> Self {
+        Self {
+            freeze: Self::everything(),
+            except: Vec::new(),
+            versions: Self::every_manager(),
+            replay: true,
+        }
+    }
+}
+
 /// Feature 5: Configuration for background scheduled tasks.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ScheduleConfig {
@@ -494,6 +575,11 @@ pub struct Config {
     /// count ceilings, and the install/change rules. See [`GuardSettings`].
     #[serde(default)]
     pub guard: GuardSettings,
+
+    /// The `[lock]` table: which axes a bare `lock` freezes, which managers get version pins,
+    /// and whether an ordinary `sync` replays them. See [`LockSettings`].
+    #[serde(default)]
+    pub lock: LockSettings,
 
     /// The `[remove]` table (II.11c). `purge = true` makes every removal on this machine also
     /// destroy the package's configuration. Off by default and machine-wide by construction:
@@ -841,6 +927,7 @@ impl Default for Config {
             backend_settings: HashMap::new(),
             allow_mass_install: false,
             guard: GuardSettings::default(),
+            lock: LockSettings::default(),
             remove: RemoveSettings::default(),
             purge_this_run: false,
             keep_going_this_run: false,
@@ -1063,6 +1150,124 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A machine with no `[lock]` section behaves exactly as it did before the table
+    /// existed.** Asserted key by key rather than by `assert_eq!` on the struct, so a later
+    /// key added with a bolder default fails here instead of changing every machine quietly.
+    #[test]
+    fn the_lock_table_defaults_to_what_shipped_before_it() {
+        let lock = LockSettings::default();
+        assert!(lock.replay, "an ordinary sync replayed recorded versions");
+        assert_eq!(lock.versions, vec!["*".to_string()], "every manager");
+        assert_eq!(
+            lock.freezes(),
+            crate::core::lock_kind::ALL.to_vec(),
+            "a bare `lock` froze all nine kinds"
+        );
+        // And the same reached through `Config`, which is what every caller actually holds —
+        // a `Default` on the table that the parent does not use is a default nothing reads.
+        assert!(Config::default().lock.replay);
+    }
+
+    /// `["*"]` is every manager; a named list is those managers and no others. Both directions,
+    /// because a `pins` that answered `true` unconditionally would satisfy the first alone.
+    #[test]
+    fn a_named_manager_list_pins_those_managers_and_no_others() {
+        let every = LockSettings::default();
+        for backend in ["apt", "cargo", "brew", "a-backend-invented-tomorrow"] {
+            assert!(every.pins(backend), "`*` must admit {backend}");
+        }
+
+        let narrowed = LockSettings {
+            versions: vec!["apt".into(), "cargo".into()],
+            ..LockSettings::default()
+        };
+        assert!(narrowed.pins("apt"));
+        assert!(narrowed.pins("cargo"));
+        assert!(!narrowed.pins("brew"), "brew was not named");
+        assert!(!narrowed.pins("ap"), "a prefix is not a manager");
+
+        // An empty list pins nothing, which is a real thing to want — record no versions at all
+        // while still using `lock scripts`. It must not read as "unset, so everything".
+        let none = LockSettings {
+            versions: vec![],
+            ..LockSettings::default()
+        };
+        assert!(!none.pins("apt"));
+    }
+
+    /// The freeze list narrows what a bare `lock` does, in the same words the command takes —
+    /// a group, a kind, or `everything` minus an exclusion. All three spellings, because a
+    /// vocabulary that works on the command line and not in the file is two vocabularies.
+    #[test]
+    fn the_freeze_list_narrows_a_bare_lock_in_the_commands_own_words() {
+        use crate::core::lock_kind::LockKind;
+
+        let group = LockSettings {
+            freeze: vec!["scripts".into()],
+            ..LockSettings::default()
+        };
+        assert!(group.freezes().contains(&LockKind::Exec));
+        assert!(!group.freezes().contains(&LockKind::Versions));
+
+        let one_kind = LockSettings {
+            freeze: vec!["exec".into()],
+            ..LockSettings::default()
+        };
+        assert_eq!(one_kind.freezes(), vec![LockKind::Exec]);
+
+        let subtracted = LockSettings {
+            except: vec!["versions".into()],
+            ..LockSettings::default()
+        };
+        assert!(!subtracted.freezes().contains(&LockKind::Versions));
+        assert!(subtracted.freezes().contains(&LockKind::Backends));
+        assert_eq!(
+            subtracted.freezes().len(),
+            crate::core::lock_kind::ALL.len() - 1
+        );
+    }
+
+    /// **A `[lock]` section that will not parse falls back to everything rather than refusing
+    /// the command.** A typo in a preference that narrows a default must not be the thing that
+    /// stops a machine approving a script.
+    #[test]
+    fn an_unparseable_freeze_list_falls_back_to_everything() {
+        let nonsense = LockSettings {
+            freeze: vec!["firewall".into()],
+            ..LockSettings::default()
+        };
+        assert_eq!(nonsense.freezes(), crate::core::lock_kind::ALL.to_vec());
+
+        let empty = LockSettings {
+            freeze: vec!["everything".into()],
+            except: vec!["everything".into()],
+            ..LockSettings::default()
+        };
+        assert_eq!(empty.freezes(), crate::core::lock_kind::ALL.to_vec());
+    }
+
+    /// The table parses from `preferences.toml` under the name the docs give it, and a key that
+    /// is left out keeps its default rather than zeroing the struct.
+    #[test]
+    fn the_lock_table_parses_and_a_missing_key_keeps_its_default() {
+        let config: Config = toml::from_str("[lock]\nreplay = false\n").expect("parse [lock]");
+        assert!(!config.lock.replay, "the key that was given");
+        assert_eq!(
+            config.lock.versions,
+            vec!["*".to_string()],
+            "a key that was not given must keep its default, not empty out"
+        );
+        assert_eq!(config.lock.freeze, vec!["everything".to_string()]);
+        assert_eq!(config.lock.freezes(), crate::core::lock_kind::ALL.to_vec());
+
+        // `deny_unknown_fields` on the table, so a typo is a loud failure and not a setting
+        // that reads as configured while being off — the same argument `Config` itself makes.
+        assert!(
+            toml::from_str::<Config>("[lock]\nreplayy = false\n").is_err(),
+            "a misspelled key inside [lock] must be refused"
+        );
+    }
 
     /// Every `preferences.toml` key that a command-line flag can also turn on, with the field
     /// on each side. The pairs are the test: a rule that holds for one of them and not the

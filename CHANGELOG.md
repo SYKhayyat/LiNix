@@ -18,6 +18,81 @@ and x86_64 Windows, and installers that download them.
 five things the assessment did not know about. All of them are in this release, which is why the
 entry it was written for now carries them rather than sitting above an untagged number.*
 
+### `lock` and `unlock` take a list of nine kinds, not one of three axes
+
+`shall lock` froze three things and there was no way to ask for less than one of them. The
+vocabulary is now nine kinds in three groups, and the same words work on the command line, in
+`--except`, and in `preferences.toml`.
+
+```sh
+shall lock exec,hooks                          # a list of kinds
+shall lock everything --except versions:cargo  # everything, minus one manager's pins
+shall lock versions:apt curl                   # apt's curl, and not cargo's
+shall lock hooks:after_install                 # one hook, across every package
+shall unlock --list                            # every entry, under its own kind
+```
+
+- The groups are `everything`, `packages` (`versions`, `backends`) and `scripts` (`hooks`,
+  `events`, `adapters`, `exec`, `generate`, `health`, `vars`). Approving all seven script kinds
+  to approve one was never a limitation of the ledger — each already had its own identity in
+  `locks/hooks.toml`. It was a limitation of the word.
+- `kind:qualifier` narrows below the kind. Four kinds divide (`versions`, `backends`, `hooks`,
+  `events`); the other five are flat sets whose granularity is the item's own name, and asking
+  for a sub-category there is refused with what to type instead, rather than silently matching
+  everything.
+- **`--backend` is gone from these two verbs.** The manager belongs in the word because an
+  exclusion is a *list*, and "everything except cargo's pins" has no spelling as a flag. It
+  cannot be a bare word either: `apt:apt` is a real package on every Debian machine, so
+  `lock versions apt` has to keep meaning the package.
+- `[lock] freeze` and `[lock] except` narrow what a bare `lock` freezes, in exactly those words;
+  `[lock] versions` names which managers get pins; `[lock] replay` says whether an ordinary
+  `sync` installs the recorded versions — which was hardcoded, so the only way to decline it was
+  `--upgrade` on every invocation for ever. A `[lock]` block that will not parse freezes
+  everything and says so, and `shall check config` now reads the same parser so the mistake is
+  findable before the run that trips over it.
+- Fixed on the way: `unlock backends:cargo` would have cleared **every** manager's recorded
+  resolution, an undo wider than the thing it undid.
+- **A manager pin that a sync cannot satisfy now explains itself.** When an install fails on a
+  version that `locks/versions.json` recorded, the failure names the file, says Shall wrote the
+  number, and gives the four ways out. Derived from disk at the moment of failure rather than
+  from a provenance bit on the spec, and withheld when the manager's complaint does not quote
+  the pin — so a dead mirror is never blamed on a lockfile.
+
+### `upgrade` no longer runs every step, and a step can wait for a big enough run
+
+- **`shall upgrade curl` used to fire every `@on=upgrade` step**, firmware included. A narrowed
+  upgrade — named packages, `--backend`, `--security`, `--canary`, or a profile/module scope —
+  now runs no steps unless asked. `--steps` and `--no-steps` reach both answers explicitly.
+- **`@after=N` on an `exec:` line** runs the step only on a run that actually moved at least N
+  packages: `exec:./firmware.sh @on=upgrade @after=5`. `@after=0` is refused rather than read as
+  "always" — a threshold of nothing means the author meant something else.
+- The native whole-system path (`apt upgrade` and friends) reports no per-package count, so it
+  answers **unknown**, not zero, and unknown runs the step. Skipping a firmware step after the
+  run that moves the most would be the wrong direction to be wrong in.
+
+### A `setting:` is read back, so a sync that changes one says so
+
+`check` and `plan` called every `setting:` line *unverifiable*, and unverifiable places — so a
+converged machine reported work it would not do, a settled key was written on every sync for
+ever, and a sync that genuinely changed a registry value printed `already up to date`. The
+reason given was that the store has no "current value" command; every row in
+`setting_stores.toml` carries `read`, a row whose `read` is empty is refused at load, and the
+installer had been calling exactly that pair all along.
+
+The probe and the installer now ask one function. A read only counts if it **exits clean**: a
+schema the store does not know, a hive this account cannot open, or a `@scope=system` line
+against a store with no machine-wide commands stays unverifiable and is never reported as drift.
+
+### An AUR package is named under a manager that can put it back
+
+`pacman`, `yay` and `paru` are three clients of one database, and the row that survives the
+collapse used to be pacman's always. That is right for removal and wrong for a manifest: pacman
+removes an AUR package and cannot reinstall it, so `pacman:<aur package>` is a line you cannot
+delete and add back. The owner now speaks for the packages its repositories supply and the
+helper speaks for the rest, told apart by `pacman -Qmq` — asked once per run, and only on a
+machine that has both. `adopt`, `list`, the undeclared crawl and `uninstall --absent` all read
+the same answer.
+
 ### Two commands now return an exit code they did not
 
 - **`shall plan` exits `2` when the plan it wrote is not empty.** It answers the question `check`

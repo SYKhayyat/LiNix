@@ -125,7 +125,7 @@ impl Extras<'_> {
             // The record still answers the case nothing can be asked about: a resource this
             // machine cannot be queried for has been applied, or it has not, and only one of
             // those is work.
-            let answer = in_effect(self.config, self.registry, stmt, &key).await;
+            let answer = in_effect(self.config, self.registry, self.executor, stmt, &key).await;
             let key = key.to_string();
             match answer {
                 Some(true) => {}
@@ -342,11 +342,11 @@ impl Extras<'_> {
 /// re-copied all three under a summary reading `already up to date`, and the second run backed
 /// up the copies Shall had made itself.
 ///
-/// `None` means Shall cannot ask — **not** that the answer is yes. A `setting:` reads back
-/// through an adapter that does not report a current value, a `service:` state costs a process
-/// launch per line, and a `@decrypt`ed secret's plaintext cannot be compared with its ciphertext
-/// without running the tool. Those are named `unverifiable` and placed rather than guessed,
-/// which keeps today's behaviour for the kinds nothing can verify.
+/// `None` means Shall cannot ask — **not** that the answer is yes. A store with no adapter on
+/// this machine, a `service:` enablement no init reports in a listing, and a `@decrypt`ed
+/// secret's plaintext that cannot be compared with its ciphertext without running the tool are
+/// each named `unverifiable` and placed rather than guessed, which keeps today's behaviour for
+/// the kinds nothing can verify.
 ///
 /// A `link:` is compared by content, not by existence: the destination existing is what the
 /// ledger already knew, and a user who edits the deployed file has drift the file test cannot
@@ -355,6 +355,7 @@ impl Extras<'_> {
 pub(crate) async fn in_effect(
     config: &std::sync::Arc<crate::config::Config>,
     registry: &crate::backends::BackendRegistry,
+    executor: &crate::core::CommandExecutor,
     stmt: &crate::config::grammar::Statement,
     key: &crate::core::extras_lock::ExtraKey,
 ) -> Option<bool> {
@@ -449,12 +450,33 @@ pub(crate) async fn in_effect(
                 .is_in_effect(id)
                 .await,
         ),
+        // A settings store that cannot be read is not an adapter — `why_unusable` refuses a row
+        // whose `read` is empty — so every store Shall will drive can answer this, and the
+        // installer has been asking it all along. Only the reporting half was not: `check` and
+        // `plan` called every `setting:` line *unverifiable*, which places, so a converged
+        // machine reported work it would not do and a settled key was named on every run.
+        //
+        // The store's answer is the whole of it — no provenance bit, no memory of what Shall
+        // wrote last time. A value a user set by hand and a value Shall set are the same value,
+        // and a model that treated them differently is what `was_hand_written` was banned for.
+        K::Setting => {
+            let Statement::Setting(name, opts) = stmt else {
+                return None;
+            };
+            // A line with no value is invalid, and the installer says so by name. Guessing what
+            // it meant here would answer for a declaration that is never going to apply.
+            let want = opts.one("value")?;
+            crate::backends::setting::SettingBackendCore::new(
+                executor.clone(),
+                crate::backends::setting::adapters(crate::backends::setting::user_adapters(config)),
+            )
+            .holds(name, want, opts.one("scope"))
+            .await
+        }
         // **Each of these says `None` for a reason, and the reason is written down.** `None` is
         // *unverifiable*, which places — so a kind that lands here is re-applied on every sync
         // for ever, and that is a cost worth stating rather than inheriting from a `_` arm.
         //
-        // - `setting:` reads back through an adapter that has no "current value" command; the
-        //   only way to know is to write and see.
         // - `repo:` is answerable — the backend can list repositories — but not for free, and
         //   not without deciding what a URL that differs from the declaration means. Adding
         //   that probe changes what `sync` does on a converged machine, which is a ruling, not
@@ -464,7 +486,7 @@ pub(crate) async fn in_effect(
         //   own diff against what is in force; a per-line probe here would be a second opinion.
         // - `exec:`, `generate:` and `dotfiles:` never reach here — `extra_key` returns `None`
         //   for all three — and are listed so the compiler keeps that true.
-        K::Setting | K::Repo | K::Schedule | K::Firewall => None,
+        K::Repo | K::Schedule | K::Firewall => None,
         K::Exec | K::Generate | K::Dotfiles => None,
     }
 }
@@ -545,14 +567,11 @@ list_pattern = 'SERVICE_NAME:\s+(\S+)'
     async fn each_kind_either_answers_or_says_why_it_cannot() {
         let config = Arc::new(crate::config::Config::default());
         let reg = BackendRegistry::new();
+        let exec = CommandExecutor::new(false, false);
         let mut opts = Options::default();
         opts.insert("value", "1");
 
         for (stmt, key) in [
-            (
-                Statement::Setting("dark".into(), opts.clone()),
-                "setting:dark",
-            ),
             (
                 Statement::Repo {
                     backend: "apt".into(),
@@ -571,11 +590,43 @@ list_pattern = 'SERVICE_NAME:\s+(\S+)'
         ] {
             let key: ExtraKey = key.parse().expect("the fixture keys are well formed");
             assert_eq!(
-                in_effect(&config, &reg, &stmt, &key).await,
+                in_effect(&config, &reg, &exec, &stmt, &key).await,
                 None,
                 "`{key}` is documented as unverifiable; if that changed, say so here"
             );
         }
+
+        // `setting:` is the one that left this list (J2). It answers from the store now, and
+        // what it still cannot answer it reports as unanswerable rather than as absent: a key
+        // whose name is not `SCHEMA/KEY` addresses nothing, and a store this machine does not
+        // run has no value to compare. Both place, which is what they did before.
+        let key: ExtraKey = "setting:dark".parse().expect("well formed");
+        assert_eq!(
+            in_effect(
+                &config,
+                &reg,
+                &exec,
+                &Statement::Setting("dark".into(), opts.clone()),
+                &key
+            )
+            .await,
+            None,
+            "`dark` is not `SCHEMA/KEY`, so it addresses no key in any store"
+        );
+        // A line with no `@value=` is invalid and the installer refuses it by name. Answering
+        // here would be answering for a declaration that is never going to apply.
+        let key: ExtraKey = "setting:org.gnome.x/theme".parse().expect("well formed");
+        assert_eq!(
+            in_effect(
+                &config,
+                &reg,
+                &exec,
+                &Statement::Setting("org.gnome.x/theme".into(), Options::default()),
+                &key
+            )
+            .await,
+            None,
+        );
 
         // A key whose kind is not a keyword at all — a package line's `backend:name` — cannot
         // even be built now, which is the point of the type: `ExtraKey` refuses it at the parse.
@@ -589,26 +640,33 @@ list_pattern = 'SERVICE_NAME:\s+(\S+)'
     async fn a_service_already_in_its_declared_state_is_not_placed_again() {
         let config = Arc::new(crate::config::Config::default());
         let reg = registry_listing_nginx();
+        let exec = CommandExecutor::new(false, false);
 
         let (running, key) = service("nginx", "status", "running");
         assert_eq!(
-            in_effect(&config, &reg, &running, &key).await,
+            in_effect(&config, &reg, &exec, &running, &key).await,
             Some(true),
             "nginx is in the listing and the line asks for running"
         );
 
         let (stopped, key) = service("nginx", "status", "stopped");
         assert_eq!(
-            in_effect(&config, &reg, &stopped, &key).await,
+            in_effect(&config, &reg, &exec, &stopped, &key).await,
             Some(false),
             "a running service declared stopped is drift, and drift places"
         );
 
         // The same two questions about a service the init does not report.
         let (running, key) = service("absent-svc", "status", "running");
-        assert_eq!(in_effect(&config, &reg, &running, &key).await, Some(false));
+        assert_eq!(
+            in_effect(&config, &reg, &exec, &running, &key).await,
+            Some(false)
+        );
         let (stopped, key) = service("absent-svc", "status", "stopped");
-        assert_eq!(in_effect(&config, &reg, &stopped, &key).await, Some(true));
+        assert_eq!(
+            in_effect(&config, &reg, &exec, &stopped, &key).await,
+            Some(true)
+        );
     }
 
     /// What the listing cannot answer stays unanswered. A restart is a transition no listing
@@ -618,12 +676,16 @@ list_pattern = 'SERVICE_NAME:\s+(\S+)'
     async fn what_the_listing_cannot_answer_is_left_unverifiable() {
         let config = Arc::new(crate::config::Config::default());
         let reg = registry_listing_nginx();
+        let exec = CommandExecutor::new(false, false);
 
         let (restarted, key) = service("nginx", "status", "restarted");
-        assert_eq!(in_effect(&config, &reg, &restarted, &key).await, None);
+        assert_eq!(
+            in_effect(&config, &reg, &exec, &restarted, &key).await,
+            None
+        );
 
         let (enabled, key) = service("nginx", "enabled", "true");
-        assert_eq!(in_effect(&config, &reg, &enabled, &key).await, None);
+        assert_eq!(in_effect(&config, &reg, &exec, &enabled, &key).await, None);
 
         // Enablement declared *alongside* a status is still unanswered: the status half being
         // satisfied says nothing about the half that is not.
@@ -633,7 +695,7 @@ list_pattern = 'SERVICE_NAME:\s+(\S+)'
         let both = Statement::Service("nginx".to_string(), opts);
         let key = ExtraKey::new(crate::config::grammar::ResourceKind::Service, "nginx");
         assert_eq!(
-            in_effect(&config, &reg, &both, &key).await,
+            in_effect(&config, &reg, &exec, &both, &key).await,
             None,
             "running is satisfied and enabled is unknown — the line as a whole is unknown"
         );

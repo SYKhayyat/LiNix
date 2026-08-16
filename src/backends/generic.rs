@@ -413,6 +413,10 @@ pub struct ManagerConfig {
     /// How to ask the manager what its own orphan verb *would* remove, without removing it.
     /// `None` means this manager cannot say, and a manager that cannot say does not remove.
     pub orphan_dry_run: Option<OrphanDryRun>,
+    /// How to ask which installed packages this manager's repositories did not supply
+    /// (`Queryable::foreign_to_repositories`). One bare name per line; `None` from a manager
+    /// that draws no such distinction, which is all of them but pacman.
+    pub foreign_args: Option<Vec<String>>,
     pub repo_add_args: Option<Vec<String>>,
     pub repo_remove_args: Option<Vec<String>>,
     pub repo_list_args: Option<Vec<String>>,
@@ -1370,6 +1374,31 @@ impl Queryable for GenericQueryable {
         }
     }
 
+    /// Read through `probe_output`, so a manager that refuses the flag is *unknown* rather
+    /// than *nothing is foreign*. An empty answer read out of a failure would attribute every
+    /// AUR package to pacman again, which is the state this exists to leave.
+    async fn foreign_to_repositories(&self) -> Result<Option<Vec<String>>> {
+        let Some(ref foreign_args) = self.core.config.foreign_args else {
+            return Ok(None);
+        };
+        let args: Vec<&str> = foreign_args.iter().map(|s| s.as_str()).collect();
+        let bin = self
+            .core
+            .config
+            .list_binary
+            .as_deref()
+            .unwrap_or(self.core.binary());
+        let output = self.core.executor.probe_output(bin, &args).await?;
+        Ok(Some(
+            output
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(|l| l.split_whitespace().next().unwrap_or(l).to_string())
+                .collect(),
+        ))
+    }
+
     async fn essential(&self) -> Result<Vec<String>> {
         let Some(ref essential_args) = self.core.config.essential_args else {
             return Ok(Vec::new());
@@ -2245,6 +2274,7 @@ mod tests {
                 update_args: None,
                 purge_args: None,
                 orphan_dry_run: None,
+                foreign_args: None,
                 repo_add_args: None,
                 repo_remove_args: None,
                 repo_list_args: None,
@@ -3484,6 +3514,7 @@ mod settings_interpolation_tests {
             upgrade_args: vec![],
             update_args: None,
             orphan_dry_run: None,
+            foreign_args: None,
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,

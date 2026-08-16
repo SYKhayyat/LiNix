@@ -236,6 +236,7 @@ pub(crate) fn base_config(name: &str) -> ManagerConfig {
         upgrade_args: vec![],
         update_args: None,
         orphan_dry_run: None,
+        foreign_args: None,
         repo_add_args: None,
         repo_remove_args: None,
         repo_list_args: None,

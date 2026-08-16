@@ -377,6 +377,8 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
             all,
             security,
             except,
+            steps,
+            no_steps,
             ignore_holds,
             profile,
             module,
@@ -398,6 +400,13 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
                     out: Output::from_json_flag(*json),
                     canary: *canary,
                     test,
+                    // Neither flag is the default, and `overrides_with` makes the pair
+                    // mutually exclusive rather than letting both be true at once.
+                    steps: match (*steps, *no_steps) {
+                        (true, _) => Some(true),
+                        (_, true) => Some(false),
+                        _ => None,
+                    },
                 },
             )
             .await
@@ -512,13 +521,31 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
             command,
             args,
         } => handle_run(app.runner(), packages, command, args).await,
-        Commands::Lock { axis, names, list } => handle_lock(app, *axis, names, *list).await,
-        Commands::Unlock { axis, names, list } => {
+        Commands::Lock {
+            what,
+            names,
+            except,
+            list,
+        } => {
+            let selection = shall::core::lock_kind::LockSelection::parse(what, except)?
+                .narrowed_by_config(&app.config.lock.freezes());
+            handle_lock(app, &selection, names, *list).await
+        }
+        Commands::Unlock {
+            what,
+            names,
+            except,
+            list,
+        } => {
+            // **`[lock] freeze` does not narrow `unlock`.** It says what a machine freezes by
+            // default, and reading it as "what a machine may release" would make an entry
+            // recorded before the preference changed permanently unreleasable.
+            let selection = shall::core::lock_kind::LockSelection::parse(what, except)?;
             handle_unlock(
                 &app.config,
                 &app.registry,
                 &app.resolver().await,
-                *axis,
+                &selection,
                 names,
                 *list,
             )

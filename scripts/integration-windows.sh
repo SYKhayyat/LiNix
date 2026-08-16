@@ -2007,13 +2007,50 @@ else
             else
                 soft "lock: the stamp was already gone after the kill, so the corpse case is weaker than intended"
             fi
+            # **The lock is timed by a command whose entire cost IS the lock.**
+            #
+            # `unlock backends <a name nothing froze>` takes the data lock, writes a ledger and
+            # asks no package manager anything, so its duration is the acquisition and nothing
+            # else. A sync cannot answer this question, and the container twin proved it: one
+            # `zypper` command installing three packages spent 121 seconds of entirely correct
+            # work, and a stopwatch over the sync called it the data-lock timeout. This script
+            # held the same stopwatch at `>= 30`, four times likelier to fire, and had simply
+            # not met a slow enough manager yet.
+            #
+            # **It runs before `heal`, and that ordering is the positive control.** `heal` is a
+            # `Writer`: it takes the data lock for its whole run and `Drop` deletes the stamp. So
+            # with `heal` first, the "is the corpse's stamp gone" branch below could never fire —
+            # the step added to clear the *manager's* orphaned lock had silently disabled the
+            # only evidence that Shall's own lock was ever taken. The probe needs no `heal`,
+            # because it never goes near a manager.
+            _t0=$(date +%s)
+            $TO "$SHALL" -y unlock backends shall-never-frozen-zzz >/tmp/lock-corpse-probe-win.out 2>&1
+            _probe=$(since "$_t0")
+            if grep -q "waiting for the data directory\|is locked by" /tmp/lock-corpse-probe-win.out 2>/dev/null; then
+                hard "lock: taking the lock after a killed holder waited on the data directory — the stale stamp file was believed over the lock (${_probe}s)"
+                excerpt /tmp/lock-corpse-probe-win.out 6
+            elif [ "$_probe" -ge 30 ]; then
+                hard "lock: taking the lock after a killed holder cost ${_probe}s, and this command has no manager work to spend it on"
+                excerpt /tmp/lock-corpse-probe-win.out 6
+            # **Positive evidence that the lock was taken, not merely that nothing complained.**
+            # `DataLock`'s `Drop` deletes the stamp, so the corpse's file is gone once something
+            # has taken and released the lock — and is still there if nothing did. Without this
+            # the whole branch passed against a stub that does nothing and exits 0, which is a
+            # check that cannot fail and therefore proves nothing when it passes.
+            elif [ -s "$LOCKOWNER" ]; then
+                hard "lock: the killed holder's stamp is still on disk after a run that takes the lock — nothing took and released it, so this check had nothing to measure"
+                excerpt /tmp/lock-corpse-probe-win.out 6
+            else
+                PASS=$((PASS + 1)); echo "  PASS  lock: a killed holder's lock died with it — the next run took it in ${_probe}s and released it"
+            fi
+
             # **The subject here is Shall's own lock, so the package manager's is cleared
             # first.** Killing a holder mid-sync also orphans the manager it had started, which
             # keeps its own lock and leaves it behind — so the sync below would fail on *that*
             # lock and this check would report it as a Shall lock that was not released. The
             # container twin learned this and this script did not, which is the same one-of-two
             # split as the assertion below it. `heal` is the command whose job that repair is
-            # (II.50), and it is untimed: what is measured is the sync.
+            # (II.50).
             $TO "$SHALL" -y heal >/tmp/lock-corpse-heal-win.out 2>&1 || true
             _t0=$(date +%s)
             $TO "$SHALL" -y sync >/tmp/lock-corpse-win.out 2>&1
@@ -2033,24 +2070,14 @@ else
             # run pointed at the wrong mechanism. A check whose name and whose cause are
             # unrelated is the defect `GRADER.md` exists to catch. Two questions, two sentences.
             #
-            # The lock question is answered by the clock and by the message, not by rc: Shall
+            # The lock question is answered by the message, not by rc and not by the clock: Shall
             # announces its own wait, so a run that was refused by a dead holder's stamp says so.
+            # The clock lives on the probe above, where nothing else can spend it.
             if grep -q "waiting for the data directory\|is locked by" /tmp/lock-corpse-win.out 2>/dev/null; then
-                hard "lock: the next run waited on the data directory after the holder was killed — the stale stamp file was believed over the lock (${_took}s)"
-                excerpt /tmp/lock-corpse-win.out 6
-            elif [ "$_took" -ge 30 ]; then
-                hard "lock: the next run took ${_took}s after a holder that was already dead, without saying what it was waiting for"
-                excerpt /tmp/lock-corpse-win.out 6
-            # **Positive evidence that the lock was taken, not merely that nothing complained.**
-            # `DataLock`'s `Drop` deletes the stamp, so the corpse's file is gone once something
-            # has taken and released the lock — and is still there if nothing did. Without this
-            # the whole branch passed against a stub that does nothing and exits 0, which is a
-            # check that cannot fail and therefore proves nothing when it passes.
-            elif [ -s "$LOCKOWNER" ]; then
-                hard "lock: the killed holder's stamp is still on disk after the next run — nothing took and released the lock, so this check had nothing to measure"
+                hard "lock: the sync after a killed holder waited on the data directory — the stale stamp file was believed over the lock (${_took}s)"
                 excerpt /tmp/lock-corpse-win.out 6
             else
-                PASS=$((PASS + 1)); echo "  PASS  lock: a killed holder's lock died with it — the next run took ${_took}s, took the lock and released it"
+                PASS=$((PASS + 1)); echo "  PASS  lock: the sync after a killed holder claimed no wait on the data directory (${_took}s)"
             fi
             # The other question, asked separately because it is a different question — and asked
             # at all only where the fixture it syncs is installable here.

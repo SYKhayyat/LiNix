@@ -636,6 +636,10 @@ async fn absent_targets(
     let mut out: Vec<(String, String)> = Vec::new();
     let mut listings: std::collections::HashMap<String, std::collections::HashSet<String>> =
         std::collections::HashMap::new();
+    // An `absent:` line is permanent, so the manager it names has to be the one that can act
+    // on the package for as long as the line lives — which for an AUR package is the helper,
+    // not pacman (`J3`).
+    let foreign = crate::backends::shared_database::ForeignSets::probe(registry).await;
 
     for pkg in packages {
         let (scoped, name) =
@@ -702,7 +706,7 @@ async fn absent_targets(
             );
         }
         // Every holder is named, but three clients of one database are one holder.
-        crate::backends::capability::one_backend_per_shared_database(&mut holders);
+        crate::backends::shared_database::one_backend_for(&mut holders, &name, &foreign);
         out.extend(holders.into_iter().map(|b| (b, name.clone())));
     }
     Ok(out)
@@ -752,7 +756,7 @@ async fn unmanaged_targets(
                         usable.iter().map(|b| b.name().to_string()).collect();
                     // One database is one manager to name in the refusal that follows, or the
                     // sentence lists `pacman:jq`, `paru:jq` and `yay:jq` for one jq.
-                    crate::backends::capability::one_backend_per_shared_database(&mut widened);
+                    crate::backends::shared_database::one_backend_per_shared_database(&mut widened);
                     out.extend(widened.into_iter().map(|b| (b, name.clone())));
                 }
             }

@@ -69,6 +69,7 @@ pub(super) fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecu
             upgrade_args: vec!["upgrade".into(), "--all".into(), "--silent".into()],
             update_args: Some(vec!["source".into(), "update".into()]),
             orphan_dry_run: None,
+            foreign_args: None,
             repo_add_args: Some(vec![
                 "source".into(),
                 "add".into(),
@@ -155,6 +156,7 @@ pub(super) fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecut
             upgrade_args: vec!["update".into(), "*".into()],
             update_args: Some(vec!["update".into()]),
             orphan_dry_run: None,
+            foreign_args: None,
             repo_add_args: Some(vec![
                 "bucket".into(),
                 "add".into(),
@@ -245,6 +247,7 @@ pub(super) fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecut
             upgrade_args: vec!["upgrade".into(), "all".into(), "-y".into()],
             update_args: None,
             orphan_dry_run: None,
+            foreign_args: None,
             repo_add_args: Some(vec![
                 "source".into(),
                 "add".into(),
@@ -327,6 +330,7 @@ pub(super) fn register_mas(reg: &mut BackendRegistry, executor: &CommandExecutor
             upgrade_args: vec!["upgrade".into()],
             update_args: None,
             orphan_dry_run: None,
+            foreign_args: None,
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,

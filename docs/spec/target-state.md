@@ -2452,6 +2452,15 @@ unverifiable rather than assumed converged. And where the machine answers by exi
 `sc start` on a running service returns 1056 — that code is success for the verb that asked and
 a failure for every other verb. **V.133.**
 
+**A `setting:` is read back, and a read that fails is not an answer** (2026-08-16, `J2`). The
+probe asks the store what the key holds and compares it with the declaration, through the same
+function the installer calls before it writes — one question, not two, because two of them is how
+the reporting half came to say *nothing to do* about a key the other half was rewriting. A read
+only counts if it **exits clean**: a schema the store does not know, a hive this account cannot
+open, or a `@scope=system` line against a store with no machine-wide commands is
+`None`/unverifiable, never *not in effect*. A failed read reported as drift would rewrite the key
+on every sync for ever and keep `check` permanently red on something nobody can see. **V.188.**
+
 **Two knobs, because processes and sockets are not the same thing.** `max_parallel` bounds
 concurrent **processes** and defaults to the core count. `network_parallel` bounds concurrent
 **network requests** and defaults to 16, whatever the core count. Nothing that fans out reads a
@@ -2824,6 +2833,15 @@ indistinguishable at the call site — which is the entire failure this rule pre
   at it again. The warning that accompanied it was below the default log filter.
 - **In a probe, `None` means *unverifiable*, and unverifiable places.** A kind that falls through
   is re-applied on every sync, for ever.
+
+**Backends that share one installed database are one package, and which of them the row names
+depends on the package** (2026-08-16, `J3`). `pacman`, `yay` and `paru` are three clients of one
+libalpm database, so every surface that enumerates installed software collapses them to one row
+per database (`backends/shared_database.rs`). The surviving row names the **owner** for a package
+its repositories supply and the **client** for one they do not, because a declaration has to
+survive being deleted and put back: pacman removes an AUR package and cannot reinstall it, and
+the helper does both. The foreign set is asked once per run, only where an owner and a client are
+both present here, and a probe that fails leaves the owner speaking for everything. **V.189.**
 
 **A ledger key whose kind this build does not have is kept, not dropped.** It is left in place,
 reported, and re-offered next run. Forgetting a row is the one outcome that cannot be undone.
@@ -3470,3 +3488,52 @@ opposite about the same package. A bare name resolves to the manager that *holds
 refused when no manager does — resolving it the way `install` does would write a permanent line
 naming a manager that never had the package. A survivor after the sync is still reported, since
 a package that outlived an `absent:` line is a failed removal, not a refused one.
+
+## II.57 A version Shall recorded is not a decision the user made (`J4`, V.187)
+
+**What `lock` and `unlock` freeze is a list, and the list is granular.** Nine kinds —
+`versions`, `backends`, `hooks`, `events`, `adapters`, `exec`, `generate`, `health`, `vars` — in
+three groups: `everything`, `packages` (the first two) and `scripts` (the other seven). The
+first positional takes a comma-separated list of either, `--except` subtracts from it, and both
+sides accept `kind:qualifier` to narrow below the kind: `versions:apt`, `backends:cargo`,
+`hooks:after_install`, `events:pre-sync`. Package names come after the scope and intersect with
+it, so `lock versions:apt curl` pins apt's curl and not cargo's.
+
+**The manager scope is in the word, not on a flag.** `--backend apt` reads well until you want
+`--except`, and then it cannot be written at all: *everything except cargo's pins* has no
+spelling as a flag. It also has to be inferred from nothing — `apt:apt` is a real package on
+every Debian machine, so `lock versions apt` must keep meaning the package, which is exactly why
+the class cannot be a bare word either. `kind:qualifier` is one grammar that reads the same in
+an inclusion and an exclusion, and there is one of it rather than two.
+
+**A kind that does not subdivide refuses a qualifier and says what to type instead.** Only
+`versions`, `backends`, `hooks` and `events` have anything below them. Accepting `exec:anything`
+and ignoring it would leave a user believing they had narrowed a command that did everything.
+
+**Every part of this has a name in `preferences.toml`.** `[lock] freeze` and `[lock] except`
+narrow what a bare `lock` freezes, in the same words the command takes; `[lock] versions` names
+which managers get pins; `[lock] replay` says whether an ordinary `sync` installs recorded
+versions. All default to the shipped behaviour. A `[lock]` block that will not parse falls back
+to freezing everything and reports the mistake — the preference narrows a default, and a typo in
+it must not be the thing that stops a machine approving a script. `shall check config` reads the
+same parser, so the mistake is findable before the `lock` run that trips over it. `replay` had
+no name at all before: a sync replaying the lockfile was hardcoded, so the only way to decline
+it was `--upgrade` on every invocation for ever, and a preference the program holds but no user
+can write is not a preference.
+
+**The manager filter is enforced where the file is written, not where the command is typed.**
+`heal` reconciles `locks/versions.json` too. A filter on the `lock` command alone would have
+`heal` quietly put back every pin the configuration said not to write.
+
+**A manager that cannot get a pinned version says where the pin came from.** It names
+`locks/versions.json`, says Shall recorded it, and gives the four ways out — `upgrade`, `unlock
+versions`, `sync --upgrade`, `[lock] replay = false`. The provenance is **derived from disk at
+the moment of failure**, by asking whether the version the manager quoted is the one recorded
+for that package. No bit is carried on the spec; II.53's ban on a `was_hand_written` flag stands.
+Advice is withheld when the failure does not quote the pin, so a dead mirror is never blamed on
+a lockfile.
+
+**A version somebody typed still fails hard.** That is the line, and it is the same one II.53
+draws: a version you typed is a decision, and the tool must not walk past it. A version Shall
+wrote down on your behalf is not a decision you made, so it may not brick every future sync
+without saying so.

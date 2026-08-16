@@ -49,6 +49,7 @@ That indirection is what lets one repo describe several machines — see [Profil
 [A folder of dotfiles](#a-folder-of-dotfiles) · [Secrets](#secrets)
 
 **Running it** — [Commands](#commands) · [History and rollback](#history-and-rollback) ·
+[Locking](#locking-what-you-can-freeze-and-how-to-say-which) ·
 [When `sync` says "nothing to do"](#when-sync-says-nothing-to-do-and-something-is-still-broken) ·
 [Exit codes](#exit-codes)
 
@@ -831,7 +832,7 @@ a number typed into a README does.
 | `plan` / `apply` | Freeze what `sync` would do to a file, review it, then apply exactly that |
 | `eval` | Print the resolved config as versioned JSON — every `when` decided, every bare name given a backend. Takes no locks |
 | `try` | Rehearse this config on a clean machine in a container. Answers what `plan` cannot: would it work somewhere that is not here? |
-| `lock` | Record every managed package's version so `sync --locked` reproduces it elsewhere |
+| `lock` / `unlock` | Freeze what a sync would otherwise decide again — nine kinds, from version pins to `exec:` approvals. Scope it to a kind, a sub-category (`versions:apt`), or one name. **Recorded versions are replayed by every sync, not only `sync --locked`** — see below |
 | `export` | Emit native manifests (Brewfile, requirements.txt, package.json, Aptfile) |
 | `bundle` | An offline/air-gapped bundle of config, lockfile and resolved package list |
 | `sbom` / `check security` | CycloneDX bill of materials; scan managed packages against OSV.dev |
@@ -1170,6 +1171,11 @@ declaration rather than a command that runs on every sync — and `reset` is wha
 line does. A machine whose store has no row gets an error naming what Shall looked for, never a
 key that silently did nothing.
 
+`check` and `plan` read the store too, so a key already holding the value you declared is not
+reported as work. Where the store cannot be read — a schema it does not know, a hive this
+account cannot open — the key is reported as *unverifiable* rather than as drift, and applied:
+Shall does not claim a machine matches a key it could not look at.
+
 ### The eight things you can teach it
 
 Everything above is one of these. A row in one of eight files in your repo teaches Shall
@@ -1211,12 +1217,99 @@ the first `sync` after you write or change one refuses it by name and tells you 
 lock`. That is the same rule hooks and `exec:` scripts follow, and it is why a repo you cloned
 cannot teach your machine anything you have not read.
 
+## Locking: what you can freeze, and how to say which
+
+`shall lock` freezes **nine** separate things, and with no argument it freezes all of them:
+
+| kind | what it freezes |
+|---|---|
+| `versions` | the installed version of every managed package |
+| `backends` | which manager each bare name resolved to |
+| `hooks` | lifecycle hooks (`after_install:nginx`) |
+| `events` | hooks on Shall's own events |
+| `adapters` | files under `adapters/` |
+| `exec` | `exec:` scripts |
+| `generate` | `generate:` commands |
+| `health` | declared health-check commands |
+| `vars` | the `vars` provider |
+
+Three groups stand for sets of them: **`everything`**, **`packages`** (versions + backends), and
+**`scripts`** (the seven that approve something the config can run).
+
+Say what you want in whichever direction is shorter — a list, or everything minus the exceptions:
+
+```sh
+shall lock                            # everything
+shall lock exec                       # just the exec: scripts
+shall lock exec,hooks                 # two kinds
+shall lock scripts                    # all seven approval kinds, no version pins
+shall lock everything --except exec   # everything else
+```
+
+Below a kind there is a sub-category, written `kind:sub`. Four kinds have one:
+
+```sh
+shall lock versions:apt               # apt's version pins, nobody else's
+shall lock hooks:after_install        # one hook, across every package
+shall lock events:before_sync         # one event, wherever it is declared
+shall lock everything --except versions:cargo   # all of it but cargo's pins
+```
+
+The other five are flat — an `exec:` script has no category above itself — so their granularity
+is the item's own name, which the positional argument has always taken: `shall lock exec
+./setup.sh`. Asking for a sub-category where there isn't one is refused and tells you that.
+
+`unlock` takes exactly the same words. A scope you can freeze with and cannot release with is a
+one-way door.
+
+**The part worth knowing before you run it: a recorded version is replayed by every `sync`, not
+only by `sync --locked`.** That is deliberate — a sync converges to what you decided, not to
+whatever was published since — but it has a consequence that arrives weeks later. If the archive
+drops a version you recorded, an ordinary `sync` starts failing on a version that is nowhere in
+your config. Shall says so when that happens, and names the way out; these are the ways out:
+
+```sh
+shall upgrade curl              # move one package forward, and re-record its pin
+shall upgrade --backend apt     # or a whole manager's worth
+shall unlock versions curl      # drop one pin, take whatever the manager offers
+shall sync --upgrade            # ignore every recorded pin, for this run only
+```
+
+Scope the freezing rather than undoing it afterwards:
+
+```sh
+shall lock versions curl                 # one package
+shall lock versions:apt                  # every package apt installed
+shall lock versions:apt curl             # apt's curl, and not cargo's
+shall lock scripts                       # approve the scripts, pin no versions
+```
+
+For a standing preference rather than a per-run one, `preferences.toml` has a `[lock]` table
+speaking the same vocabulary. Every default is the behaviour above, so leaving it out changes
+nothing:
+
+```toml
+[lock]
+freeze   = ["everything"]  # what a bare `shall lock` freezes
+except   = []              # kinds left out of that
+versions = ["*"]           # which managers get version pins
+replay   = true            # does an ordinary sync install recorded versions
+```
+
+Prefer `except` to listing eight of the nine kinds: a tenth kind added in a later release is
+still frozen by `everything`, and would silently not be by a hand-written list.
+
+`replay = false` is the one to reach for if you want the lockfile as a record without it being an
+install argument: `check` still reports drift against it, and `sync --locked` still reproduces
+from it exactly.
+
 ## Configuration
 
 `shall config init` writes a commented `preferences.toml` into your repo; `shall edit
 preferences.toml` opens it and re-checks that it still parses when you save. Every key is
 optional. Settings cover timeouts, concurrency (`max_parallel`), snapshot retention,
-notification channels, and the `[guard]` block that holds the removal rules described above.
+notification channels, the `[lock]` table described above, and the `[guard]` block that holds the
+removal rules described above.
 
 **Where your repo lives is not a key in it.** `preferences.toml` sits *inside* the repo, so a
 key there could only be read from the directory it was trying to move away from. That one
