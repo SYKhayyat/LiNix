@@ -490,8 +490,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { distro: tools,     backend: apt,      pkg: jq, flags: '' }
-          - { distro: gentoo,    backend: emerge,   pkg: jq, flags: '-e SMOKE_ONLY=1' }
+          # `probe` is how this image is asked the argv questions, and it is a matrix field
+          # because one image cannot be asked the way the others are. Everything here compiles
+          # the suite in place; `guix`'s runtime stage is `metacall/guix`, which has no `cargo`
+          # (measured), so its Dockerfile copies a prebuilt `suite` binary out of the builder and
+          # this drives that instead. The step concatenates `probe` with the test filters, which
+          # is why the cargo form carries its own trailing `--`.
+          - { distro: tools,     backend: apt,      pkg: jq, flags: '', probe: 'cargo test --test suite --' }
+          - { distro: gentoo,    backend: emerge,   pkg: jq, flags: '-e SMOKE_ONLY=1', probe: 'cargo test --test suite --' }
           # Slackware is here rather than in the fast matrix for the reason gentoo is: the
           # image builds for tens of minutes. `slackpkg` had never met its own manager in any
           # harness before 2026-08-14 — it was argv-tested only, with no image to run it in.
@@ -502,7 +508,7 @@ jobs:
           # install — the first canary tried was `wget`, which the image DOES ship, so the
           # PATH assertion was vacuous, and worse, slackpkg shells out to `wget`, so removing
           # it broke the manager for every check after it (13 failures from one canary).
-          - { distro: slackware, backend: slackpkg, pkg: bc, flags: '' }
+          - { distro: slackware, backend: slackpkg, pkg: bc, flags: '', probe: 'cargo test --test suite --' }
           # And the image the `flags` slot was renamed for. `guix` needs
           # `--security-opt seccomp=unconfined` because its build sandbox calls `personality(2)`
           # and Docker's default profile blocks it — without which every install dies as
@@ -512,7 +518,7 @@ jobs:
           # The canary is `hello`: a guix profile starts empty, so the canary is whatever has a
           # prebuilt substitute in guix's own cache, and `hello` is the smallest such thing. A
           # source build here would be the whole nightly.
-          - { distro: guix,      backend: guix,     pkg: hello, flags: '--security-opt seccomp=unconfined' }
+          - { distro: guix,      backend: guix,     pkg: hello, flags: '--security-opt seccomp=unconfined', probe: 'suite' }
     steps:
     - uses: actions/checkout@v4
     - name: Build the ${{ matrix.distro }} image
@@ -540,14 +546,19 @@ jobs:
     # question on a red day. A composer finding sat unmeasured for a full day because a
     # coverage ratchet three steps earlier had gone red over an unrelated manager. The job still
     # fails; the difference is that the failing run now reports both answers instead of one.
+    # **`matrix.flags` belongs here too, and leaving it off was a leg that could not answer.**
+    # The flags are what an image needs to run *at all*, not what its lifecycle needs: guix's
+    # `--security-opt seccomp=unconfined` is a syscall filter, and an image whose manager dies on
+    # a blocked `personality(2)` reports its rows unmeasurable rather than measuring them. A slot
+    # named for the run and consulted by one of the run's two steps is half a slot.
     - name: Ask this image's thirty managers about subcommands, flags and `--`
       if: ${{ !cancelled() }}
       run: |
-        docker run --rm --entrypoint sh \
+        docker run --rm ${{ matrix.flags }} --entrypoint sh \
           -e TERMINATOR_PROBE=1 -e CARGO_TARGET_DIR=/tmp/target \
           -v "$PWD:/src" \
           shall-it-${{ matrix.distro }} -c \
-          "cd /src && cargo test --test suite -- argv_drift_tests:: terminator_probe_tests:: --nocapture"
+          "cd /src && ${{ matrix.probe }} argv_drift_tests:: terminator_probe_tests:: --nocapture"
 
   # The storage effectors, on real block devices. `btrfs`, `lvm` and `zfs` operate on volumes
   # and cannot be exercised by any amount of mocking; before 2026-07-30 none of them had ever

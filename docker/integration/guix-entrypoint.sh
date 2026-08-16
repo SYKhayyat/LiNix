@@ -42,20 +42,6 @@ if [ ! -S /var/guix/daemon-socket/socket ]; then
 fi
 echo "guix-daemon up, socket after ${i}s"
 
-# **The profile goes on PATH, because on a guix machine a person puts it there once.** `guix
-# install hello` writes `/root/.guix-profile/bin/hello` — measured, and it runs — and guix then
-# prints *"see `guix package --search-paths'"* rather than touching your environment. So without
-# this the harness installed the canary, found nothing on PATH, and reported a manager that had
-# in fact done its job: `guix: hello is not on PATH and nothing said where it went`, with seven
-# further checks cascading off it.
-#
-# Prepended rather than sourced from `$GUIX_PROFILE/etc/profile`, which is what the guix
-# documentation tells a user to do: that file is created by the FIRST install, so at entrypoint
-# time on a fresh container there is nothing to source. A PATH entry that does not exist yet
-# costs nothing and is there when the directory appears.
-PATH="/root/.guix-profile/bin:/root/.guix-profile/sbin:$PATH"
-export PATH
-
 # **The fixtures, installed here because the image could not install them.** A guix profile
 # starts empty, and two of the harness's sections need something in it that has nothing to do
 # with guix itself: `git` for the history and rollback proofs, and a package from Shall's

@@ -966,3 +966,65 @@ fn the_test_target_scan_sees_the_line_that_was_broken() {
     // everything it reads.
     assert!(test_targets_named("run: cargo build --release").is_empty());
 }
+
+/// **Every image the argv gates are pointed at is asked in a way that image can answer.**
+///
+/// The nightly probe step ran `cargo test` against whatever image the matrix named, on the
+/// assumption every one carries a toolchain. `metacall/guix` does not — it is a runtime stage
+/// that receives a binary from a builder — so the guix leg was added, appeared in the job list,
+/// and would have died on `cargo: not found`. The matrix now carries a `probe` field, and this
+/// keeps the field and the Dockerfile from drifting apart.
+///
+/// **What this can and cannot see.** It checks the *pairing*: an image driven as a prebuilt
+/// `suite` binary must ship one, and an image that ships one must be driven that way. It cannot
+/// tell whether a new image has a toolchain — that is a fact about a base image, not about text
+/// in this repository — and the honest backstop for that is the step itself, which fails loudly
+/// on a missing `cargo` rather than quietly measuring nothing.
+#[test]
+fn every_probed_image_is_asked_in_a_form_it_can_run() {
+    let ci = read(".github/workflows/ci.yml");
+
+    let rows: Vec<&str> = ci
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("- { distro:"))
+        .collect();
+    assert!(
+        rows.len() >= 4,
+        "found {} matrix rows declaring a distro in ci.yml; this reader has stopped matching the \
+         file it reads",
+        rows.len()
+    );
+
+    let field = |row: &str, key: &str| -> Option<String> {
+        let at = row.find(&format!("{key}: "))? + key.len() + 2;
+        let rest = &row[at..];
+        let end = rest.find([',', '}']).unwrap_or(rest.len());
+        Some(rest[..end].trim().trim_matches('\'').to_string())
+    };
+
+    for row in rows {
+        let distro = field(row, "distro").expect("a row that starts `- { distro:` has one");
+        // Only the nightly matrix carries `probe`; the fast one shares a single step. A row
+        // without it is one of those, and it is the step's own hardcoded command that applies.
+        let Some(probe) = field(row, "probe") else {
+            continue;
+        };
+        let dockerfile = read(&format!("docker/integration/Dockerfile.{distro}"));
+        let ships_binary = dockerfile.contains("/usr/local/bin/suite");
+        let driven_as_binary = !probe.starts_with("cargo");
+
+        assert_eq!(
+            ships_binary,
+            driven_as_binary,
+            "`{distro}` is probed with `{probe}` and its Dockerfile {} a prebuilt suite binary. \
+             An image that ships one and is asked with cargo compiles a second copy for no \
+             reason; an image asked for the binary without shipping it cannot run the gate at all.",
+            if ships_binary {
+                "ships"
+            } else {
+                "does not ship"
+            }
+        );
+    }
+}

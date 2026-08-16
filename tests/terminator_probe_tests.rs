@@ -276,6 +276,63 @@ fn on_path(program: &str) -> bool {
     which::which(program).is_ok()
 }
 
+/// The host class this run's measurements are filed under in `scripts/terminator-floor.txt`.
+///
+/// The IMAGE, not the distro underneath it. `tools` is built on Ubuntu and carries thirty
+/// managers the ubuntu image does not, so `/etc/os-release` would file the two legs that differ
+/// most under one record — the mistake `lifecycle-floor.txt` documents having already made.
+fn host_class() -> String {
+    let image = std::env::var("SHALL_IT_IMAGE").ok();
+    host_class_of(image.as_deref(), std::env::var("CI").is_ok())
+}
+
+/// The rule, over its two inputs rather than over the process environment.
+///
+/// **Split for the test's sake, and the split is not cosmetic.** Driving [`host_class`] by
+/// setting `SHALL_IT_IMAGE` would mutate a variable the probe in this same binary reads, on
+/// another thread, mid-run — so the test for the naming rule could rename the host under the
+/// gate it exists to protect. Two lines of lookup stay untested; a cross-test data race does not.
+fn host_class_of(image: Option<&str>, ci: bool) -> String {
+    match image.map(str::trim) {
+        Some(image) if !image.is_empty() => format!("container-{image}"),
+        _ => format!(
+            "{}-{}",
+            std::env::consts::OS,
+            if ci { "ci" } else { "local" }
+        ),
+    }
+}
+
+fn repo_file(rel: &str) -> String {
+    let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel);
+    std::fs::read_to_string(&p)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", p.display()))
+        .replace("\r\n", "\n")
+}
+
+/// `container-arch cargo gem pacman …` -> one entry, the class mapped to its names.
+///
+/// A repeated class is a merge, not a replacement. Two lines for one class is a mistake either
+/// way, and the union is the reading that cannot silently drop a name that somebody measured —
+/// [`the_floor_names_each_host_class_once`] is what turns it into a visible failure.
+fn recorded_floors() -> BTreeMap<String, BTreeSet<String>> {
+    let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for line in repo_file("scripts/terminator-floor.txt").lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        let Some(class) = fields.next() else {
+            continue;
+        };
+        out.entry(class.to_string())
+            .or_default()
+            .extend(fields.map(str::to_string));
+    }
+    out
+}
+
 fn first_line(text: &str) -> &str {
     text.lines().next().unwrap_or("").trim()
 }
@@ -622,6 +679,165 @@ async fn every_terminator_claim_still_holds_where_the_tool_is_installed() {
          when someone has checked its argument parser. Fix the row in `src/core/argv.rs` and put \
          the tool's own words in its evidence.",
         wrong.join("\n\n")
+    );
+
+    // **What this host owes, by name.** Everything above answers "does anything measured here
+    // contradict the table"; nothing above answers "did this leg still measure what it is the
+    // only place that measures". Those are different questions, and the second one has a
+    // documented casualty: `pacman`'s row says `Evidence::Measured` because this probe ran on the
+    // arch image, and the day that image switched to an unprivileged user — which `yay` and
+    // `paru` require — pacman stopped answering while six other binaries carried on. Six
+    // measured, one silently unchecked, green.
+    //
+    // The ratchet is over NAMES rather than a count, because the failure swaps a name without
+    // moving a total. `scripts/terminator-floor.txt` carries the sets and the reasoning.
+    let class = host_class();
+    let floors = recorded_floors();
+    let measured: BTreeSet<String> = confirmed.keys().cloned().collect();
+
+    match floors.get(&class) {
+        None => eprintln!(
+            "terminator probe: no record for host class `{class}` in \
+             scripts/terminator-floor.txt. It is neither passed nor failed — a gate that fails \
+             the first run on a new host is a gate that stops people adding hosts. To record \
+             what this run measured, add:\n\n    {class} {}\n",
+            measured.iter().cloned().collect::<Vec<_>>().join(" ")
+        ),
+        Some(owed) => {
+            // Why it could not be measured, in the words this run already has. "Not installed"
+            // and "installed and would not answer" want opposite fixes — restore the manager, or
+            // restore the privilege — and a report that says only "missing" sends you to the
+            // wrong one.
+            let lost: Vec<String> = owed
+                .difference(&measured)
+                .map(|b| {
+                    let why = if inconclusive.contains(b) {
+                        "present and driven, but no verb of it ever resolved the operand — \
+                         usually privilege: run the probe as root"
+                    } else if absent.contains(b) {
+                        "not on this host at all — the manager left the image"
+                    } else if undriven.contains(b) {
+                        "no backend built an argv carrying an operand for it — the registry \
+                         changed, not the manager"
+                    } else {
+                        "driven, present, and absent from every bucket — the probe's own \
+                         accounting is wrong"
+                    };
+                    format!("  {b}: {why}")
+                })
+                .collect();
+
+            assert!(
+                lost.is_empty(),
+                "`{class}` has measured these rows before and did not this time:\n{}\n\n\
+                 Each one's row in `src/core/argv.rs` may say `Evidence::Measured` on the \
+                 strength of this leg, so the claim now outlives the measurement. Restore the \
+                 measurement, or demote the row to the inference it has become — do NOT delete \
+                 the name from scripts/terminator-floor.txt, which is the one edit that file \
+                 exists to make visible in a diff.",
+                lost.join("\n")
+            );
+
+            let gained: Vec<&String> = measured.difference(owed).collect();
+            if !gained.is_empty() {
+                eprintln!(
+                    "terminator probe: `{class}` measured {gained:?} beyond its record. To \
+                     ratchet, replace its line in scripts/terminator-floor.txt with:\n\n    \
+                     {class} {}\n",
+                    measured.iter().cloned().collect::<Vec<_>>().join(" ")
+                );
+            }
+        }
+    }
+}
+
+// ---- The floor file itself, checked where every push can see it. --------------------------
+//
+// The probe runs on a nightly image; these run everywhere. A name misspelled in the floor is a
+// failure that can only appear on the one host that owes it, which is the slowest possible place
+// to learn about a typo.
+
+#[test]
+fn the_terminator_floor_is_readable_and_names_real_rows() {
+    let floors = recorded_floors();
+    assert!(
+        !floors.is_empty(),
+        "scripts/terminator-floor.txt parsed to nothing. Every assertion the probe makes against \
+         it is over what this reader managed to read, so an empty parse is a silent exemption for \
+         every host class at once."
+    );
+
+    let known: BTreeSet<&str> = shall::core::argv::known_terminator_claims()
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+
+    let mut unknown: Vec<String> = Vec::new();
+    for (class, names) in &floors {
+        assert!(
+            !names.is_empty(),
+            "`{class}` records no names, which is not a floor — it is a line that asserts nothing"
+        );
+        for n in names {
+            if !known.contains(n.as_str()) {
+                unknown.push(format!("{class}: {n}"));
+            }
+        }
+    }
+    assert!(
+        unknown.is_empty(),
+        "scripts/terminator-floor.txt owes rows that `src/core/argv.rs` does not have: {unknown:?}. \
+         A name no row matches can never be measured, so it would fail its host class forever — \
+         and a name misspelled is indistinguishable from a manager that left."
+    );
+}
+
+#[test]
+fn the_floor_names_each_host_class_once() {
+    // The parser unions duplicate lines rather than letting the last one win, so a repeat cannot
+    // silently drop names. It is still a mistake, and the diff is where it should be caught: two
+    // lines for one class is how two people record two different truths about one host.
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut repeated: Vec<String> = Vec::new();
+    for line in repo_file("scripts/terminator-floor.txt").lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(class) = line.split_whitespace().next() {
+            if !seen.insert(class.to_string()) {
+                repeated.push(class.to_string());
+            }
+        }
+    }
+    assert!(
+        repeated.is_empty(),
+        "scripts/terminator-floor.txt records {repeated:?} on more than one line"
+    );
+}
+
+#[test]
+fn a_container_is_filed_under_its_image_and_a_runner_under_its_os() {
+    // `SHALL_IT_IMAGE` is what every integration Dockerfile declares, and it survives the
+    // `--entrypoint sh` the probe step overrides. Reading `/etc/os-release` instead would file
+    // the `tools` image (thirty managers) and the `ubuntu` image (seven) under one record,
+    // because `tools` is built on Ubuntu — the mistake `lifecycle-floor.txt` records having made.
+    assert_eq!(host_class_of(Some("tools"), false), "container-tools");
+    assert_eq!(
+        host_class_of(Some("arch"), true),
+        "container-arch",
+        "a container is one class either way: `docker run` passes no `CI`, and a disposable \
+         image is equally clean whoever started it"
+    );
+
+    let os = std::env::consts::OS;
+    assert_eq!(host_class_of(None, true), format!("{os}-ci"));
+    assert_eq!(host_class_of(None, false), format!("{os}-local"));
+    assert_eq!(
+        host_class_of(Some("   "), false),
+        format!("{os}-local"),
+        "a blank image name is not an image — `-e SHALL_IT_IMAGE=` would otherwise file a runner \
+         under `container-`"
     );
 }
 

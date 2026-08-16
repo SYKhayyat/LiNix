@@ -30,10 +30,33 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 WORKDIR /src
 COPY . /src
 RUN cargo build --release && cp target/release/shall /usr/local/bin/shall && chmod 0755 /usr/local/bin/shall
+# **The test binary comes with it, because the runtime stage has no Rust and the argv gates are
+# `cargo test` invocations.** Every other image in the matrix carries a toolchain and compiles the
+# suite in place; `metacall/guix` carries no `cargo` at all (measured), so the probe step that
+# asks this image's manager about `--` would have died on `cargo: not found` — a leg added and
+# unable to answer. Installing Rust through guix was the alternative and is the thing this file's
+# header refuses: it pulls a toolchain through the manager under test.
+#
+# `--release`, so it reuses the artefacts `cargo build --release` above just produced rather than
+# compiling the whole dependency graph a second time in debug.
+RUN cargo test --release --no-run --test suite \
+    && cp "$(ls -t target/release/deps/suite-* | grep -v '\.d$' | head -1)" /usr/local/bin/suite \
+    && chmod 0755 /usr/local/bin/suite
 
 FROM metacall/guix:latest
 ENV SHALL_IT_IMAGE=guix
+# **On the image, not in the entrypoint, because CI overrides the entrypoint.** `guix install`
+# writes to `/root/.guix-profile/bin` and then tells you to put it on PATH yourself; the harness
+# needs it to find a canary it just installed. The argv and terminator probes run this image with
+# `--entrypoint sh`, so anything the entrypoint exports is not in force for them — and a probe
+# that cannot see `guix` reports the row as unmeasurable rather than measuring it.
+#
+# Prepended rather than sourced from `$GUIX_PROFILE/etc/profile`, which is what guix tells a user
+# to do: that file is created by the FIRST install, so at container start there is nothing to
+# source. A PATH entry for a directory that does not exist yet costs nothing.
+ENV PATH="/root/.guix-profile/bin:/root/.guix-profile/sbin:${PATH}"
 COPY --from=builder /usr/local/bin/shall /usr/local/bin/shall
+COPY --from=builder /usr/local/bin/suite /usr/local/bin/suite
 COPY docker/integration/retry.sh /usr/local/bin/retry
 COPY docker/integration/guix-entrypoint.sh /usr/local/bin/guix-entrypoint
 RUN chmod 0755 /usr/local/bin/retry /usr/local/bin/guix-entrypoint

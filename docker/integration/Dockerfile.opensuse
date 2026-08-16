@@ -12,7 +12,13 @@ RUN zypper --non-interactive --gpg-auto-import-keys refresh \
     && zypper --non-interactive install --no-recommends \
        curl gcc make pkg-config libopenssl-devel perl git tar gzip unzip \
        nodejs npm python3-pipx ruby ruby-devel \
+       diffutils \
     && zypper --non-interactive clean --all
+# `diffutils` is on that list for the harness, not for the build: the shim section asserts the
+# deployed shim is byte-identical to the `shall` binary with `cmp`, and Tumbleweed's minimal set
+# is the one image in this matrix that ships no `cmp` at all. Without it that check failed
+# `command not found` — a missing tool reported as a product defect, on the one assertion that
+# proves a shim is a copy rather than a file of the right name.
 # Every network install below goes through this. One attempt was the wrong number: a
 # best-effort install that fails once takes its manager out of the image, and `|| true`
 # means nothing says so until the coverage ratchet goes red. See `retry.sh`.
