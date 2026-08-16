@@ -49,6 +49,27 @@ function Get-PublishedBinary($destination, $tag) {
     # message about something else.
     if (-not (Test-Path $destination)) { return $false }
     if ((Get-Item $destination).Length -lt 1000000) { return $false }
+
+    # **And it has to RUN** — the twin of the rule `install.sh` gained in the same change, and
+    # for a defect found on the other side. Every check above asks whether a file arrived; none
+    # asks whether this machine can execute it. On Unix that is sharp: the `-gnu` binaries need
+    # a dynamic loader NixOS and Alpine do not ship, so the installer delivered a `shall` that
+    # answered every invocation with `not found`, having reported success.
+    #
+    # Windows has no loader problem of that kind, which is exactly why the rule belongs here
+    # too rather than only where it bit: an architecture mismatch, a partial download that
+    # passed the size floor, a binary quarantined by policy, all land the same way. A twin that
+    # only carries the rules its own platform has already been burned by is how these two files
+    # keep diverging.
+    #
+    # Non-fatal, like every other branch: the caller falls back to a source build, which is slow
+    # and works.
+    try {
+        & $destination --version *> $null
+        if ($LASTEXITCODE -ne 0) { return $false }
+    } catch {
+        return $false
+    }
     return $true
 }
 

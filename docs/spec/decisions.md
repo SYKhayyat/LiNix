@@ -1,4 +1,4 @@
-# The decision register — 213 entries, none open
+# The decision register — 214 entries, none open
 **One file, six features, nothing waiting on the owner.** Every decision this design forces lives
 here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -24,7 +24,7 @@ HALF RULED had no rows, the five that remained summed to 206 against 210, and
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **208** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **209** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 | **DEFERRED** | Asked, and the owner chose to answer it later. | A ruling, when the owner returns to it. | **1** |
 | **HALF RULED** | Part of the question was answered and part was not. | A ruling on the remaining half. | **2** |
@@ -106,8 +106,8 @@ that cannot express one — was raised, measured and ruled on 2026-08-10. `J4` i
 the same coin and is not ruled: what a version pin means when *Shall* recorded it and the archive
 has since dropped it. The `G` round then ran the
 other way round: `docs/GRADE-2026-08-12.md`'s work order was implemented in one pass, and the nine
-changes in it that a user would notice shipped ahead of any ruling. All 213 are accounted
-for: **208 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN** — and this line
+changes in it that a user would notice shipped ahead of any ruling. All 214 are accounted
+for: **209 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -8772,3 +8772,67 @@ reasoning `pins.rs` already gives: a version you typed is a decision. Only the r
 the explanation. And `refresh_version_locks` still moves an existing pin even for a manager
 `[lock] versions` now excludes — the pin exists, and refusing to move it would freeze it at a
 stale version, which is the Z2 bug the function was written to prevent.
+
+## J5
+
+**Status: ANSWERED — 2026-08-16. Four questions put to the owner and four answers, all in one
+sitting. Build order and the coverage bound are below; nothing here was built before it was
+ruled.**
+
+**On NixOS, `nix profile install` is a side door the operating system does not know about.** It
+sits outside the system generation, no `nixos-rebuild` accounts for it, and it makes Shall's
+declarations and NixOS's declarations two sources of truth for one machine. That is the exact
+condition this tool exists to remove, so Shall on NixOS should write the **system configuration**
+and let NixOS execute it.
+
+**Before any of it: the published binary could not start on NixOS at all.** Measured 2026-08-16
+by mounting Ubuntu's own `/bin/echo` into `nixos/nix` — exit 127, *"cannot execute: required
+file not found"* — because a `-gnu` target hard-codes `/lib64/ld-linux-x86-64.so.2` and NixOS has
+no such file. **Alpine fails identically and is in the integration matrix**, so this was a
+supported platform whose binary could never have run. A static `x86_64-unknown-linux-musl` build
+fixes both: one artifact, measured to report `shall 0.8.0` from `nixos/nix`, `alpine:3.20` and
+`ubuntu:24.04` alike, with no source change. That is built.
+
+### The four rulings
+
+1. **Does Shall edit `configuration.nix`?** — **A setting decides.** Shall owns
+   `/etc/nixos/shall-packages.nix` completely and regenerates it; whether it also adds the one
+   `imports = [ ./shall-packages.nix ];` line to `configuration.nix` is a `preferences.toml` key.
+   The drop-in half is not novel: `pacman`'s repo support already writes
+   `/etc/pacman.d/shall-<name>.conf` and adds one `Include =` line, *never rewriting the body*.
+   Shall must never parse or rewrite a hand-edited Nix expression.
+
+2. **Does `sync` run `nixos-rebuild switch`?** — **Yes, itself.** Consistent with the standing
+   ruling that if a thing is the command's job it happens automatically rather than being
+   prompted for. It needs root and takes minutes, which is a cost to state, not a reason to ask.
+
+3. **One name or two?** — **Two.** `nix:` keeps meaning `nix profile` on every host, including
+   NixOS; `nixos:` means the system configuration. A NixOS user may legitimately want both — a
+   package for every account and a scratch tool for one — and two names is the only spelling that
+   can say so. It also keeps a shared config file meaning the same thing on every machine, which
+   one name could not: `nix:ripgrep` would silently be a different mechanism per host.
+
+4. **How far does it go?** — **Everything.** Not packages alone: `service:` and `firewall:` are
+   `configuration.nix` concerns on NixOS too, and are generated into the same file.
+
+**Also ruled, in passing:** `shall export` gains a `nix` format. It already emits Brewfile,
+`requirements.txt`, `package.json` and Aptfile; a NixOS fragment is the same idea and falls out
+of the generator this decision creates.
+
+### The coverage bound, stated before the code rather than discovered after
+
+**No container available here is NixOS.** `nixos/nix` is the Nix *package manager* on a minimal
+base: measured, it has `/nix/store` and `nix` 2.35.2 and it does **not** have `/etc/NIXOS`,
+`/run/current-system`, `nixos-rebuild` or systemd. So:
+
+- the generator's output is proven by hermetic Rust tests;
+- **that the output is valid Nix** is proven in `nixos/nix` by `nix-instantiate --parse`, which
+  is the risk that matters — Shall would be emitting text in another language, and a file nix
+  cannot parse breaks the user's whole system configuration rather than just Shall. Measured
+  non-vacuous: a well-formed module parses, and a deliberately unbalanced one is refused with
+  `error: syntax error, unexpected '}'`;
+- the `nix:` profile path is already driven for real in the `tools` image;
+- **`nixos-rebuild switch` against a real NixOS is argv-checked and not executed.** It wants a
+  VM or a real host, and until one exists that row is inference. Written here so nobody reads
+  a green suite as proof of it.
+

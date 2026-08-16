@@ -25,10 +25,30 @@ say "bootstrapping — detecting toolchain..."
 
 # The build target this machine wants, empty when no release binary is published for it.
 # `uname -m` on arm64 macOS says `arm64`; the Rust triple says `aarch64`.
+#
+# **On Linux the architecture is only half the question — the C library is the other half.**
+# A `-gnu` binary is dynamically linked and names `/lib64/ld-linux-x86-64.so.2` as its
+# interpreter. NixOS does not have that file, and neither does Alpine; on both, execve fails
+# with a message that names nothing a reader can act on. Measured 2026-08-16 with Ubuntu's own
+# `/bin/echo`: exit 127 *"cannot execute: required file not found"* in `nixos/nix`, and
+# *"not found"* in `alpine:3.20` on a file that is plainly there.
+#
+# So the loader is asked for rather than assumed, and where it is missing the statically linked
+# musl build is fetched instead — one artifact measured to start on nixos/nix, alpine and ubuntu
+# alike. `fetch_binary` re-checks by running what it downloaded, so a host neither branch
+# predicts still degrades to a source build rather than to a broken install.
 target_triple() {
   case "$(uname -s 2>/dev/null || echo unknown)" in
     Linux)  case "$(uname -m)" in
-              x86_64)        echo x86_64-unknown-linux-gnu ;;
+              x86_64)
+                if [ -e /lib64/ld-linux-x86-64.so.2 ] || [ -e /lib/ld-linux-x86-64.so.2 ]; then
+                  echo x86_64-unknown-linux-gnu
+                else
+                  echo x86_64-unknown-linux-musl
+                fi ;;
+              # No aarch64 musl build is published yet, so an arm64 NixOS or Alpine box still
+              # falls through to a source build. Named here rather than left as a silent gap:
+              # the row is one line in `ci.yml`'s matrix the day somebody wants it.
               aarch64|arm64) echo aarch64-unknown-linux-gnu ;;
             esac ;;
     Darwin) case "$(uname -m)" in
@@ -70,6 +90,27 @@ fetch_binary() {
   size=$(wc -c < "$out")
   [ "$size" -gt 1000000 ] || return 1
   chmod 755 "$out"
+
+  # **And it has to RUN, which is the only question that was never asked.** Everything above
+  # checks that a file arrived; none of it checks that this machine can execute what arrived.
+  # The published Linux binaries target `-gnu`, and a dynamically linked glibc binary needs
+  # `/lib64/ld-linux-x86-64.so.2` — which **NixOS and Alpine do not have**. Measured, not
+  # reasoned: Ubuntu's own `/bin/echo` mounted into `nixos/nix` exits 127 with *"cannot execute:
+  # required file not found"*, and into `alpine:3.20` with *"not found"* on a file that is
+  # plainly there. That error names nothing a reader can act on.
+  #
+  # Without this line the installer downloaded a perfectly valid binary onto a host that cannot
+  # start it, chmod'd it, reported the 30-second success this file promises, and left the user
+  # with a `shall` that answers every invocation with `not found`. Alpine is in the integration
+  # matrix, so that was a live platform, not a hypothetical.
+  #
+  # A failure here is not fatal: it returns non-zero like every other branch, and the caller
+  # falls back to building from source — which is slow and *works*. Being slow is a promise
+  # broken; being broken is a tool.
+  "$out" --version >/dev/null 2>&1 || {
+    say "the published binary for $triple does not run here — building from source instead."
+    return 1
+  }
 }
 
 # WHICH Shall. `HEAD` is whatever was pushed last, which is not a thing anyone can ask for

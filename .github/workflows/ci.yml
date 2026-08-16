@@ -162,6 +162,20 @@ jobs:
             target: aarch64-unknown-linux-gnu
             rust: stable
             native: false
+          # **The distros where a `-gnu` binary cannot start at all.** A dynamically linked
+          # glibc binary hard-codes `/lib64/ld-linux-x86-64.so.2` as its interpreter, and
+          # neither NixOS nor Alpine has one — measured 2026-08-16 by mounting Ubuntu's own
+          # `/bin/echo` into `nixos/nix` (exit 127, *"cannot execute: required file not
+          # found"*) and into `alpine:3.20` (*"not found"*, on a file plainly there). Alpine is
+          # in this workflow's own integration matrix, so that was a supported platform whose
+          # published binary could never have run.
+          #
+          # A static musl build has no interpreter to miss. One artifact, measured on all
+          # three: `shall 0.8.0` from nixos/nix, alpine:3.20 and ubuntu:24.04 alike.
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            rust: stable
+            native: false
           - os: macos-latest
             target: x86_64-apple-darwin
             rust: stable
@@ -227,6 +241,20 @@ jobs:
           echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar"
         } >> "$GITHUB_ENV"
       if: matrix.target == 'aarch64-unknown-linux-gnu'
+
+    # Same reasoning as the row above: `rustup target add` alone links against the host's glibc
+    # and dies at the last step. `mlua` vendors Lua, and `xz2`/`zstd` vendor C, so musl needs a
+    # C compiler of its own. Verified in `rust:1-slim` before this row was written — the build
+    # is clean and needs no source change.
+    - name: Cross toolchain for musl
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y musl-tools musl-dev
+        {
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc"
+          echo "CC_x86_64_unknown_linux_musl=musl-gcc"
+        } >> "$GITHUB_ENV"
+      if: matrix.target == 'x86_64-unknown-linux-musl'
 
     - name: Build
       run: cargo build --release --target ${{ matrix.target }}
@@ -370,12 +398,12 @@ jobs:
       run: |
         set -eu
         missing=
-        for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin; do
+        for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-unknown-linux-musl x86_64-apple-darwin aarch64-apple-darwin; do
           test -f "dist/shall-${target}" || missing="${missing} shall-${target}"
         done
         test -f dist/shall-x86_64-pc-windows-msvc.exe || missing="${missing} shall-x86_64-pc-windows-msvc.exe"
         test -z "$missing" || { echo "the release is missing:${missing}" >&2; exit 1; }
-        echo "all five targets present"
+        echo "all six targets present"
 
     # `@v2`, not `@v1`. `actionlint` reports that v1's runner is too old for GitHub Actions —
     # it pins Node 16, which was removed — so the step that publishes the binaries would fail on
