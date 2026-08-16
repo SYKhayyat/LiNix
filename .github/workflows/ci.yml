@@ -62,7 +62,7 @@ jobs:
     name: Advisories and licences
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@stable
     - name: cargo-deny
       uses: EmbarkStudios/cargo-deny-action@v2
@@ -86,7 +86,7 @@ jobs:
     name: Builds on the declared MSRV
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - id: msrv
       run: echo "version=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
     - uses: dtolnay/rust-toolchain@master
@@ -106,7 +106,7 @@ jobs:
     name: Shell scripts
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: shellcheck
       # `.githooks/*` is named rather than globbed by extension because a git hook may not have
       # one, which is the only reason it went unlinted when it was added.
@@ -189,7 +189,7 @@ jobs:
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ startsWith(github.ref, 'refs/tags/v') && '1' || '16' }}
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@master
@@ -335,7 +335,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Download all artifacts
       uses: actions/download-artifact@v4
@@ -418,7 +418,7 @@ jobs:
           - { distro: opensuse, backend: zypper, pkg: jq }
           - { distro: void,     backend: xbps,   pkg: jq }
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Build the ${{ matrix.distro }} image
       run: docker build -f docker/integration/Dockerfile.${{ matrix.distro }} -t shall-it-${{ matrix.distro }} .
     - name: Run the ${{ matrix.distro }} lifecycle
@@ -524,7 +524,7 @@ jobs:
           # operand, and the leg measured `apt` instead of the manager it exists for.
           - { distro: guix,      backend: guix,     pkg: hello, flags: '--security-opt seccomp=unconfined', probe: 'sh /usr/local/bin/guix-daemon-up && suite' }
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Build the ${{ matrix.distro }} image
       run: docker build -f docker/integration/Dockerfile.${{ matrix.distro }} -t shall-it-${{ matrix.distro }} .
     - name: Run the ${{ matrix.distro }} lifecycle
@@ -584,7 +584,7 @@ jobs:
     name: Integration (storage — btrfs/lvm/zfs on loopback devices)
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Build the storage image
       run: docker build -f docker/integration/Dockerfile.storage -t shall-it-storage .
     - name: Run the storage lifecycle
@@ -608,7 +608,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: macos-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@stable
     - name: Build
       run: cargo build --release
@@ -632,7 +632,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@stable
     - name: Build
       run: cargo build --release
@@ -662,7 +662,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@stable
     - name: Ask every installed manager whether it still has these subcommands
       run: "cargo test --release --test suite -- argv_drift_tests:: --nocapture"
@@ -708,7 +708,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     # **Both sides of the one fork this script has, because testing one of them tested neither.**
     # `install.sh` asks `command -v cargo` and takes one of two paths. This job built a container
     # with no Rust in it and then asserted that a binary appeared, so it was asserting the
@@ -776,7 +776,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Run install.ps1 as the README says to
       shell: pwsh
       env:
@@ -799,7 +799,7 @@ jobs:
     name: Harness mutation (can the checks fail?)
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@stable
     - name: Stub the binary and count what still passes
       run: bash scripts/harness-mutation-test.sh --check
@@ -847,7 +847,7 @@ jobs:
           - { what: the data lock, file: src/core/datalock.rs, slug: datalock }
           - { what: the transaction, file: src/core/transaction.rs, slug: transaction }
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@stable
     - uses: Swatinem/rust-cache@v2
     - name: Install cargo-mutants
