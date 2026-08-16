@@ -695,6 +695,58 @@ fn every_triple_the_installer_downloads_is_one_the_release_publishes() {
     );
 }
 
+/// The **file name** half of the same contract, which the triple check above does not reach.
+///
+/// `every_triple_the_installer_downloads_is_one_the_release_publishes` proves the release builds
+/// each platform the installer asks for. It says nothing about what the artifact is *called*,
+/// and a release that publishes the right binary under the wrong name is a 404 for every user —
+/// which `install.sh` answers by silently compiling 448 crates instead, the exact failure that
+/// test exists to prevent, one step further along.
+///
+/// Three files hard-code the string `shall-<target>` and nothing joined them: the release job's
+/// rename loop and its by-name assertion, `install.sh`'s URL, and `install.ps1`'s `$asset`.
+/// **`install.ps1` was not covered at all** — its Windows asset is one literal filename, and the
+/// scan above reads only `install.sh`.
+#[test]
+fn every_asset_name_the_installers_ask_for_is_one_the_release_writes() {
+    let ci = read(".github/workflows/ci.yml");
+
+    // The Windows asset is a single literal on both sides, so the two can be compared exactly.
+    // Read from the script, not restated here, or this pins a name somebody edits out from
+    // under it.
+    let ps1 = read("scripts/install.ps1");
+    let asset = ps1
+        .lines()
+        .find_map(|l| {
+            l.trim()
+                .strip_prefix("$asset = '")?
+                .strip_suffix('\'')
+                .map(str::to_string)
+        })
+        .expect("`install.ps1` no longer assigns `$asset` as a single-quoted literal");
+    assert!(
+        ci.contains(&format!("dist/{asset}")),
+        "`install.ps1` downloads `{asset}` and the release job never writes `dist/{asset}`, so \
+         every Windows user gets a 404 and falls back to a source build. The release job's own \
+         assertion cannot catch this: it checks the name it writes against itself."
+    );
+
+    // And the Unix half, by prefix. `install.sh` builds its URL as `shall-$triple`; the release
+    // job writes `dist/shall-${target}`. Both are the string `shall-` and a triple, and the
+    // triples already agree — so the prefix is the whole of what is left to check.
+    let sh = read("scripts/install.sh");
+    assert!(
+        sh.contains("/shall-$triple\""),
+        "`install.sh` no longer builds its URL as `shall-$triple`; this check has stopped \
+         matching the script it is about"
+    );
+    assert!(
+        ci.contains("dist/shall-${target}"),
+        "the release job no longer writes `dist/shall-${{target}}`, and `install.sh` still asks \
+         for `shall-<triple>`"
+    );
+}
+
 /// Why a matrix block would expand to fewer jobs than it has rows, or `None` if it is sound.
 ///
 /// A base key beside `include:` gives the matrix one combination, and GitHub merges an include
