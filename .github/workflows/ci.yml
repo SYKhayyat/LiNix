@@ -321,6 +321,19 @@ jobs:
           | grep -E '^latency shape:' \
           | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY" || true
 
+    # **The one gate that asks a real parser about the Nix Shall writes.** `backends/nixos.rs`
+    # generates a NixOS module into the user's `/etc/nixos`; a mistake there does not break Shall,
+    # it breaks the machine's whole system configuration. No Rust test can catch it, because a
+    # Rust test suite cannot parse Nix — so the suite writes every shape the renderer can produce
+    # into `target/nix-fixtures/` and this asks `nix-instantiate --parse` about them.
+    #
+    # On the Linux row only: it needs docker, and the fixtures come from the test step above.
+    # `--self-test` on every run, because a parse gate that has never been watched refuse a
+    # broken module is a gate nobody has tested.
+    - name: Is the Nix Shall generates valid Nix?
+      if: matrix.target == 'x86_64-unknown-linux-gnu'
+      run: ./scripts/nix-validate.sh --self-test
+
     - name: Check formatting
       run: cargo fmt -- --check
       if: matrix.target == 'x86_64-unknown-linux-gnu'

@@ -23,6 +23,14 @@
 //! for a reason beyond convenience: `os_native_argv_coverage_tests.rs` already fails the build
 //! if a registrar has no row there. So "every backend has a row" and "the row count is the
 //! backend count" hold each other up — a new backend cannot change one without the other.
+//!
+//! **One backend is outside that pairing, and it is named here so the gap is not silent.**
+//! `nixos` has no argv row because it has no per-package command line at all: it renders the
+//! machine's system configuration and runs one `nixos-rebuild`. It is therefore exempt in
+//! `os_native_argv_coverage_tests::NO_ROW`, and the number below counts argv rows rather than
+//! registered backends — so it excludes `nixos` and any future backend of that shape. The count
+//! this asserts is *backends that drive a manager's command line*, which is what the sentences
+//! in `SPEC.md` and `README.md` say. A backend added the ordinary way still moves both.
 
 use std::path::PathBuf;
 

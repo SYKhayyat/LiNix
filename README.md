@@ -164,6 +164,7 @@ apt:curl                  # explicit backend
 ripgrep                   # bare name: resolved via `priority`, then locked
 apt:re:^python3-.*        # regex against that backend's names
 absent:snap:firefox       # must NOT be installed
+nixos:ripgrep             # NixOS only: into the system configuration, not a profile
 repo:apt:ppa:foo/bar      # a repository
 shim:node                 # a PATH stand-in
 service:nginx             # a service
@@ -172,6 +173,13 @@ use editors               # pull in another module
 ```
 
 `use` takes **a name, never a path or a URL.**
+
+On NixOS, `nix:` and `nixos:` are different things and both are useful. `nix:jq` is
+`nix profile install` — a per-user package, and what `nix:` means on a Mac or an Ubuntu box too.
+`nixos:jq` goes into the machine's system configuration, so installing it becomes a NixOS
+generation that `nixos-rebuild --rollback` knows about. Shall writes a `shall-packages.nix` it
+owns outright and imports it from your `configuration.nix`; see [Configuration](#configuration)
+for the `[nixos]` keys.
 
 A prefix can be a chain — `apt,cargo:ripgrep` means "apt if it has it, else cargo." If you write
 the same chain often, name it once in a `groups` file and use the name:
@@ -420,10 +428,9 @@ Drift is derived from managed state, and managed state can be wrong — a mis-sc
 state file from another machine. So **every path that removes anything** goes through one guard.
 That covers packages *and* the resources a declaration puts in place — a `link:`, `service:`,
 `setting:`, `shim:`, `schedule:` or `repo:` line that leaves your modules is torn down under the
-same rules, against its own limit. The sentence you just read is checked by
-`tests/removal_guard_enumeration_tests.rs`, which counts the removal paths in the source on every
-run; it was written because the sentence was false for the whole resource family until
-2026-07-28, and nothing had re-counted since it was first written.
+same rules, against its own limit. That sentence is not a promise in prose:
+`tests/removal_guard_enumeration_tests.rs` counts the removal paths in the source on every run,
+so a new one that skips the guard fails the build.
 
 The guard refuses when a removal:
 
@@ -953,9 +960,10 @@ named and skipped rather than rebuilt. It cannot be put in `schedules`.
 
 ### What has been driven, and what has only been argv-checked
 
-Shall ships 62 backends. That is a count of the managers it knows how to drive, and it is not a
-claim that every one of them has been driven — so here is the difference, taken from the
-harnesses' own tables rather than from anybody's memory.
+Shall ships 62 backends. That counts the managers it drives by building a command line; `nixos:`
+is a further one that works differently, by writing the system configuration instead. Either way
+the number is what Shall *knows how to drive*, not a claim that every one has been driven — so
+here is the difference, taken from the harnesses' own tables rather than from anybody's memory.
 
 **Most of them get a real install → list → binary-on-PATH → remove round trip**, on every
 nightly, against the actual manager: apt, dnf, pacman, apk, zypper, xbps and brew on their own
@@ -990,12 +998,13 @@ right one, and no machine in this project's CI has ever run it:
 
 | backend | why nothing has driven it |
 |---|---|
+| `nixos` | no CI leg runs NixOS. The full round trip has been driven by hand on NixOS 26.05, and a Nix parser checks every generated module in CI — but neither is an automated lifecycle |
 | `flatpak` | needs a session bus; the container matrix has none |
 | `snap` | snapd is a systemd daemon, and no image here runs systemd |
 | `macports` | never attempted: CI *does* run on `macos-latest`, and no step installs MacPorts on it. Work nobody has done, not hardware nobody has |
 | `mas` | needs a signed-in Mac App Store account on real Apple hardware |
 | `pkg`, `pkg_add`, `pkgin` | FreeBSD, OpenBSD and pkgsrc — no BSD host exists in this CI |
-| `eopkg` | Solus publishes no container image; re-probed 2026-08-14 and still none |
+| `eopkg` | Solus publishes no container image |
 | `emerge` | smoke-only: `gentoo/stage3` ships a binary-package host but no portage tree, so the closing move is a build-time `emerge-webrsync` nobody has paid for |
 | `stack` | its toolchain can be baked in; the per-package source build cannot, so it is minutes per run for ever |
 
@@ -1018,26 +1027,23 @@ The same four everywhere, so a script can branch on them:
 install something with no `@sha256`, to write a secret the filesystem cannot protect, to decrypt
 into the git repo, to run an unapproved hook, to overwrite a file Shall did not create, or to
 place files outside `$HOME` all return `3` — the same code as refusing to remove too many
-packages. Until 2026-07-28 those nine returned `1`, so a script could not tell "I refused" from
-"I broke", and the `on_guard_refusal` hook never fired for any of them. Both halves are now
-checked by `tests/grader_refusal_exit_code_tests.rs` rather than asserted in a comment.
+packages. A script can therefore tell "I refused" from "I broke" without reading the message, and
+the `on_guard_refusal` hook fires for all of them.
 
-`2` is why `shall check` in CI tells you a machine has drifted without failing the job the way
-an error would, and `3` is distinct from `1` because "I will not do this" is not "this broke".
+`2` is why `shall check` in CI tells you a machine has drifted without failing the job the way an
+error would, and `3` is distinct from `1` because "I will not do this" is not "this broke".
 
-**`shall plan` exits `2` when the plan it wrote is not empty** (2026-08-13). It answers the same
-question `check` answers *and* writes the artifact a script consumes, so a pipeline that branches
-on drift will reach for it — and until this it was told `0` every time, including while printing
-the work on the line above. `shall list --outdated` deliberately still exits `0`: a listing's
-subject is inventory rather than a verdict, and one that failed for having contents would
-surprise every script that has ever piped one.
+**`shall plan` exits `2` when the plan it wrote is not empty**, so a pipeline can branch on drift
+using the command that also writes the artifact it will consume. `shall list --outdated`
+deliberately exits `0` whatever it finds: a listing's subject is inventory rather than a verdict,
+and one that failed for having contents would surprise every script that pipes it.
 
-**`shall sync` exits `1` when a declaration could not be acted on** (2026-08-13) — one that names
-a manager this machine cannot reach, counted per declaration so a partial skip is caught too. It
-used to warn and return `0`, which matters most where nobody is reading the warnings: `sudo`'s
-stock `secure_path` hides `~/.cargo/bin`, `~/.bun/bin` and `~/.local/bin`, so an unattended sync
-could install nothing and report success. A *removal* the guard declines is not this — that is
-the guard working, and it is the ordinary state of every adopted machine.
+**`shall sync` exits `1` when a declaration could not be acted on** — one naming a manager this
+machine cannot reach — counted per declaration, so a partial skip is caught too. This matters
+most where nobody reads warnings: `sudo`'s stock `secure_path` hides `~/.cargo/bin`,
+`~/.bun/bin` and `~/.local/bin`, so an unattended sync can install nothing and would otherwise
+report success. A *removal the guard declines* is not this — that is the guard working, and it
+is the ordinary state of every adopted machine.
 
 ## Teaching Shall a package manager it has never heard of
 
@@ -1246,18 +1252,18 @@ shall lock scripts                    # all seven approval kinds, no version pin
 shall lock everything --except exec   # everything else
 ```
 
-Below a kind there is a sub-category, written `kind:sub`. Four kinds have one:
+Four kinds divide further, written `kind:sub`, and a package name after that narrows again:
 
 ```sh
 shall lock versions:apt               # apt's version pins, nobody else's
+shall lock versions:apt curl          # apt's curl, and not cargo's
 shall lock hooks:after_install        # one hook, across every package
-shall lock events:before_sync         # one event, wherever it is declared
 shall lock everything --except versions:cargo   # all of it but cargo's pins
 ```
 
 The other five are flat — an `exec:` script has no category above itself — so their granularity
-is the item's own name, which the positional argument has always taken: `shall lock exec
-./setup.sh`. Asking for a sub-category where there isn't one is refused and tells you that.
+is the item's own name: `shall lock exec ./setup.sh`. Asking for a sub-category where there is
+none is refused and tells you so.
 
 `unlock` takes exactly the same words. A scope you can freeze with and cannot release with is a
 one-way door.
@@ -1275,15 +1281,6 @@ shall unlock versions curl      # drop one pin, take whatever the manager offers
 shall sync --upgrade            # ignore every recorded pin, for this run only
 ```
 
-Scope the freezing rather than undoing it afterwards:
-
-```sh
-shall lock versions curl                 # one package
-shall lock versions:apt                  # every package apt installed
-shall lock versions:apt curl             # apt's curl, and not cargo's
-shall lock scripts                       # approve the scripts, pin no versions
-```
-
 For a standing preference rather than a per-run one, `preferences.toml` has a `[lock]` table
 speaking the same vocabulary. Every default is the behaviour above, so leaving it out changes
 nothing:
@@ -1296,12 +1293,10 @@ versions = ["*"]           # which managers get version pins
 replay   = true            # does an ordinary sync install recorded versions
 ```
 
-Prefer `except` to listing eight of the nine kinds: a tenth kind added in a later release is
-still frozen by `everything`, and would silently not be by a hand-written list.
-
-`replay = false` is the one to reach for if you want the lockfile as a record without it being an
-install argument: `check` still reports drift against it, and `sync --locked` still reproduces
-from it exactly.
+Prefer `except` to listing eight of the nine kinds: a tenth kind added later is still frozen by
+`everything`, and would silently not be by a hand-written list. Set `replay = false` to keep the
+lockfile as a record without it being an install argument — `check` still reports drift against
+it, and `sync --locked` still reproduces from it exactly.
 
 ## Configuration
 

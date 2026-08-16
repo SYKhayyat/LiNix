@@ -2843,6 +2843,31 @@ survive being deleted and put back: pacman removes an AUR package and cannot rei
 the helper does both. The foreign set is asked once per run, only where an owner and a client are
 both present here, and a probe that fails leaves the owner speaking for everything. **V.189.**
 
+**On NixOS, Shall writes the system configuration and lets NixOS execute it** (2026-08-16,
+`J5`). `nix:` means `nix profile` on every host, NixOS included; `nixos:` means the system
+configuration. Two prefixes and not one word whose meaning changes per machine — a NixOS user may
+want both, and a config file shared across machines has to mean the same thing on each of them.
+
+**Shall owns one generated file and never rewrites yours.** `shall-packages.nix` is a projection
+of the model, rendered whole and sorted so an unchanged model produces no diff and no rebuild.
+`configuration.nix` gains exactly one `imports` entry, **inserted inside the attribute set** and
+only when `[nixos] manage_imports` says so; otherwise the line is printed to paste. **The
+`pacman.conf` append precedent does not carry over** — Nix is an expression language, so a line
+added after the closing brace is outside the set and nix refuses the whole file.
+
+**An absent import is a refusal, not a warning.** Nothing declared reaches the system until that
+line exists, so proceeding would rebuild the machine as it already was and report an install.
+
+**The rebuild is told which configuration to read** (`-I nixos-config=`), or `NIX_PATH` sends it
+to `/etc/nixos` regardless of `[nixos] config_dir`. **The generated file is placed through the
+executor, not `std::fs`**, because `/etc/nixos` is root-owned and `needs_root()` governs commands
+rather than syscalls.
+
+**`sync` runs `nixos-rebuild switch` itself**, once per batch and not once per package, and
+**restores BOTH files it changed when the rebuild fails** — the generated module and the
+`configuration.nix` edit. Restoring only the first leaves an import pointing at a file that is
+gone, which makes every later `nixos-rebuild` fail for reasons of Shall's making. **V.190.**
+
 **A ledger key whose kind this build does not have is kept, not dropped.** It is left in place,
 reported, and re-offered next run. Forgetting a row is the one outcome that cannot be undone.
 

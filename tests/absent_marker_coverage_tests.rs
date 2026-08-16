@@ -69,6 +69,11 @@ const CANNOT_REPORT_A_MISSING_NAME: &[&str] = &[
     "mise",
     "mix",
     "nix",
+    // `nixos:` never asks nix whether an attribute exists — it writes the name into a generated
+    // module and lets `nixos-rebuild` be the judge. A typo is caught at rebuild time, by nix,
+    // with nix's own message about the attribute: a better error than Shall could synthesise,
+    // arriving one step later than this table would prefer.
+    "nixos",
     "opam",
     "pip",
     "pkg",

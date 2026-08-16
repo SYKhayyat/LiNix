@@ -8798,13 +8798,48 @@ fixes both: one artifact, measured to report `shall 0.8.0` from `nixos/nix`, `al
 1. **Does Shall edit `configuration.nix`?** — **A setting decides.** Shall owns
    `/etc/nixos/shall-packages.nix` completely and regenerates it; whether it also adds the one
    `imports = [ ./shall-packages.nix ];` line to `configuration.nix` is a `preferences.toml` key.
-   The drop-in half is not novel: `pacman`'s repo support already writes
-   `/etc/pacman.d/shall-<name>.conf` and adds one `Include =` line, *never rewriting the body*.
-   Shall must never parse or rewrite a hand-edited Nix expression.
+
+   **The `pacman.conf` precedent cited here does NOT carry over, and believing it did was the
+   first of three defects a real NixOS found.** That backend appends one `Include =` line and
+   never rewrites the body, which works because `pacman.conf` is line-oriented. Nix is an
+   expression language: a line appended after the closing brace lands *outside* the attribute
+   set, and nix refuses the entire file —
+
+   ```text
+   error: syntax error, unexpected '=', expecting end of file
+       7| imports = [ ./shall-packages.nix ];
+   ```
+
+   — which breaks the machine's boot configuration rather than Shall. The import is inserted
+   *inside* the set instead, in one of two recognised shapes (an existing `imports = [` list, or
+   the `{` that opens the body after the argument pattern), and any other shape is refused by
+   name. Shall still never parses a hand-edited Nix expression in the sense that matters: it
+   makes one bounded textual insert, and every shape it produces is handed to
+   `nix-instantiate --parse` in CI.
+
+   **And an absent import is a refusal, not a warning.** Nothing declared reaches the system
+   until that line exists, so proceeding would rebuild the machine as it already was and report
+   an install.
 
 2. **Does `sync` run `nixos-rebuild switch`?** — **Yes, itself.** Consistent with the standing
    ruling that if a thing is the command's job it happens automatically rather than being
    prompted for. It needs root and takes minutes, which is a cost to state, not a reason to ask.
+
+   **It must be passed `-I nixos-config=`, and the second defect was that it was not.**
+   `nixos-rebuild` takes its configuration from `NIX_PATH`, which pins
+   `nixos-config=/etc/nixos/configuration.nix`, so a bare `nixos-rebuild switch` ignores
+   `[nixos] config_dir` entirely. Measured on NixOS 26.05: against a scratch `config_dir` the
+   rebuild ran 45.9s, rebuilt the system from the *real* config, exited 0, and Shall reported
+   `install 1  Status: SUCCESS` for a package that was never installed. A green transaction over
+   an untouched machine is the worst shape a failure takes.
+
+   **The third defect was in how the file is written.** `/etc/nixos` is root-owned and
+   `std::fs::write` knows nothing about sudo — `needs_root()` governs the commands the executor
+   runs, not a direct filesystem call — so an ordinary `shall sync` died with
+   `I/O error: Permission denied (os error 13)`, naming neither the file nor the reason. The
+   generated file is staged to a temporary path and moved with the executor now, which is the
+   shape `pacman`'s drop-in uses: the privileged step is a command, not a syscall. The rollback
+   goes the same way, or it would silently no-op on the one directory it exists to protect.
 
 3. **One name or two?** — **Two.** `nix:` keeps meaning `nix profile` on every host, including
    NixOS; `nixos:` means the system configuration. A NixOS user may legitimately want both — a
@@ -8819,7 +8854,25 @@ fixes both: one artifact, measured to report `shall 0.8.0` from `nixos/nix`, `al
 `requirements.txt`, `package.json` and Aptfile; a NixOS fragment is the same idea and falls out
 of the generator this decision creates.
 
-### The coverage bound, stated before the code rather than discovered after
+### The coverage bound — written before the code, and then found to be wrong
+
+**What was written here first:** *"no container available is NixOS… `nixos-rebuild switch`
+against a real NixOS is argv-checked and not executed. It wants a VM or a real host, and until
+one exists that row is inference."* That was recorded in this entry and in two spec files and
+treated as settled.
+
+**It was one command away from being false.** `wsl --install --from-file nixos.wsl` imports
+NixOS-WSL, and NixOS 26.05 was running here within the hour — with `/etc/NIXOS`,
+`/run/current-system`, `nixos-rebuild`, systemd and passwordless sudo. The limitation was the
+author's, not the environment's, and writing it down confidently is what stopped the search.
+
+**Driving it found three defects that every hermetic layer had passed** — 11 unit tests, a real
+Nix parser over every generated shape, clippy, fmt, and a Linux compile check. The three are
+recorded against the rulings above. The one worth naming twice is that the gate existed and
+pointed the wrong way: `nix-instantiate --parse` validated the file Shall *generates* while the
+defect was in the file Shall *edits* and the command Shall *runs*. It validates both now.
+
+### What remains unproven, and what it would cost
 
 **No container available here is NixOS.** `nixos/nix` is the Nix *package manager* on a minimal
 base: measured, it has `/nix/store` and `nix` 2.35.2 and it does **not** have `/etc/NIXOS`,

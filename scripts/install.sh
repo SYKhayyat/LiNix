@@ -26,29 +26,33 @@ say "bootstrapping — detecting toolchain..."
 # The build target this machine wants, empty when no release binary is published for it.
 # `uname -m` on arm64 macOS says `arm64`; the Rust triple says `aarch64`.
 #
-# **On Linux the architecture is only half the question — the C library is the other half.**
-# A `-gnu` binary is dynamically linked and names `/lib64/ld-linux-x86-64.so.2` as its
-# interpreter. NixOS does not have that file, and neither does Alpine; on both, execve fails
-# with a message that names nothing a reader can act on. Measured 2026-08-16 with Ubuntu's own
-# `/bin/echo`: exit 127 *"cannot execute: required file not found"* in `nixos/nix`, and
-# *"not found"* in `alpine:3.20` on a file that is plainly there.
+# **x86_64 Linux takes the static musl build, on every distribution.** Not a detection — the
+# absence of one, deliberately.
 #
-# So the loader is asked for rather than assumed, and where it is missing the statically linked
-# musl build is fetched instead — one artifact measured to start on nixos/nix, alpine and ubuntu
-# alike. `fetch_binary` re-checks by running what it downloaded, so a host neither branch
-# predicts still degrades to a source build rather than to a broken install.
+# A `-gnu` binary is dynamically linked against a loader that Alpine does not have and that NixOS
+# replaces with a stub whose only job is to refuse. The first version of this sniffed for
+# `/lib64/ld-linux-x86-64.so.2` and chose `gnu` when it was there, which is **wrong on the very
+# platform it was written for**: NixOS ships that path as a symlink to `stub-ld`, so the test
+# passes and the binary then dies with
+#
+#     Could not start dynamically linked executable: …
+#     NixOS cannot run dynamically linked executables intended for generic linux environments
+#
+# Measured on NixOS 26.05 under WSL, after the same check had been "verified" against
+# `nixos/nix` — which is the Nix package manager on a minimal base and not NixOS at all.
+#
+# A detector has to be right about every distribution's quirks and is wrong the first time one of
+# them is unusual. A statically linked binary has no interpreter to miss, so there is nothing to
+# be right about: the same artifact was measured reporting `shall 0.8.0` on ubuntu:24.04,
+# alpine:3.20, nixos/nix AND real NixOS. One binary, every Linux.
+#
+# `-gnu` is still published for anyone who wants it and is still what arm64 gets, since no
+# aarch64 musl row exists yet — named here rather than left as a silent gap, because an arm64
+# Alpine or NixOS box does still fall through to a source build.
 target_triple() {
   case "$(uname -s 2>/dev/null || echo unknown)" in
     Linux)  case "$(uname -m)" in
-              x86_64)
-                if [ -e /lib64/ld-linux-x86-64.so.2 ] || [ -e /lib/ld-linux-x86-64.so.2 ]; then
-                  echo x86_64-unknown-linux-gnu
-                else
-                  echo x86_64-unknown-linux-musl
-                fi ;;
-              # No aarch64 musl build is published yet, so an arm64 NixOS or Alpine box still
-              # falls through to a source build. Named here rather than left as a silent gap:
-              # the row is one line in `ci.yml`'s matrix the day somebody wants it.
+              x86_64)        echo x86_64-unknown-linux-musl ;;
               aarch64|arm64) echo aarch64-unknown-linux-gnu ;;
             esac ;;
     Darwin) case "$(uname -m)" in

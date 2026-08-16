@@ -19,6 +19,7 @@ pub mod link;
 mod link_teardown_test;
 pub mod mise;
 pub mod nix;
+pub mod nixos;
 pub mod service;
 pub mod setting;
 pub mod shared_database;

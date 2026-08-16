@@ -86,13 +86,31 @@ Windows build cannot see. It runs `cargo check` in a `rust:1-slim` container, be
 alternative genuinely does not exist — `cargo check --target x86_64-unknown-linux-gnu` from a
 Windows host dies in `mlua`'s vendored C build for want of `x86_64-linux-gnu-gcc`.
 
-Skipping it is not free. One commit named a private associated const across a module boundary
-under `#[cfg(unix)]` on both sides; the local chain was clean, every Apple/Linux/MSRV job went
-red, and all seven distro integration jobs went with them — and since the container harness builds
-its binary in-image, a tree that will not compile on Linux takes every fault-injection check
-offline too. Both sat for 26 commits.
+Skipping it is not free: a tree that will not compile on Linux fails every Apple, Linux and MSRV
+job *and* every distro integration job, because the container harness builds its binary in-image.
+One `#[cfg(unix)]` mistake can therefore take the whole board red and the fault-injection checks
+offline at the same time.
 
 `scripts/unix-check.sh --lib` is faster and catches most of it.
+
+## Two more gates, when they apply
+
+Neither belongs in the chain above — most changes cannot fail them — but both are cheap and both
+are enforced in CI.
+
+```sh
+cargo deny check                    # whenever Cargo.toml or Cargo.lock moves
+scripts/nix-validate.sh --self-test # whenever backends/nixos.rs changes
+```
+
+`cargo deny check` covers advisories, licences, sources and duplicate versions. A dependency bump
+is the only thing that can fail it, and it will: a new crate can arrive under a licence the allow
+list does not carry.
+
+`scripts/nix-validate.sh` asks a real Nix parser about every module `backends/nixos.rs` generates
+*and* every `configuration.nix` it edits. No Rust test can do this — a Rust test suite cannot
+parse Nix — and the file is somebody's boot configuration, so a mistake there breaks their
+machine rather than Shall. `--self-test` also proves the gate can still fail.
 
 ## Running tests
 

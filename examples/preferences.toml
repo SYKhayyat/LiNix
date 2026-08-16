@@ -101,6 +101,26 @@ versions = ["*"]
 # version stops being an install argument on every run.
 replay = true
 
+# The [nixos] table (J5): only consulted on NixOS, and only by the `nixos:` prefix.
+#
+# `nix:` and `nixos:` are two different things on purpose. `nix:jq` is `nix profile install` and
+# means the same on a Mac, on Ubuntu and on NixOS. `nixos:jq` puts the package in the SYSTEM
+# configuration, so installing it becomes a NixOS generation that `nixos-rebuild --rollback`
+# knows about. On a NixOS box you can use both.
+#
+# Shall generates `shall-packages.nix` and owns it outright — it is rewritten from your modules
+# on every sync, so editing it does nothing. Your `configuration.nix` is never rewritten.
+[nixos]
+# Where configuration.nix lives; the generated file is written beside it.
+# config_dir = "/etc/nixos"
+#
+# Whether Shall may append the one line that imports its generated file:
+#   imports = [ ./shall-packages.nix ];
+# Off by default. Nothing Shall declares takes effect until that line is there, so with this off
+# Shall prints it for you to paste once — a hand-edited file that decides how the machine boots
+# is yours to change, not the tool's.
+# manage_imports = false
+
 # The [guard] table (II.10): the nine refusals, one home. Protected packages,
 # the removal/install ceilings, and the install/change rules all live here.
 [guard]

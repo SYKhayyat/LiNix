@@ -71,6 +71,11 @@ pub enum Format {
     Pip,
     Npm,
     Apt,
+    /// A NixOS module (`J5`). The odd one out: the other four are the native manifest of ONE
+    /// manager, and this one is the system configuration of a whole operating system — so it
+    /// takes the `nix:` and `nixos:` sets together, which is what a reader would expect
+    /// `shall export --format nix` on a NixOS box to hand them.
+    Nix,
 }
 
 impl Format {
@@ -80,6 +85,7 @@ impl Format {
             "pip" | "requirements" | "pipx" => Format::Pip,
             "npm" | "node" | "package.json" => Format::Npm,
             "apt" | "aptfile" | "deb" => Format::Apt,
+            "nix" | "nixos" => Format::Nix,
             _ => return None,
         })
     }
@@ -90,11 +96,21 @@ impl Format {
             Format::Pip => "requirements.txt",
             Format::Npm => "package.json",
             Format::Apt => "Aptfile",
+            // The name the `nixos:` backend generates, so an export can be dropped straight into
+            // `/etc/nixos` and imported. Two files with one job would be two files to keep in
+            // step.
+            Format::Nix => crate::backends::nixos::GENERATED,
         }
     }
 
-    pub fn all() -> [Format; 4] {
-        [Format::Brew, Format::Pip, Format::Npm, Format::Apt]
+    pub fn all() -> [Format; 5] {
+        [
+            Format::Brew,
+            Format::Pip,
+            Format::Npm,
+            Format::Apt,
+            Format::Nix,
+        ]
     }
 
     /// True if a backend's packages belong in this format's output.
@@ -104,6 +120,11 @@ impl Format {
             Format::Pip => backend == "pip" || backend == "pipx",
             Format::Npm => matches!(backend, "npm" | "pnpm" | "yarn" | "bun"),
             Format::Apt => backend == "apt",
+            // Both, deliberately. A package installed through the profile and one written into
+            // the system configuration are the same package to somebody asking for "my nix
+            // packages as a module", and an export that silently dropped half of them would be
+            // the wrong answer quietly.
+            Format::Nix => backend == "nix" || backend == "nixos",
         }
     }
 
@@ -161,6 +182,19 @@ impl Format {
                 }
                 s
             }
+            // **Rendered by the backend, not here.** `backends::nixos::render` is what the
+            // `nixos:` prefix writes into `/etc/nixos`, and it is the text
+            // `scripts/nix-validate.sh` points a real Nix parser at. A second renderer for the
+            // same file format would be a second thing to keep valid, and only one of the two
+            // would be under that gate.
+            //
+            // Versions are dropped on purpose: a NixOS module pins packages by pinning nixpkgs,
+            // not per package, which is the same reason `nixos:` refuses an `@version=`.
+            Format::Nix => crate::backends::nixos::render(
+                &rows.iter().map(|(_, name, _)| name.clone()).collect(),
+                &std::collections::BTreeSet::new(),
+                &std::collections::BTreeSet::new(),
+            ),
         })
     }
 }
@@ -300,6 +334,43 @@ mod tests {
 
     fn p(backend: &str, name: &str, ver: Option<&str>) -> Pkg {
         (backend.into(), name.into(), ver.map(|s| s.into()))
+    }
+
+    /// `J5`: the nix format takes BOTH prefixes, and renders through the backend rather than
+    /// through a second copy of the format.
+    #[test]
+    fn the_nix_format_takes_both_prefixes_and_renders_a_module() {
+        assert_eq!(Format::parse("nix"), Some(Format::Nix));
+        assert_eq!(Format::parse("nixos"), Some(Format::Nix));
+        assert_eq!(Format::Nix.filename(), "shall-packages.nix");
+
+        let out = Format::Nix
+            .render(&[
+                p("nix", "ripgrep", Some("14.1.0")),
+                p("nixos", "jq", None),
+                p("apt", "curl", None),
+            ])
+            .expect("two nix packages apply");
+
+        // A NixOS module, not a list of names.
+        assert!(
+            out.contains("environment.systemPackages = with pkgs; ["),
+            "{out}"
+        );
+        assert!(out.contains("ripgrep"), "{out}");
+        assert!(out.contains("jq"), "{out}");
+        // The apt package is somebody else's format.
+        assert!(!out.contains("curl"), "{out}");
+        // **No version.** A NixOS module pins by pinning nixpkgs, not per package — the same
+        // reason `nixos:` refuses an `@version=`. A rendered `14.1.0` would not evaluate.
+        assert!(!out.contains("14.1.0"), "{out}");
+    }
+
+    /// A machine with no nix packages writes no nix file, rather than an empty module that
+    /// would import cleanly and silently declare nothing.
+    #[test]
+    fn no_nix_packages_means_no_nix_file() {
+        assert_eq!(Format::Nix.render(&[p("apt", "curl", None)]), None);
     }
 
     #[test]

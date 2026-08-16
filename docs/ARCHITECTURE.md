@@ -108,12 +108,13 @@ This is the single most important thing to know before adding manager support: *
 to write a row.** An adapter mechanism the built-ins bypass is one nobody has tested, so the
 built-ins deliberately do not bypass it.
 
-Five shapes genuinely cannot be a row — an install conditional on a read (`snap`'s `@classic`),
+Six shapes genuinely cannot be a row — an install conditional on a read (`snap`'s `@classic`),
 argv that is a program rather than a template (`nix`, `go`), a removal that is a filesystem
-operation informed by a query (`appimage`, `web`), a probe reaching *into* JSON, and per-package
-identity that includes the version. Those live in Rust modules beside the table, and
-`backend_is_data_not_code_tests.rs` holds the exemption list with a reason for each. Adding to
-that list is a decision, not a convenience.
+operation informed by a query (`appimage`, `web`), a probe reaching *into* JSON, per-package
+identity that includes the version, and **no per-package command at all** (`nixos`, which renders
+the machine's whole system configuration and then runs one `nixos-rebuild`). Those live in Rust
+modules beside the table, and `backend_is_data_not_code_tests.rs` holds the exemption list with a
+reason for each. Adding to that list is a decision, not a convenience.
 
 ## Invariants that will bite you
 

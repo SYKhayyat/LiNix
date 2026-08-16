@@ -122,6 +122,7 @@ const UNIVERSE: &[&str] = &[
     "mix",
     "nimble",
     "nix",
+    "nixos",
     "npm",
     "opam",
     "pacman",
@@ -212,7 +213,14 @@ fn nowhere() -> Vec<Nowhere> {
 /// community-built and ship a Rust too old to build Shall in-image"*, and both halves were wrong:
 /// `Dockerfile.slackware` bootstraps the toolchain through slackpkg itself and the Rust it
 /// installs builds Shall. Like the four above it, the tool never changed — the harness did.
-const NOWHERE_CEILING: usize = 8;
+// Raised 8 -> 9 on 2026-08-16 for `nixos`, by the owner, and this is the only entry that has
+// ever raised it. The rule above says it may only go down, and the remedy says a reason must be
+// an impossibility rather than a cost; `nixos` is a cost. What was traded for it: the full
+// lifecycle WAS driven, by hand, on NixOS 26.05 under WSL — install, list, binary on PATH,
+// remove, machine still buildable — and that run found four defects the hermetic layers had all
+// passed. So the number buys a backend that is measured but not gated, and the debt is a NixOS
+// CI leg. Retire it by building one; do not retire it by deleting the row.
+const NOWHERE_CEILING: usize = 9;
 
 fn covered_somewhere() -> BTreeSet<String> {
     let win = read("scripts/integration-windows.sh");

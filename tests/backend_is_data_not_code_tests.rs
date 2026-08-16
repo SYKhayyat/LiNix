@@ -95,6 +95,15 @@ const HAND_WRITTEN: &[HandWritten] = &[
         proof: "download::check_scheme",
     },
     HandWritten {
+        module: "nixos.rs",
+        why: "renders the machine's system configuration and runs ONE `nixos-rebuild switch` for \
+              the whole batch. `ManagerConfig` is a table of per-package argv, and this backend \
+              has no per-package command at all: the name never reaches a command line, it \
+              reaches a generated Nix module. A data row could not express that, and one that \
+              pretended to would be argv nothing ever runs.",
+        proof: "nixos-rebuild",
+    },
+    HandWritten {
         module: "github.rs",
         why: "resolves a release through the GitHub API, selects among assets by rule, and \
               records the choice in a lock. The selection logic IS the backend; there is no \

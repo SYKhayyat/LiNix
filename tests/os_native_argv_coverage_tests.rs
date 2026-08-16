@@ -50,6 +50,16 @@ const NO_ROW: &[NoRow] = &[
               Its argv is whatever its caller configures, and each caller has its own row.",
     },
     NoRow {
+        registrar: "backends::nixos::register",
+        why: "has no per-package argv to record. Every other backend here turns a package name \
+              into a command line, which is what the table checks for a typo; `nixos:` turns the \
+              whole declared set into a generated Nix module and then runs one fixed \
+              `nixos-rebuild switch`. There is no install or remove verb, so a row would be a \
+              template nothing fills. What the table protects — a wrong verb invisible on a \
+              platform that cannot run the manager — is covered instead by \
+              `scripts/nix-validate.sh`, which asks a real Nix parser about the generated file.",
+    },
+    NoRow {
         registrar: "register_aur_helper",
         why: "takes five arguments, so it cannot be a `Registrar`. The two backends it builds \
               have rows of their own via `register_yay` and `register_paru`.",

@@ -215,6 +215,47 @@ pub struct RemoveSettings {
 /// three were reachable at all: `lock` froze all three axes, pinned every manager, and a plain
 /// `sync` replayed the result, with no way to ask for anything else short of typing `--upgrade`
 /// on every invocation for ever.
+/// The `[nixos]` table: how Shall writes a NixOS system configuration (`J5`).
+///
+/// **Only consulted on NixOS.** The `nixos` backend reports itself unavailable anywhere else —
+/// it tests for `/etc/NIXOS`, not for `nix` on `PATH`, because a Mac with Nix on it is the `nix:`
+/// prefix's business and not this one's.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NixosSettings {
+    /// Where `configuration.nix` lives, and where the generated file is written beside it.
+    ///
+    /// A key rather than a constant so a relocated or flake-based configuration is reachable
+    /// without waiting for a Shall release — the same reasoning every other path here follows.
+    #[serde(default = "NixosSettings::etc_nixos")]
+    pub config_dir: std::path::PathBuf,
+
+    /// Whether Shall may append `imports = [ ./shall-packages.nix ];` to `configuration.nix`
+    /// (owner ruling, 2026-08-16: a setting decides, rather than Shall choosing for everyone).
+    ///
+    /// **On either setting Shall owns the generated file and never rewrites yours.** This
+    /// governs one appended line, guarded so it is added at most once. Off, the line is printed
+    /// for you to paste — which is the right default for a hand-edited file that decides whether
+    /// the machine boots the way you expect.
+    #[serde(default)]
+    pub manage_imports: bool,
+}
+
+impl Default for NixosSettings {
+    fn default() -> Self {
+        Self {
+            config_dir: Self::etc_nixos(),
+            manage_imports: false,
+        }
+    }
+}
+
+impl NixosSettings {
+    fn etc_nixos() -> std::path::PathBuf {
+        std::path::PathBuf::from("/etc/nixos")
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct LockSettings {
@@ -581,6 +622,11 @@ pub struct Config {
     #[serde(default)]
     pub lock: LockSettings,
 
+    /// The `[nixos]` table (`J5`): where the system configuration lives and whether Shall may
+    /// add the one line that imports its generated file. See [`NixosSettings`].
+    #[serde(default)]
+    pub nixos: NixosSettings,
+
     /// The `[remove]` table (II.11c). `purge = true` makes every removal on this machine also
     /// destroy the package's configuration. Off by default and machine-wide by construction:
     /// a removal happens after the line that would have carried a per-package option is gone,
@@ -928,6 +974,7 @@ impl Default for Config {
             allow_mass_install: false,
             guard: GuardSettings::default(),
             lock: LockSettings::default(),
+            nixos: NixosSettings::default(),
             remove: RemoveSettings::default(),
             purge_this_run: false,
             keep_going_this_run: false,

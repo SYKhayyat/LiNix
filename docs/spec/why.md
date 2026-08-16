@@ -6636,3 +6636,68 @@ check asked whether *this client* holds a declaration for the name. Once the own
 aside, that question lets a `pacman:jq` written last week sit beside a `yay:jq` written today —
 the exact duplicate the collapse exists to stop, arriving through the filter VI.6 already had to
 move once. It asks about the database now.
+
+**V.190 — Why NixOS gets its own prefix and a generated file.**
+
+*(Rule in II.30's neighbourhood. Ruling `J5`, owner 2026-08-16, four questions and four answers.)*
+
+`nix profile install` works on NixOS and is nonetheless the wrong thing there. The profile sits
+outside the system generation: no `nixos-rebuild` accounts for it, `nixos-rebuild --rollback`
+does not move it, and the machine ends up with two descriptions of itself that no single command
+reconciles. That is the condition Shall exists to remove, so on NixOS the declaration belongs in
+the configuration NixOS itself reads.
+
+**Why two prefixes and not one clever one.** The tempting design is a single `nix:` whose meaning
+depends on the host — profile on a Mac, system config on NixOS. It fails on the property the
+whole tool rests on: a module file is shared across machines, and under that design one line
+silently does something different on each, with no way to say which was meant. It also cannot
+express the case a NixOS user actually has, which is *both* — a package for every account and a
+scratch tool for one. Two names cost one word of vocabulary and buy an unambiguous file.
+
+**Why Shall owns a file instead of editing yours.** `configuration.nix` is hand-written Nix with
+arbitrary expressions in it. Editing it in place means parsing a language Shall does not
+implement, and getting that wrong does not break Shall — it breaks the machine's boot
+configuration. The drop-in shape was already blessed here: `pacman`'s repo support writes
+`/etc/pacman.d/shall-<name>.conf` and adds one `Include =` line, *never rewriting the body*. The
+one appended `imports` line is governed by a setting because even one line into that file is the
+user's call to make, not the tool's.
+
+**Why the whole file is rendered rather than patched.** The generated file is a projection of the
+model, so there is no delta to track and no state to fall out of step. Sorted, because a
+generated file that reorders itself produces a diff and a rebuild on every sync — and a rebuild
+is minutes.
+
+**Why the previous file is restored when the rebuild fails.** Otherwise the file claims a set the
+running system does not have, and the next `list` reports packages that are not installed. That
+is `E6`'s phantom drift, arriving in a file Shall wrote itself, which is the least excusable
+place for it.
+
+**What is proven, and what four defects cost to learn.** The renderer is pure and hermetically
+tested, and its output is checked as valid Nix by `nix-instantiate --parse`, self-tested against
+a deliberately unbalanced module. **All of that passed while the backend did not work at all.**
+
+This entry first said `nixos-rebuild` "is argv-checked and not executed: no container available
+is NixOS", and that bound was written into three documents and treated as settled. It was one
+`wsl --install` from being false. NixOS 26.05 under WSL, on 2026-08-16, found:
+
+1. the `imports` line appended **outside** the attribute set — `syntax error, unexpected '='`,
+   which breaks the machine's boot configuration rather than Shall;
+2. `nixos-rebuild` reading `/etc/nixos` regardless of `config_dir`, because `NIX_PATH` pins it —
+   a 45.9s rebuild of the real config, exit 0, `Status: SUCCESS`, **nothing installed**;
+3. the generated file written with `std::fs::write` into root-owned `/etc/nixos` —
+   `Permission denied (os error 13)`, naming neither file nor reason;
+4. a rollback that restored the generated file and left the import pointing at it, so
+   `nixos-rebuild` then failed for **every** later reason: `error: path
+   '/etc/nixos/shall-packages.nix' does not exist`. A failed sync left the machine unbuildable.
+
+The fourth was introduced while fixing the first three, in the function whose own comment says it
+exists to stop the files misdescribing the system. **The transferable lesson is not "test on real
+hardware"** — it is that the parse gate existed and pointed the wrong way: it validated the file
+Shall *generates* while the defects were in the file Shall *edits* and the command Shall *runs*.
+A gate aimed at the half you were already thinking about is the half that was never at risk.
+
+After the fixes, the whole lifecycle passes there: declared, generated, imported, rebuilt,
+`hello` at `/run/current-system/sw/bin/hello`, read back by `list`, removed by undeclaring, and
+the machine still builds. **No automated gate reaches it** — the debt, its receipt and its price
+are in `proving.rs`, and it is the one entry ever to raise `NOWHERE_CEILING`.
+

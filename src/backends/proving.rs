@@ -30,6 +30,23 @@
 /// declarations at all.
 pub const UNPROVEN: &[(&str, &str)] = &[
     (
+        "nixos",
+        "no CI leg is NixOS — a cost rather than an impossibility, which this table is supposed \
+         to refuse, so it is recorded with a receipt and a price instead of an excuse. THE \
+         RECEIPT: the whole lifecycle was driven by hand on NixOS 26.05 (Yarara) under WSL on \
+         2026-08-16 — `nixos:hello` declared, the generated module written into a root-owned \
+         /etc/nixos, the import inserted into the real configuration.nix, `nixos-rebuild switch` \
+         run, and `hello` found at /run/current-system/sw/bin/hello saying `Hello, world!`; then \
+         `list` read it back, undeclaring it took it off PATH, and the machine still dry-builds. \
+         That run found FOUR defects every hermetic layer had passed, one of which reported \
+         `Status: SUCCESS` over a machine where nothing had been installed. THE PRICE: \
+         `nixos/nix` cannot stand in — probed the same day, it is the Nix package manager on a \
+         minimal base with no /etc/NIXOS, no /run/current-system, no `nixos-rebuild` and no \
+         systemd. Closing this wants a NixOS image that can run `nixos-rebuild`, or NixOS-WSL on \
+         a Windows runner. Until then `scripts/nix-validate.sh` is what runs automatically — a \
+         real Nix parser over every generated AND edited shape — and a parser is not a lifecycle.",
+    ),
+    (
         "emerge",
         "Gentoo is SMOKE_ONLY: its image installs nothing, so crediting it would be a caption. \
          The stated reason — a source build costs hours — is no longer the whole truth and the \
