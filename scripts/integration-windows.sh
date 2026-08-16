@@ -795,8 +795,19 @@ nok_saying "a pattern cannot span one" "must match in exactly one backend"  lx -
 nok "a pin to a manager this host lacks is not silent" lx -y install "apt:$PKG"
 ok  "unlock backends --list runs"  lx unlock backends --list
 ok  "unlocking an unfrozen name is not an error" lx unlock backends shall-never-frozen-zzz
-# Z2: the axis is not optional in the sense that matters — a bare name is not one.
-nok_saying "a name where the axis goes is refused" "invalid value" lx unlock shall-never-frozen-zzz
+# Z2: the scope is not optional in the sense that matters — a bare name is not one.
+#
+# **The refusal is Shall's now, not clap's, and that is the assertion.** While the scope was a
+# closed `--axis`-style enum, a bare name was rejected by the argument parser with `invalid
+# value` and this check asserted that string. `J4` made the scope a list — nine kinds, three
+# groups, `kind:qualifier`, `--except` — which no enum can express, so the word arrives as a
+# `String` and Shall refuses it itself. Asserting the vocabulary rather than the refusal is
+# deliberate: a message that says no without saying what to type instead is the puzzle `V.42`
+# bans, and this is the one place a user meets that vocabulary by getting it wrong.
+nok_saying "a name where the scope goes is refused" "is not something Shall can freeze" \
+    lx unlock shall-never-frozen-zzz
+nok_saying "and the refusal teaches the vocabulary" "everything, packages, scripts" \
+    lx unlock shall-never-frozen-zzz
 
 # --- 11b. A manager that could not answer is not one that said no (V.7c) ---
 echo "[11b] Silence is not a no"
@@ -1442,10 +1453,10 @@ grep_ok "adapters refuses a name that is not a surface, and lists the real ones"
 mkdir -p "$SHALL_CONFIG_DIR/adapters"
 printf '[[backends]]\nname = "mymgr"\n' > "$SHALL_CONFIG_DIR/adapters/backends.toml"
 grep_ok "an adapter file nobody approved is reported unapproved" "unapproved" lx adapters backends
-lx lock >/dev/null 2>&1
+lx lock adapters >/dev/null 2>&1
 grep_ok "a table nobody opens is 'no rows', not 'in use'" "no rows" lx adapters backends
 printf '[[backend]]\nname = "mymgr"\ninstall = "cmd /c exit 0"\n' > "$SHALL_CONFIG_DIR/adapters/backends.toml"
-lx lock >/dev/null 2>&1
+lx lock adapters >/dev/null 2>&1
 grep_ok "a row of the right kind is in force" "in use" lx adapters backends
 # Malformed degrades rather than refusing (owner ruling, 2026-08-10), and `check adapters` is
 # where that fact is an exit code instead of a warning nobody re-reads.
@@ -1453,7 +1464,7 @@ printf 'this is not toml at all\n' > "$SHALL_CONFIG_DIR/adapters/backends.toml"
 # Approved first, and that ordering is the point: `standing_of` asks II.12 before it asks the
 # parser, so an unapproved file reads `unapproved` whatever is inside it. Without this line the
 # check below tests the approval ledger and calls it a parse result.
-lx lock >/dev/null 2>&1
+lx lock adapters >/dev/null 2>&1
 grep_ok "an unreadable adapter file is reported malformed" "malformed" lx adapters backends
 # The ruling: `sync` degrades rather than refusing. Asserted on the words Shall prints, not on
 # exit 0 — a check that only wants exit 0 is a check a do-nothing binary passes, which is what
