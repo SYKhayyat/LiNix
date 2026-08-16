@@ -518,7 +518,11 @@ jobs:
           # The canary is `hello`: a guix profile starts empty, so the canary is whatever has a
           # prebuilt substitute in guix's own cache, and `hello` is the smallest such thing. A
           # source build here would be the whole nightly.
-          - { distro: guix,      backend: guix,     pkg: hello, flags: '--security-opt seccomp=unconfined', probe: 'suite' }
+          # And its `probe` starts the daemon first. The probe step passes `--entrypoint sh`, so
+          # the entrypoint that normally starts `guix-daemon` does not run — every guix verb then
+          # died on "failed to connect to /var/guix/daemon-socket/socket" before parsing an
+          # operand, and the leg measured `apt` instead of the manager it exists for.
+          - { distro: guix,      backend: guix,     pkg: hello, flags: '--security-opt seccomp=unconfined', probe: 'sh /usr/local/bin/guix-daemon-up && suite' }
     steps:
     - uses: actions/checkout@v4
     - name: Build the ${{ matrix.distro }} image
@@ -687,12 +691,13 @@ jobs:
   # A clean `debian:stable-slim` with nothing this project put there, which is closer to a new
   # user's machine than any image in the integration matrix.
   #
-  # **`SHALL_REF` is the BRANCH, not the commit sha, and the difference is a broken job.** Both
-  # scripts turn a set `SHALL_REF` into `cargo install --git <repo> --tag <ref>`; a sha is not a
-  # tag, so pointing this at `github.sha` would have made the job fail on its own argument every
-  # night while looking like a finding about the installer. `github.ref_name` is the branch this
-  # run is on, which is a ref `--tag`'s sibling resolution accepts and is what the script's own
-  # documented example writes: `SHALL_REF=main`.
+  # **`SHALL_REF` is the BRANCH, and it took a real branch to find out that was not supported.**
+  # This comment used to assert that `github.ref_name` "is a ref `--tag`'s sibling resolution
+  # accepts". It is not: both scripts turned any `SHALL_REF` into `--tag <ref>`, and libgit2
+  # answers `refs/remotes/origin/tags/main` NotFound. The scripts now ask the remote which of the
+  # two a ref is and pass `--tag` or `--branch` accordingly, so `SHALL_REF=main` — the example
+  # written in `install.sh` itself — does what it says. A sha is still neither, which is why this
+  # is not `github.sha`.
   #
   # Nightly, because with no release tagged the script correctly falls through to a source build
   # of 448 crates. That fall-through is not a detour to be mocked out — it is what every user who
@@ -704,12 +709,48 @@ jobs:
     timeout-minutes: 45
     steps:
     - uses: actions/checkout@v4
+    # **Both sides of the one fork this script has, because testing one of them tested neither.**
+    # `install.sh` asks `command -v cargo` and takes one of two paths. This job built a container
+    # with no Rust in it and then asserted that a binary appeared, so it was asserting the
+    # success path in an environment that can only produce the refusal — and it failed on the
+    # script behaving exactly as designed. The refusal is a real outcome a real user gets, so it
+    # is checked rather than engineered away, and then Rust is installed and the source build is
+    # checked too.
+    - name: With no Rust, install.sh refuses and says where to get it
+      run: |
+        docker run --rm -v "$PWD:/src:ro" -e SHALL_REF="${{ github.ref_name }}" debian:stable-slim sh -c '
+          apt-get update -qq >/dev/null
+          apt-get install -y -qq curl ca-certificates git >/dev/null
+          out=$(sh /src/scripts/install.sh 2>&1); rc=$?
+          echo "$out"
+          # **Which fork this run took is read from the script, not assumed.** The refusal only
+          # applies when no published binary matched — the day a `v*` tag exists, this container
+          # downloads one and never reaches the cargo check, and an unconditional "expect exit 1"
+          # would then fail on the script working. That assumption is exactly what the step below
+          # got wrong in the other direction.
+          if echo "$out" | grep -q "no published binary"; then
+            [ "$rc" -eq 1 ] || { echo "no binary and no cargo, so expected exit 1; got $rc"; exit 1; }
+            # The sentence, not just the code: a user who cannot install needs to be told the one
+            # thing that would let them.
+            echo "$out" | grep -q "rustup.rs" || { echo "the refusal does not say where to get Rust"; exit 1; }
+          else
+            echo "a published binary matched, so the no-Rust refusal is not the path under test."
+            [ "$rc" -eq 0 ] || { echo "the download path exited $rc"; exit 1; }
+            command -v shall >/dev/null || { echo "it reported a download and left no shall"; exit 1; }
+          fi
+        '
+
     - name: Pipe install.sh into a clean container, as the README says to
       run: |
         docker run --rm -v "$PWD:/src:ro" -e SHALL_REF="${{ github.ref_name }}" debian:stable-slim sh -c '
           set -e
           apt-get update -qq >/dev/null
           apt-get install -y -qq curl ca-certificates build-essential pkg-config libssl-dev git >/dev/null
+          # The source-build path needs a toolchain, and the container has none. Installed here
+          # rather than mocked: this is the path every user gets while no release is tagged, so
+          # it is the path that has to compile.
+          curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal >/dev/null
+          . "$HOME/.cargo/env"
           sh /src/scripts/install.sh
           # The assertion is not that the script exited 0 — it is that a user now has a working
           # program. A script that reports success and installs nothing is the exact failure

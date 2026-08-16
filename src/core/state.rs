@@ -476,9 +476,11 @@ mod tests {
     /// unmanage a package that is still installed, and quietly keeping it is the original bug.
     #[test]
     fn a_row_with_no_origin_is_refused_rather_than_read() {
-        let dir = std::env::temp_dir().join("shall-sourceless-row-test");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("registry.json");
+        // `tempfile`, not a fixed name: `config.rs` already states the rule this used to break —
+        // one directory shared by every concurrent run of the suite, with a cleanup that deletes
+        // what another run is still reading.
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let path = dir.path().join("registry.json");
 
         // Serialized from a real registry, so the fixture cannot fail to load for some
         // unrelated missing field and be mistaken for the refusal under test.

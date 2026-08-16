@@ -59,7 +59,10 @@ COPY --from=builder /usr/local/bin/shall /usr/local/bin/shall
 COPY --from=builder /usr/local/bin/suite /usr/local/bin/suite
 COPY docker/integration/retry.sh /usr/local/bin/retry
 COPY docker/integration/guix-entrypoint.sh /usr/local/bin/guix-entrypoint
-RUN chmod 0755 /usr/local/bin/retry /usr/local/bin/guix-entrypoint
+# Baked rather than bind-mounted, because the step that needs it most is the probe step, and
+# that one replaces the entrypoint with `sh` — see `guix-daemon-up.sh`.
+COPY docker/integration/guix-daemon-up.sh /usr/local/bin/guix-daemon-up
+RUN chmod 0755 /usr/local/bin/retry /usr/local/bin/guix-entrypoint /usr/local/bin/guix-daemon-up
 
 # **The fixtures this image needs are installed at RUN time, not here, and that is forced.**
 # A fresh guix profile contains nothing at all, which costs the harness two checks — `git`, which

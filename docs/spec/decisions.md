@@ -1,4 +1,4 @@
-# The decision register — 211 entries: 210 ruled, one open
+# The decision register — 213 entries: 211 ruled, two open
 **One file, six features, nothing waiting on the owner.** Every decision this design forces lives
 here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -22,7 +22,7 @@ HALF RULED had no rows, the five that remained summed to 206 against 210, and
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **2** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **1** |
 | **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **206** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
@@ -101,11 +101,13 @@ status loses that, so it is kept here:
 
 ## Index
 
-**One question is open, and nine entries are waiting.** `Q53` — what a version pin means on a manager
-that cannot express one — was raised, measured and ruled on 2026-08-10. The `G` round then ran the
+**Two questions are open, and nine entries are waiting.** `Q53` — what a version pin means on a manager
+that cannot express one — was raised, measured and ruled on 2026-08-10. `J4` is the other side of
+the same coin and is not ruled: what a version pin means when *Shall* recorded it and the archive
+has since dropped it. The `G` round then ran the
 other way round: `docs/GRADE-2026-08-12.md`'s work order was implemented in one pass, and the nine
-changes in it that a user would notice shipped ahead of any ruling. All 212 are accounted
-for: **206 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 1 OPEN** — and this line
+changes in it that a user would notice shipped ahead of any ruling. All 213 are accounted
+for: **206 ANSWERED, 2 PARKED, 1 DEFERRED, 1 HALF RULED, 1 BUILT NEVER RULED, 2 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -8630,3 +8632,55 @@ so filtering to a client never returns an empty listing.
 it back needs an AUR helper. The alternative — attributing AUR packages to `yay` by asking
 `pacman -Qm` for the foreign set — is a real design and is not built here; it belongs with a
 ruling, not with a defect fix.
+
+## J4
+
+**Status: OPEN.**
+
+**A plain `sync` honours a version lockfile that `shall lock` writes as a side effect, so a
+machine stops syncing the day its archive drops a recorded version.** Found by the storage leg of
+nightly `31925296671`, reproduced end to end on the `ubuntu` integration image.
+
+The chain, and every step of it is measured:
+
+| | what runs | what it does |
+|---|---|---|
+| 1 | `shall lock` — the harness runs it to **approve an `exec:`** | `Lock: pinned 106 package version(s) to locks/versions.json`, including `"apt:libudev1": "255.4-1ubuntu8.17"` |
+| 2 | anything upgrades those packages, or the archive rolls | the recorded version is no longer in the index |
+| 3 | `shall sync --yes` — **no `--locked` anywhere** | `StateResolver::prefer_locks` defaults to `true`, so `apply_locks` injects the recorded version |
+| 4 | `apt` | `E: Version '…' for 'libudev1' was not found`, exit 100, sync exits 1 |
+
+The reproduction prints the storage leg's message verbatim, down to the manifest line numbers
+(113 for `libsystemd0`, 116 for `libudev1`).
+
+**Three mechanisms were ruled out before this one, and they are recorded so nobody re-walks
+them.** The adoption manifest carries no version — `adoption_options` is implemented by exactly
+one backend (`service.rs`, which contributes `@status=`), so `apt:libudev1` is written bare. The
+state registry records `"version": null` for these packages. And `adopt` followed by `sync` never
+creates `locks/versions.json` at all: only `lock`, `plan` and `sync` write it, which is what made
+the first reproduction attempt come back clean.
+
+**This is two questions wearing one symptom, and they can be ruled separately.**
+
+**(a) Should `shall lock` pin every managed package's version?** Its user asked to approve a
+script. It pinned 106 packages. `plan.rs` describes the file as written *"so a later `sync
+--locked` reproduces those exact versions"*, which is a purpose nobody invoked here.
+
+**(b) Should a plain `sync` prefer a recorded version at all?** `prefer_locks: true` is the
+default and `upgrading()` is the only thing that clears it, so the file written for `--locked` is
+in force for every sync. The doc comment says `--locked`; the default says always.
+
+**And a consequence either ruling has to cover: what should happen when a pinned version has left
+the archive?** Today the answer is a failed sync with a manager's error and no suggestion. There
+is no path back that does not involve the user finding `--upgrade` or deleting a file they did not
+know they had.
+
+**Recommendation, offered as one and not built.** Keep the pin — a recorded version is the point
+of recording it — and fix the two edges: `lock` should record versions only when asked to (or say
+loudly that it did), and a sync that cannot satisfy a *recorded* pin (as opposed to a typed one)
+should report the drift and name `--upgrade`, rather than handing the user apt's exit 100. A
+version somebody typed stays fatal, on the reasoning `pins.rs` already gives: *"a version you
+typed is a decision"*. A version Shall recorded on their behalf is not.
+
+**Raised rather than built because every option changes what a user sees** — which sync fails,
+which command records what, and what a machine does the morning after a security update.

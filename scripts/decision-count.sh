@@ -72,10 +72,23 @@ every count below is over $((TOTAL - OTHER)) of $TOTAL entries"
 # sentence stating a wrong total is caught too.
 for f in "$REG" "$MAP"; do
     [ -f "$f" ] || continue
-    stated="$(grep -oE '[Aa]ll [0-9]+ (decisions|are ruled)|register — all [0-9]+|[0-9]+ decisions\.' "$f" \
+    # `register — N entries` is the register's own H1, and it went stale by two while every
+    # other figure in the file was correct and this check said `ok`. It was invisible because
+    # the patterns above all spell the total as "all N": the title spells it "N entries", which
+    # is a fourth place one number is typed — the exact thing this script exists to stop.
+    stated="$(grep -oE '[Aa]ll [0-9]+ (decisions|are ruled)|register — all [0-9]+|[0-9]+ decisions\.|register — [0-9]+ entries' "$f" \
         | grep -oE '[0-9]+' | sort -u)"
     for n in $stated; do
         [ "$n" = "$TOTAL" ] || say_bad "$(basename "$f") states $n where the register holds $TOTAL"
+    done
+
+    # And the same title's "N ruled", which is everything not OPEN. Anchored on `entries:`
+    # rather than matched bare: `[0-9]+ ruled` also hits "2 ruled" and "4 ruled" in ordinary
+    # prose three times in this file, and a checker that reports prose as a miscount is one
+    # somebody switches off.
+    RULED=$((TOTAL - OPEN))
+    for n in $(grep -oE 'entries: [0-9]+ ruled' "$f" | grep -oE '[0-9]+ ruled' | grep -oE '[0-9]+'); do
+        [ "$n" = "$RULED" ] || say_bad "$(basename "$f") states $n ruled where the register holds $RULED (everything not OPEN)"
     done
     # **A count is written in the status's own spelling — shouted — and that is what makes it
     # checkable.** `SPEC.md` said "125 answered, 2 parked" in lower case and went a week wrong

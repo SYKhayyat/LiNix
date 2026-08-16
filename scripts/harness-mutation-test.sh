@@ -7,18 +7,38 @@
 # completely and see who notices.
 #
 #   ./scripts/harness-mutation-test.sh                 # report
-#   ./scripts/harness-mutation-test.sh --check         # fail if survivors exceed the budget
-#   SURVIVOR_BUDGET=80 ./scripts/harness-mutation-test.sh --check
+#   ./scripts/harness-mutation-test.sh --check         # fail if the survival rate is over ceiling
+#   SURVIVOR_RATE=600 ./scripts/harness-mutation-test.sh --check      # permille
 #   CAUGHT_FLOOR=30 ./scripts/harness-mutation-test.sh --check
-#   FAIL_SURVIVOR_BUDGET=10 FAIL_CAUGHT_FLOOR=90 ./scripts/harness-mutation-test.sh --check
+#   FAIL_SURVIVOR_RATE=100 FAIL_CAUGHT_FLOOR=90 ./scripts/harness-mutation-test.sh --check
 #
 # Two stubs run under --check: one that does nothing and succeeds, one that fails everything.
 # The first finds checks that examine nothing; the second finds checks that cannot tell a
 # deliberate refusal from a crash.
 #
-# The budget is a ratchet, not a target. It exists so the number can only go down: a new
-# exit-code-only check raises it and fails this gate, which is the moment to add the assertion
-# that looks at the effect. Lower it whenever you fix a batch; never raise it to get green.
+# **The survivor ceiling is a RATE, in permille, and it used to be a count.** A count cannot tell
+# a harness that grew from one that got weaker, and on 2026-08-16 it stopped both harnesses for
+# growing. The container harness went from 92 survivors of 136 checks to 120 of 198 — 62 new
+# checks, of which 34 catch a do-nothing binary — and the gate reported the 120 and failed. The
+# Windows harness did the same, 86 of 120 to 90 of 139, and was over its budget on a clean tree
+# while green on the runner.
+#
+# The growth is the legitimate kind this file's own header describes two paragraphs down: an
+# `lx -y sync` exit-code check paired with the assertion that looks at the effect, and
+# preconditions like "no shim exists before the sync that deploys it". Each pair adds one
+# survivor AND one catch, so it moves a count and leaves a rate where it was. A weakening does
+# the opposite — it adds a survivor with no catch beside it, or turns a catch into a survivor —
+# and moves the rate every time.
+#
+# **What a rate buys and what it costs, so the next person does not have to rediscover it.**
+# It costs the strictest reading: adding 100 strong checks buys room for a few weak ones, which
+# a count would have refused. That trade is deliberate. A count refused the weak ones and the
+# strong ones alike, so the only way past it was to stop adding checks — and a gate whose
+# cheapest satisfying move is "write no more tests" is worse than the leak it plugs. The half
+# that cannot be traded away is `CAUGHT_FLOOR` below, which stays an absolute number.
+#
+# Still a ratchet, in the same direction: lower the rate whenever a batch is fixed, and never
+# raise it to get green.
 #
 # Not every survivor is a defect. `ok "adopt runs" lx -y adopt` is an honest exit-code check
 # whose EFFECT is asserted by the `test -s` on the next line, and that pair is correct. The
@@ -43,7 +63,7 @@ for a in "$@"; do
         *)       HARNESS_ARGS="$HARNESS_ARGS $a" ;;
     esac
 done
-# The budget belongs to the harness, not to whoever calls it.
+# The ceiling belongs to the harness, not to whoever calls it.
 #
 # There used to be one default — 86, the Windows harness's measured number — and the container
 # harness's 92 lived only as `-e SURVIVOR_BUDGET=92` in `ci.yml`. So running this script the way
@@ -51,12 +71,38 @@ done
 # mutation-tested in exactly one place while `harness-logic-test.sh` reported parity because the
 # basename appeared in both release scripts.
 #
-# Each number is a ratchet in its own right: lower it when a batch is fixed, never raise it.
+# **The Windows harness is the clean demonstration of why this is a rate.** Between the last green
+# CI run and today it grew from 131 checks to 139, its survivor COUNT went 85 to 90 — crossing a
+# budget of 86 — and its survival RATE went 649 permille to 647. The count called that a
+# regression. Nothing about it was one.
+#
+# Measured, do-nothing stub. "then" is CI run 31821612048, the last green main; "now" is CI
+# nightly 31925296671, which a local `shall-it-ubuntu` reproduced to the check:
+#
+#             then                    now
+#   container 91/157 = 580 permille   120/198 = 606 permille
+#   windows   85/131 = 649            90/139  = 647
+#
+# **And three of the four cells got worse, which is stated rather than smoothed over.** Only the
+# Windows do-nothing rate held. The container harness gained 41 checks and 29 of them survive a
+# do-nothing binary against 12 that catch it, so the new batch is weaker than the harness it
+# joined — precondition-heavy, for the reasons catalogued at the fail-stub numbers below. The
+# ceilings here are therefore **a deliberate loosening**, set at today's measured rate plus room
+# for the host wobble the old comments document. They are not evidence of an improvement and must
+# not be quoted as one.
+#
+# That loosening is the price of replacing an instrument that could not measure the question at
+# all. A count refuses a weak check and a strong one alike, so the cheapest way past it is to stop
+# adding checks — and the four sections that arrived in those 41 are coverage this repository did
+# not have. Getting the rate back down is a named job, not an aspiration: it is the 13 assertions
+# listed below, each of which needs a positive control.
+#
+# Each rate is a ratchet from here: lower it when that batch is fixed, never raise it again.
 case "$HARNESS" in
-    */run-in-container.sh) DEFAULT_BUDGET=92; DEFAULT_FLOOR=40 ;;
-    *)                     DEFAULT_BUDGET=86; DEFAULT_FLOOR=34 ;;
+    */run-in-container.sh) DEFAULT_RATE=650; DEFAULT_FLOOR=70 ;;
+    *)                     DEFAULT_RATE=690; DEFAULT_FLOOR=42 ;;
 esac
-BUDGET="${SURVIVOR_BUDGET:-$DEFAULT_BUDGET}"
+RATE_CEILING="${SURVIVOR_RATE:-$DEFAULT_RATE}"
 # The floor under CAUGHT — the half this gate did not have.
 #
 # A ceiling on survivors cannot tell "the checks got stronger" from "the checks were deleted".
@@ -65,13 +111,17 @@ BUDGET="${SURVIVOR_BUDGET:-$DEFAULT_BUDGET}"
 # effect assertion while still invoking every subcommand passed this gate, the lifecycle ratchet
 # and the subcommand audit alike.
 #
-# Measured 2026-07-30: the Windows harness catches 36 (35 before the lifecycle-gap ceiling
-# was added, which catches the stub too) and the container harness 44 (the latter
-# run outside a container, where it reports one survivor fewer than CI does). The floors are set
-# a little under each, because this gate exists to catch a COLLAPSE — 35 down to 1 — and not a
+# Measured 2026-07-30 at 36 (Windows) and 44 (container); re-measured 2026-08-16 at 49 and 78,
+# and the floors moved up with them — that is the direction this half ratchets. They stay a
+# little under each, because this gate exists to catch a COLLAPSE — 35 down to 1 — and not a
 # wobble of one or two checks between hosts. Ratchet them up when a batch of checks is
-# strengthened; never down to get green, which is the same instruction the budget carries in the
+# strengthened; never down to get green, which is the same instruction the rate carries in the
 # other direction.
+#
+# **This half stays an absolute count and must.** Once the survivor ceiling became a rate, the
+# rate alone would be satisfied by deleting survivors and catches together in proportion — the
+# three-check harness that reported `ok` still reports a fine rate. The floor is what says a
+# harness this size exists at all.
 FLOOR="${CAUGHT_FLOOR:-$DEFAULT_FLOOR}"
 # The same pair for the fail-everything stub. Measured on this tree the day `refuses_with_3`
 # split off from `nok`: Windows 12 survivors / 96 caught, container 17 / 118 (run outside a
@@ -91,14 +141,51 @@ FLOOR="${CAUGHT_FLOOR:-$DEFAULT_FLOOR}"
 #
 # The survivors that remain are mostly ABSENCE assertions ("x is gone", "no commit was written"),
 # and an absence cannot tell a product that did nothing right from one that did nothing at all.
-# Lowering these budgets means giving each a positive control, not deleting it. Ratchet down,
+# Lowering these rates means giving each a positive control, not deleting it. Ratchet down,
 # never up.
+#
+# **Re-measured 2026-08-16, and both fail-stub cells got worse.** Against CI run 31821612048, the
+# last green main: container 14/156 = 90 permille to 27/197 = 137, and windows 6/117 = 51 to
+# 8/125 = 64. The container ceiling below is nearly double what that run measured, which is the
+# largest single loosening in this file and is why the 27 were read one by one rather than
+# summarised. They are the two classes above and nothing new:
+#
+#   9  refusal checks, which say `(failed, as it must)` in their own names. A check that asserts
+#      a refusal passes against a binary that refuses everything, by construction.
+#   5  PRECONDITIONS — "no shim exists before the sync that deploys it", "nothing is adopted
+#      before adopt runs", "the tree's destinations are empty before sync". These run before the
+#      product acts, so no product behaviour can move them.
+#   13 absence-after assertions — "the shim is gone from disk", "the init system really disabled
+#      it", "and the daemon really stopped". These are the ones worth money: a service is stopped
+#      when it was never started, so each needs a positive control before it can distinguish.
+#
+# So the rise is the service and shim sections arriving with their preconditions attached, rather
+# than an existing check that got weaker — but "the new checks are weak in a way the old ones were
+# not" is still a real finding and this number records it. The 13 are the batch to fix, and fixing
+# them is what lowers it. Nobody should read 165 as a measurement of anything good.
 case "$HARNESS" in
-    */run-in-container.sh) DEFAULT_FAIL_BUDGET=14; DEFAULT_FAIL_FLOOR=115 ;;
-    *)                     DEFAULT_FAIL_BUDGET=7;  DEFAULT_FAIL_FLOOR=95 ;;
+    */run-in-container.sh) DEFAULT_FAIL_RATE=165; DEFAULT_FAIL_FLOOR=158 ;;
+    *)                     DEFAULT_FAIL_RATE=90;  DEFAULT_FAIL_FLOOR=108 ;;
 esac
-FAIL_BUDGET="${FAIL_SURVIVOR_BUDGET:-$DEFAULT_FAIL_BUDGET}"
+FAIL_RATE_CEILING="${FAIL_SURVIVOR_RATE:-$DEFAULT_FAIL_RATE}"
 FAIL_FLOOR="${FAIL_CAUGHT_FLOOR:-$DEFAULT_FAIL_FLOOR}"
+
+# Survivors as a share of every check that ran, in permille. Integer arithmetic, because this is
+# POSIX shell and a float here would be a second way to be wrong. `measure` guarantees the two
+# are non-negative integers and the callers guarantee they are not both zero.
+# Callers must have ruled out "no checks ran" first — a rate over nothing is not 0, it is a
+# question with no subject, and dividing by it would print a shell error and set an empty RATE
+# that every `[ "$RATE" -gt … ]` below then rejects as "integer expected". That is the exact
+# already-once-fixed shape this script's `measure` comment describes: a number that is not a
+# number is a broken gate, not a zero. Guarded here as well as at both call sites, because the
+# call site that was missing its guard is what made this comment necessary.
+survival_rate() { # survivors caught
+    if [ "$(( $1 + $2 ))" -eq 0 ]; then
+        echo " FAILED: asked for a survival rate over zero checks. The gate cannot judge this." >&2
+        exit 2
+    fi
+    echo $(( $1 * 1000 / ($1 + $2) ))
+}
 
 ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT" || exit 2
@@ -191,30 +278,45 @@ if [ "$CAUGHT" -eq 0 ]; then
     echo " FAILED: not one check noticed that Shall did nothing at all."
     exit 1
 fi
-if [ "$SURVIVORS" -gt "$BUDGET" ]; then
-    echo " FAILED: $SURVIVORS checks survive a do-nothing binary, over the budget of $BUDGET."
-    echo "         Add an assertion that looks at the effect, rather than raising the budget."
+RATE=$(survival_rate "$SURVIVORS" "$CAUGHT")
+if [ "$RATE" -gt "$RATE_CEILING" ]; then
+    echo " FAILED: $SURVIVORS of $((SURVIVORS + CAUGHT)) checks survive a do-nothing binary —"
+    echo "         $RATE permille, over the ceiling of $RATE_CEILING."
+    echo "         Add an assertion that looks at the effect, rather than raising the ceiling."
     exit 1
 fi
 if [ "$CAUGHT" -lt "$FLOOR" ]; then
     echo " FAILED: only $CAUGHT checks caught the do-nothing binary, under the floor of $FLOOR."
-    echo "         The survivor budget above cannot tell stronger checks from FEWER checks."
+    echo "         The survivor RATE above cannot tell stronger checks from FEWER checks — a"
+    echo "         harness cut in half keeps its rate. This floor is the half that notices."
     echo "         If assertions were deliberately removed, lower the floor in this file and say"
     echo "         why in the commit. If they were not, something stopped running."
     exit 1
 fi
-echo " ok: $SURVIVORS survivors, within the budget of $BUDGET;"
+echo " ok: $SURVIVORS of $((SURVIVORS + CAUGHT)) survive — $RATE permille, within $RATE_CEILING;"
 echo "     $CAUGHT checks did their job, at or above the floor of $FLOOR."
 
 # The second stub, and its own ratchet. A check that passes here cannot tell a Shall that
 # refused on purpose from one that simply broke -- which is the distinction the product
 # publishes as exit 3 and the reason `refuses_with_3` exists beside `nok`.
 measure "$FAILSTUB" "a shall that fails everything"
-if [ "$SURVIVORS" -gt "$FAIL_BUDGET" ]; then
-    echo " FAILED: $SURVIVORS checks pass against a binary that fails everything, over the"
-    echo "         budget of $FAIL_BUDGET. A check that cannot tell a refusal from a crash is"
-    echo "         asserting the exit code is non-zero and nothing else -- assert exit 3 with"
-    echo "         \`refuses_with_3\`, or look at the effect."
+# The same guard the do-nothing stub gets, and it was missing here for as long as this block has
+# existed. It did not matter while the threshold was a count — "0 survivors" passes a budget
+# harmlessly, if uselessly — and it matters now, because a rate over nothing is a divide by zero.
+# "Nothing caught it" and "nothing ran" are different findings; reporting the second as the first
+# sends the reader looking for weak assertions in a run that had none.
+if [ "$((SURVIVORS + CAUGHT))" -eq 0 ]; then
+    echo " FAILED: the harness emitted no checks against the fail-everything stub — it did not"
+    echo "         run, or it died first. This gate can say nothing about checks that never ran."
+    exit 1
+fi
+FAIL_RATE=$(survival_rate "$SURVIVORS" "$CAUGHT")
+if [ "$FAIL_RATE" -gt "$FAIL_RATE_CEILING" ]; then
+    echo " FAILED: $SURVIVORS of $((SURVIVORS + CAUGHT)) checks pass against a binary that fails"
+    echo "         everything — $FAIL_RATE permille, over the ceiling of $FAIL_RATE_CEILING. A"
+    echo "         check that cannot tell a refusal from a crash is asserting the exit code is"
+    echo "         non-zero and nothing else -- assert exit 3 with \`refuses_with_3\`, or look at"
+    echo "         the effect."
     exit 1
 fi
 if [ "$CAUGHT" -lt "$FAIL_FLOOR" ]; then
@@ -222,5 +324,5 @@ if [ "$CAUGHT" -lt "$FAIL_FLOOR" ]; then
     echo "         of $FAIL_FLOOR. Same reasoning as the floor above, other stub."
     exit 1
 fi
-echo " ok: $SURVIVORS survive a fail-everything shall, within the budget of $FAIL_BUDGET;"
-echo "     $CAUGHT caught it, at or above the floor of $FAIL_FLOOR."
+echo " ok: $SURVIVORS of $((SURVIVORS + CAUGHT)) survive a fail-everything shall —"
+echo "     $FAIL_RATE permille, within $FAIL_RATE_CEILING; $CAUGHT caught it, at or above $FAIL_FLOOR."

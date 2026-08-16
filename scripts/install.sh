@@ -81,11 +81,29 @@ fetch_binary() {
 #
 # A repo with no tags yet falls back to the branch and SAYS SO, rather than silently
 # installing something else than it promised.
+# **A branch is not a tag, and cargo is told which.** `SHALL_REF` is documented above as "tag or
+# branch" and both examples were passed to `--tag`, so the branch example — the one written in
+# this file — could not work: `cargo install --git X --tag main` asks libgit2 for
+# `refs/remotes/origin/tags/main` and is told `NotFound`. The nightly job runs the documented
+# line with `SHALL_REF=main` and has never once been green.
+#
+# Classified by asking the remote, because the two spellings are indistinguishable from the
+# string. `git` stays optional: with no git there is nothing to ask, and `--tag` is the right
+# guess for a variable whose default and whose other example are both tags.
 REF="${SHALL_REF:-}"
+REF_FLAG=--tag
 if [ -z "$REF" ]; then
+  # No classification needed on this path: whatever comes back came out of the tag list.
   REF="$(git ls-remote --tags --refs --sort=-v:refname "$REPO" 'v*' 2>/dev/null            | head -1 | sed 's#.*/##')"
   if [ -z "$REF" ]; then
     say "no release tag published yet — installing from the default branch instead."
+  fi
+elif command -v git >/dev/null 2>&1; then
+  if [ -n "$(git ls-remote --tags --refs "$REPO" "refs/tags/$REF" 2>/dev/null)" ]; then
+    REF_FLAG=--tag
+  elif [ -n "$(git ls-remote --heads "$REPO" "refs/heads/$REF" 2>/dev/null)" ]; then
+    REF_FLAG=--branch
+    say "$REF is a branch, not a release tag — following it."
   fi
 fi
 
@@ -131,7 +149,8 @@ fi
 # hidden. That is a supply-chain downgrade triggered by bad wifi, in the script a user pipes
 # from the web.
 #
-# `--tag` only when there is one: `cargo install --git X --tag ""` is not the same command.
+# A ref only when there is one: `cargo install --git X --tag ""` is not the same command. Which
+# flag carries it was decided above, where the remote could still be asked.
 #
 # `--root` when the caller named a directory. cargo installs into `$root/bin`, so a
 # `SHALL_BIN_DIR` of `/usr/local/bin` is a root of `/usr/local` — computed here rather than
@@ -140,7 +159,7 @@ set -- --git "$REPO" --locked
 # An `if`, not `[ -n "$REF" ] && set -- …`: under `set -e` a trailing `&&` list whose test fails
 # is a failing command, so the no-tag path would have exited here.
 if [ -n "$REF" ]; then
-  set -- "$@" --tag "$REF"
+  set -- "$@" "$REF_FLAG" "$REF"
 fi
 if [ -n "$BIN_DIR" ]; then
   case "$BIN_DIR" in

@@ -1012,7 +1012,10 @@ fn every_probed_image_is_asked_in_a_form_it_can_run() {
         };
         let dockerfile = read(&format!("docker/integration/Dockerfile.{distro}"));
         let ships_binary = dockerfile.contains("/usr/local/bin/suite");
-        let driven_as_binary = !probe.starts_with("cargo");
+        // `contains`, not `starts_with`: a probe may now be a compound command — guix's starts
+        // its daemon before running anything — and `sh setup.sh && cargo test` starts with `sh`
+        // while being every bit the cargo form.
+        let driven_as_binary = !probe.contains("cargo");
 
         assert_eq!(
             ships_binary,

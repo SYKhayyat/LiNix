@@ -167,12 +167,11 @@ mod tests {
 
     /// An owner file with nothing in it names nobody, and must say so.
     ///
-    /// **Found by the mutation gate on its first completing run** (`datalock.rs:119`, the
-    /// `!s.trim().is_empty()` guard replaced with `true` and nobody noticed). Without the guard
-    /// a blank file becomes the holder's name, so the contention message reads `waiting for `
-    /// with the sentence ending in air — the one message this whole owner file exists to print.
-    /// It is reachable: `acquire` writes the lock file and the stamp as two steps, so a reader
-    /// arriving between them, or after a crash between them, sees exactly this.
+    /// Without `holder`'s `!s.trim().is_empty()` guard a blank file becomes the holder's name,
+    /// so the contention message reads `waiting for ` with the sentence ending in air — the one
+    /// message this whole owner file exists to print. It is reachable: `acquire` writes the lock
+    /// file and the stamp as two steps, so a reader arriving between them, or after a crash
+    /// between them, sees exactly this.
     ///
     /// Every shape that carries no name, not just the empty one — a file holding a newline is
     /// what a truncated write leaves behind, and it is the case a `.is_empty()` without the

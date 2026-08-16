@@ -58,10 +58,8 @@ That indirection is what lets one repo describe several machines — see [Profil
 **Extending it** — [Teaching Shall a package manager it has never heard
 of](#teaching-shall-a-package-manager-it-has-never-heard-of)
 
-> **Working on Shall itself?** [`CONTRIBUTING.md`](CONTRIBUTING.md) is the working agreement,
-> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is the map of the code, and
-> [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) is how to build, test and run it without
-> reconfiguring your own machine by accident.
+> **Working on Shall itself?** [Your first hour, in order](#your-first-hour-in-order) is the
+> reading path — six documents, and which one to open first.
 
 ---
 
@@ -1231,7 +1229,38 @@ four sources won with `shall path --explain`.
 Start with **[`CONTRIBUTING.md`](CONTRIBUTING.md)** — the working agreement, the conventions that
 are load-bearing rather than stylistic, and what review will ask you.
 
-The short version:
+### Your first hour, in order
+
+There are two large documents here and they are not alternatives —
+[`DEVELOPMENT.md`](docs/DEVELOPMENT.md) is how to work, [`BUILDER.md`](docs/BUILDER.md) is what to
+work *on*. Read them in this order and nothing below depends on something you have not met yet.
+
+```sh
+git clone … && cd shall
+git config core.hooksPath .githooks   # once per clone; it is NOT automatic, and a clone
+                                      # that skips it has no pre-commit hook at all
+cargo build --all-targets && cargo test --no-fail-fast
+```
+
+1. **[`CONTRIBUTING.md`](CONTRIBUTING.md)** — the working agreement. Ten minutes, and it is what
+   review will hold you to.
+2. **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — where things live. Everything after this
+   assumes it.
+3. **[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)** — build, test, and run Shall against a scratch
+   config rather than against your own machine. Read
+   [the verify chain](docs/DEVELOPMENT.md#the-verify-chain) even if you skim the rest: four of its
+   five steps see one platform of two, and the fifth is the one people skip.
+4. **[`docs/SPEC.md`](docs/SPEC.md)** — the map of what is supposed to exist. Follow it to
+   `spec/target-state.md` for the rules and `spec/why.md` for the bug each rule prevents. **Do not
+   change a target-state rule without reading its `why` entry first.**
+5. **[`docs/spec/decisions.md`](docs/spec/decisions.md)** — before you answer any question in code.
+   A question with an ID in that register is the owner's, not yours.
+6. **[`docs/BUILDER.md`](docs/BUILDER.md)** — *last, and only when you are picking up work.* It is
+   a standing work order (`B1`, `B2`, …), not an introduction: it opens mid-argument and assumes
+   all five documents above. The newest `docs/GRADE-*.md` and `docs/HANDOFF-*.md` are its running
+   commentary — the grade says what was found, the handoff says where the last session stopped.
+
+The short version of the same thing:
 
 | you want to | read |
 |---|---|
@@ -1240,16 +1269,8 @@ The short version:
 | know what is supposed to exist | [`docs/SPEC.md`](docs/SPEC.md), then `docs/spec/target-state.md` |
 | know *why* a rule exists before changing it | `docs/spec/why.md` — every rule has an entry |
 | find out whether a question is yours to answer | `docs/spec/decisions.md` |
+| pick up outstanding work | [`docs/BUILDER.md`](docs/BUILDER.md), then the newest `docs/HANDOFF-*.md` |
 | see what everything in `docs/` is for | [`docs/README.md`](docs/README.md) |
-
-```sh
-git clone … && cd shall
-git config core.hooksPath .githooks   # once per clone; it is not automatic
-cargo build --all-targets && cargo test --no-fail-fast
-```
-
-The full verify chain, and the reason its fifth step (`scripts/unix-check.sh`) is not optional on
-a Windows host, are in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md#the-verify-chain).
 
 ## Licence
 

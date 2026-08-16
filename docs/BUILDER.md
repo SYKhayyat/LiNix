@@ -760,11 +760,13 @@ repeat a defect. The product asserts the same thing from a string and never test
 
 `harness-logic-test.sh:291` greps `ci.yml` for `scripts/*.sh` and asserts each **basename** appears
 in both release scripts. CI runs `harness-mutation-test.sh` **twice** — once bare (Windows
-harness) and once against `run-in-container.sh` with `SURVIVOR_BUDGET=92`. Both release scripts
-run it once. Parity passes because the string appears.
+harness) and once against `run-in-container.sh`, which then carried `SURVIVOR_BUDGET=92`. Both
+release scripts run it once. Parity passes because the string appears.
 
-Compounding: the container harness's budget lives only in `ci.yml`, so the script's own documented
-invocation fails on a clean tree (90 survivors against a default of 86).
+Compounding: the container harness's budget lived only in `ci.yml`, so the script's own documented
+invocation failed on a clean tree (90 survivors against a default of 86). Both halves are fixed —
+the thresholds are per-harness inside the script, and `ci.yml` overriding any of them is now
+itself a test failure.
 
 **Fix.** Compare invocations, not names. Move each harness's budget beside the harness.
 

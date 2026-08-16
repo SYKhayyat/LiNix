@@ -80,8 +80,21 @@ fn text(out: &Output) -> String {
 ///
 /// `None` when the host has nothing to adopt — a machine with no reachable manager cannot
 /// produce this state, and the tests say so rather than passing quietly.
-fn a_machine_whose_whole_inventory_is_now_undeclared() -> Option<PathBuf> {
-    let dir = std::env::temp_dir().join("shall-rehearsal-guard");
+///
+/// **`whose` names the caller, and one directory for all three was an intermittent failure.**
+/// The path used to be a fixed `shall-rehearsal-guard`, and cargo runs these three tests in
+/// parallel threads of one process — so each was deleting, re-adopting and emptying the
+/// directory the other two were reading. `plan_reaches_the_guard_on_this_machine` failed on
+/// CI run 31919417555 with *"system already matches desired state (no changes)"*, which is what
+/// `plan` correctly reports when a sibling test's `adopt` has just refilled the module files
+/// this one emptied, and passed on the two runs either side of it. A control test that exists to
+/// stop a vacuous pass cannot itself be decided by thread scheduling.
+fn a_machine_whose_whole_inventory_is_now_undeclared(whose: &str) -> Option<PathBuf> {
+    let dir = std::env::temp_dir().join(format!(
+        "shall-rehearsal-guard-{}-{}",
+        whose,
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).ok()?;
     let init = Command::new(shall())
@@ -128,7 +141,7 @@ fn protected_lines(out: &str) -> usize {
 /// nothing protected", which would be a test that passes by measuring nothing.
 #[test]
 fn plan_reaches_the_guard_on_this_machine() {
-    let Some(dir) = a_machine_whose_whole_inventory_is_now_undeclared() else {
+    let Some(dir) = a_machine_whose_whole_inventory_is_now_undeclared("control") else {
         return; // nothing adoptable here; no state to measure
     };
     let out = text(&run(&dir, &["plan"]));
@@ -142,7 +155,7 @@ fn plan_reaches_the_guard_on_this_machine() {
 /// `sync --dry-run` reports the refusal that `plan` reports over the same repository.
 #[test]
 fn the_dry_run_reports_the_refusal_the_plan_reports() {
-    let Some(dir) = a_machine_whose_whole_inventory_is_now_undeclared() else {
+    let Some(dir) = a_machine_whose_whole_inventory_is_now_undeclared("verdict") else {
         return;
     };
     let planned = text(&run(&dir, &["plan"]));
@@ -165,7 +178,7 @@ fn the_dry_run_reports_the_refusal_the_plan_reports() {
 /// listing what is protected, which is the half a reader acts on.
 #[test]
 fn the_dry_run_names_the_protected_packages_the_plan_names() {
-    let Some(dir) = a_machine_whose_whole_inventory_is_now_undeclared() else {
+    let Some(dir) = a_machine_whose_whole_inventory_is_now_undeclared("names") else {
         return;
     };
     let planned = text(&run(&dir, &["plan"]));

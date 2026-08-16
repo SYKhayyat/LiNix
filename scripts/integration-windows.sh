@@ -1270,15 +1270,39 @@ if command -v reg >/dev/null 2>&1; then
     SET_SUBKEY='Software\ShallIntegrationCanary'
     SET_NAME=Mode
     SET_MOD="$SHALL_CONFIG_DIR/modules/imperative.txt"
-    reg delete "HKCU\\$SET_SUBKEY" /f >/dev/null 2>&1
+
+    # **`reg` is called through this, because a bare `reg query ... /v NAME` cannot work here.**
+    # This harness runs under Git Bash, whose MSYS layer rewrites any argument that looks like an
+    # absolute path — and `/v` and `/f` look exactly like one. `reg` then answers `ERROR: Invalid
+    # syntax` to every call. Measured on Windows 11: the same query is `Invalid syntax` bare and
+    # returns the value under `MSYS_NO_PATHCONV=1`.
+    #
+    # It cost four wrong verdicts on this section's first night, and only two of them looked like
+    # failures. The two `grep_ok`s reported the value missing from a registry that had it; the two
+    # `nok` controls — "the value does not exist before sync", "the value is really gone" — PASSED,
+    # because a command that always fails is indistinguishable from a key that is really absent.
+    # A control satisfied by its own instrument being broken is the vacuous check this repository
+    # keeps finding, arriving here as the thing that hid the other two.
+    #
+    # `scripts/unix-check.sh` already sets this variable for the same reason.
+    winreg() { MSYS_NO_PATHCONV=1 reg "$@"; }
+
+    # And the positive control, because the paragraph above is the whole argument for it: prove
+    # `reg query` can read a value that certainly exists, before believing it about one that
+    # should not. `CurrentVersion\ProgramFilesDir` is present on every Windows since NT.
+    grep_ok "reg query can read the registry at all (the control the controls needed)" \
+        "REG_SZ" \
+        winreg query 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion' /v ProgramFilesDir
+
+    winreg delete "HKCU\\$SET_SUBKEY" /f >/dev/null 2>&1
     # The control: the value must be absent before the sync that writes it, or every assertion
     # below passes over whatever a previous run left behind.
     nok "the registry value does not exist before sync" \
-        reg query "HKCU\\$SET_SUBKEY" /v "$SET_NAME"
+        winreg query "HKCU\\$SET_SUBKEY" /v "$SET_NAME"
     printf 'setting:%s/%s @value=prefer-dark\n' "$SET_SUBKEY" "$SET_NAME" >> "$SET_MOD"
     ok "sync applies a declared setting" lx -y sync
     grep_ok "the value is really in the registry" "prefer-dark" \
-        reg query "HKCU\\$SET_SUBKEY" /v "$SET_NAME"
+        winreg query "HKCU\\$SET_SUBKEY" /v "$SET_NAME"
     # A changed declaration must reach the store. A `setting:` that only ever wrote on first
     # sight would look identical to a working one until the day somebody edited the value.
     grep -v -F "setting:$SET_SUBKEY/$SET_NAME " "$SET_MOD" > "$SET_MOD.tmp" 2>/dev/null
@@ -1286,13 +1310,13 @@ if command -v reg >/dev/null 2>&1; then
     printf 'setting:%s/%s @value=prefer-light\n' "$SET_SUBKEY" "$SET_NAME" >> "$SET_MOD"
     ok "sync applies a CHANGED setting" lx -y sync
     grep_ok "the new value replaced the old one" "prefer-light" \
-        reg query "HKCU\\$SET_SUBKEY" /v "$SET_NAME"
+        winreg query "HKCU\\$SET_SUBKEY" /v "$SET_NAME"
     grep -v -F "setting:$SET_SUBKEY/$SET_NAME " "$SET_MOD" > "$SET_MOD.tmp" 2>/dev/null
     mv "$SET_MOD.tmp" "$SET_MOD"
     ok "sync resets a setting whose declaration is gone" lx -y sync
     nok "the value is really gone from the registry" \
-        reg query "HKCU\\$SET_SUBKEY" /v "$SET_NAME"
-    reg delete "HKCU\\$SET_SUBKEY" /f >/dev/null 2>&1
+        winreg query "HKCU\\$SET_SUBKEY" /v "$SET_NAME"
+    winreg delete "HKCU\\$SET_SUBKEY" /f >/dev/null 2>&1
     # Credited only when the whole block passed: a ledger row written before the assertions
     # is the harness telling the ratchet a number the machine did not give it.
     [ "$FAILC" = "$_set_f0" ] && echo "setting" >> "$LEDGER/be-life"

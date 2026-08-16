@@ -150,9 +150,10 @@ fn shall_says_the_package_is_declared_in_the_same_breath() {
 /// reason.
 #[test]
 fn a_plan_with_nothing_skipped_makes_no_such_claim() {
-    let dir = std::env::temp_dir().join("shall-skipped-none");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    // `tempfile`, not a fixed name: `config.rs` states the rule, and the sibling fixture in
+    // `a_rehearsal_asks_the_guard_the_act_asks_tests.rs` is where breaking it cost a red CI leg.
+    let held = tempfile::tempdir().expect("a temp dir");
+    let dir = held.path().to_path_buf();
     let init = Command::new(shall())
         .arg("init")
         .env("SHALL_CONFIG_DIR", &dir)

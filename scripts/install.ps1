@@ -63,7 +63,14 @@ function Get-PublishedBinary($destination, $tag) {
 # the one step that is only ever a *preference*. `install.sh` degrades: its `git ls-remote`
 # failure is swallowed by the pipeline's exit status and the branch fallback takes over.
 # Exactly the twin-that-diverged shape CLAUDE.md is about — the rule is in both files now.
+#
+# **A branch is not a tag, and cargo is told which - the twin of the same rule in install.sh.**
+# SHALL_REF is documented above as "tag or branch" and was passed to `--tag` either way, so the
+# branch spelling could not work: `cargo install --git X --tag main` asks libgit2 for
+# `refs/remotes/origin/tags/main` and is told NotFound. Both nightly install jobs run the
+# documented line with SHALL_REF=main; this is the one the Windows job died on.
 $ref = $env:SHALL_REF
+$refFlag = '--tag'
 if (-not $ref) {
     if (Get-Command git -ErrorAction SilentlyContinue) {
         # And a `git` that IS present can still fail — no network, a private repo, a proxy. That
@@ -76,6 +83,19 @@ if (-not $ref) {
         }
     }
     if (-not $ref) { Say "no release tag published yet - installing from the default branch instead." }
+} elseif (Get-Command git -ErrorAction SilentlyContinue) {
+    # Same degradation rule as the default path above: a git that cannot answer leaves the flag
+    # at `--tag`, which is what the default and the other documented example both are.
+    try {
+        if (& git ls-remote --tags --refs $repo "refs/tags/$ref" 2>$null) {
+            $refFlag = '--tag'
+        } elseif (& git ls-remote --heads $repo "refs/heads/$ref" 2>$null) {
+            $refFlag = '--branch'
+            Say "$ref is a branch, not a release tag - following it."
+        }
+    } catch {
+        $refFlag = '--tag'
+    }
 }
 
 # The published binary first, into the same place the source path installs to, so a user who set
@@ -120,7 +140,7 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
 $binDir = $env:SHALL_BIN_DIR
 $stage = $null
 $cargoArgs = @('install', '--git', $repo, '--locked')
-if ($ref) { $cargoArgs += @('--tag', $ref) }
+if ($ref) { $cargoArgs += @($refFlag, $ref) }
 if ($binDir) {
     $trimmed = $binDir.TrimEnd('\', '/')
     if ((Split-Path -Leaf $trimmed) -eq 'bin') {

@@ -566,29 +566,58 @@ const TERMINATORS: &[Terminator] = &[
              out not to settle the question (nightly run 31458415385, 2026-08-11)",
         ),
     ),
+    // **The four init-script rows, and the one inference that decided all of them.**
+    // All four were listed false on the same reasoning — *it is a shell script taking the
+    // service positionally, so there is no place a terminator could go* — which is the reasoning
+    // `launchctl` above them already records being refuted by measurement. Asked, the four split
+    // two and two, so the inference was not merely wrong, it was uninformative: a positional
+    // operand says nothing about whether the script's own argument walk skips a leading `--`.
+    // Whichever way a row lands, it lands on the tool's own words now.
     row(
         "rc-service",
-        false,
-        Evidence::Unasked(
-            "a shell script reading $1 as the service, and it puts the name *between* two \
-             positionals (`rc-service <name> start`), which leaves no place a terminator could \
-             go.",
+        true,
+        Evidence::Measured(
+            "asked in the gentoo integration image, nightly run 31925296671: `rc-service -- \
+             <bogus> start` and `... stop` are byte-identical with and without the terminator, \
+             both exiting 1 with `* rc-service: service '<bogus>' does not exist` — the operand \
+             is read as the service name, not as a stray option.",
         ),
     ),
     row(
         "rc-update",
-        false,
-        Evidence::Unasked("an OpenRC shell script reading $1 as the verb and $2 as the service."),
+        true,
+        Evidence::Measured(
+            "the same run, both verbs Shall drives: `rc-update add -- <bogus> default` answers \
+             `* rc-update: service '<bogus>' does not exist` and `rc-update del -- <bogus> \
+             default` answers `* rc-update: service '<bogus>' is not in the runlevel 'default'`, \
+             each identical to the same call without the `--`.",
+        ),
     ),
+    // **And the SysVinit pair answered the other way, which is why they were asked separately.**
+    // The OpenRC rows above and these two carry the same one-line description — a shell script
+    // taking the service positionally — and that description predicts the same answer for all
+    // four. It is wrong for all four: it does not say whether the script's own argument walk
+    // skips a leading `--`, and OpenRC's does while SysVinit's does not. Both halves are now
+    // measured, so neither rests on the shape of the parser.
     row(
         "update-rc.d",
         false,
-        Evidence::Unasked("a SysVinit shell script reading $1 as the service."),
+        Evidence::Measured(
+            "asked on ubuntu 24.04: `update-rc.d -- <bogus> defaults` answers `update-rc.d: \
+             error: unknown option` and prints its usage, where the same call without the \
+             terminator gets as far as `unable to read /etc/init.d/<bogus>`. The `--` is rejected \
+             as an option, not consumed as one.",
+        ),
     ),
     row(
         "service",
         false,
-        Evidence::Unasked("a SysVinit shell script putting the name between two positionals."),
+        Evidence::Measured(
+            "the same host: `service -- <bogus> start` answers `--: unrecognized service` where \
+             the call without it answers `<bogus>: unrecognized service`. The terminator is read \
+             as the service NAME — the worst of the three outcomes, because it neither errors on \
+             the `--` nor protects the operand.",
+        ),
     ),
 ];
 
@@ -723,7 +752,13 @@ mod tests {
     /// were guesses about a Go program and a Rust one that link getopt(3) no more than slackpkg
     /// does. Two right answers and one wrong one from the same inference is the argument for
     /// counting it as unasked rather than as nearly-measured.
-    const UNASKED_CEILING: usize = 45;
+    /// Lowered 45 → 41 on 2026-08-16: the four init-script rows, `rc-service`, `rc-update`,
+    /// `service` and `update-rc.d`. One sentence had decided all four — *a shell script taking
+    /// the service positionally* — and asked, they split two and two: OpenRC's argument walk
+    /// skips a leading `--`, SysVinit's does not, and `service` reads the terminator as the
+    /// service name itself. An inference that gets half of a family right is not weak evidence,
+    /// it is none, which is the argument for this ceiling counting inferences at all.
+    const UNASKED_CEILING: usize = 41;
 
     /// A row whose hosts disagree takes the answer that sends no terminator.
     ///

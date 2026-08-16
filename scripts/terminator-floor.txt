@@ -55,9 +55,16 @@ container-void cargo gem pipx pnpm uv xbps-install xbps-remove yarn
 # this repository has: twenty-two rows asked of one image, against five to eight on a distro.
 container-tools apt asdf cabal cargo composer conda dart dotnet flatpak gem helm kubectl luarocks mise mix nimble opam pip pipx pixi spack uv
 container-gentoo cargo emerge
-# Measured locally 2026-08-15, running the probe step exactly as `ci.yml` does. One name, and
-# `guix` is not it: the probe step overrides the entrypoint, which is the only thing that starts
-# `guix-daemon`, so every `guix` verb fails to reach the socket before it parses an operand and
-# the row comes back honestly unchecked. `apt` is here because `metacall/guix` is Debian-based.
-# Raise this line to include `guix` when the daemon is started for the probe too.
-container-guix apt
+# Measured locally 2026-08-16, the probe step driven as `ci.yml` drives it, `-u 0`. `slackpkg` is
+# the row this image exists for — it was argv-tested only until 2026-08-14, with no image to run
+# it in — and `pip` is here where `pipx` and `uv` are on the other legs, because Slackware ships
+# neither.
+container-slackware cargo gem pip slackpkg
+# Raised 2026-08-16 once the probe could reach the daemon. It could not before: the probe step
+# overrides the entrypoint, which was the only thing that started `guix-daemon`, so every `guix`
+# verb failed to reach the socket before it parsed an operand and the row came back honestly
+# unchecked — a leg named for guix, measuring Debian's `apt` because `metacall/guix` is
+# Debian-based. `guix-daemon-up.sh` is now called by both the entrypoint and the probe.
+#
+# Read off a local run of the probe step as `ci.yml` spells it, with the daemon script mounted in.
+container-guix apt guix
