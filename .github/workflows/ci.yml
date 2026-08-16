@@ -311,7 +311,7 @@ jobs:
       if: matrix.target == 'x86_64-unknown-linux-gnu'
 
     - name: Upload binary artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: shall-${{ matrix.target }}
         path: |
@@ -804,7 +804,7 @@ jobs:
       run: cargo mutants --no-shuffle -j2 --file ${{ matrix.file }} -- --no-fail-fast
     - name: The survivors, kept whether the run passed or failed
       if: ${{ !cancelled() }}
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: mutants-out-${{ matrix.slug }}
         path: mutants.out/
