@@ -82,3 +82,14 @@ container-guix apt guix
 linux-ci cabal cargo composer conda dotnet gem helm pip pipx snap stack yarn
 macos-ci brew cargo dotnet gem pip pipx yarn
 windows-ci cabal cargo choco composer dotnet gem helm pip pipx sc stack yarn
+
+# The storage image, from push run 31946026041 (2026-08-16) — the first run that ever asked it.
+# It had been listed as a class owing a line on the assumption that every class prints one on its
+# next run; it never had a run, because no job pointed the probe at it. That is a step now.
+#
+# **Two rows, and `btrfs`, `lvm` and `zfs` are not among them.** Those three are the reason this
+# image exists and they have no row in `TERMINATORS` at all, so the probe has nothing to ask about
+# them and this line cannot grow to include them. Not a defect — the table's default is "does not
+# terminate", which is the safe direction, and each takes a path or a `VG/LV` positionally — but
+# if a row is ever added for one, this is the only host that can measure it.
+container-storage apt cargo

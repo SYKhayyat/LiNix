@@ -602,10 +602,14 @@ jobs:
     # and the nightly one, and storage is neither. A class that no job asks is not a gap waiting on
     # a run; it is a gap waiting on a step, and it would have waited indefinitely.
     #
-    # Worth having for more than the missing line: these three backends are the most destructive
-    # in the program — `btrfs:PATH` runs `subvolume create`, `lvm:VG/LV` runs `lvcreate` — and
-    # this is the only image that has their tools, so it is the only place their argv can be
-    # checked against the tools themselves rather than against the table's own belief.
+    # **It does NOT reach `btrfs`, `lvm` or `zfs`, which is why the step was worth adding but not
+    # for the reason it was added.** The first run measured `container-storage apt cargo` and
+    # nothing else. Those three binaries have no row in `TERMINATORS` at all, so the probe has
+    # nothing to ask about them — and this step is what turned that from an assumption into a
+    # measurement. The absence is not itself a defect: the table's default is "does not
+    # terminate", which is the safe answer, and these tools take a path or a `VG/LV` positionally.
+    # It is an unmeasured area with a name on it now, which is the whole business of the floor
+    # file.
     #
     # `--privileged` and `/lib/modules` as above: the probe drives the same binaries the lifecycle
     # does, and a `zfs` that cannot load its module answers differently from one that can.
