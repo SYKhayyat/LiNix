@@ -18,6 +18,41 @@ and x86_64 Windows, and installers that download them.
 five things the assessment did not know about. All of them are in this release, which is why the
 entry it was written for now carries them rather than sitting above an untagged number.*
 
+### The Linux binary now runs on NixOS and Alpine, and the installers check that it does
+
+`shall-x86_64-unknown-linux-gnu` is dynamically linked and needs a loader Alpine does not have
+and NixOS replaces with a stub that refuses. Alpine is in the integration matrix, so a supported
+platform's published binary could never have started — and both installers reported success
+regardless, because neither ran what it downloaded.
+
+- **`x86_64-unknown-linux-musl` is published, and x86_64 Linux installs take it.** Statically
+  linked, so there is no interpreter to miss: the same artifact starts on Ubuntu, Alpine and
+  NixOS. No source change was needed to build it.
+- **`install.sh` and `install.ps1` run `--version` on what they downloaded** and fall back to a
+  source build if it will not start. Slow and working beats fast and broken, and it covers hosts
+  nobody has thought of rather than only these two.
+- No `aarch64` musl build is published yet, so an arm64 Alpine or NixOS box still builds from
+  source.
+
+### `nixos:` writes the system configuration
+
+On NixOS, `nix profile install` sits outside the system generation, so Shall's declarations and
+NixOS's own would be two descriptions of one machine. `nixos:ripgrep` puts the package where
+NixOS reads it, and installing becomes a generation `nixos-rebuild --rollback` knows about.
+
+```sh
+nix:jq        # nix profile — the same on a Mac, on Ubuntu, on NixOS
+nixos:jq      # environment.systemPackages, via a generated module and a rebuild
+```
+
+Shall renders `shall-packages.nix` from your modules and owns it outright, adds one `imports`
+entry to `configuration.nix`, and runs `nixos-rebuild switch` once per sync. If the rebuild
+fails, both files are put back. `[nixos] config_dir` and `manage_imports` configure it, and an
+absent import is refused rather than warned about — without it nothing declared would take
+effect and the rebuild would report success over an unchanged machine.
+
+`shall export --format nix` emits the same module for `nix:` and `nixos:` packages together.
+
 ### `lock` and `unlock` take a list of nine kinds, not one of three axes
 
 `shall lock` froze three things and there was no way to ask for less than one of them. The
