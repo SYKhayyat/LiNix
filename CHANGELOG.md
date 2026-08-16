@@ -303,6 +303,28 @@ crash.*
 
 ### Supply chain
 
+- **Every dependency is at its current release, majors included.** Ten Dependabot proposals in
+  one pass: the sixteen-crate minor group (tokio 1.53, clap 4.6.6, regex 1.13, serde 1.0.229 and
+  the rest), four crate majors — `thiserror` 1→2, `mlua` 0.9→0.12, `zstd` 0.11→0.13, `cron`
+  0.12→0.17 — and five GitHub Actions: `checkout` v4→v7, `cache` v4→v6, `upload-artifact` v4→v7,
+  `download-artifact` v4→v8, `action-gh-release` v2→v3. No source change was needed for any of
+  the four majors, which is worth writing down rather than assuming: the surface Shall uses of
+  each is small, and `mlua` 0.9→0.12 across three minor versions of a vendored-C binding was the
+  one that could have cost a day.
+
+- **`zip` 0.6→8 and `bzip2` 0.4→0.6 came with them, and neither was proposed.** Taking `zstd`
+  0.13 alone would have left the tree compiling that C library **twice**, because `zip` 0.6 pins
+  0.11 — a duplicate `cargo deny` reports as a warning and nobody would have read. Bumping `zip`
+  collapsed it and introduced the same problem one crate over (`bzip2` 0.6 beside our 0.4), so
+  that moved too. One `zstd`, one `bzip2`, and a `zip` that is no longer three years old. No
+  source change for either: Shall's whole use of `zip` is `ZipArchive::new` and `extract`.
+
+- **`bzip2-1.0.6` joins the allowed licences, and it grants nothing new.** `bzip2` 0.6 uses
+  `libbz2-rs-sys` — pure-Rust libbzip2 — which *declares* bzip2's own BSD-style licence where the
+  old C wrapper declared only its own `MIT OR Apache-2.0` and vendored the same upstream code
+  under the same terms. Shall has shipped that code since it could open a `.tar.bz2`. The row
+  names an obligation that was already being met and was previously invisible.
+
 - **One advisory is silenced, and it says so.** `RUSTSEC-2026-0249` — `smartstring` is
   unmaintained, its repository archived on 2026-05-03. It is not a vulnerability and there is no
   upgrade: it is a non-optional dependency of `rhai`, which is one of the three hook dialects and

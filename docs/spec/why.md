@@ -6573,6 +6573,17 @@ the key's value, and `run_output` hands it back as `Ok("")`, which compares uneq
 value there is. The distinction between the two primitives is the difference between "the value
 differs" and "I could not ask", and it is one of the four tests.
 
+**The sibling this shares its shape with, and why it is not fixed here.** The bug is really
+about the *key*: a `setting:` key carries the schema and the scope and not the value, so an
+edited `@value=` is the same key, is found in the applied ledger, and is written without ever
+being counted. `repo:` cannot have it — its subject IS the spec, so an edited URL is a new key.
+`schedule:` can and does: `@cron=` and `@run=` are not in its key either. It costs less there —
+provisioning is idempotent at the OS scheduler, so the machine converges — but `plan` still says
+nothing to do about a schedule it is about to rewrite. Closing that means reading a cron line
+back out of cron, systemd timers and `schtasks`: three adapters and a design, where this was one
+function that already existed. Written down here rather than left for the next person to
+rediscover from the same symptom.
+
 **What this does not close, stated rather than left to be discovered.** A store whose read fails
 on an *unset* key — `reg query` on a value that is not there — is still unanswerable rather than
 absent, so it is placed. That is exactly what it did before. `gsettings`, which returns the

@@ -60,6 +60,13 @@ allow = [
     # `webpki-roots` is Mozilla's CA root store, and a set of certificates is data rather than
     # code — hence a data licence. Permissive, and the alternative is bundling no roots.
     "CDLA-Permissive-2.0",
+    # bzip2's own licence, carried by `libbz2-rs-sys` — the pure-Rust libbzip2 that `bzip2` 0.6
+    # uses in place of the vendored C. BSD-style and permissive; the only reason it appears now
+    # is that this crate DECLARES it. Shall has shipped bzip2's algorithm since it could open a
+    # `.tar.bz2`, under `bzip2` 0.4 -> `bzip2-sys` -> the same upstream code and the same terms,
+    # behind a wrapper crate that declared only its own `MIT OR Apache-2.0`. So this row adds no
+    # obligation that was not already being met; it names one that was previously invisible.
+    "bzip2-1.0.6",
 ]
 # Every name above is one a crate in this tree actually carries. `Unicode-DFS-2016` and `OpenSSL`
 # were here and matched nothing; an allowance nobody exercises is a hole with a comment on it, and

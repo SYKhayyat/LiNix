@@ -480,8 +480,17 @@ pub(crate) async fn in_effect(
         // - `repo:` is answerable — the backend can list repositories — but not for free, and
         //   not without deciding what a URL that differs from the declaration means. Adding
         //   that probe changes what `sync` does on a converged machine, which is a ruling, not
-        //   a refactor.
+        //   a refactor. **It is not `J2`'s bug, and the difference is in the key**: a `repo:`
+        //   subject IS its spec, so editing the URL produces a *new* key that nothing has
+        //   applied, and the change is reported. A `setting:` key carries the schema and the
+        //   scope and not the value, which is why a changed `@value=` was the same key, found
+        //   in the ledger, and written without ever being counted.
         // - `schedule:` provisioning is idempotent at the OS scheduler and cheap to repeat.
+        //   **This one shares `J2`'s shape and only half of `J2`'s cost.** `@cron=` and `@run=`
+        //   are not in the key either, so an edited schedule is the same key, is re-provisioned
+        //   (correctly — the machine converges), and is reported as nothing to do. Closing the
+        //   reporting half means reading a cron line back out of three different schedulers,
+        //   which is three adapters and a design, not the one function `holds` turned out to be.
         // - `firewall:` is reconciled as a whole perimeter by `Firewall::apply`, which does its
         //   own diff against what is in force; a per-line probe here would be a second opinion.
         // - `exec:`, `generate:` and `dotfiles:` never reach here — `extra_key` returns `None`
