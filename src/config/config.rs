@@ -331,6 +331,11 @@ impl Default for LockSettings {
 }
 
 /// Feature 5: Configuration for background scheduled tasks.
+///
+/// Everything past `command` is `Option`, and that is load-bearing rather than tidy: an option
+/// nobody wrote must not refuse and must not change what the schedule does. A provisioner that
+/// cannot express `persistent` refuses it *as written*, so a machine whose scheduler has no such
+/// setting keeps taking every schedule that never mentions it.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ScheduleConfig {
     /// Unique identifier for the task.
@@ -341,8 +346,16 @@ pub struct ScheduleConfig {
     pub command: String,
     /// Notification channel: "desktop", "email", or "none".
     pub notification: Option<String>,
-    /// Last time the task was successfully verified in the system scheduler.
-    pub last_synced: Option<chrono::DateTime<chrono::Utc>>,
+    /// Whether the task fires. Undeclared is armed, which is what every schedule was before
+    /// the option existed.
+    pub enabled: Option<bool>,
+    /// Whether a firing the machine was switched off for is run when it comes back.
+    pub persistent: Option<bool>,
+    /// Seconds of randomised delay after the scheduled moment, so a fleet does not arrive at
+    /// the same mirror on the same second.
+    pub jitter: Option<u32>,
+    /// Whether the task runs with the highest privileges the account holds.
+    pub elevated: Option<bool>,
 }
 
 /// Refusals and behaviour: `<config_root>/preferences.toml` (II.1).

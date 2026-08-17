@@ -6701,3 +6701,181 @@ After the fixes, the whole lifecycle passes there: declared, generated, imported
 the machine still builds. **No automated gate reaches it** — the debt, its receipt and its price
 are in `proving.rs`, and it is the one entry ever to raise `NOWHERE_CEILING`.
 
+**V.191 — Why `service:` and `firewall:` are NixOS attributes rather than commands there.**
+
+*(Rule beside V.190. Ruling `J5`'s fourth answer, owner 2026-08-16: how far does it go —
+*everything*. Built 2026-08-16, in the round after the prefix landed.)*
+
+The renderer took `services` and `ports` from its first commit and nothing ever passed them
+anything. Only packages reached the generated file, because packages arrive through
+`Installable` and a `service:` line does not — it is applied by `Dependents` through the
+`service` backend, and a `firewall:` line by `Firewall::apply` through an adapter. So the ruling
+was half built for a round, and the half that shipped was the half whose interface already fit.
+
+**What the missing half cost on a real NixOS.** `systemctl enable nginx` writes into
+`/etc/systemd/system`, which `nixos-rebuild switch` regenerates from the configuration — so an
+enablement Shall issued imperatively survived until the next generation, *including the
+generation Shall itself built one line later when a `nixos:` package changed*. And `ufw` is not
+on a NixOS box at all: `Firewall::apply` found no adapter and returned the refusal it is
+supposed to return, which failed the entire sync. A machine declaring `firewall:22/tcp` and
+`nixos:ripgrep` could not sync at all.
+
+**Why one pass rather than two.** Services and the perimeter are written by one function into one
+file and applied by one `nixos-rebuild`. A rebuild is minutes; doing it once for services and
+again for ports would double the slowest thing Shall does on that OS for no gain. That is
+`II.19`'s reason one layer up, and it is why the projection runs in the firewall phase and the
+dependent phase passes the `service:` lines over.
+
+**Why the file is read back rather than remembered.** Two writers own one file — the package path
+knows a batch of specs and no services, the projection knows the model and no packages. Each
+reads the whole module, changes its own half and writes it whole. Anything else is the rollback
+defect of V.190 one layer up: *restoring what you were thinking about instead of everything you
+changed*. A package install that could not see the services would have silently disabled every
+one of them.
+
+**Why state is declared and a transition is performed.** `services.<name>.enable` is a state.
+`@status=restarted` is not: no attribute in a NixOS module says *restart this now*, and a rebuild
+restarts only what it changed. Refusing the line would break a config file shared with a systemd
+machine for no benefit, and declaring `enable = true` and calling it a restart would be a
+pretence. So the restart goes to the init, and the enablement — which the configuration now owns
+— is trimmed out of what the init is asked for. Two owners of one enablement is the whole defect
+above.
+
+**Why a line this OS cannot express is refused.** `@enabled=false @status=running` is
+expressible on systemd (disabled at boot, running now) and is one attribute with two answers
+here. `firewall:default/outgoing` has no `networking.firewall` option — that module filters
+incoming traffic, and synthesising the rule out of raw nftables would be Shall writing a firewall
+rather than declaring one. P7's rule: a refusal that names the line beats a perimeter nobody can
+reason about.
+
+**Why the whole safety story is repeated on this path and not shared by inheritance.** The
+adapter path's three protections — the SSH lockout check, `enforce_ports`, `enforce_additions` —
+live in `Firewall::apply`, and the NixOS path does not go through it. A port dropped from
+`allowedTCPPorts` closes on rebuild exactly as `ufw delete` closes it, on a machine that takes
+minutes to rebuild back, so all three are called here against the same functions. The lockout
+predicate and `session_port` moved into `model::firewall` for that reason: a check only one of
+two perimeters can ask is a check on one host class.
+
+**Why the rebuild is skipped when nothing changed.** The package path only reaches
+`write_and_switch` when the engine has work. This projection runs on every sync, converged or
+not — so without the skip a NixOS machine would rebuild itself once per run for ever. The import
+has to be present for the skip to fire, because a file identical to what Shall would write that
+nothing imports has never reached the system, which is V.190's second defect wearing a different
+hat.
+
+**What is proven.** The projection, the routing split and every refusal are hermetic Rust tests.
+Every rendered shape — services true *and* false, both port lists, the firewall enabled and
+disabled — is written to `target/nix-fixtures/` and parsed by `nix-instantiate --parse` in
+`scripts/nix-validate.sh`, self-tested against a broken module.
+
+**Parsing was not enough once the module carried options, and that gap is now closed
+automatically.** `--parse` answers *is this Nix*; it has nothing to say about whether
+`services.nginx.enable` is an option NixOS has or whether `allowedTCPPorts` takes numbers — which
+is the entire risk this rule added. `nix-validate.sh --evaluate` imports each generated module
+into a real NixOS module system (`<nixpkgs/nixos>` in the same `nixos/nix` image) and forces the
+attributes Shall writes, so an option NixOS does not have is a red gate rather than a red machine.
+Measured at 25s for the whole gate — six modules parsed, four evaluated, two container starts —
+which is why it is a per-push gate and not a nightly. Its self-test
+is the failure it exists for: a module that is *perfectly valid Nix* and names a service nixpkgs
+has never heard of — asserted to parse on the way in, so the self-test cannot pass by proving the
+parse gate over again.
+
+**And it has now been handed to a real `nixos-rebuild`** (2026-08-16, NixOS 26.05 Yarara under
+WSL). A configuration importing a module carrying `hello`, `services.cron.enable`,
+`networking.firewall.enable` and both port lists **evaluated and built a complete system closure**
+(`nixos-system-nixos-26.05pre-git`); the negative control, one option nixpkgs does not have,
+failed with `The option ... does not exist`. `switch` on that distro fails at **activation** with
+a dbus error — and the control settles whose fault that is, which is the only reason the result is
+worth anything: `nixos-rebuild switch` with the machine's own configuration and no Shall in it
+fails identically, exit 4. What the failed switch *did* prove is the rollback of V.190: both
+`/etc/nixos` files were put back and the error named them, on a real failure nothing hermetic can
+stage. **What remains unproven is activation, and only activation** — the price is still a NixOS
+CI leg, and it is now a much smaller row than the one V.190 first wrote down.
+
+**V.192 — Why a schedule is read back, and why the fix that closed `J2` could not be copied.**
+
+*(Rule in II.29, which is where every arm of the kind dispatch has to answer for itself; the rule
+it echoes, V.188, lives in II.19's convergence half. Ruling `J6`, owner 2026-08-16: "do the
+durable fix. feature rich and configurable, for power users." Built in the same commit.)*
+
+**`J2`'s defect had a sibling and `J2`'s own entry said so.** A `setting:` key carries the schema
+and the scope and not the value, so an edited `@value=` was the same key, was found in the applied
+ledger, and was written without ever being counted. `schedule:` has exactly that shape: `@cron=`
+and `@run=` are not in its key either, so editing when a job runs — or what it runs — was
+reported as *nothing to do* by the very sync that rewrote it. `plan` filed it under **Shall
+cannot read back** rather than under work, which is the honest label for what the code was doing
+and the wrong answer for the user.
+
+**The cheap fix is wrong here, and it is worth writing down why.** `J2` was closed by putting the
+discriminating option into the ledger key — `setting:x@scope=system` — and the obvious move is
+the same thing for `@cron=`. It does not transfer. A `setting:`'s scope makes two genuinely
+*different* subjects, so tearing down the old key resets a different value. **A schedule's name
+IS its identity at the OS scheduler**: `schedule:nightly@cron=old` and `schedule:nightly@cron=new`
+are one cron entry, one timer, one task. `reconcile` runs after the apply phase and deprovisions
+by name whatever the ledger holds and the model no longer declares — so widening the key would
+have it delete, by name, the schedule the apply phase had just written. Editing a schedule would
+silently remove it. Making that safe means teaching `reconcile` that a drift key whose name half
+is still declared is a change and not a teardown, which is a rule about **every** kind and about
+none of them in particular.
+
+**So the machine is asked instead.** Three schedulers, three readings, each in the scheduler's own
+terms rather than in a shared vocabulary nobody speaks:
+
+- **systemd and launchd keep files**, so the comparison is the whole unit Shall would write
+  against the whole unit on disk. That is exact, and it is self-maintaining: every option those
+  schedulers can express is covered by construction, and the next one added is covered without
+  anybody remembering to extend a comparison. It is also why the binary path is deliberately
+  *inside* the compared text — a schedule pointing at a `shall` that has moved is a schedule that
+  will not run, and `sync` from the new location repairing it is the wanted behaviour, not noise.
+- **Task Scheduler keeps no file**, so both sides are canonicalised: the declaration from the
+  `/SC` arguments Shall would pass, the machine from the trigger XML it hands back. The trigger
+  shapes were captured from real tasks on a Windows 11 box on 2026-08-16 rather than imagined,
+  which is the only reason the comparison can be trusted at all. Weekdays are sorted Sunday-first
+  on both sides, because `<DaysOfWeek>` is a set and a cron reading `5,1` would otherwise report
+  drift for ever against the identical task.
+
+**Why an unrecognised shape is `unverifiable` and never drift.** This is V.188's rule arriving on
+a third store. A trigger the reader does not understand — every third day, a second trigger
+somebody added by hand, an event subscription — reported as a mismatch would rewrite the task on
+every sync for ever and keep `check` permanently red on something nobody can see. Reported as
+*Shall cannot read this back*, it is a sentence a user can act on. The same goes for a query that
+failed: on Windows the failure is separated from the answer by asking `schtasks` a question it can
+always answer, because `ERROR: The system cannot find the file specified.` is translated on a
+non-English Windows and matching that string would make the reading depend on the display
+language.
+
+**Why the four options, and why refusal beats a silent default.** The register's own governance
+(2026-07-26) is that a feature is built fully. `enabled`, `persistent`, `jitter` and `elevated`
+are the four settings the three schedulers between them actually have, and no scheduler has all
+four: a systemd *user* timer cannot raise its own privilege, launchd has no randomised delay and
+no switch for catch-up, and `schtasks` can set neither `RandomDelay` nor `StartWhenAvailable`
+because both live in XML it has no flag for. Accepting one of those and dropping it is the same
+failure as the cron that was silently widened into `DAILY`: the declaration says one thing, the
+machine does another, and both report success. So each provisioner refuses by name, before it
+writes anything, and a table test asserts the whole matrix — because a matrix checked one cell at
+a time is a matrix with a hole in it, and the first run of that table found one (launchd took
+`persistent` on an `@reboot` job, which has no calendar to miss).
+
+**Why an undeclared option is never refused.** `persistent` is refused outright on Windows, and
+its default everywhere is *true*. If the default were a value rather than an absence, every
+schedule on every Windows machine would be refused by an option nobody had written. Each of the
+four arrives as an `Option` for that reason, and "not written" is a distinct answer from "written
+as the default" at every layer that touches it.
+
+**A defect found on the way, which is the shape the read-back was built to expose.** Rendering
+the systemd unit in one place instead of two showed that the `@reboot` shape was produced by
+*overwriting* the file the ordinary shape had just written — and the replacement carried no
+`StandardOutput=` or `StandardError=` at all. The one kind of job nobody watches run was writing
+its output nowhere. Its sibling: `is_task_active` asked only about the timer, so the end-state
+assertion in `remove_task` — the one that exists to stop Shall reporting a schedule as removed
+while it keeps firing — was vacuous for every boot job, which is precisely the case where a
+surviving unit runs the command again on the next boot. Both are fixed here; launchd and Windows
+were checked for the same pair and have neither.
+
+**What is proven, and what is not.** The renderers, the refusal matrix, the canonical forms, the
+XML reader and its unreadable cases are hermetic Rust tests over real captured Task Scheduler
+XML. **No read-back has been driven against a live systemd, launchd or Task Scheduler**, because
+registering a task on this Windows needs an elevated shell and the container harness does not
+provision schedules. That is the same unproven row the NixOS rebuild sits in, and it is named
+here rather than implied.
+

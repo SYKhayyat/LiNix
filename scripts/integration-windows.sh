@@ -346,6 +346,39 @@ hard() { FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES
 # scoring that as a failure — or as "ecosystem variance" — says the opposite of what happened.
 refused() { PASS=$((PASS + 1)); echo "  PASS  $1 (Shall refused, on purpose)"; }
 
+# ---- an absence that means something — the twin of the container harness's pair -------
+#
+# **An absence on its own proves nothing.** `nok ... query <key>` after a teardown passes
+# against a product that reset the value AND against one that never wrote it — measured
+# under `scripts/harness-mutation-test.sh`'s fail-everything stub, where the whole
+# absence-after family reported PASS while every `lx` call beside it went red.
+#
+# `witness` is called where the harness already asserts PRESENCE and records the sighting;
+# `gone_ok` refuses to score an absence for a subject no sighting was recorded for. On a real
+# run the presence holds, so this cannot turn a working leg red: if the presence did not
+# hold, the assertion in front of it already failed.
+_seen_tag() { printf '%s' "$1" | sed 's/[^A-Za-z0-9]/_/g'; }
+witness() { # witness <tag> cmd... — record a sighting when cmd succeeds
+    _w_tag="$1"; shift
+    if "$@" >/dev/null 2>&1; then
+        mkdir -p "$LEDGER/seen"
+        : > "$LEDGER/seen/$(_seen_tag "$_w_tag")"
+    fi
+}
+gone_ok() { # gone_ok "desc" <tag> cmd... — cmd must FAIL now and have SUCCEEDED earlier
+    _g_desc="$1"; _g_tag="$2"; shift 2
+    if [ ! -f "$LEDGER/seen/$(_seen_tag "$_g_tag")" ]; then
+        hard "$_g_desc (nothing in this run was ever seen as '$_g_tag', so its absence proves nothing)"
+        return 1
+    fi
+    if "$@" >/tmp/itw.out 2>&1; then
+        FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES
+    - $_g_desc (it is still there)"
+        echo "  FAIL  $_g_desc (it is still there)"; return 1
+    fi
+    PASS=$((PASS + 1)); echo "  PASS  $_g_desc (was there, now gone)"; return 0
+}
+
 # Why an install failed — a question, not an assumption (E5).
 #
 # Both harnesses used to soften ANY install failure into a claim about the network, and skip
@@ -634,6 +667,8 @@ if [ "$CLASS" = installed ] || [ "$CLASS" = transient ]; then
     ok "unmanage forgets a package without uninstalling it" lx unmanage "$BACKEND:$PKG"
     ok "$PKG is still installed after unmanage" binary_present "$BACKEND" "$PKG" /tmp/itw-life0.out
     ok "declaring it again takes it back" lx -y install "$BACKEND:$PKG"
+    # The sighting the absence below leans on, taken while the package is certainly here.
+    witness pkg-binary binary_present "$BACKEND" "$PKG" /tmp/itw-life0.out
     ok "uninstall $BACKEND:$PKG" lx -y uninstall "$BACKEND:$PKG"
     # S36 again, on the package the run did not install. When the host already owned
     # $PKG, absence is not this harness's to demand: the manager may legitimately keep a
@@ -647,7 +682,8 @@ if [ "$CLASS" = installed ] || [ "$CLASS" = transient ]; then
             PASS=$((PASS + 1)); echo "  PASS  $PKG binary gone after uninstall"
         fi
     else
-        nok "$PKG binary gone after uninstall" binary_present "$BACKEND" "$PKG" /tmp/itw-life0.out
+        gone_ok "$PKG binary gone after uninstall" pkg-binary \
+            binary_present "$BACKEND" "$PKG" /tmp/itw-life0.out
     fi
     if [ -n "$PKG_WAS_HERE" ]; then
         if lx -y install "$BACKEND:$PKG" >/dev/null 2>&1; then
@@ -1322,10 +1358,11 @@ if command -v reg >/dev/null 2>&1; then
     ok "sync applies a CHANGED setting" lx -y sync
     grep_ok "the new value replaced the old one" "prefer-light" \
         winreg query "HKCU\\$SET_SUBKEY" /v "$SET_NAME"
+    witness registry-value winreg query "HKCU\\$SET_SUBKEY" /v "$SET_NAME"
     grep -v -F "setting:$SET_SUBKEY/$SET_NAME " "$SET_MOD" > "$SET_MOD.tmp" 2>/dev/null
     mv "$SET_MOD.tmp" "$SET_MOD"
     ok "sync resets a setting whose declaration is gone" lx -y sync
-    nok "the value is really gone from the registry" \
+    gone_ok "the value is really gone from the registry" registry-value \
         winreg query "HKCU\\$SET_SUBKEY" /v "$SET_NAME"
     winreg delete "HKCU\\$SET_SUBKEY" /f >/dev/null 2>&1
     # Credited only when the whole block passed: a ledger row written before the assertions

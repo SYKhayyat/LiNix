@@ -43,8 +43,20 @@ pub const UNPROVEN: &[(&str, &str)] = &[
          `nixos/nix` cannot stand in — probed the same day, it is the Nix package manager on a \
          minimal base with no /etc/NIXOS, no /run/current-system, no `nixos-rebuild` and no \
          systemd. Closing this wants a NixOS image that can run `nixos-rebuild`, or NixOS-WSL on \
-         a Windows runner. Until then `scripts/nix-validate.sh` is what runs automatically — a \
-         real Nix parser over every generated AND edited shape — and a parser is not a lifecycle.",
+         a Windows runner. NARROWER AGAIN, 2026-08-16: the services-and-perimeter module has now \
+         been handed to a real `nixos-rebuild` on that same NixOS 26.05. `nixos-rebuild build` \
+         over a configuration importing a module carrying `hello`, `services.cron.enable`, \
+         `networking.firewall.enable` and both port lists EVALUATED AND BUILT a complete system \
+         closure (`nixos-system-nixos-26.05pre-git`), and the negative control — one option \
+         nixpkgs does not have — failed with `The option ... does not exist`, so the check is \
+         not vacuous. `switch` on that distro fails at ACTIVATION with a dbus error, and the \
+         control settles whose fault that is: `nixos-rebuild switch` with the machine's own \
+         configuration and no Shall in it fails identically (exit 4). What that same run DID \
+         prove about Shall is the rollback — the failed switch put both /etc/nixos files back \
+         and named them, which no hermetic test can stage. WHAT IS LEFT: activation, and only \
+         activation. Automatically, `scripts/nix-validate.sh --evaluate` now merges every \
+         generated module into a real NixOS module system (`<nixpkgs/nixos>`), which is where a \
+         wrong option name arrives — parsing never saw one. An evaluation is not an activation.",
     ),
     (
         "emerge",

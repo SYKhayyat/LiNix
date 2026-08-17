@@ -271,6 +271,50 @@ hard() { FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES
 # scoring that as a failure — or as "ecosystem variance" — says the opposite of what happened.
 refused() { PASS=$((PASS + 1)); echo "  PASS  $1 (Shall refused, on purpose)"; }
 
+# ---- an absence that means something -------------------------------------------------------
+#
+# **`test ! -e "$path"` after a teardown passes against a product that tore the file down AND
+# against one that never placed it.** Measured under the fail-everything stub of
+# `scripts/harness-mutation-test.sh`: the whole absence-after family reported PASS while every
+# `lx` call in the same section went red. The gate's own header calls these "the ones worth
+# money: a service is stopped when it was never started, so each needs a positive control before
+# it can distinguish."
+#
+# `witness` is that control. It is called where the harness already asserts PRESENCE — the line
+# that says the link is a symlink, that the shim is on disk, that the file was placed — and it
+# records the sighting under a tag. `gone_ok` then refuses to score an absence for a tag no
+# sighting was ever recorded for, so a run in which the product did nothing fails by name
+# instead of passing over an empty directory.
+#
+# **Not merged into the presence check itself**, deliberately: the presence assertion belongs to
+# the section that made the claim, and folding a side effect into `ok` would put a witness behind
+# every `test -e` in the file including the preconditions, which are the checks that must NOT
+# have one.
+# One pair, taking a COMMAND rather than a path, because the subjects are not all paths: a
+# symlink, a file in a tree, a line in the lock file and a binary that may be off `PATH` are
+# four different questions and only the first two are `test -e`.
+_seen_tag() { printf '%s' "$1" | sed 's/[^A-Za-z0-9]/_/g'; }
+witness() { # witness <tag> cmd... — record a sighting when cmd succeeds
+    _w_tag="$1"; shift
+    if "$@" >/dev/null 2>&1; then
+        mkdir -p "$LEDGER/seen"
+        : > "$LEDGER/seen/$(_seen_tag "$_w_tag")"
+    fi
+}
+gone_ok() { # gone_ok "desc" <tag> cmd... — cmd must FAIL now and have SUCCEEDED earlier
+    _g_desc="$1"; _g_tag="$2"; shift 2
+    if [ ! -f "$LEDGER/seen/$(_seen_tag "$_g_tag")" ]; then
+        hard "$_g_desc (nothing in this run was ever seen as '$_g_tag', so its absence proves nothing)"
+        return 1
+    fi
+    if "$@" >/tmp/it.out 2>&1; then
+        FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES
+    - $_g_desc (it is still there)"
+        echo "  FAIL  $_g_desc (it is still there)"; return 1
+    fi
+    PASS=$((PASS + 1)); echo "  PASS  $_g_desc (was there, now gone)"; return 0
+}
+
 # Why an install failed — a question, not an assumption (E5).
 #
 # Both harnesses used to soften ANY install failure into a claim about the network, and skip
@@ -510,7 +554,13 @@ answers "plan (no changes yet)" lx plan --dry-run
 answers "check parses the model" lx check
 ok "check absent lists nothing" lx check absent
 ok "protected lists guarded packages" lx protected
-grep_ok "protected includes a system essential" "shall\|libc\|systemd\|kernel\|bash" lx protected
+# **`shall` is not in this alternation, and it used to be.** The pattern matched the
+# program's own name, so ANY output mentioning Shall satisfied it — including the mutation
+# stub's `shall: this stub fails everything`, which is exactly how this check passed against
+# a binary that answers nothing. A protected-set assertion has to name something the
+# operating system would miss.
+grep_ok "protected includes a system essential" "libc\|systemd\|kernel\|bash\|coreutils" \
+    lx protected
 
 # --- 3. Dry-run is preview-only -------------------------------------------
 echo "[3] Dry-run safety"
@@ -558,7 +608,13 @@ ok "second sync is a no-op (exit 0)" lx -y sync
 
 # --- 7. Negative path ------------------------------------------------------
 echo "[7] Negative path"
-nok "installing a nonexistent package fails" lx -y install "shall-no-such-pkg-zzz"
+# **`nok_saying`, and the pattern is the subject.** A bare `nok` scores any non-zero exit,
+# so the fail-everything stub of `scripts/harness-mutation-test.sh` passed this check by
+# printing `shall: this stub fails everything` and exiting 1. The stub never echoes its
+# arguments and every real refusal names what it refused, so asserting the subject appears
+# is both the tighter check and the one a user needs (V.42: a refusal that teaches).
+nok_saying "installing a nonexistent package fails" "shall-no-such-pkg-zzz" \
+    lx -y install "shall-no-such-pkg-zzz"
 # The failure must not be left in the manifest. Every later command parses the
 # model, so one unresolvable line wedges the config until someone hand-edits it.
 ok "a failed install leaves the model parseable" lx check drift
@@ -619,13 +675,22 @@ if [ "$BACKEND" = "apt" ] || [ "$BACKEND" = "dnf" ] || [ "$BACKEND" = "pacman" ]
 $BACKEND manual set=$MANUAL  $BACKEND installed=$INSTALLED_TOTAL"
     ok "adopt wrote an adoption manifest" test -s "$ADOPTED_FILE"
     ok "adopt recorded at least one package" test "$ADOPTED" -ge 1
-    if [ "$INSTALLED_TOTAL" -gt 0 ]; then
+    # **Both bounds below are satisfied by zero**, which is what an adopt that did nothing
+    # leaves behind — measured as two of the fail-stub survivors. A bound over an empty
+    # set is not a weak assertion, it is no assertion, so it reports as unmeasured rather
+    # than as a pass. `soft`, not a failure: a run whose adopt legitimately took no row of
+    # THIS manager has not found a defect, it has found nothing to bound.
+    if [ "$ADOPTED_NATIVE" -le 0 ]; then
+        soft "adopt took no $BACKEND: row — both adoption bounds would be satisfied by zero, so neither ran"
+    elif [ "$INSTALLED_TOTAL" -gt 0 ]; then
         ok "adopt took the manual set, not the whole dependency closure" \
             test "$ADOPTED_NATIVE" -lt "$INSTALLED_TOTAL"
     else
         soft "could not count installed packages on $BACKEND — closure proof skipped"
     fi
-    if [ "$MANUAL" -gt 0 ]; then
+    if [ "$ADOPTED_NATIVE" -le 0 ]; then
+        : # reported unmeasured above; a bound over an empty set asserts nothing
+    elif [ "$MANUAL" -gt 0 ]; then
         # Never MORE than the manual set: adopt may drop a name (already declared elsewhere,
         # unwritable), but a count above it means something not user-chosen was swept in.
         # Protected and OS-essential names are NOT dropped — they are adopted like any other
@@ -710,8 +775,13 @@ echo "[10] Remove"
 if [ -n "$SMOKE" ]; then
     skip_smoke "uninstall $PKG (nothing was installed to remove)"
 else
+    # Witnessed BEFORE the uninstall, not after: "the binary is gone" over a package that was
+    # never installed is the same PASS as over one Shall removed, and under the fail-everything
+    # stub that is exactly what it was.
+    witness pkg-binary binary_present "$BACKEND" "$PKG" /tmp/it-life0.out
     ok "uninstall $PKG" lx -y uninstall "$PKG"
-    nok "$PKG binary gone after uninstall" binary_present "$BACKEND" "$PKG" /tmp/it-life0.out
+    gone_ok "$PKG binary gone after uninstall" pkg-binary \
+        binary_present "$BACKEND" "$PKG" /tmp/it-life0.out
 fi
 
 # --- 11. Git-backed history (Phase 4 / v7) --------------------------------
@@ -784,10 +854,16 @@ echo "        commits before=$BEFORE_COMMITS after=$AFTER_COMMITS"
 # Guarded by the same question, because `0 = 0` is what this reads on an image with no git —
 # a pass that proves K14 exactly as well as running nothing would. The comment above has said
 # so since the check was written, and only the first half of the pair acted on it.
-if on_path git; then
-    ok "rebuild wrote no git commit (K14)" test "$BEFORE_COMMITS" = "$AFTER_COMMITS"
-else
+# **And the same question about the count, which is the half that comment missed.** It
+# guarded the image with no git and not the run with no commits: on a `shall` that never
+# committed anything, before and after are both 0, and `0 = 0` proves K14 exactly as well
+# as running nothing does. Measured — this was one of the fail-stub survivors.
+if ! on_path git; then
     soft "K14's no-commit proof — no git here, so before and after are both 0 and the comparison asserts nothing"
+elif [ "$BEFORE_COMMITS" -le 0 ]; then
+    soft "K14's no-commit proof — nothing in this run had committed anything, so 0 = 0 compares two absences"
+else
+    ok "rebuild wrote no git commit (K14)" test "$BEFORE_COMMITS" = "$AFTER_COMMITS"
 fi
 fi
 
@@ -828,12 +904,14 @@ nok_saying "a pattern cannot span one" "must match in exactly one backend"   lx 
 FOREIGN=dnf; [ "$BACKEND" = "dnf" ] && FOREIGN=apt
 command -v "$FOREIGN" >/dev/null 2>&1 \
     && soft "$FOREIGN exists on this image — cannot test a pin to a missing manager" \
-    || nok "a pin to a manager this host lacks is not silent" lx -y install "$FOREIGN:$PKG"
+    || nok_saying "a pin to a manager this host lacks is not silent" "$FOREIGN" \
+        lx -y install "$FOREIGN:$PKG"
 
 if [ -z "$SMOKE" ]; then
 grep_ok "unlock backends --list names the frozen package" "$PKG" lx unlock backends --list
+witness lockfile-entry grep -q "$PKG" "$LOCKFILE"
 ok "unlock backends forgets one name" lx unlock backends "$PKG"
-nok "the entry is really gone" grep -q "$PKG" "$LOCKFILE"
+gone_ok "the entry is really gone" lockfile-entry grep -q "$PKG" "$LOCKFILE"
 fi
 ok "unlocking a name that was never frozen is not an error" lx unlock backends shall-never-frozen-zzz
 
@@ -1662,6 +1740,7 @@ else
     ok "the link target does not exist before sync" test ! -e "$LINK_DST"
     ok "sync applies a declared link" lx -y sync
     ok "the declared link is a symlink on disk" test -L "$LINK_DST"
+    witness link-dst test -L "$LINK_DST"
     ok "and it resolves to the declared source" grep -q "link-canary-payload" "$LINK_DST"
 
     # Teardown: the declaration goes and the file must go with it. This is the half that makes
@@ -1670,7 +1749,7 @@ else
     grep -v -F "link:./$LINK_SRC_NAME" "$_limp" > "$_limp.tmp" 2>/dev/null
     mv "$_limp.tmp" "$_limp"
     ok "sync tears down a link whose declaration is gone" lx -y sync
-    ok "the link is gone from disk" test ! -e "$LINK_DST"
+    gone_ok "the link is gone from disk" link-dst test -e "$LINK_DST"
     # Credited by the section that drove it, and only when nothing in it failed.
     [ "$FAILC" = "$_dep_f0" ] && echo link >> "$LEDGER/be-life"
 fi
@@ -1709,6 +1788,7 @@ else
     ok "no shim exists before the sync that deploys it" test ! -e "$_bindir/$PKG"
     ok "sync deploys a declared shim" lx -y sync
     ok "the shim is on disk" test -f "$_bindir/$PKG"
+    witness shim test -f "$_bindir/$PKG"
     _shallbin="$(command -v "$SHALL" 2>/dev/null)"
     if [ -n "$_shallbin" ]; then
         ok "the shim is byte-identical to the shall binary" cmp -s "$_shallbin" "$_bindir/$PKG"
@@ -1725,12 +1805,24 @@ else
     # into this one pattern rather than loosened for every check in the file.
     _pkg_rest="$(printf '%s' "$PKG" | cut -c2-)"
     _pkg_either="$(printf '%s' "$PKG" | cut -c1)$(printf '%s' "$PKG" | cut -c1 | tr 'a-z' 'A-Z')"
-    grep_ok "running the shim reaches the real tool" "[$_pkg_either]$_pkg_rest" \
-        "$_bindir/$PKG" --version
+    # **Guarded on the shim existing, and that guard is the whole check.** The pattern is
+    # the package name, the command is a path ENDING in the package name, and a shell
+    # asked to run a file that is not there prints that path in its own error — so
+    # `bash: /root/.local/bin/jq: No such file or directory` matched `[jJ]q` and this
+    # reported PASS against a binary that had deployed nothing. Measured as one of the
+    # fail-stub survivors. (An earlier reading of this blamed `grep_ok`'s `2>&1` and
+    # tested it with an EMPTY path, where the error names `/` and no longer contains the
+    # pattern; the hypothesis was right and the experiment was of a different command.)
+    if [ -x "$_bindir/$PKG" ]; then
+        grep_ok "running the shim reaches the real tool" "[$_pkg_either]$_pkg_rest" \
+            "$_bindir/$PKG" --version
+    else
+        hard "running the shim reaches the real tool — no shim was deployed, so the invocation would have matched the pattern in its own 'No such file' error"
+    fi
     grep -v -F "shim:$PKG " "$_c14" > "$_c14.tmp" 2>/dev/null
     mv "$_c14.tmp" "$_c14"
     ok "sync removes a shim whose declaration is gone" lx -y sync
-    ok "the shim is gone from disk" test ! -e "$_bindir/$PKG"
+    gone_ok "the shim is gone from disk" shim test -e "$_bindir/$PKG"
     ok "the wrapped package uninstalls" lx_slow -y uninstall "$BACKEND:$PKG"
 
     # ---- dotfiles: ----------------------------------------------------------
@@ -1746,13 +1838,15 @@ else
     ok "the tree's destinations are empty before sync" test ! -e "$_dtarget/alpha.conf"
     ok "sync places a declared dotfiles tree" lx -y sync
     ok "a top-level file is placed" test -e "$_dtarget/alpha.conf"
+    witness dot-top test -e "$_dtarget/alpha.conf"
     ok "a NESTED file keeps its path under the target" test -e "$_dtarget/nested/beta.conf"
+    witness dot-nested test -e "$_dtarget/nested/beta.conf"
     ok "the placed file resolves to the tree's copy" grep -q alpha "$_dtarget/alpha.conf"
     grep -v -F "dotfiles:./dotcanary" "$_c14" > "$_c14.tmp" 2>/dev/null
     mv "$_c14.tmp" "$_c14"
     ok "sync tears down a tree whose declaration is gone" lx -y sync
-    ok "every file the tree placed is gone" test ! -e "$_dtarget/alpha.conf"
-    ok "including the nested one" test ! -e "$_dtarget/nested/beta.conf"
+    gone_ok "every file the tree placed is gone" dot-top test -e "$_dtarget/alpha.conf"
+    gone_ok "including the nested one" dot-nested test -e "$_dtarget/nested/beta.conf"
 
     # ---- exec: --------------------------------------------------------------
     # The approval gate first, because it is the rule with teeth: an unapproved script is a
@@ -1793,9 +1887,12 @@ else
     ok "shall lock exec approves it" lx lock exec
     ok "sync runs an approved exec:" lx -y sync
     ok "the script really ran" test -f "$_emark"
+    # The marker's own positive control: it was seen to exist, so the absence asserted two
+    # lines down means the script did not run AGAIN rather than that it never ran at all.
+    witness exec-mark test -f "$_emark"
     rm -f "$_emark"
     ok "a second sync is clean under @runs=1" lx -y sync
-    ok "and the script did not run a second time" test ! -e "$_emark"
+    gone_ok "and the script did not run a second time" exec-mark test -e "$_emark"
     grep -v -F "exec:./bin/exec-canary.sh" "$_c14" > "$_c14.tmp" 2>/dev/null
     mv "$_c14.tmp" "$_c14"
     ok "sync undoes an exec: whose line has gone" lx -y sync
@@ -1829,6 +1926,12 @@ else
         ok "sync enables and starts a declared service" lx -y sync
         ok "the init system really enabled it" sh -c 'ls /etc/rc[2-5].d/S*cron >/dev/null 2>&1'
         ok "and the daemon is really running" sh -c 'service cron status >/dev/null 2>&1'
+        # Witnessed here, where the service IS enabled and IS running, so the two assertions
+        # after the second sync can tell "Shall turned it off" from "it was never on". Under a
+        # `shall` that fails everything, the first sync never enables anything and both of those
+        # used to PASS anyway — a service is stopped when it was never started.
+        witness svc-enabled sh -c 'ls /etc/rc[2-5].d/S*cron >/dev/null 2>&1'
+        witness svc-running sh -c 'service cron status >/dev/null 2>&1'
         # Declared the other way round: a `service:` is converged to what the line says, so
         # flipping the line is the teardown. Removing it entirely would leave the service in
         # whatever state it was in, which proves nothing about the second direction.
@@ -1836,8 +1939,10 @@ else
         mv "$_c14.tmp" "$_c14"
         printf 'service:%s @enabled=false,status=stopped\n' "$_svc" >> "$_c14"
         ok "sync disables and stops it when the line says so" lx -y sync
-        ok "the init system really disabled it" sh -c '! ls /etc/rc[2-5].d/S*cron >/dev/null 2>&1'
-        ok "and the daemon really stopped" sh -c '! service cron status >/dev/null 2>&1'
+        gone_ok "the init system really disabled it" svc-enabled \
+            sh -c 'ls /etc/rc[2-5].d/S*cron >/dev/null 2>&1'
+        gone_ok "and the daemon really stopped" svc-running \
+            sh -c 'service cron status >/dev/null 2>&1'
         grep -v -F "service:$_svc " "$_c14" > "$_c14.tmp" 2>/dev/null
         mv "$_c14.tmp" "$_c14"
         ok "the service's package uninstalls" lx_slow -y uninstall "$BACKEND:$_svc"
@@ -2018,7 +2123,8 @@ mkdir -p /tmp/shall-share/modules
 printf 'apt:jq\n' > /tmp/shall-share/modules/shared.txt
 ok "add vendors a module from a local source" lx add /tmp/shall-share
 ok "add brought the module file in" test -f "$SHALL_CONFIG_DIR/modules/shared.txt"
-nok "add refuses a source that does not exist" lx add /no/such/source/here
+nok_saying "add refuses a source that does not exist" "no/such/source" \
+    lx add /no/such/source/here
 ok "sbom emits a bill of materials" lx sbom
 ok "completions bash generates a script" lx completions bash
 ok "profile list" lx profile list

@@ -46,14 +46,17 @@ say "bootstrapping — detecting toolchain..."
 # be right about: the same artifact was measured reporting `shall 0.8.0` on ubuntu:24.04,
 # alpine:3.20, nixos/nix AND real NixOS. One binary, every Linux.
 #
-# `-gnu` is still published for anyone who wants it and is still what arm64 gets, since no
-# aarch64 musl row exists yet — named here rather than left as a silent gap, because an arm64
-# Alpine or NixOS box does still fall through to a source build.
+# **Both architectures take musl now.** The comment here used to say `-gnu` "is still what
+# arm64 gets, since no aarch64 musl row exists yet", which left an arm64 Alpine or NixOS box
+# — a Pi, a Graviton instance, an arm64 container — compiling 448 crates under fat LTO on
+# hardware chosen for its power draw. `ci.yml` builds `aarch64-unknown-linux-musl` through
+# `cargo-zigbuild`, so the same one-artifact-every-Linux argument now holds on arm64 too.
+# `-gnu` is still published for both architectures for anyone who wants it.
 target_triple() {
   case "$(uname -s 2>/dev/null || echo unknown)" in
     Linux)  case "$(uname -m)" in
               x86_64)        echo x86_64-unknown-linux-musl ;;
-              aarch64|arm64) echo aarch64-unknown-linux-gnu ;;
+              aarch64|arm64) echo aarch64-unknown-linux-musl ;;
             esac ;;
     Darwin) case "$(uname -m)" in
               arm64|aarch64) echo aarch64-apple-darwin ;;

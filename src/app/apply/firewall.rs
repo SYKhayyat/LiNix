@@ -105,7 +105,7 @@ impl Firewall<'_> {
             &to_close,
             default_denies_incoming,
             &wanted_ports,
-            self.session_port(),
+            firewall::session_port(),
         ) {
             return Err(Error::Refused(firewall::lockout_refusal(port, scope)));
         }
@@ -246,15 +246,6 @@ impl Firewall<'_> {
                 );
             }
         }
-    }
-    /// The local port carrying the connection Shall is being run over, if any.
-    ///
-    /// Read from `SSH_CONNECTION` — the shell sets it to
-    /// `<client ip> <client port> <server ip> <server port>`, and the last field is the port
-    /// this session arrived on. A console session has no such variable and nothing to lose.
-    fn session_port(&self) -> Option<u16> {
-        let raw = std::env::var("SSH_CONNECTION").ok()?;
-        raw.split_whitespace().nth(3)?.parse().ok()
     }
     /// Run a firewall command that **opens** a port or sets a policy — anything but a removal.
     ///

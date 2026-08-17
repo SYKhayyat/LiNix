@@ -328,6 +328,7 @@ take the else branch — the silent-wrongness this rule closes.
 | `after_install`, `before_install`, … | a hook. Hashed and locked |
 | `source` | on `shim:` — `BACKEND:NAME`, which provider this stand-in forwards to. **It is read when the shim runs, not when it is deployed**: a shim is the shall binary under another name and has nowhere to keep data, so the answer comes from the line itself, which the shim process has already loaded. Absent means the bare name, resolved through `priority` like any other. **V.152** |
 | `cron`, `run`, `notify` | on `schedule:` |
+| `enabled`, `persistent`, `jitter`, `elevated` | on `schedule:` — arm it, catch up a missed firing, spread a fleet, raise its privilege. **No scheduler expresses all four**, so each one either expresses the option or refuses it by name; an option nobody wrote is never refused. **V.192** |
 | `target`, `content`, `template`, `decrypt`, `identity`, `backup` | on `link:` |
 | `enabled`, `status` | on `service:` |
 | `value` | on `setting:` (the value to write) and on `firewall:default/…` (`allow` or `deny`) |
@@ -741,9 +742,10 @@ schedule:nightly {
 }
 ```
 
-`run=` is hashed and locked exactly like a hook. A `schedule:` may take `cron`, `run` and
-`notify`, and its cron is validated where the line is read, so a bad expression names the file
-and line rather than surfacing when the OS scheduler is handed the job.
+`run=` is hashed and locked exactly like a hook. A `schedule:` may take `cron`, `run`,
+`notify`, `enabled`, `persistent`, `jitter` and `elevated`, and its cron is validated where the
+line is read, so a bad expression names the file and line rather than surfacing when the OS
+scheduler is handed the job.
 
 **`shall schedule add`/`remove` edit this file and then sync**, the way `install` edits a
 module and syncs (P1) — the file is the state, so the edit IS the command. `schedule list`
@@ -2866,10 +2868,55 @@ rather than syscalls.
 **`sync` runs `nixos-rebuild switch` itself**, once per batch and not once per package, and
 **restores BOTH files it changed when the rebuild fails** — the generated module and the
 `configuration.nix` edit. Restoring only the first leaves an import pointing at a file that is
-gone, which makes every later `nixos-rebuild` fail for reasons of Shall's making. **V.190.**
+gone, which makes every later `nixos-rebuild` fail for reasons of Shall's making. **A rebuild is
+skipped when the rendered file is unchanged and the import is already there**, because the
+services and the perimeter are projected on every sync whether they have converged or not.
+**V.190.**
+
+**On NixOS a `service:` and a `firewall:` line are system configuration too**, not commands
+(`J5`'s fourth answer: *everything*). `services.<name>.enable`, `networking.firewall.enable`,
+`allowedTCPPorts` and `allowedUDPPorts` are written into the same generated module, and one
+rebuild applies them beside the packages. The imperative paths are **not** taken as well: on
+NixOS `systemctl enable` writes into a tree the next generation regenerates, and no `ufw` is
+there at all — a NixOS box declaring `firewall:22/tcp` used to fail its whole sync on a missing
+adapter.
+
+**State is declared; a transition is performed.** `@enabled=` and `@status=running|stopped` are
+the enable attribute, so they go into the file. `@status=restarted` is not a state any attribute
+can express, so it still goes to the init — with the enablement trimmed off, because two owners
+of one enablement is what this rule exists to remove.
+
+**A line NixOS cannot express is refused by name, never approximated**: `@enabled=false` with
+`@status=running` (one attribute, two answers), one service declared both on and off across two
+modules, `firewall:default/outgoing` (`networking.firewall` filters incoming), and a
+`default/incoming` policy that is neither `deny` nor `allow`.
+
+**The lockout check, the removal guard and the addition ceiling all run on this path too.** A
+port dropped from `allowedTCPPorts` closes on rebuild exactly as `ufw delete` closes it, on a
+machine whose rebuild takes minutes to undo. **V.191.**
 
 **A ledger key whose kind this build does not have is kept, not dropped.** It is left in place,
 reported, and re-offered next run. Forgetting a row is the one outcome that cannot be undone.
+
+**A `schedule:` is read back out of the scheduler that holds it, and a schedule already in force
+is not work** (2026-08-16, `J6`). Each of the three schedulers answers in its own terms: systemd
+and launchd compare the whole unit Shall would write against the file on disk, so every option
+they can express is covered without anyone remembering to list it, and Task Scheduler — which
+keeps no file — compares a canonical form built from its own trigger XML. **What Shall did not
+write is `unverifiable`, never drift**: a trigger shape the reader does not understand, a second
+trigger somebody added by hand, a query that could not be answered. Reported as a mismatch, each
+of those would rewrite the task on every sync for ever and keep `check` red on something nobody
+can see — V.188's rule, on a different store. **The ledger key is deliberately *not* widened to
+carry `@cron=` and `@run=`**, which is where `J2`'s own fix does not transfer. **V.192.**
+
+**A schedule declares more than when it runs, and an option no scheduler can keep is refused by
+name.** `enabled` (provision it and leave it silent), `persistent` (run a firing the machine was
+switched off for), `jitter` (spread a fleet around the scheduled moment) and `elevated` (run at
+the highest privilege the account holds) are parsed and bounded in the model, and each
+provisioner either expresses the option or says by name that it cannot. **An option nobody wrote
+is never refused and never changes what the schedule does** — that is what keeps a portable model
+file readable on every machine, and it is why each of these arrives as an `Option` rather than as
+a default. **V.192.**
 
 ## II.30 `<kind>:<subject>` has one producer and one reader, and it is a type (`S57`, V.161)
 

@@ -343,6 +343,16 @@ impl App {
         }
     }
 
+    /// The NixOS system configuration — where `service:` and `firewall:` go on that OS (`J5`).
+    pub fn system_config(&self) -> crate::app::SystemConfig<'_> {
+        crate::app::SystemConfig {
+            config: &self.config,
+            executor: &self.executor,
+            registry: &self.registry,
+            reaping: &self.reaping,
+        }
+    }
+
     pub fn dotfiles(&self) -> crate::app::Dotfiles<'_> {
         crate::app::Dotfiles {
             config: &self.config,

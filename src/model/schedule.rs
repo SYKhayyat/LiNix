@@ -9,8 +9,18 @@
 //!   cron = 0 2 * * *
 //!   run = clean
 //!   notify = desktop
+//!   enabled = true       # provision it and leave it silent with `false`
+//!   persistent = true    # run a firing the machine was switched off for
+//!   jitter = 30m         # spread a fleet out around the scheduled moment
+//!   elevated = false     # run with the highest privileges the account holds
 //! }
 //! ```
+//!
+//! The four options past `notify` are **not** universal, and this module does not pretend
+//! otherwise: it parses and bounds them, and each provisioner in `app/scheduler` either
+//! expresses the option or refuses it by name. Accepting an option and dropping it is the same
+//! failure as a cron silently widened into DAILY — the declaration says one thing, the machine
+//! does another, and both report success.
 //!
 //! The resolver collects these (from the `schedules` file only — II.2), and this module maps
 //! one to the [`ScheduleConfig`] the existing `SchedulerManager` provisions onto systemd /
@@ -41,7 +51,14 @@ pub fn schedule_config(
                 origin.clone(),
                 format!("`schedule:{}` has an unknown option `{}`", name, key),
             )
-            .with_hint("a schedule takes `cron`, `run`, and optional `notify`."));
+            .with_hint(format!(
+                "a schedule takes {}.",
+                KNOWN_KEYS
+                    .iter()
+                    .map(|k| format!("`{}`", k))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
         }
     }
 
@@ -64,8 +81,77 @@ pub fn schedule_config(
         cron,
         command,
         notification,
-        last_synced: None,
+        enabled: boolean(name, options, "enabled", origin)?,
+        persistent: boolean(name, options, "persistent", origin)?,
+        jitter: seconds(name, options, "jitter", origin)?,
+        elevated: boolean(name, options, "elevated", origin)?,
     })
+}
+
+/// A yes/no option, or an error naming the line.
+///
+/// **Anything that is not a spelling of true or false is refused**, rather than read as false
+/// the way `service:`'s `enabled` reads it. A typo that silently means "no" on an option whose
+/// job is to stop a job firing is the quiet failure this file's unknown-key check exists to
+/// prevent, one level down.
+fn boolean(name: &str, options: &Options, key: &str, origin: &Origin) -> Result<Option<bool>> {
+    let Some(raw) = options.one(key) else {
+        return Ok(None);
+    };
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "true" | "yes" | "on" | "1" => Ok(Some(true)),
+        "false" | "no" | "off" | "0" => Ok(Some(false)),
+        other => Err(GrammarError::new(
+            origin.clone(),
+            format!(
+                "`schedule:{}` has `{} = {}`, which is not yes or no",
+                name, key, other
+            ),
+        )
+        .with_hint("write `true` or `false` (`yes`/`no`, `on`/`off` and `1`/`0` also read).")),
+    }
+}
+
+/// The longest jitter that is still a jitter. A day of randomised delay on a daily timer means
+/// the firing can land after the next one is due, which is not a spread — it is a schedule
+/// nobody can predict.
+const MAX_JITTER_SECONDS: u32 = 24 * 60 * 60;
+
+/// A duration in seconds, written bare or with a `s`/`m`/`h` suffix.
+fn seconds(name: &str, options: &Options, key: &str, origin: &Origin) -> Result<Option<u32>> {
+    let Some(raw) = options.one(key) else {
+        return Ok(None);
+    };
+    let raw = raw.trim();
+    let bad = |what: &str| {
+        Err(GrammarError::new(
+            origin.clone(),
+            format!(
+                "`schedule:{}` has `{} = {}`, which {}",
+                name, key, raw, what
+            ),
+        )
+        .with_hint(format!(
+            "write a duration: `900`, `15m`, `2h`. The longest this option takes is {}h.",
+            MAX_JITTER_SECONDS / 3600
+        )))
+    };
+    let (digits, multiplier) = match raw.chars().last() {
+        Some('s') | Some('S') => (&raw[..raw.len() - 1], 1),
+        Some('m') | Some('M') => (&raw[..raw.len() - 1], 60),
+        Some('h') | Some('H') => (&raw[..raw.len() - 1], 3600),
+        _ => (raw, 1),
+    };
+    let Ok(value) = digits.trim().parse::<u32>() else {
+        return bad("is not a duration");
+    };
+    let Some(total) = value.checked_mul(multiplier) else {
+        return bad("is longer than any schedule");
+    };
+    if total > MAX_JITTER_SECONDS {
+        return bad("is longer than a day");
+    }
+    Ok(Some(total))
 }
 
 /// Refuse a `run` whose command is on this machine's `[guard] never_unattended` list (K13).
@@ -298,7 +384,71 @@ mod tests {
         assert_eq!(cfg.cron, "0 2 * * *");
         assert_eq!(cfg.command, "clean");
         assert_eq!(cfg.notification.as_deref(), Some("desktop"));
-        assert!(cfg.last_synced.is_none());
+        // Nothing declared is nothing decided: every option a line does not mention arrives as
+        // `None`, which is what stops a scheduler refusing an option nobody wrote.
+        assert_eq!(cfg.enabled, None);
+        assert_eq!(cfg.persistent, None);
+        assert_eq!(cfg.jitter, None);
+        assert_eq!(cfg.elevated, None);
+    }
+
+    #[test]
+    fn every_spelling_of_yes_and_no_reads_and_anything_else_is_refused() {
+        for (written, want) in [
+            ("true", true),
+            ("yes", true),
+            ("on", true),
+            ("1", true),
+            ("TRUE", true),
+            ("false", false),
+            ("no", false),
+            ("off", false),
+            ("0", false),
+        ] {
+            // Every boolean option, not just the one that was thought of: three keys go through
+            // the same function and a check on one of them says nothing about the others.
+            for key in ["enabled", "persistent", "elevated"] {
+                let o = opts(&[("cron", "0 2 * * *"), ("run", "clean"), (key, written)]);
+                let cfg = schedule_config("t", &o, &origin(), &shipped()).unwrap();
+                let got = match key {
+                    "enabled" => cfg.enabled,
+                    "persistent" => cfg.persistent,
+                    _ => cfg.elevated,
+                };
+                assert_eq!(got, Some(want), "`{} = {}` read wrong", key, written);
+            }
+        }
+        for key in ["enabled", "persistent", "elevated"] {
+            let o = opts(&[("cron", "0 2 * * *"), ("run", "clean"), (key, "maybe")]);
+            let err = schedule_config("t", &o, &origin(), &shipped()).unwrap_err();
+            assert!(err.what.contains("not yes or no"), "{}", err);
+            assert!(err.to_string().contains("schedules:3"), "{}", err);
+        }
+    }
+
+    #[test]
+    fn a_jitter_is_a_duration_and_a_bounded_one() {
+        for (written, want) in [
+            ("900", 900u32),
+            ("15m", 900),
+            ("2h", 7200),
+            ("45s", 45),
+            ("24h", 86400),
+        ] {
+            let o = opts(&[("cron", "0 2 * * *"), ("run", "clean"), ("jitter", written)]);
+            let cfg = schedule_config("t", &o, &origin(), &shipped()).unwrap();
+            assert_eq!(cfg.jitter, Some(want), "`jitter = {}` read wrong", written);
+        }
+        // Longer than a day, and an overflow that would wrap to a small number if it were
+        // multiplied without asking.
+        for written in ["25h", "2d", "soon", "-5", "4294967295h", ""] {
+            let o = opts(&[("cron", "0 2 * * *"), ("run", "clean"), ("jitter", written)]);
+            assert!(
+                schedule_config("t", &o, &origin(), &shipped()).is_err(),
+                "`jitter = {}` was accepted",
+                written
+            );
+        }
     }
 
     #[test]

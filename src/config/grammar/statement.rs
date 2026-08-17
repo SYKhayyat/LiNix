@@ -1555,7 +1555,19 @@ pub const SERVICE_OPTION_KEYS: &[&str] = &["enabled", "status"];
 pub const LINK_OPTION_KEYS: &[&str] = &[
     "target", "content", "template", "decrypt", "identity", "scope", "backup",
 ];
-pub const SCHEDULE_OPTION_KEYS: &[&str] = &["cron", "run", "notify"];
+/// `enabled`, `persistent`, `jitter` and `elevated` are here even though no scheduler expresses
+/// all four: the grammar says what a schedule may *say*, and `app/scheduler` says what each OS
+/// can *keep*. Refusing an option in the parser because one platform cannot hold it would make
+/// a portable model file unreadable on the machine it was written for.
+pub const SCHEDULE_OPTION_KEYS: &[&str] = &[
+    "cron",
+    "run",
+    "notify",
+    "enabled",
+    "persistent",
+    "jitter",
+    "elevated",
+];
 pub const SETTING_OPTION_KEYS: &[&str] = &["value", "scope"];
 /// `target` is where the tree is mirrored to; absent means the home directory, which is what a
 /// dotfiles tree mirrors by definition. There is deliberately no per-file option: the tree has

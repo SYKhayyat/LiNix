@@ -190,11 +190,14 @@ impl Format {
             //
             // Versions are dropped on purpose: a NixOS module pins packages by pinning nixpkgs,
             // not per package, which is the same reason `nixos:` refuses an `@version=`.
-            Format::Nix => crate::backends::nixos::render(
-                &rows.iter().map(|(_, name, _)| name.clone()).collect(),
-                &std::collections::BTreeSet::new(),
-                &std::collections::BTreeSet::new(),
-            ),
+            //
+            // Packages only, and that is not an omission: `export` renders what the *managed
+            // set* holds, and a `service:` or `firewall:` line is not a package in it. The
+            // services and the perimeter reach the same file through `sync` on a NixOS host.
+            Format::Nix => crate::backends::nixos::render(&crate::backends::nixos::Module {
+                packages: rows.iter().map(|(_, name, _)| name.clone()).collect(),
+                ..Default::default()
+            }),
         })
     }
 }

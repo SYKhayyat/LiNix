@@ -94,6 +94,10 @@ const LEDGER: &[Accounted] = &[
         file: "src/app/apply/firewall.rs",
         guarded_by: "**THE FINDING.** `guard::enforce_extras` over `to_close`, before the                      first `deny_command` runs. Until 2026-08-07 the word `guard` appeared                      nowhere in this file — not an import, not a call, not a comment — while                      it closed every open port no `firewall:` line declared. `max_removals`                      did not count them, `protected` could not name them, and                      `--allow-mass-removal` was not consulted. Three bespoke refusals were                      written here instead of calling the one guard two hundred lines away",
     },
+    Accounted {
+        file: "src/app/apply/nixos.rs",
+        guarded_by: "`guard::enforce_ports` over the ports leaving                      `allowedTCPPorts`/`allowedUDPPorts` and `guard::enforce_extras` over the                      services leaving `services.<name>.enable`, both before the module is                      written and the rebuild runs. **The same perimeter one OS over, so it                      takes the same three protections**: the SSH lockout check                      (`would_close_session`) runs first, then the two budgets, then                      `enforce_additions` for what is being opened. A port dropped from a                      NixOS attribute closes on rebuild exactly as `ufw delete` closes it, on                      a machine that takes minutes to rebuild back — and this file was written                      by copying the shape of `apply/firewall.rs` above precisely so the entry                      beside it would not be the finding twice",
+    },
 ];
 
 /// Does this line reach a backend's removal?

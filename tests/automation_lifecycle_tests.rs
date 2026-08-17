@@ -121,7 +121,10 @@ async fn test_systemd_oncalendar_translation_logic() {
                 cron: cron.into(),
                 command: "sync".into(),
                 notification: None,
-                last_synced: None,
+                enabled: None,
+                persistent: None,
+                jitter: None,
+                elevated: None,
             },
         )
         .await
@@ -176,7 +179,10 @@ async fn test_launchd_plist_translation_logic() {
                 cron: cron.into(),
                 command: "upgrade".into(),
                 notification: None,
-                last_synced: None,
+                enabled: None,
+                persistent: None,
+                jitter: None,
+                elevated: None,
             },
         )
         .await
@@ -226,7 +232,10 @@ async fn test_scheduler_reboot_mapping_fidelity() {
                 cron: "@reboot".into(),
                 command: "clean".into(),
                 notification: None,
-                last_synced: None,
+                enabled: None,
+                persistent: None,
+                jitter: None,
+                elevated: None,
             },
         )
         .await

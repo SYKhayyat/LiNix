@@ -176,6 +176,23 @@ jobs:
             target: x86_64-unknown-linux-musl
             rust: stable
             native: false
+          # And the same argument on arm64, which the row above could not carry. `install.sh`
+          # sent every aarch64 Linux box to `-gnu`, so an arm64 Alpine or NixOS machine fell
+          # through to compiling 448 crates under fat LTO on hardware chosen for its power draw
+          # — the exact case the musl row exists to end, on the exact hardware where a source
+          # build hurts most.
+          #
+          # **Built with zig rather than a musl cross-toolchain, because Ubuntu has no
+          # `gcc-aarch64-linux-musl` and the vendored C is not optional.** `mlua` vendors Lua and
+          # `xz2`/`zstd`/`zip` vendor their own, so the target needs a C cross compiler and not
+          # just a Rust one. `cargo-zigbuild` supplies both from one pip package. Measured on
+          # ubuntu:24.04 in a container before this row was written: 16m45s, every vendored C
+          # crate compiled, the link step clean.
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            rust: stable
+            native: false
+            zigbuild: true
           - os: macos-latest
             target: x86_64-apple-darwin
             rust: stable
@@ -256,8 +273,26 @@ jobs:
         } >> "$GITHUB_ENV"
       if: matrix.target == 'x86_64-unknown-linux-musl'
 
+    # **zig, not a cross gcc, and the reason is the vendored C.** Ubuntu ships
+    # `gcc-aarch64-linux-gnu` and no musl equivalent, while `mlua` vendors Lua and
+    # `xz2`/`zstd`/`zip` vendor their own C — so `rustup target add` alone links nothing.
+    # `cargo-zigbuild` gives one toolchain that is both a Rust linker and a C cross compiler,
+    # from a pip package rather than a downloaded tarball with a URL to rot.
+    - name: Cross toolchain for aarch64 musl
+      run: |
+        pip3 install --break-system-packages ziglang
+        cargo install --locked cargo-zigbuild
+      if: matrix.zigbuild
+
     - name: Build
       run: cargo build --release --target ${{ matrix.target }}
+      if: ${{ !matrix.zigbuild }}
+
+    # Same command through zig's linker. Split rather than a shell conditional inside one
+    # step, so the job log names which of the two ran instead of hiding it in a branch.
+    - name: Build (zigbuild)
+      run: cargo zigbuild --release --target ${{ matrix.target }}
+      if: matrix.zigbuild
 
     # `--no-fail-fast` because cargo stops at the first test TARGET that fails, and this suite has
     # dozens. Run 30503630610 reported exactly one failing target per OS and never ran the rest —
@@ -327,10 +362,19 @@ jobs:
     # Rust test suite cannot parse Nix — so the suite writes every shape the renderer can produce
     # into `target/nix-fixtures/` and this asks `nix-instantiate --parse` about them.
     #
+    # **And parsing is not evaluating.** `--parse` says nothing about whether
+    # `services.nginx.enable` is an option NixOS has or whether `allowedTCPPorts` takes numbers,
+    # which is exactly the half that grew when `service:` and `firewall:` became NixOS
+    # attributes. `--self-test` implies `--evaluate`, which imports each generated module into a
+    # real NixOS module system and forces the attributes Shall writes. Measured 2026-08-16: 25s
+    # for the whole gate, six modules parsed and four evaluated across two container starts —
+    # a per-push gate rather than a nightly.
+    #
     # On the Linux row only: it needs docker, and the fixtures come from the test step above.
-    # `--self-test` on every run, because a parse gate that has never been watched refuse a
-    # broken module is a gate nobody has tested.
-    - name: Is the Nix Shall generates valid Nix?
+    # `--self-test` on every run, because a gate that has never been watched refuse a broken
+    # module is a gate nobody has tested. It proves both halves: a module that is not Nix, and a
+    # module that is perfectly good Nix naming an option NixOS does not have.
+    - name: Is the Nix Shall generates valid Nix, and does NixOS accept it?
       if: matrix.target == 'x86_64-unknown-linux-gnu'
       run: ./scripts/nix-validate.sh --self-test
 
@@ -411,12 +455,12 @@ jobs:
       run: |
         set -eu
         missing=
-        for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-unknown-linux-musl x86_64-apple-darwin aarch64-apple-darwin; do
+        for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-apple-darwin aarch64-apple-darwin; do
           test -f "dist/shall-${target}" || missing="${missing} shall-${target}"
         done
         test -f dist/shall-x86_64-pc-windows-msvc.exe || missing="${missing} shall-x86_64-pc-windows-msvc.exe"
         test -z "$missing" || { echo "the release is missing:${missing}" >&2; exit 1; }
-        echo "all six targets present"
+        echo "all seven targets present"
 
     # `@v2`, not `@v1`. `actionlint` reports that v1's runner is too old for GitHub Actions —
     # it pins Node 16, which was removed — so the step that publishes the binaries would fail on
@@ -908,9 +952,25 @@ jobs:
   # 31821620442 both ended `cancelled` at six hours and two seconds — a gate that has never once
   # reported a result, which is worse than a gate nobody wrote, because the job list says it ran.
   #
-  # Sharded by file rather than by `--shard k/n`: the files are the unit the comment reasons in,
-  # each shard's name says which safety property it covers, and a file that grows past the limit
-  # tells you which one it is instead of moving an anonymous fraction of the work.
+  # Sharded by file first: the files are the unit the comment reasons in, and each row's name says
+  # which safety property it covers rather than moving an anonymous fraction of the work.
+  #
+  # **Two of the four files do not fit in a job, and one row per file was the second arrangement
+  # to discover that.** `the removal guard` (125 mutants) and `the transaction` (119) reached 5h
+  # 24m and were killed at the six-hour ceiling in dispatch `31957877153` — `cancelled`, which in
+  # a job list is neither red nor green and reads to a reader as *ran*. The two small files came
+  # back in minutes and have been green all along, so what the split bought was a result for
+  # `datalock` and `exit` and a second silent timeout for the two that matter most.
+  #
+  # So the two large files are cut again, `--shard k/n` **inside** the file, `k` zero-based and
+  # `k < n` (verified against the installed cargo-mutants: `--shard 2/2` is rejected by name, and
+  # `0/2` + `1/2` partition the list exactly). ~31 mutants a shard against the ~125 that took six
+  # hours. The row name still says which property and now also which quarter of it, so a survivor
+  # arrives with the same address it had before.
+  #
+  # `0/1` for a file that fits: one shard of one is the whole file, and spelling it means the run
+  # line has no conditional in it — a matrix where one row runs a different command from the
+  # others is how a flag gets applied to three of four.
   rust-mutation:
     name: Mutation (${{ matrix.what }}, nightly)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -920,18 +980,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { what: the removal guard, file: src/app/sync/guard.rs, slug: guard }
-          - { what: the exit codes, file: src/core/exit.rs, slug: exit }
-          - { what: the data lock, file: src/core/datalock.rs, slug: datalock }
-          - { what: the transaction, file: src/core/transaction.rs, slug: transaction }
+          - { what: the removal guard 1/4, file: src/app/sync/guard.rs, slug: guard-1, shard: 0/4 }
+          - { what: the removal guard 2/4, file: src/app/sync/guard.rs, slug: guard-2, shard: 1/4 }
+          - { what: the removal guard 3/4, file: src/app/sync/guard.rs, slug: guard-3, shard: 2/4 }
+          - { what: the removal guard 4/4, file: src/app/sync/guard.rs, slug: guard-4, shard: 3/4 }
+          - { what: the exit codes, file: src/core/exit.rs, slug: exit, shard: 0/1 }
+          - { what: the data lock, file: src/core/datalock.rs, slug: datalock, shard: 0/1 }
+          - { what: the transaction 1/4, file: src/core/transaction.rs, slug: transaction-1, shard: 0/4 }
+          - { what: the transaction 2/4, file: src/core/transaction.rs, slug: transaction-2, shard: 1/4 }
+          - { what: the transaction 3/4, file: src/core/transaction.rs, slug: transaction-3, shard: 2/4 }
+          - { what: the transaction 4/4, file: src/core/transaction.rs, slug: transaction-4, shard: 3/4 }
     steps:
     - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@stable
     - uses: Swatinem/rust-cache@v2
     - name: Install cargo-mutants
       run: cargo install cargo-mutants --locked
-    - name: Mutate ${{ matrix.file }}, where a silent mutation is a safety failure
-      run: cargo mutants --no-shuffle -j2 --file ${{ matrix.file }} -- --no-fail-fast
+    - name: Mutate ${{ matrix.file }} (shard ${{ matrix.shard }}), where a silent mutation is a safety failure
+      run: cargo mutants --no-shuffle -j2 --file ${{ matrix.file }} --shard ${{ matrix.shard }} -- --no-fail-fast
     - name: The survivors, kept whether the run passed or failed
       if: ${{ !cancelled() }}
       uses: actions/upload-artifact@v7

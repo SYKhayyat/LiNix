@@ -181,6 +181,14 @@ generation that `nixos-rebuild --rollback` knows about. Shall writes a `shall-pa
 owns outright and imports it from your `configuration.nix`; see [Configuration](#configuration)
 for the `[nixos]` keys.
 
+On that machine your `service:` and `firewall:` lines go into the same file, because that is
+where NixOS reads them — `services.<name>.enable`, `networking.firewall.allowedTCPPorts` and
+`allowedUDPPorts`, and `networking.firewall.enable` for a `firewall:default/incoming` policy.
+One `nixos-rebuild` applies all of it. `@status=restarted` still goes to the init, since a
+restart is a transition no attribute can declare, and a line NixOS has no attribute for — a
+service declared both enabled and running-while-disabled, or a default *outgoing* policy — is
+refused by name rather than half-applied.
+
 A prefix can be a chain — `apt,cargo:ripgrep` means "apt if it has it, else cargo." If you write
 the same chain often, name it once in a `groups` file and use the name:
 
@@ -237,6 +245,17 @@ it takes the stand-in away), the `*_install` hooks, and
 per-directive keys like `cron`/`run` on `schedule:` or
 `target`/`content`/`template`/`decrypt`/`identity` on `link:` — the last two are
 [Secrets](#secrets).
+
+**A `schedule:` also takes `enabled`, `persistent`, `jitter` and `elevated`** — provision it and
+leave it silent, run a firing the machine was switched off for, spread a fleet out around the
+scheduled moment, run at the highest privilege the account holds. No scheduler has all four
+(a `--user` systemd timer cannot raise its own privilege, launchd has no randomised delay, and
+`schtasks` can set neither `RandomDelay` nor `StartWhenAvailable`), so each one either expresses
+the option or **refuses it by name before it writes anything** — never accepts it and drops it.
+An option you do not write is never refused and never changes what the schedule does. Shall reads
+schedules back out of the scheduler that holds them, so editing `cron` or `run` is reported as
+work rather than passing as *nothing to do*; a trigger Shall did not write is reported as *cannot
+read back* rather than as drift.
 
 Some keys belong to one family of backends and are refused, by name, anywhere else — `@classic`
 on a snap, `@system` on pip, and the storage keys below. An option no backend would read is an
@@ -998,7 +1017,7 @@ right one, and no machine in this project's CI has ever run it:
 
 | backend | why nothing has driven it |
 |---|---|
-| `nixos` | no CI leg runs NixOS. The full round trip has been driven by hand on NixOS 26.05, and a Nix parser checks every generated module in CI — but neither is an automated lifecycle |
+| `nixos` | no CI leg runs NixOS. The package round trip has been driven by hand on NixOS 26.05; the services-and-ports module has been evaluated and **built** into a real system closure there; and CI parses every generated module *and* merges it into a real NixOS module system. What no gate reaches is **activation** — that machine cannot activate at all, with or without Shall |
 | `flatpak` | needs a session bus; the container matrix has none |
 | `snap` | snapd is a systemd daemon, and no image here runs systemd |
 | `macports` | never attempted: CI *does* run on `macos-latest`, and no step installs MacPorts on it. Work nobody has done, not hardware nobody has |

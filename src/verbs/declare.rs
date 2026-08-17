@@ -683,9 +683,15 @@ pub async fn handle_schedule(app: &App, cmd: &ScheduleCommand) -> Result<()> {
             }
             // An empty list printed as nothing at all reads as a command that failed. Name the
             // file too: a `when` block that did not fire is the other reason this is empty.
+            //
+            // **Declared, not "in force", and the difference is a rule rather than a word.**
+            // `schedule` is `Class::ConfigOnly` (latency.rs), so this command may not ask the
+            // OS scheduler anything — and since `J6` there is something to ask, which makes the
+            // old wording a claim about a machine this command is forbidden to look at.
+            // `shall check` and `shall plan` are where the machine gets asked.
             if listed == 0 {
                 println!(
-                    "No schedules are in force. {} declares none that apply to this machine.",
+                    "No schedules are declared. {} declares none that apply to this machine.",
                     file.display()
                 );
             }

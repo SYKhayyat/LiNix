@@ -406,7 +406,20 @@ pub async fn apply_non_package_phases(
             // Phase 3c (Part XI): the perimeter. After the packages, because a rule usually
             // exists to let something in that was just installed — and its lockout check runs
             // before any command it would issue, on this path and on the unattended one alike.
-            Phase::Firewall => app.firewall().apply(state, scope).await?,
+            //
+            // **On NixOS the perimeter is not a command, and neither are the services** (`J5`,
+            // ruling 4). Both go into the generated module and one `nixos-rebuild` applies
+            // them, so this arm carries the services too and `Phase::Dependents` above passed
+            // them over. One rebuild rather than two is `II.19`'s reason, and a rebuild is
+            // minutes.
+            Phase::Firewall => {
+                let system = app.system_config();
+                if system.owns_extras() {
+                    system.apply(state, scope).await?
+                } else {
+                    app.firewall().apply(state, scope).await?
+                }
+            }
             // Phase 4 (S21): provision the declared schedules onto the OS scheduler.
             Phase::Schedules => app.schedules().apply(state).await?,
             // Phase 4b (XIII.3): the declared `exec:` scripts, after the packages and

@@ -1,4 +1,4 @@
-# The decision register — 214 entries, none open
+# The decision register — 216 entries, none open
 **One file, six features, nothing waiting on the owner.** Every decision this design forces lives
 here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -24,7 +24,7 @@ HALF RULED had no rows, the five that remained summed to 206 against 210, and
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **209** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **211** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 | **DEFERRED** | Asked, and the owner chose to answer it later. | A ruling, when the owner returns to it. | **1** |
 | **HALF RULED** | Part of the question was answered and part was not. | A ruling on the remaining half. | **2** |
@@ -107,7 +107,7 @@ the same coin and is not ruled: what a version pin means when *Shall* recorded i
 has since dropped it. The `G` round then ran the
 other way round: `docs/GRADE-2026-08-12.md`'s work order was implemented in one pass, and the nine
 changes in it that a user would notice shipped ahead of any ruling. All 214 are accounted
-for: **209 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN** — and this line
+for: **211 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -8850,6 +8850,21 @@ fixes both: one artifact, measured to report `shall 0.8.0` from `nixos/nix`, `al
 4. **How far does it go?** — **Everything.** Not packages alone: `service:` and `firewall:` are
    `configuration.nix` concerns on NixOS too, and are generated into the same file.
 
+   **Built 2026-08-16, in the round after the prefix landed, and the delay is worth recording.**
+   The renderer took `services` and `ports` from its first commit and nothing ever passed it
+   any — packages arrive through `Installable`, and a `service:` line does not: it is applied by
+   `Dependents` through the `service` backend and a `firewall:` line by `Firewall::apply` through
+   an adapter. So the half of the ruling that shipped first was the half whose interface already
+   fitted, and the ruling read as built because the renderer's signature said it was.
+
+   What the missing half cost on that OS: `systemctl enable` writes into a tree
+   `nixos-rebuild switch` regenerates — including the rebuild Shall itself runs one line later
+   for a `nixos:` package — and `ufw` is not on a NixOS box at all, so a machine declaring
+   `firewall:22/tcp` failed its whole sync on a missing adapter. Both are attributes now, written
+   by one function into one file and applied by one rebuild. **State is declared and a transition
+   is performed**: `@status=restarted` still goes to the init, with the enablement trimmed out.
+   Rules and reasons: `II.30`'s neighbourhood in `target-state.md`, and **V.191**.
+
 **Also ruled, in passing:** `shall export` gains a `nix` format. It already emits Brewfile,
 `requirements.txt`, `package.json` and Aptfile; a NixOS fragment is the same idea and falls out
 of the generator this decision creates.
@@ -8885,7 +8900,83 @@ base: measured, it has `/nix/store` and `nix` 2.35.2 and it does **not** have `/
   non-vacuous: a well-formed module parses, and a deliberately unbalanced one is refused with
   `error: syntax error, unexpected '}'`;
 - the `nix:` profile path is already driven for real in the `tools` image;
-- **`nixos-rebuild switch` against a real NixOS is argv-checked and not executed.** It wants a
-  VM or a real host, and until one exists that row is inference. Written here so nobody reads
-  a green suite as proof of it.
+- **`nixos-rebuild switch` against a real NixOS was driven by hand on 2026-08-16** — the sentence
+  that used to stand here said it was "argv-checked and not executed… until a real host exists
+  that row is inference", and it was one `wsl --install --from-file nixos.wsl` from being false.
+  It is not inference; it is four defects, listed above. What remains true is narrower and is the
+  row to close: **no automated gate reaches it**, and the configuration driven there carried
+  packages only — the services and ports of ruling 4 have never been through a real
+  `nixos-rebuild`. The price is a NixOS CI leg, and `proving.rs` holds the receipt.
 
+
+## J6
+
+**Status: ANSWERED — 2026-08-16. Owner: *"do the durable fix. feature rich and configurable, for
+power users."* Built in the same commit.**
+
+**`schedule:` reported nothing to do about a schedule it was about to rewrite** — `J2`'s sibling,
+named in `J2`'s own entry and left open there because it looked like three adapters and a design.
+It was three adapters and a design.
+
+`@cron=` and `@run=` are not in a schedule's ledger key, so editing when a job runs — or what it
+runs — produced the same key, was found in the applied-extras ledger, and was reported as
+*nothing to do* by the very sync that re-provisioned it underneath. Provisioning is idempotent, so
+the machine always converged; what it could not do was say it had changed anything. `plan` filed
+it under *Shall cannot read back* rather than under work.
+
+**`J2`'s fix does not transfer, and that is the useful half of the investigation.** `J2` was closed
+by putting the discriminating option into the key (`setting:x@scope=system`). A `setting:`'s scope
+makes two genuinely different subjects, so the old key's teardown resets a different value. A
+schedule's name **is** its identity at the OS scheduler: `schedule:nightly@cron=old` and
+`@cron=new` are one cron entry, so `reconcile` — which runs after the apply phase — would
+deprovision by name the entry that phase had just written. Editing a schedule would silently
+delete it.
+
+**So the machine is asked.** systemd and launchd keep files, so the comparison is the whole unit
+Shall would write against the whole unit on disk — exact, and covering every option those
+schedulers can express without anyone maintaining a list. Task Scheduler keeps no file, so both
+sides are canonicalised: the declaration from the `/SC` arguments, the machine from the trigger
+XML, with the trigger shapes captured from real tasks on a Windows 11 box rather than imagined.
+**A shape the reader does not understand is `unverifiable`, never drift** — V.188's rule on a
+third store.
+
+**The feature-rich half.** Four options, which are the four settings the three schedulers between
+them actually have: `enabled` (provision it and leave it silent), `persistent` (run a firing the
+machine was switched off for), `jitter` (spread a fleet around the scheduled moment), `elevated`
+(run at the highest privilege the account holds). **No scheduler has all four**, so each
+provisioner expresses what it can and **refuses the rest by name**, before it writes anything —
+accepting an option and dropping it is the same failure as the cron that was silently widened into
+`DAILY`. An option nobody wrote is never refused and never changes what the schedule does, which
+is why each arrives as an `Option` rather than as a default. A table test asserts the whole matrix;
+its first run found a hole (launchd took `persistent` on an `@reboot` job, which has no calendar
+to miss).
+
+**Two defects found on the way, both of the class the read-back was built to expose.** Rendering
+the systemd unit once instead of twice showed the `@reboot` shape was produced by *overwriting* the
+file the ordinary shape had just written, and the replacement carried no `StandardOutput=` at all
+— the one kind of job nobody watches run was writing its output nowhere. Its sibling:
+`is_task_active` asked only about the timer, so `remove_task`'s end-state assertion was vacuous for
+every boot job. launchd and Windows were checked for the same pair and have neither.
+
+**Not proven:** no read-back has been driven against a live systemd, launchd or Task Scheduler.
+Registering a task on Windows needs an elevated shell and the container harness provisions no
+schedules. Same row as the NixOS rebuild, named rather than implied. Rule: `II.29`, V.192.
+
+## J7
+
+**Status: ANSWERED — 2026-08-16. Three release questions, three answers in one sitting.**
+
+**The version stays `0.8.0`** (owner: *"v.08 — may as well"*). The entry had grown well past its
+title — *"the first published binaries"* — so the title is rewritten to cover what the release
+holds rather than the number being moved to excuse it.
+
+**`nixos:` ships in it** (owner: *"ship with nixos"*), which is why the backend ceiling was raised
+to nine rather than the backend being held back for a NixOS CI leg it does not have yet. The
+unproven row travels with it, stated in `proving.rs`, the README's proving table and V.191.
+
+**There is no `shall doctor`, and there will not be one** (owner: *"if you think there should be
+doctor, do it, but i feel like not"*). The handoff item that raised this assumed the command
+existed and had lost its NixOS reporting; it does not exist and never shipped. `src/main.rs` names
+`doctor` among twelve invented names that are refused with the real one, and `shall check health`
+already reports the `nixos` backend correctly. Adding an alias would put a second name on a
+command that has one, which is the duplication this rewrite exists to remove.

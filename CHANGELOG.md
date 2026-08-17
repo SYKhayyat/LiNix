@@ -2,7 +2,7 @@
 
 All notable changes to Shall are documented here.
 
-## [0.8.0] — unreleased — the first published binaries
+## [0.8.0] — unreleased — published binaries, NixOS as a system, and schedules that report
 
 **The first release anyone can install without a Rust toolchain.** `0.7.0` named the rewrite in
 this file and was never tagged, so no binary was ever published and `install.sh` compiled 448
@@ -11,8 +11,9 @@ about to repeat it — and the reason was not the missing tag. `ci.yml` listened
 `push: branches: [main]` and nothing else, so the release job's `if: refs/tags/v*` was gated on a
 ref its own workflow could never be running under. A tag would have done nothing.
 
-This is the one that ships: `shall-<target>` binaries for x86_64 Linux, both Apple architectures
-and x86_64 Windows, and installers that download them.
+This is the one that ships: `shall-<target>` binaries for Linux on both architectures and both
+libcs, both Apple architectures and x86_64 Windows — seven in all — and installers that download
+them, run them, and fall back to a source build when what they downloaded will not start.
 
 *What follows is a day's work on top of that write-up — the 2026-08-11 assessment's order, and
 five things the assessment did not know about. All of them are in this release, which is why the
@@ -31,8 +32,50 @@ regardless, because neither ran what it downloaded.
 - **`install.sh` and `install.ps1` run `--version` on what they downloaded** and fall back to a
   source build if it will not start. Slow and working beats fast and broken, and it covers hosts
   nobody has thought of rather than only these two.
-- No `aarch64` musl build is published yet, so an arm64 Alpine or NixOS box still builds from
-  source.
+- **`aarch64-unknown-linux-musl` is published too, so arm64 Linux stops building from
+  source.** A Pi, a Graviton instance or an arm64 container used to compile 448 crates
+  under fat LTO on hardware chosen for its power draw. Ubuntu has no aarch64 musl C
+  cross-compiler and `mlua`/`xz2`/`zstd`/`zip` all vendor C, so the release builds this
+  target through `cargo-zigbuild`. Seven published binaries now, not five.
+
+### A `schedule:` is read back, and it carries four more options
+
+Editing when a job runs, or what it runs, used to be reported as *nothing to do* by the very
+`sync` that rewrote it. Provisioning was always idempotent, so the machine converged — it just
+never said so, because `cron` and `run` are not part of a schedule's identity in the applied
+ledger and the edited line looked like the line already recorded.
+
+Shall now asks the scheduler. systemd and launchd keep files, so the whole unit Shall would write
+is compared against the whole unit on disk; Windows Task Scheduler keeps none, so both sides are
+reduced to a canonical form built from its own trigger XML. **A shape Shall did not write —
+a trigger it does not recognise, a second trigger somebody added by hand, a query that could not
+be answered — is reported as *cannot read back*, never as drift.** Calling it drift would rewrite
+the task on every sync for ever and keep `check` red on something nobody can see.
+
+Four new options, for machines that need them:
+
+```text
+schedule:nightly {
+  cron       = 0 2 * * *
+  run        = sync
+  enabled    = true    # false provisions it and leaves it silent
+  persistent = true    # run a firing the machine was switched off for
+  jitter     = 30m     # spread a fleet out around the scheduled moment
+  elevated   = false   # run at the highest privilege the account holds
+}
+```
+
+No scheduler has all four, and Shall does not pretend otherwise: a `--user` systemd timer cannot
+raise its own privilege, launchd has no randomised delay, and `schtasks` can set neither
+`RandomDelay` nor `StartWhenAvailable`. **Each provisioner expresses what it can and refuses the
+rest by name, before it writes anything.** An option you do not write is never refused and never
+changes what the schedule does.
+
+Two defects fell out of rendering the systemd unit in one place instead of two: an `@reboot` job
+was written by overwriting the file the ordinary shape had just written, so it had no
+`StandardOutput=` and its output went nowhere; and the check that a removal really removed the
+schedule only asked about the timer, so it was vacuous for exactly the boot jobs that would
+otherwise run again on the next boot.
 
 ### `nixos:` writes the system configuration
 
@@ -52,6 +95,35 @@ absent import is refused rather than warned about — without it nothing declare
 effect and the rebuild would report success over an unchanged machine.
 
 `shall export --format nix` emits the same module for `nix:` and `nixos:` packages together.
+
+### On NixOS, `service:` and `firewall:` are system configuration too
+
+Packages were the half that shipped first. `service:nginx` used to reach `systemctl enable`,
+which writes into a tree the next `nixos-rebuild switch` regenerates — including the rebuild
+Shall runs one line later when a `nixos:` package changes. And there is no `ufw` on a NixOS box
+at all, so a machine declaring `firewall:22/tcp` failed its whole sync looking for one.
+
+Both go into the same generated module now, and one rebuild applies them beside the packages:
+
+```
+service:nginx                   ->  services.nginx.enable = true;
+service:telnet @status=stopped  ->  services.telnet.enable = false;
+firewall:22/tcp                 ->  networking.firewall.allowedTCPPorts = [ 22 ];
+firewall:53/udp                 ->  networking.firewall.allowedUDPPorts = [ 53 ];
+firewall:default/incoming       ->  networking.firewall.enable = true;
+```
+
+**State is declared; a transition is performed.** `@enabled=` and `@status=running|stopped` are
+the enable attribute. `@status=restarted` is not a state any attribute can express, so it still
+goes to the init — with the enablement trimmed off, because two owners of one enablement is the
+problem this fixes.
+
+A line NixOS cannot express is refused by name rather than approximated: `@enabled=false` with
+`@status=running`, one service declared both ways across two modules, `firewall:default/outgoing`
+(`networking.firewall` filters incoming traffic), and a default policy that is neither `deny` nor
+`allow`. The SSH lockout check, the removal guard and the change ceiling all run on this path —
+a port dropped from `allowedTCPPorts` closes on rebuild exactly as `ufw delete` closes it. And a
+rebuild is skipped entirely when the generated file would be unchanged.
 
 ### `lock` and `unlock` take a list of nine kinds, not one of three axes
 

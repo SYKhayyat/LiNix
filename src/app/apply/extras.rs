@@ -473,6 +473,38 @@ pub(crate) async fn in_effect(
             .holds(name, want, opts.one("scope"))
             .await
         }
+        // A schedule is read back out of the scheduler that holds it — the three adapters `J2`'s
+        // sibling needed. Provisioning was always idempotent, so the machine converged; what it
+        // could not do was *say* it had changed anything, because `@cron=` and `@run=` are not
+        // in the key, so an edited schedule was the same key, was found in the applied ledger,
+        // and was reported as nothing to do while `sync` rewrote it underneath.
+        //
+        // **The key was deliberately not widened to carry them**, which is where `J2`'s own fix
+        // does not transfer: a `setting:`'s scope makes two different subjects, but a schedule's
+        // name IS its identity at the OS scheduler, so `schedule:nightly@cron=old` and
+        // `@cron=new` are one cron entry and `reconcile` would deprovision by name the entry the
+        // apply phase had just written. Editing a schedule would silently delete it.
+        K::Schedule => {
+            let Statement::Schedule(name, opts) = stmt else {
+                return None;
+            };
+            // Through the same builder the provisioner is handed, so the probe and the
+            // installer cannot disagree about what the line says. A line that will not build is
+            // one the apply phase refuses by name; guessing at it here would answer for a
+            // declaration that is never going to apply.
+            let cfg = crate::model::schedule::schedule_config(
+                name,
+                opts,
+                &crate::config::grammar::Origin::new("schedules", 0),
+                &config.guard.never_unattended,
+            )
+            .ok()?;
+            crate::app::scheduler::SchedulerManager::new()
+                .ok()?
+                .standing(executor, &cfg)
+                .await
+                .in_effect()
+        }
         // **Each of these says `None` for a reason, and the reason is written down.** `None` is
         // *unverifiable*, which places — so a kind that lands here is re-applied on every sync
         // for ever, and that is a cost worth stating rather than inheriting from a `_` arm.
@@ -485,17 +517,11 @@ pub(crate) async fn in_effect(
         //   applied, and the change is reported. A `setting:` key carries the schema and the
         //   scope and not the value, which is why a changed `@value=` was the same key, found
         //   in the ledger, and written without ever being counted.
-        // - `schedule:` provisioning is idempotent at the OS scheduler and cheap to repeat.
-        //   **This one shares `J2`'s shape and only half of `J2`'s cost.** `@cron=` and `@run=`
-        //   are not in the key either, so an edited schedule is the same key, is re-provisioned
-        //   (correctly — the machine converges), and is reported as nothing to do. Closing the
-        //   reporting half means reading a cron line back out of three different schedulers,
-        //   which is three adapters and a design, not the one function `holds` turned out to be.
         // - `firewall:` is reconciled as a whole perimeter by `Firewall::apply`, which does its
         //   own diff against what is in force; a per-line probe here would be a second opinion.
         // - `exec:`, `generate:` and `dotfiles:` never reach here — `extra_key` returns `None`
         //   for all three — and are listed so the compiler keeps that true.
-        K::Repo | K::Schedule | K::Firewall => None,
+        K::Repo | K::Firewall => None,
         K::Exec | K::Generate | K::Dotfiles => None,
     }
 }

@@ -39,6 +39,13 @@ impl Dependents<'_> {
     pub async fn apply(&self, state: &crate::model::DesiredState) -> Result<()> {
         use crate::config::grammar::Statement;
 
+        // **On NixOS a service's enablement is not this loop's to apply** (`J5`, ruling 4).
+        // `systemctl enable` writes into a tree the next `nixos-rebuild switch` regenerates —
+        // including the rebuild Shall itself runs when a `nixos:` package changes — so the
+        // enablement is declared in the generated module instead and this loop is left holding
+        // only the transitions. See `apply::nixos`.
+        let declared_by_nixos = crate::app::apply::nixos::owns_extras(self.registry);
+
         for (stmt, origin) in state.dependents() {
             if let Some(key) = crate::core::extras_lock::extra_key(stmt) {
                 if crate::app::apply::extras::in_effect(
@@ -91,7 +98,18 @@ impl Dependents<'_> {
                     }
                 }
                 Statement::Service(name, opts) => {
-                    self.apply_through_backend("service", name, opts, origin)
+                    let opts = if declared_by_nixos {
+                        match crate::app::apply::nixos::imperative_remainder(opts) {
+                            // A restart is a transition no attribute can express, so the init
+                            // still gets it — with the enablement trimmed off, because that half
+                            // is the configuration's and asking twice is two owners.
+                            Some(remainder) => std::borrow::Cow::Owned(remainder),
+                            None => continue,
+                        }
+                    } else {
+                        std::borrow::Cow::Borrowed(opts)
+                    };
+                    self.apply_through_backend("service", name, &opts, origin)
                         .await?
                 }
                 Statement::Link(name, opts) => {

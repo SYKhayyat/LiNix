@@ -94,12 +94,19 @@ done
 # That loosening is the price of replacing an instrument that could not measure the question at
 # all. A count refuses a weak check and a strong one alike, so the cheapest way past it is to stop
 # adding checks — and the four sections that arrived in those 41 are coverage this repository did
-# not have. Getting the rate back down is a named job, not an aspiration: it is the 13 assertions
-# listed below, each of which needs a positive control.
+# not have. **That job was done rather than left as an aspiration**: the batch it named got its
+# positive controls, the container do-nothing rate came back to 548 permille and the fail-stub
+# rate to 51, and both ceilings below moved down with them. The numbers in the table above are
+# kept as the "then" they were measured as, not rewritten to look better.
 #
 # Each rate is a ratchet from here: lower it when that batch is fixed, never raise it again.
+# **Ratcheted 2026-08-16 (second round), measured not estimated.** The container harness
+# moved from 120/198 = 606 permille to 107/195 = 548, and its caught count from 78 to 88,
+# when the absence-after family got its positive controls. Both numbers move together, which
+# is what a real strengthening looks like: a survivor became a catch rather than a check
+# disappearing. The Windows row is untouched because nothing measured it this round.
 case "$HARNESS" in
-    */run-in-container.sh) DEFAULT_RATE=650; DEFAULT_FLOOR=70 ;;
+    */run-in-container.sh) DEFAULT_RATE=600; DEFAULT_FLOOR=80 ;;
     *)                     DEFAULT_RATE=690; DEFAULT_FLOOR=42 ;;
 esac
 RATE_CEILING="${SURVIVOR_RATE:-$DEFAULT_RATE}"
@@ -144,27 +151,65 @@ FLOOR="${CAUGHT_FLOOR:-$DEFAULT_FLOOR}"
 # Lowering these rates means giving each a positive control, not deleting it. Ratchet down,
 # never up.
 #
-# **Re-measured 2026-08-16, and both fail-stub cells got worse.** Against CI run 31821612048, the
-# last green main: container 14/156 = 90 permille to 27/197 = 137, and windows 6/117 = 51 to
-# 8/125 = 64. The container ceiling below is nearly double what that run measured, which is the
-# largest single loosening in this file and is why the 27 were read one by one rather than
-# summarised. They are the two classes above and nothing new:
+# **Re-measured 2026-08-16 twice, and the second measurement is the one to read.** Against CI
+# run 31821612048, the last green main, the container harness had gone 14/156 = 90 permille to
+# 27/197 = 137 — the largest single loosening this file has ever carried, and the 27 were read
+# one by one rather than summarised. Reading them is what produced the fix: **27 survivors of
+# 197 became 10 of 194 — 51 permille — and the caught count went 170 to 184.**
 #
-#   9  refusal checks, which say `(failed, as it must)` in their own names. A check that asserts
-#      a refusal passes against a binary that refuses everything, by construction.
-#   5  PRECONDITIONS — "no shim exists before the sync that deploys it", "nothing is adopted
-#      before adopt runs", "the tree's destinations are empty before sync". These run before the
-#      product acts, so no product behaviour can move them.
-#   13 absence-after assertions — "the shim is gone from disk", "the init system really disabled
-#      it", "and the daemon really stopped". These are the ones worth money: a service is stopped
-#      when it was never started, so each needs a positive control before it can distinguish.
+# **The published 9/5/13 classification of those 27 was wrong**, and correcting it is most of
+# what made them fixable. Seventeen of the 27 were controllable and are now controlled:
 #
-# So the rise is the service and shim sections arriving with their preconditions attached, rather
-# than an existing check that got weaker — but "the new checks are weak in a way the old ones were
-# not" is still a real finding and this number records it. The 13 are the batch to fix, and fixing
-# them is what lowers it. Nobody should read 165 as a measurement of anything good.
+#   11 ABSENCE-AFTER assertions — "the shim is gone from disk", "the daemon really stopped",
+#      "every file the tree placed is gone". Each now goes through the `witness` / `gone_ok`
+#      pair in the harness: the sighting is recorded where the harness already asserts
+#      presence, and an absence with no sighting behind it is a FAILURE, not a pass.
+#    2 BOUNDS a zero satisfies — "adopt took no more than what apt calls user-chosen". A bound
+#      over an empty set is not a weak assertion, it is no assertion, so it now reports
+#      unmeasured rather than passing.
+#    3 REFUSAL checks that scored any non-zero exit. `nok_saying` with the SUBJECT as the
+#      pattern: the stub never echoes its arguments and every real refusal names what it
+#      refused, so this is both the tighter check and the one a user needs (V.42).
+#    1 PATTERN that matched the program's own name. `protected includes a system essential`
+#      grepped for `shall\|libc\|systemd\|...`, and the stub prints `shall: this stub fails
+#      everything`. The alternation no longer contains `shall`.
+#
+# **And one of the 27 had a published explanation that was tested and pronounced false.**
+# `running the shim reaches the real tool` invokes `"$_bindir/$PKG" --version` and greps for
+# the package name — so a shell asked to run a file that is not there prints the path in its
+# own error and `bash: /root/.local/bin/jq: No such file or directory` matches `[jJ]q`. That
+# hypothesis was recorded as disproved because the experiment used an EMPTY path, where the
+# error names `/` and no longer contains the pattern. Right hypothesis, different command. It
+# is guarded on the shim existing now.
+#
+# **The 10 that remain are three shapes a fail-everything stub cannot distinguish, plus one
+# artefact of the instrument. None of them is a weak check and none of them is a job.**
+#
+#    5 PRECONDITIONS — "no shim exists before the sync that deploys it", "nothing is adopted
+#      before adopt runs", "the link target does not exist before sync", "the tree's
+#      destinations are empty before sync", "the service is disabled and stopped before the
+#      declaration". These run BEFORE the product acts, so no product behaviour can move them.
+#      They are the controls the checks after them depend on; deleting them to lower this
+#      number would weaken the harness while improving its score.
+#    3 assertions that the product showed RESTRAINT — "and freezes nothing", "and the
+#      unapproved script did NOT run", "dry-run did NOT actually install jq". There is no
+#      earlier presence to witness, because the whole claim is that nothing was ever written.
+#      A stub that does nothing has exactly the same restraint, and no instrument of this shape
+#      can tell the two apart.
+#    1 assertion that Shall did not break what the image already had — "python3 still
+#      installed after adopt". Same shape as the three above.
+#    1 INSTRUMENT ARTEFACT — "git log shows a shall commit" greps for `shall:`, and the fail
+#      stub writes `shall: this stub fails everything` to stderr, which `grep_ok` folds into
+#      its output. The check is not weak; the stub's prefix collides with the product's
+#      commit-subject prefix. Changing either to break the collision would make the stub or the
+#      product less like itself, which is a worse trade than one known survivor.
+#
+# So the ceiling below is a MEASUREMENT with a few points of runner slack, not a loosening.
+# Still a ratchet in the same direction: lower it when a batch is fixed, never raise it to get
+# green. The Windows row is unchanged — the same `witness`/`gone_ok` pair landed in that
+# harness for its two absence-after checks, and nothing measured the result this round.
 case "$HARNESS" in
-    */run-in-container.sh) DEFAULT_FAIL_RATE=165; DEFAULT_FAIL_FLOOR=158 ;;
+    */run-in-container.sh) DEFAULT_FAIL_RATE=70;  DEFAULT_FAIL_FLOOR=178 ;;
     *)                     DEFAULT_FAIL_RATE=90;  DEFAULT_FAIL_FLOOR=108 ;;
 esac
 FAIL_RATE_CEILING="${FAIL_SURVIVOR_RATE:-$DEFAULT_FAIL_RATE}"

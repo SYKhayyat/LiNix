@@ -12,7 +12,7 @@
 use async_trait::async_trait;
 use chrono::{Duration as ChronoDuration, Utc};
 use dashmap::DashMap;
-use shall::app::scheduler::TaskProvisioner;
+use shall::app::scheduler::{Provisioned, Reading, TaskProvisioner};
 use shall::app::App;
 use shall::config::config::ScheduleConfig;
 use shall::config::Config;
@@ -301,6 +301,34 @@ impl TaskProvisioner for MockTaskProvisioner {
     async fn is_task_active(&self, _executor: &CommandExecutor, name: &str) -> bool {
         let map = self.active_tasks.lock().await;
         map.contains_key(name)
+    }
+    /// The mock scheduler expresses everything, so nothing is refused here. A refusal belongs
+    /// to the OS that cannot hold the option, and inventing one for the mock would make a test
+    /// about the mock's imagination.
+    fn refuse_unsupported(&self, _config: &ScheduleConfig) -> std::result::Result<(), String> {
+        Ok(())
+    }
+    /// It stores the whole declaration, so what it would provision and what it holds are the
+    /// same value — which is what makes it a mock and not a second implementation.
+    fn rendered(
+        &self,
+        config: &ScheduleConfig,
+        _shall_bin: &Path,
+    ) -> std::result::Result<Provisioned, String> {
+        Ok(Provisioned {
+            spec: format!("{:?}", config),
+            armed: config.enabled.unwrap_or(true),
+        })
+    }
+    async fn read_task(&self, _executor: &CommandExecutor, name: &str) -> Reading {
+        let map = self.active_tasks.lock().await;
+        match map.get(name) {
+            Some(config) => Reading::Holds(Provisioned {
+                spec: format!("{:?}", config),
+                armed: config.enabled.unwrap_or(true),
+            }),
+            None => Reading::Absent,
+        }
     }
 }
 

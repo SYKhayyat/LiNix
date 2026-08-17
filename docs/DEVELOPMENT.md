@@ -110,7 +110,15 @@ list does not carry.
 `scripts/nix-validate.sh` asks a real Nix parser about every module `backends/nixos.rs` generates
 *and* every `configuration.nix` it edits. No Rust test can do this — a Rust test suite cannot
 parse Nix — and the file is somebody's boot configuration, so a mistake there breaks their
-machine rather than Shall. `--self-test` also proves the gate can still fail.
+machine rather than Shall.
+
+**`--evaluate` is the half that catches an option name.** Parsing says nothing about whether
+`services.nginx.enable` exists or whether `allowedTCPPorts` takes numbers, which is exactly what
+the module grew when `service:` and `firewall:` became NixOS attributes. This mode imports each
+generated module into a real NixOS module system and forces the attributes Shall writes. The
+whole gate — six modules parsed, four evaluated, two container starts — measured 25s.
+`--self-test` implies it, and proves *both* gates can fail: a module that is not Nix, and a module
+that is perfectly good Nix naming a service nixpkgs has never heard of.
 
 ## Running tests
 
@@ -173,8 +181,17 @@ So when something is red, start with `gh run list --workflow=CI --event=schedule
 are frequently all green and it is a nightly-only job, which is by construction the half that
 touches real managers.
 
-CI also runs linters the five-step chain does not: `shellcheck`, `cargo deny`, and the MSRV build.
-Run those in a container before pushing shell or dependency changes.
+CI also runs linters the five-step chain does not: `shellcheck`, `actionlint`, `cargo deny`,
+and the MSRV build. Run those in a container before pushing shell, workflow or dependency
+changes.
+
+**And one of them is not a linter at all — it is a mode bit.** The Linux build leg runs
+`./scripts/nix-validate.sh`, spelled with a leading `./`, and a script committed from
+Windows carries `100644` in the index because the filesystem here has no executable bit to
+record. `main` went red on `a5d5517` with `Permission denied` and exit 126, on a commit
+whose own diff was documentation. `every_shipped_script_is_executable_tests` in the suite
+now asks git — not the working tree — whether every file with a shebang is `100755`. If it
+fails, the fix is `git update-index --chmod=+x <path>`.
 
 ## Debugging
 
