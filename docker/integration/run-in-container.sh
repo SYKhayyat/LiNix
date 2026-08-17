@@ -1121,7 +1121,16 @@ echo "[14] Real lifecycle, every other manager on this image"
 # this to a number nobody has measured is the mistake the paragraph above records happening once
 # already, against `storage`. The soft branch prints each image's new count; take the largest of
 # them from the next full matrix run and lower this line to it.
-LIFECYCLE_GAP_CEILING=11
+#
+# **Lowered to 1 on 2026-08-17, which is that instruction carried out.** Every image in the
+# matrix was read off its own soft line rather than reasoned about — push run 31990107008 for
+# ubuntu, arch, alpine, void, fedora, opensuse and storage; nightly 31992721802 for tools,
+# slackware, guix and gentoo. Ten of the eleven printed `nixos`, which is named above as of this
+# change and leaves them at nought. `storage` printed `nixos zfs`, and its `zfs` is the one real
+# remainder: on the only image where `SHALL_IT_STORAGE` is set, `btrfs` and `lvm` get canaries
+# and `zfs` does not. So 1 is the largest true count, and the gate now fails on the next backend
+# added without either — which at 11 it could not have done.
+LIFECYCLE_GAP_CEILING=1
 canary() {
     case "$1" in
         # **One binary name per backend.** `cowsay` was the canary for npm, pnpm, yarn AND bun,
@@ -1354,6 +1363,13 @@ no_lifecycle_reason() {
         # for a backend whose `needs_root` is true. Building from source is avoided by giving
         # them a repository package as their canary, which they hand to pacman. They have rows
         # in `canary()` now, so a reason here would be a claim contradicted one function away.
+        # `nixos:` is not a package manager that could be installed into one of these images —
+        # it declares system state through /etc/nixos and `nixos-rebuild`, so the image would
+        # have to BE NixOS. `nixos/nix` cannot stand in: probed 2026-08-16, it is the Nix
+        # package manager on a minimal base, with no /etc/NIXOS, no /run/current-system, no
+        # `nixos-rebuild` and no systemd. `proving.rs` carries the by-hand receipt and the
+        # price of closing it; `scripts/nix-validate.sh` is the automated half.
+        nixos)    echo "needs the image to BE NixOS (/etc/nixos + nixos-rebuild), and no image in this matrix is — nixos/nix was probed and is the Nix manager on a minimal base, not NixOS; scripts/nix-validate.sh evaluates every generated module against real nixpkgs instead" ;;
         eopkg)    echo "Solus's native manager, and there is no Solus image in this matrix — argv-tested only" ;;
         slackpkg) echo "Slackware's native manager, driven for real on the slackware image and absent from this one" ;;
         guix)     echo "GNU Guix's own manager, driven for real on the guix image and absent from this one" ;;

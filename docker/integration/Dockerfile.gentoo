@@ -22,14 +22,64 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 WORKDIR /src
 COPY . /src
 RUN cargo build --release && cp target/release/shall /usr/local/bin/shall && chmod 0755 /usr/local/bin/shall
+# The test binary travels with it, for the reason `Dockerfile.guix` gives: the argv and
+# terminator gates are `cargo test` invocations, and whether the runtime base happens to ship a
+# Rust toolchain is not this repository's to decide. `gentoo/stage3:latest` is a rolling tag —
+# it carried `cargo` on 2026-08-16, answered `cargo: command not found` on the 2026-08-17
+# nightly, and carried it again hours later. A probe step whose ability to run at all depends on
+# which day's base image it drew is not a measurement.
+#
+# `--release`, so it reuses the artefacts the line above just produced rather than compiling the
+# dependency graph a second time in debug.
+RUN cargo test --release --no-run --test suite \
+    && cp "$(ls -t target/release/deps/suite-* | grep -v '\.d$' | head -1)" /usr/local/bin/suite \
+    && chmod 0755 /usr/local/bin/suite
 
 FROM gentoo/stage3:latest
 ENV SHALL_IT_IMAGE=gentoo
 # SMOKE-ONLY: no source builds; plan/parse/read-only only.
 ENV SMOKE_ONLY=1
+
+# **Portage without an ebuild repository is a package manager that knows no packages, and the
+# base image stopped shipping one.** `gentoo/stage3:latest` is rolling: on 2026-08-16 the leg
+# passed 238 checks, and on 2026-08-17 `/var/db/repos/gentoo` did not exist, so
+# `emerge --search '^jq$'` answered `[ Applications found : 0 ]` and every check that asks Shall
+# to resolve a bare name failed with *"no package manager this line accepts has `jq`"* — five of
+# them, reading like a broken resolver rather than an empty tree.
+#
+# `gentoo/portage` is Gentoo's own published snapshot of that tree and is what their
+# documentation points at. Copied in rather than mounted with `--volumes-from`, because this
+# image is driven by two CI steps with different `docker run` lines and a tree that only one of
+# them mounts is a tree the other one does not have.
+COPY --from=gentoo/portage:latest /var/db/repos/gentoo /var/db/repos/gentoo
+
+# A profile is what gives Portage its USE flags, masks and defaults; without one it warns that it
+# "will probably prevent most merges" and dry-run plans are answering from nothing. The `test -d`
+# fails the BUILD if the path moves, so a Gentoo profile renumbering arrives as a build error
+# naming the directory rather than as a leg quietly measuring an unprofiled host.
+#
+# **The news notice is suppressed, and it is not cosmetic.** Portage appends
+# `IMPORTANT: N news items need reading for repository 'gentoo'` to the output of ordinary
+# commands — `emerge --pretend`, `--search`, and everything Shall parses. A fresh tree arrives
+# with about twenty unread items, so without this every parse in the run gets two extra lines
+# it did not ask for. `.skip` is the file that answers this and `.read` is not: `.read` records
+# what `eselect news read` has shown, while `.unread` is regenerated from the tree on the next
+# command unless the item is skipped.
+#
+# The final `emerge --search` is there to absorb the one-time "Performing Global Updates" pass
+# at build time rather than in the middle of the first check that reads emerge's output.
+RUN test -d /var/db/repos/gentoo/profiles/default/linux/amd64/23.0 \
+    && ln -sfn ../../var/db/repos/gentoo/profiles/default/linux/amd64/23.0 /etc/portage/make.profile \
+    && mkdir -p /var/lib/gentoo/news \
+    && ls /var/db/repos/gentoo/metadata/news > /var/lib/gentoo/news/news-gentoo.skip \
+    && cp /var/lib/gentoo/news/news-gentoo.skip /var/lib/gentoo/news/news-gentoo.read \
+    && : > /var/lib/gentoo/news/news-gentoo.unread \
+    && (emerge --search --quiet '^shall-absorbs-the-first-run$' >/dev/null 2>&1 || true)
+
 # On PATH, as in every other image: a second way to find the binary is a second way
 # to get it wrong, and this one was wrong — the harness never read the env var it set.
 COPY --from=builder /usr/local/bin/shall /usr/local/bin/shall
+COPY --from=builder /usr/local/bin/suite /usr/local/bin/suite
 # run-in-container.sh is .dockerignored on purpose (it's bind-mounted at run time by run.sh,
 # so editing it never busts the build cache). Just create the mount-target dir; the runtime
 # `-v …/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro` provides the file.

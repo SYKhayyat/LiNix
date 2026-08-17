@@ -1094,7 +1094,7 @@ impl Transaction {
                         node_index: *idx,
                         backend_name: b_name.clone(),
                         package_name: name.clone(),
-                        retries: attempt - 1,
+                        retries: retries_behind(attempt),
                         duration: start_instant.elapsed(),
                         bytes_downloaded: 0,
                         start_time: start_time_utc,
@@ -1134,10 +1134,8 @@ impl Transaction {
                         break;
                     }
                     LockWait::Backoff => {
-                        let backoff = std::cmp::min(
-                            config.initial_backoff * (1 << (attempt - 2)),
-                            config.max_backoff,
-                        );
+                        let backoff =
+                            backoff_for(attempt, config.initial_backoff, config.max_backoff);
                         tokio::time::sleep(backoff).await;
                     }
                 }
@@ -1208,7 +1206,7 @@ impl Transaction {
                             node_index: *idx,
                             backend_name: b_name.clone(),
                             package_name: name.clone(),
-                            retries: attempt - 1,
+                            retries: retries_behind(attempt),
                             duration: start_instant.elapsed(),
                             bytes_downloaded: 0,
                             start_time: start_time_utc,
@@ -1270,7 +1268,7 @@ impl Transaction {
                 node_index: *idx,
                 backend_name: b_name.clone(),
                 package_name: name.clone(),
-                retries: attempt - 1,
+                retries: retries_behind(attempt),
                 duration: start_instant.elapsed(),
                 bytes_downloaded: 0,
                 start_time: start_time_utc,
@@ -1637,6 +1635,27 @@ async fn wait_for_manager_lock(
     })
 }
 
+/// How many of `attempt` tries were retries: all but the first.
+///
+/// `attempt` counts from 1, so a batch that succeeded first time reports nought. Written out
+/// because three `TaskResult` constructions computed it inline, and a copy of an expression is
+/// a copy of its blind spot — the mutation sweep found the same subtraction three times over
+/// and nothing in the suite could tell any of them from `attempt + 1`.
+fn retries_behind(attempt: u32) -> u32 {
+    attempt - 1
+}
+
+/// The wait before retry number `attempt`, doubling each time and capped at `max`.
+///
+/// Only ever called from inside `attempt > 1`, so the first retry waits `initial` exactly and
+/// the exponent cannot go negative. Written out for the same reason as [`retries_behind`], with
+/// more to answer for: a shift inside a multiplication inside a `min` inside a match arm is
+/// three separate numbers, and all three survived — `<<` read as `>>`, and `attempt - 2` read
+/// as both `attempt + 2` and `attempt / 2`, without failing anything.
+fn backoff_for(attempt: u32, initial: Duration, max: Duration) -> Duration {
+    std::cmp::min(initial * (1 << (attempt - 2)), max)
+}
+
 /// A failure that survived its own retries is not transient, whatever the string said.
 ///
 /// `Retryability::Transient` is a claim: *a second attempt could differ*. The container harness
@@ -1859,6 +1878,68 @@ mod transience_tests {
         assert!(!out.to_string().contains("did not change"));
     }
 
+    /// A run that never retried reports no retries.
+    ///
+    /// `attempt` counts tries and `retries` counts the ones after the first, and the three
+    /// `TaskResult` sites that used to spell that out inline each carried the same untested
+    /// subtraction. There is one now, and this is what stops it reading `attempt + 1`.
+    #[test]
+    fn retries_are_every_attempt_but_the_first() {
+        assert_eq!(retries_behind(1), 0, "the first try is not a retry");
+        assert_eq!(retries_behind(2), 1);
+        assert_eq!(retries_behind(4), 3);
+    }
+
+    /// The backoff doubles from the first retry, and the cap is a cap.
+    ///
+    /// Called only with `attempt >= 2`, so attempt 2 — the first retry — waits `initial`
+    /// exactly. Each value below is one the shift, the exponent or the multiplication would
+    /// get wrong on its own.
+    #[test]
+    fn the_backoff_doubles_from_the_first_retry_and_stops_at_the_cap() {
+        let initial = Duration::from_millis(500);
+        let max = Duration::from_secs(30);
+
+        assert_eq!(
+            backoff_for(2, initial, max),
+            Duration::from_millis(500),
+            "the first retry waits the initial backoff, undoubled"
+        );
+        assert_eq!(backoff_for(3, initial, max), Duration::from_secs(1));
+        assert_eq!(backoff_for(4, initial, max), Duration::from_secs(2));
+        assert_eq!(
+            backoff_for(7, initial, max),
+            Duration::from_secs(16),
+            "still doubling while it is under the cap"
+        );
+        assert_eq!(
+            backoff_for(8, initial, max),
+            max,
+            "thirty-two seconds is over a thirty-second cap, so the cap is what is waited"
+        );
+    }
+
+    /// Two attempts is the experiment; one is not.
+    ///
+    /// The tests above use three attempts and one, and `attempts < 2` reads `<= 2` without
+    /// either of them noticing — which quietly raises the bar to three, so the *second*
+    /// identical failure stops counting as evidence. Two is the smallest number of attempts
+    /// that can show a failure repeating, and it is the only value at which the two spellings
+    /// disagree.
+    #[test]
+    fn the_second_attempt_is_already_a_repeat() {
+        let out = falsify_transience(transient("`gem` failed: Connection reset"), 2);
+        assert_eq!(
+            out.retryability(),
+            Retryability::Exhausted,
+            "a failure seen twice has been tested once, which is the whole experiment"
+        );
+        assert!(
+            out.to_string().contains("tried 2 times"),
+            "the message must say how many attempts stand behind it: {out}"
+        );
+    }
+
     #[test]
     fn a_permanent_failure_is_not_touched_by_the_retry_count() {
         // It never entered the retry loop a second time — `give_up` breaks on Permanent — so
@@ -1884,6 +1965,78 @@ mod transience_tests {
         let out = falsify_transience(e, 3);
         assert_eq!(out.retryability(), Retryability::Unknown);
         assert!(!out.to_string().contains("did not change"));
+    }
+}
+
+#[cfg(test)]
+mod from_config_tests {
+    use super::*;
+
+    /// Every setting this constructor exists to carry is actually carried.
+    ///
+    /// The doc comment on `from_config` records why it exists: `max_concurrent` had been left
+    /// at the `patient()` default and nobody noticed, because a field that silently falls back
+    /// to a sensible number looks exactly like a field that was read. `..Self::patient()` makes
+    /// that the failure mode for every line in the struct — deleting `max_concurrent`, `purge`
+    /// or `manager_lock_wait` left the suite green, which is the same defect the constructor
+    /// was written to prevent, three more times.
+    ///
+    /// `max_concurrent` is asserted at two different values rather than one. The fallback is
+    /// this machine's parallelism, so a single value can agree with it by luck on whatever host
+    /// happens to run the test; two values cannot both be it.
+    #[test]
+    fn every_setting_from_config_claims_to_read_reaches_the_transaction() {
+        let base = crate::config::Config::default;
+
+        for parallel in [1usize, 64] {
+            let mut config = base();
+            config.max_parallel = parallel;
+            assert_eq!(
+                TransactionConfig::from_config(&config).max_concurrent,
+                parallel,
+                "max_parallel = {parallel} did not reach max_concurrent"
+            );
+        }
+        let mut none = base();
+        none.max_parallel = 0;
+        assert_eq!(
+            TransactionConfig::from_config(&none).max_concurrent,
+            1,
+            "nought parallelism is one worker, not none"
+        );
+
+        // Purge is an OR of a persistent setting and a this-run flag, and each half must be
+        // able to turn it on alone — `&&` reads identically until you ask one of them by itself.
+        let mut persistent = base();
+        persistent.remove.purge = true;
+        assert!(
+            TransactionConfig::from_config(&persistent).purge,
+            "`[remove] purge = true` alone must purge"
+        );
+        let mut this_run = base();
+        this_run.purge_this_run = true;
+        assert!(
+            TransactionConfig::from_config(&this_run).purge,
+            "`--purge` alone must purge"
+        );
+        assert!(
+            !TransactionConfig::from_config(&base()).purge,
+            "neither set is not a purge"
+        );
+
+        let mut keep_going = base();
+        keep_going.keep_going_this_run = true;
+        assert!(TransactionConfig::from_config(&keep_going).continue_on_error);
+        assert!(!TransactionConfig::from_config(&base()).continue_on_error);
+
+        // A wait no default would produce, so the fallback cannot pass for the setting.
+        let mut waiting = base();
+        waiting.manager_lock_wait_secs = 4_321;
+        assert_eq!(
+            TransactionConfig::from_config(&waiting).manager_lock_wait,
+            Duration::from_secs(4_321),
+            "manager_lock_wait_secs did not reach the transaction"
+        );
     }
 }
 
@@ -2450,6 +2603,91 @@ mod batching_tests {
             "two independent chains reported {} wave(s) against a depth of {}",
             ran.waves,
             ran.depth
+        );
+    }
+
+    /// Where the byte bound puts the split, to the name.
+    ///
+    /// **`batches` had no direct test at all.** Every batching test above drives it through the
+    /// async harness and asks how many *commands* ran; none asks where the split fell, and the
+    /// difference is the whole of the arithmetic. Six mutants lived in five lines of it — both
+    /// `name.len() + 1` costs, the `bytes + cost` sum, the `bytes += cost` accumulation, and the
+    /// `>` that compares them — and a run that batches 61 packages into 2 commands does that
+    /// under every one of them.
+    ///
+    /// The lengths are picked so each mutation moves the answer, which is the only reason this
+    /// is a table of magic numbers rather than one round case. `MAX_BATCH_BYTES` is 6000 and a
+    /// name of length L costs L + 1:
+    ///
+    ///   - L = 99 (cost 100) makes 60 names come to exactly 6000, which is the one place `>`
+    ///     and `>=` disagree.
+    ///   - L = 100 (cost 101) fits 59 names where cost 100 or 99 would fit 60, which is where
+    ///     dropping the `+ 1` shows up.
+    #[test]
+    fn the_byte_bound_splits_exactly_where_the_cost_says() {
+        /// A name of exactly `len` characters, distinct per index.
+        fn padded(len: usize, i: usize) -> String {
+            format!("{:0width$}", i, width = len)
+        }
+
+        fn sizes(actions: Vec<GraphAction>, max_batch: usize) -> Vec<usize> {
+            let mut graph = StableDiGraph::new();
+            let ready: Vec<_> = actions.into_iter().map(|a| graph.add_node(a)).collect();
+            Transaction::batches(&graph, ready, max_batch)
+                .iter()
+                .map(|b| b.len())
+                .collect()
+        }
+
+        let installs = |len: usize, n: usize| {
+            (0..n)
+                .map(|i| GraphAction::Install(spec("apt", &padded(len, i))))
+                .collect::<Vec<_>>()
+        };
+        let removals = |len: usize, n: usize| {
+            (0..n)
+                .map(|i| GraphAction::Remove {
+                    name: padded(len, i),
+                    backend: "apt".into(),
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // Exactly on the bound: 60 × 100 bytes is 6000, and 6000 is not *over* 6000.
+        assert_eq!(
+            sizes(installs(99, 60), 10_000),
+            vec![60],
+            "sixty names costing 6000 bytes sit exactly on the bound, which is not over it"
+        );
+        // One more, and the bound is genuinely crossed.
+        assert_eq!(
+            sizes(installs(99, 61), 10_000),
+            vec![60, 1],
+            "the sixty-first name is the one that does not fit"
+        );
+
+        // One byte per name wider, and the batch is one name shorter — which is what says the
+        // separator is being counted at all.
+        assert_eq!(
+            sizes(installs(100, 60), 10_000),
+            vec![59, 1],
+            "at 101 bytes a name only fifty-nine fit under 6000"
+        );
+        // A removal's name costs the same as an install's; it is the other arm of the same
+        // match, and it was the other surviving mutant.
+        assert_eq!(
+            sizes(removals(100, 60), 10_000),
+            vec![59, 1],
+            "a removal's name is measured the same way an install's is"
+        );
+
+        // And the count cap, which is the caller's and not the byte bound's. Short names, so
+        // nothing here is near 6000 bytes and only `max_batch` can be doing the splitting.
+        assert_eq!(sizes(installs(2, 10), 3), vec![3, 3, 3, 1]);
+        assert_eq!(
+            sizes(installs(2, 10), 0),
+            vec![1; 10],
+            "a cap of nought is read as one, not as no cap at all"
         );
     }
 }

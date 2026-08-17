@@ -1084,6 +1084,13 @@ no_lifecycle_reason() {
         # nobody re-derived, and it turned out to be a price (Q17).
         macports)   echo "MacPorts installs a whole second package tree under /opt/local beside Homebrew and has never been attempted on a runner — a cost nobody has priced, not a wall" ;;
 
+        # `nixos:` writes a module into /etc/nixos and hands it to `nixos-rebuild`. That is a
+        # property of the operating system, not of the shell: no amount of tooling makes a
+        # macOS or Windows host into a NixOS one. The receipt for the lifecycle that HAS been
+        # driven, and the one step still open, are in `proving.rs`; `scripts/nix-validate.sh`
+        # is what asks a real Nix evaluator about every module this code generates.
+        nixos)      echo "declares system state through /etc/nixos and \`nixos-rebuild\`, so it needs the host to BE NixOS — this one is not, and no runner in this matrix is either; scripts/nix-validate.sh evaluates every generated module against real nixpkgs instead" ;;
+
         # Lifecycled for real in the `tools` container image, which ships each of these and has
         # a canary for it. Installing them here would be testing their installers on somebody's
         # machine, which is what `disposable_host` exists to refuse.

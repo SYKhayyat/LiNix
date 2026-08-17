@@ -576,13 +576,18 @@ jobs:
       matrix:
         include:
           # `probe` is how this image is asked the argv questions, and it is a matrix field
-          # because one image cannot be asked the way the others are. Everything here compiles
-          # the suite in place; `guix`'s runtime stage is `metacall/guix`, which has no `cargo`
-          # (measured), so its Dockerfile copies a prebuilt `suite` binary out of the builder and
-          # this drives that instead. The step concatenates `probe` with the test filters, which
-          # is why the cargo form carries its own trailing `--`.
+          # because one image cannot be asked the way the others are. `tools` compiles the suite
+          # in place; `guix` and `gentoo` copy a prebuilt `suite` binary out of their builder
+          # stage and drive that instead. The step concatenates `probe` with the test filters,
+          # which is why the cargo form carries its own trailing `--`.
+          #
+          # `gentoo` joined the prebuilt half on 2026-08-17. `metacall/guix` has no `cargo` and
+          # never had one; `gentoo/stage3:latest` is worse than that, because it is a rolling tag
+          # that HAD one on 2026-08-16, answered `cargo: command not found` on the 2026-08-17
+          # nightly, and had one again hours later. An argv gate that can only run on the days
+          # the base image feels like shipping a toolchain reports nothing on the other days.
           - { distro: tools,     backend: apt,      pkg: jq, flags: '', probe: 'cargo test --test suite --' }
-          - { distro: gentoo,    backend: emerge,   pkg: jq, flags: '-e SMOKE_ONLY=1', probe: 'cargo test --test suite --' }
+          - { distro: gentoo,    backend: emerge,   pkg: jq, flags: '-e SMOKE_ONLY=1', probe: 'suite' }
           # Slackware is here rather than in the fast matrix for the reason gentoo is: the
           # image builds for tens of minutes. `slackpkg` had never met its own manager in any
           # harness before 2026-08-14 — it was argv-tested only, with no image to run it in.
@@ -627,7 +632,10 @@ jobs:
     # present, and a GitHub runner has about eight — this image has thirty. That gap is the
     # whole reason `luarocks`, `mix` and `asdf` went years without anyone asking them a
     # question: not that the gates were missing, but that they had never been pointed at a
-    # machine that could answer. The image already carries a Rust toolchain.
+    # machine that could answer. How the suite gets here is the `probe` column's business: only
+    # `tools` compiles it in place, and the sentence that stood here until 2026-08-17 — "the
+    # image already carries a Rust toolchain" — was a claim about all four that was false for
+    # two of them.
     #
     # **Runs even when the lifecycle above it failed.** They are separate questions asked of the
     # same image — "does an install→list→remove still work" and "do these tools still parse the

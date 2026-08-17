@@ -1661,6 +1661,11 @@ mod tests {
         );
     }
 
+    /// **Which lines were refused, not how many.** This asserted `os.len() == 2` and nothing
+    /// else, so swapping `v != "latest"` for `v == "latest"` kept the count at two while
+    /// reversing the verdict on every line: `@version=latest` passed as pinned and `@version=1.6`
+    /// was refused as floating. A count is invariant under a permutation, which is exactly what
+    /// a comparison flip produces.
     #[test]
     fn pinned_only_requires_a_concrete_version() {
         let guard = crate::config::GuardSettings {
@@ -1672,11 +1677,26 @@ mod tests {
             &desired(&[
                 ("apt", "curl", None),           // no version -> refused
                 ("apt", "wget", Some("latest")), // floating -> refused
+                ("apt", "tree", Some("*")),      // floating -> refused
+                ("apt", "htop", Some("")),       // empty is not a version -> refused
                 ("apt", "jq", Some("1.6")),      // pinned -> ok
             ]),
         );
-        assert_eq!(os.len(), 2, "{:?}", os);
-        assert!(os.iter().all(|o| matches!(o, Objection::Unpinned { .. })));
+
+        let mut refused: Vec<&str> = os
+            .iter()
+            .map(|o| match o {
+                Objection::Unpinned { key } => key.as_str(),
+                other => panic!("pinned_only raised something that is not Unpinned: {other:?}"),
+            })
+            .collect();
+        refused.sort_unstable();
+        assert_eq!(
+            refused,
+            ["apt:curl", "apt:htop", "apt:tree", "apt:wget"],
+            "a concrete version is the only thing that satisfies pinned_only, and `apt:jq` is \
+             the only line here that has one"
+        );
     }
 
     #[test]
@@ -2442,6 +2462,226 @@ mod tests {
         assert!(
             !over.objections.is_empty(),
             "four removals under a ceiling of three must be refused"
+        );
+    }
+
+    /// The same boundary, asked of the function the boundary lives in.
+    ///
+    /// [`the_removal_ceiling_fires_past_the_limit_and_not_at_it`] was written to kill
+    /// `too_many_changes`'s `>`→`>=`, and did not: it sets `max_removals`, which is a
+    /// *per-kind* ceiling checked elsewhere, so `too_many_changes` — which reads
+    /// `max_total_changes` and nothing else — never saw a total equal to its limit. The mutant
+    /// was still alive nine days later. A boundary test has to be pointed at the comparison it
+    /// names, not at a ceiling that sounds like it.
+    #[test]
+    fn the_total_ceiling_fires_past_the_limit_and_not_at_it() {
+        let cfg = |limit| Config {
+            guard: crate::config::GuardSettings {
+                max_total_changes: limit,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(
+            too_many_changes(&cfg(3), &Reaping::new(), 3).is_none(),
+            "three changes under a total of three is at the limit, not over it"
+        );
+        assert!(
+            too_many_changes(&cfg(3), &Reaping::new(), 4).is_some(),
+            "four changes under a total of three must be refused"
+        );
+        // The other half of the same guard: nought is off, not a ceiling of nought.
+        assert!(
+            too_many_changes(&cfg(0), &Reaping::new(), 9_999).is_none(),
+            "max_total_changes = 0 disables the total; it does not refuse everything"
+        );
+        // And a limit of one, where `>` and `>=` disagree about the smallest set there is.
+        assert!(too_many_changes(&cfg(1), &Reaping::new(), 1).is_none());
+        assert!(too_many_changes(&cfg(1), &Reaping::new(), 2).is_some());
+    }
+
+    /// The cap says "…and N more" only when there are more.
+    ///
+    /// `protected.len() > MAX_LISTED` reads `>=` just as happily, and every test of this message
+    /// used 25 objections against a cap of 10 — far enough over that both comparisons agree.
+    /// At exactly the cap they disagree, and the mutant's version prints "…and 0 more
+    /// protected package(s)" under a list that already showed every one of them.
+    #[test]
+    fn the_capped_list_claims_more_only_when_there_is_more() {
+        let protected = |n: usize| GuardReport {
+            objections: (0..n)
+                .map(|i| Objection::Protected {
+                    key: format!("apt:pkg{}", i),
+                    reason: "protected by config rule `x`".into(),
+                })
+                .collect(),
+        };
+
+        let exactly = protected(MAX_LISTED).message(GuardScope::Sync, RemovalKind::Package);
+        assert!(
+            !exactly.contains("…and"),
+            "ten protected packages all fit under a cap of ten, so there is no remainder to \
+             announce:\n{exactly}"
+        );
+        assert!(
+            exactly.contains(&format!("apt:pkg{}", MAX_LISTED - 1)),
+            "the last one that fits must still be listed:\n{exactly}"
+        );
+
+        let one_over = protected(MAX_LISTED + 1).message(GuardScope::Sync, RemovalKind::Package);
+        assert!(
+            one_over.contains("…and 1 more protected package(s)"),
+            "eleven against a cap of ten leaves exactly one unlisted:\n{one_over}"
+        );
+    }
+
+    /// Every objection renders a reason that names itself.
+    ///
+    /// `describe_objection` is the install side's whole explanation of a refusal, and nothing
+    /// asserted a word of it — replacing the body with `String::new()` and with `"xyzzy"` both
+    /// passed the suite. A refusal a user cannot read is a refusal that will be read as a bug
+    /// in Shall.
+    #[test]
+    fn every_objection_describes_itself() {
+        let cases = [
+            (
+                Objection::Denied {
+                    key: "apt:telnet".into(),
+                },
+                vec!["apt:telnet", "deny_packages"],
+            ),
+            (
+                Objection::Unpinned {
+                    key: "apt:curl".into(),
+                },
+                vec!["apt:curl", "pinned_only", "@version="],
+            ),
+            (
+                Objection::Protected {
+                    key: "apt:python3".into(),
+                    reason: "an OS essential".into(),
+                },
+                vec!["apt:python3", "an OS essential"],
+            ),
+            (
+                Objection::TooMany {
+                    count: 42,
+                    limit: 20,
+                    setting: "max_removals",
+                },
+                vec!["42", "20", "max_removals"],
+            ),
+            (
+                Objection::TooManyInstalls {
+                    count: 99,
+                    limit: 50,
+                },
+                vec!["99", "50", "max_installs"],
+            ),
+        ];
+
+        let mut seen: Vec<String> = Vec::new();
+        for (objection, must_name) in cases {
+            let text = describe_objection(&objection);
+            for needle in must_name {
+                assert!(
+                    text.contains(needle),
+                    "`{text}` does not name `{needle}`, so the user cannot tell what refused \
+                     them or what to change"
+                );
+            }
+            assert!(
+                !seen.contains(&text),
+                "two objections describe themselves identically (`{text}`), so the sentence \
+                 does not identify which one fired"
+            );
+            seen.push(text);
+        }
+    }
+
+    /// Clearing a count says so; clearing nothing says nothing.
+    ///
+    /// The flag is the one place a refusal turns into a pass, so the line announcing it is the
+    /// only record that it happened. `before != after` reads `==` without failing a test —
+    /// which inverts it into announcing an override on every run that did NOT need one, and
+    /// staying silent on the runs that did.
+    #[test]
+    fn allowing_the_count_is_announced_and_only_when_it_happened() {
+        use std::io::Write;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct Captured(Arc<Mutex<Vec<u8>>>);
+        impl Write for Captured {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+            type Writer = Captured;
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let log_of = |report: &mut GuardReport| {
+            let captured = Captured::default();
+            {
+                let _guard = tracing::subscriber::set_default(
+                    tracing_subscriber::fmt()
+                        .with_writer(captured.clone())
+                        .with_max_level(tracing::Level::WARN)
+                        .finish(),
+                );
+                let cfg = Config {
+                    allow_mass_removal: true,
+                    ..Default::default()
+                };
+                allow_the_count(&cfg, report, GuardScope::Sync, "package");
+            }
+            let bytes = captured.0.lock().unwrap().clone();
+            String::from_utf8_lossy(&bytes).into_owned()
+        };
+
+        let mut cleared = GuardReport {
+            objections: vec![Objection::TooMany {
+                count: 42,
+                limit: 20,
+                setting: "max_removals",
+            }],
+        };
+        let said = log_of(&mut cleared);
+        assert!(
+            cleared.objections.is_empty(),
+            "the flag exists to clear the count"
+        );
+        assert!(
+            said.contains("--allow-mass-removal"),
+            "a refusal was overridden and nothing recorded it:\n{said}"
+        );
+
+        // Nothing to clear: a protected package is not the count, and the run must not claim
+        // an override that never happened.
+        let mut untouched = GuardReport {
+            objections: vec![Objection::Protected {
+                key: "apt:python3".into(),
+                reason: "an OS essential".into(),
+            }],
+        };
+        let quiet = log_of(&mut untouched);
+        assert_eq!(
+            untouched.objections.len(),
+            1,
+            "protection is never cleared by a mass flag"
+        );
+        assert!(
+            !quiet.contains("--allow-mass-removal"),
+            "nothing was overridden, so nothing should have been announced:\n{quiet}"
         );
     }
 }
