@@ -1,4 +1,4 @@
-# The decision register — 216 entries, none open
+# The decision register — 217 entries, one open
 **One file, six features, nothing waiting on the owner.** Every decision this design forces lives
 here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -22,16 +22,16 @@ HALF RULED had no rows, the five that remained summed to 206 against 210, and
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
 | **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **211** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 | **DEFERRED** | Asked, and the owner chose to answer it later. | A ruling, when the owner returns to it. | **1** |
 | **HALF RULED** | Part of the question was answered and part was not. | A ruling on the remaining half. | **2** |
 
-**Four of these seven statuses now describe nothing, and they stay.** The categories are not
-decoration: both *OPEN* rows refill the moment a new feature is proposed, and *BUILT, NEVER
-RULED* has refilled three times — once with twelve entries at once, and again on 2026-08-14 with
+**Three of these seven statuses now describe nothing, and they stay.** The categories are not
+decoration: *OPEN* refilled on 2026-08-17 with `J8`, the moment a nightly leg stopped being
+answered by the wrong package manager, and *BUILT, NEVER RULED* has refilled three times — once with twelve entries at once, and again on 2026-08-14 with
 `J3`, which was ruled on 2026-08-16 and emptied it — the moment somebody implemented a work
 order, or a defect fix with a visible choice inside it, before it was put to the owner. Deleting
 an empty category is how the next one goes unnoticed.
@@ -106,8 +106,8 @@ that cannot express one — was raised, measured and ruled on 2026-08-10. `J4` i
 the same coin and is not ruled: what a version pin means when *Shall* recorded it and the archive
 has since dropped it. The `G` round then ran the
 other way round: `docs/GRADE-2026-08-12.md`'s work order was implemented in one pass, and the nine
-changes in it that a user would notice shipped ahead of any ruling. All 214 are accounted
-for: **211 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN** — and this line
+changes in it that a user would notice shipped ahead of any ruling. All 217 are accounted
+for: **211 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 0 BUILT NEVER RULED, 1 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -421,6 +421,7 @@ opposite way to the recommendation that was put to him.*
 
 | | question | ruled |
 |---|---|---|
+| **J8** | **OPEN.** How does a bare package name reach a manager whose own names carry a category? `emerge` cannot resolve one at all, and the leg that would have shown it was answering from crates.io. | 2026-08-17 |
 | **H1** | Is a declaration Shall was told to act on and could not a **failure of the run**, or a line that does not apply to this host? RULED: **a failure.** `sync` exits 1 and no longer returns `Converged` over it. | 2026-08-13 |
 | **H2** | Should a read-only command that finds work exit 2, beyond `check`? RULED: **yes for `plan`, no for `list --outdated`.** | 2026-08-13 |
 | **H3** | `outdated` — remove the dead name from the latency class table, or promote `list --outdated` to a subcommand? RULED: **remove the name; the flag stays a flag.** | 2026-08-13 |
@@ -8980,3 +8981,56 @@ existed and had lost its NixOS reporting; it does not exist and never shipped. `
 `doctor` among twelve invented names that are refused with the real one, and `shall check health`
 already reports the `nixos` backend correctly. Adding an alias would put a second name on a
 command that has one, which is the duplication this rewrite exists to remove.
+
+## J8
+
+**Status: OPEN — 2026-08-17. How does a bare package name reach a manager whose own names carry
+a category?**
+
+**The finding, and it is not the one the failure looks like.** `shall install jq` on Gentoo
+answers *"no package manager this line accepts has `jq`"* while `emerge --search jq` is printing
+three packages called jq. `Searchable::lookup` — the question the resolver asks — is
+`search(name).find(|p| p.name == name)`, and `emerge`'s search parser returns Portage's atoms:
+`app-misc/jq`, `dev-python/jq`, `app-emacs/jq-mode`. The string being compared is the one the
+user typed, so on that backend the comparison can never be true. Every line that does not spell
+the category resolves to no manager at all.
+
+**Why nothing caught it, which is the part worth keeping.** The gentoo leg scored `pass=238
+fail=0` for as long as it ran, and those five checks were among the 238. Measured on 2026-08-17
+by running the harness against both images and diffing the two runs, the only difference is one
+line:
+
+    < READY backends: appimage cargo emerge github link service web
+    > READY backends: appimage emerge github link service web
+
+`gentoo/stage3` shipped a Rust toolchain, so the **`cargo` backend was ready on the Gentoo
+image** — and `jq` is a crate. The leg named for `emerge` was resolving its canary from
+crates.io. The 2026-08-17 change that stopped the image depending on a rolling toolchain removed
+the accidental answerer, and the defect it had been covering became visible the same day. This is
+the same shape as the guix leg that measured Debian's `apt` because `metacall/guix` is
+Debian-based, and it is why a canary must be resolved by the manager the leg is named for.
+
+**The family, enumerated rather than assumed.** Of the twenty search readers in
+`parsers::named::search`, exactly one returns a qualified name: `ecosystem::emerge_search`.
+`pacman::parse_search_for` takes the other road and strips the repository — `core/bash` is read
+as `bash` — and the rest print bare names. So this is one backend, and the question is which of
+those two roads is right rather than how many callers to patch.
+
+**Stripping the category, pacman-style, is the wrong road here, and the reason is specific.**
+Portage refuses a bare `emerge jq` itself, as ambiguous between `app-misc/jq` and `dev-python/jq`
+— so a stripped name would resolve and then fail at the manager. Worse, `emerge`'s *installed*
+listing is `qlist -I`, which prints atoms and is not going to stop: a declaration reading `jq`
+against an installed `app-misc/jq` never matches, so every sync would re-install a package that
+is already there.
+
+**Recommendation.** A manager may declare that its names are qualified. On one, a bare name that
+matches exactly **one** atom resolves to it and the plan names the atom, so what reaches Portage
+and what comes back from `qlist -I` are the same string; a bare name matching more than one is
+**refused, listing them** — which is what Portage does, and it is a better answer than picking
+the first. The owner decides; this is not built.
+
+**Until it is ruled the gentoo leg stays red on those five checks, deliberately.** It is a
+finding held in the harness rather than hidden by editing the canary to `app-misc/jq`, which is
+the precedent `lvm:`'s `@size` set: that leg failed by name every run until `Q18` ruled the table
+wrong. The other 233 checks pass, and the leg's own `search finds something` passes in the same
+run — which is the pair of facts that names the seam.

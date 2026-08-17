@@ -54,7 +54,25 @@ container-void cargo gem pipx pnpm uv xbps-install xbps-remove yarn
 # The nightly images, from the scheduled run 31862666974 (2026-08-15). `tools` is the widest leg
 # this repository has: twenty-two rows asked of one image, against five to eight on a distro.
 container-tools apt asdf cabal cargo composer conda dart dotnet flatpak gem helm kubectl luarocks mise mix nimble opam pip pipx pixi spack uv
-container-gentoo cargo emerge
+# **`cargo` left this line on 2026-08-17, and this is the one deletion the paragraph above
+# permits.** It is not a name deleted to get green: the image stopped carrying a Rust toolchain
+# **by design**, in the same change that made this leg run at all. `gentoo/stage3:latest` is a
+# rolling tag that had `cargo` on 2026-08-16, answered `cargo: command not found` on the
+# 2026-08-17 nightly, and had it again hours later — measured a third time here, where
+# `gentoo/stage3@sha256:5dd16673…` has no `cargo` and the cached 2026-08-16 image
+# (`sha256:08914e15…`) does. So the probe now drives a `suite` binary copied out of the Ubuntu
+# builder, and an image that does not need `cargo` does not ship one.
+#
+# **`cargo`'s row in `src/core/argv.rs` is not demoted, and must not be**: nine host classes on
+# this page still measure it, and every one of them is enforced on its own leg — six of them on
+# every push. What is lost is this leg's copy of a measurement, not the measurement. A line that
+# kept `cargo` here would instead make the leg red on whichever days the base image feels like
+# shipping a toolchain, which is the exact failure the prebuilt-binary change was made to end.
+#
+# `rc-service` and `rc-update` are the ratchet the 2026-08-17 handoff said was owed and
+# deliberately not taken from one local run. Taken here from dispatch 32027405844, which is a
+# full matrix run: `terminator probe: 3 binaries measured here`.
+container-gentoo emerge rc-service rc-update
 # Measured locally 2026-08-16, the probe step driven as `ci.yml` drives it, `-u 0`. `slackpkg` is
 # the row this image exists for — it was argv-tested only until 2026-08-14, with no image to run
 # it in — and `pip` is here where `pipx` and `uv` are on the other legs, because Slackware ships
