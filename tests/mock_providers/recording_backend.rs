@@ -39,6 +39,10 @@ struct Machine {
     installed: BTreeMap<String, Option<String>>,
     /// Names whose install fails, permanently, until [`RecordingBackend::let_it_succeed`].
     failing: BTreeSet<String>,
+    /// Names whose install fails **once**, transiently, and succeeds on the retry. The manager
+    /// that is briefly unreachable, which is the only state in which the retry loop's backoff
+    /// runs at all.
+    flaky: BTreeSet<String>,
 }
 
 pub struct RecordingBackend {
@@ -124,6 +128,13 @@ impl RecordingBackendBuilder {
         self
     }
 
+    /// Installing this name fails **once**, transiently, and works on the next attempt — the
+    /// only state in which the engine's backoff runs.
+    pub fn flaky_once(mut self, name: &str) -> Self {
+        self.machine.flaky.insert(name.to_string());
+        self
+    }
+
     pub fn build(self) -> Arc<RecordingBackend> {
         Arc::new(RecordingBackend {
             name: self.name,
@@ -176,6 +187,20 @@ impl Installable for RecordingBackend {
                 // Permanent, so one attempt is the whole story and no test waits out a backoff
                 // it is not asserting on.
                 retry: Retryability::Permanent,
+                absent_name: false,
+            });
+        }
+        // Transient, and only the first time: the engine retries, and the attempt after this one
+        // falls through to the success below.
+        if let Some(bad) = specs
+            .iter()
+            .find(|s| machine.flaky.contains(&s.name))
+            .map(|s| s.name.clone())
+        {
+            machine.flaky.remove(&bad);
+            return Err(Error::CommandFailed {
+                message: format!("`{}` could not reach its index for {}", self.name, bad),
+                retry: Retryability::Transient,
                 absent_name: false,
             });
         }

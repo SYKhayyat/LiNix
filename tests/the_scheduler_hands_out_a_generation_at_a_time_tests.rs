@@ -53,12 +53,21 @@ fn two_managers(
 }
 
 /// Enough concurrency for both managers to be in flight at once, and no retries to wait out.
+///
+/// **`total_timeout` is 20s rather than the default hour, and that is a gate rather than
+/// impatience.** Two of this engine's mutations do not change an answer, they stop the loop
+/// terminating — `batches` returning one empty batch dispatches nothing for ever, and
+/// `attempt += 1` read as `*=` leaves the counter at nought. Against a one-hour bound those are
+/// reported as *timeouts*, which is neither caught nor survived and is how a mutant hides in a
+/// shard's exit code. Against this one they are ordinary failures. Every command here is a mock
+/// and returns instantly, so twenty seconds is four orders of magnitude of headroom.
 fn side_by_side(auto_rollback: bool) -> TransactionConfig {
     TransactionConfig {
         max_concurrent: 4,
         max_retries: 0,
         auto_rollback,
-        node_timeout: Duration::from_secs(30),
+        node_timeout: Duration::from_secs(10),
+        total_timeout: Duration::from_secs(20),
         ..TransactionConfig::default()
     }
 }
@@ -218,6 +227,74 @@ async fn a_resumed_run_counts_only_what_it_has_left() {
     assert_eq!(
         shape.depth, 1,
         "the remaining node has no unfinished dependency, so what is left is one level deep"
+    );
+}
+
+/// A retry waits before it runs, and the first attempt does not.
+///
+/// **`attempt > 1` is the whole of that sentence, and reversing it costs nothing observable in
+/// the answer.** A run whose manager fails once and works on the retry still ends `Ok`, still
+/// records two commands, and still reports one retry — because the counter and the loop are not
+/// what the gate controls. What it controls is whether the backoff and the manager-lock verdict
+/// happen at all, and the only reading of that is the clock: a retry that waited took at least
+/// the initial backoff, and one that did not took none of it.
+///
+/// The bound is a lower one, against a backoff four times larger, because a mock command returns
+/// instantly and the failure being guarded against is *no wait*, not a short one.
+#[tokio::test]
+async fn a_retry_waits_the_backoff_and_the_first_attempt_does_not() {
+    use std::time::Instant;
+
+    let kernel = TestKernel::new().await;
+    let log = shared_log();
+    let backend = RecordingBackend::named("mock-flaky", &log)
+        .flaky_once("pkg-retried")
+        .build();
+    let mut registry = BackendRegistry::new();
+    registry.register(capabilities(&backend));
+
+    let mut graph = StableDiGraph::new();
+    graph.add_node(install("pkg-retried", "mock-flaky"));
+
+    const BACKOFF: Duration = Duration::from_millis(400);
+    let mut tx = Transaction::with_config(
+        graph,
+        Arc::new(registry),
+        kernel.app.journal.clone(),
+        kernel.app.diagnostics.clone(),
+        kernel.app.config.clone(),
+        TransactionConfig {
+            max_retries: 1,
+            initial_backoff: BACKOFF,
+            ..side_by_side(false)
+        },
+    );
+
+    let started = Instant::now();
+    let results = tx
+        .execute_with_telemetry()
+        .await
+        .expect("the second attempt succeeds");
+    let took = started.elapsed();
+
+    assert_eq!(
+        backend.calls(),
+        vec![
+            "mock-flaky install pkg-retried".to_string(),
+            "mock-flaky install pkg-retried".to_string(),
+        ],
+        "the manager should have been asked twice — once failing, once not"
+    );
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results[0].retries, 1,
+        "one attempt after the first is one retry"
+    );
+    assert!(
+        took >= BACKOFF / 2,
+        "the whole run took {took:?} against a {BACKOFF:?} backoff, so the retry did not wait — \
+         which also means no failure on this path is ever asked whether another manager is \
+         holding the lock"
     );
 }
 
