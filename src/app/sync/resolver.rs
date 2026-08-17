@@ -6,7 +6,7 @@ use crate::config::parser::HostFacts;
 use crate::config::Config;
 use crate::core::LockFile;
 use crate::core::{Error, PackageSpec, Result, Validator};
-use crate::model::resolve::{to_spec, Provenance, BARE};
+use crate::model::resolve::{to_spec, BareAnswer, Provenance, BARE};
 use crate::model::{DesiredState, Layout, Priority};
 use semver::{Version, VersionReq};
 use std::collections::HashMap;
@@ -59,9 +59,14 @@ enum Coverage {
 /// freezing a lower manager on the strength of it is how an unedited line comes to mean a
 /// different package the day an index goes stale (V.7c).
 enum Verdict {
-    Has,
+    /// This manager has it, and — when the manager's own name for it differs from the one
+    /// typed — what it calls it (`J8`).
+    Has(Option<String>),
     Lacks,
     CouldNotTell(String),
+    /// It has more than one package by that name and declined to choose, so neither will Shall.
+    /// Carries the sentence that lists them.
+    Ambiguous(String),
 }
 
 /// Give an error the file and line the declaration came from, in the shape the grammar's own
@@ -907,7 +912,7 @@ impl<'a> StateResolver<'a> {
         statements: &[(Statement, Origin, Gates)],
         priority: &Priority,
         coverage: Coverage,
-    ) -> Result<HashMap<String, String>> {
+    ) -> Result<HashMap<String, BareAnswer>> {
         struct Question {
             name: String,
             candidates: Candidates,
@@ -1013,7 +1018,18 @@ impl<'a> StateResolver<'a> {
                     .is_some_and(|b| b.is_available());
                 if chain.contains(&backend) && usable {
                     debug!("`{}` is locked to `{}`.", question.name, backend);
-                    answers.insert(question.name, backend);
+                    // **The lock freezes which manager answers, not how that manager spells
+                    // the name.** On a backend whose names carry a category, the atom is not a
+                    // choice between managers and so is not the lock's to keep — it is what
+                    // `qlist -I` will report back and what has to reach emerge's argv, and a
+                    // second run that skipped the search would plan `emerge:jq` and fail at the
+                    // manager (`J8`). One search, of one backend, and only for a backend that
+                    // qualifies.
+                    let qualified = match self.qualified_name(&backend, &question.name).await {
+                        Ok(q) => q,
+                        Err(e) => return Err(e),
+                    };
+                    answers.insert(question.name, BareAnswer { backend, qualified });
                     continue;
                 }
                 warn!(
@@ -1063,12 +1079,25 @@ impl<'a> StateResolver<'a> {
             let mut silent: Vec<String> = Vec::new();
             for (backend, verdict) in chain.iter().zip(verdicts) {
                 match verdict {
-                    Verdict::Has => {
-                        found = Some(backend.clone());
+                    Verdict::Has(qualified) => {
+                        found = Some((backend.clone(), qualified));
                         break;
                     }
                     Verdict::Lacks => {}
                     Verdict::CouldNotTell(why) => silent.push(why),
+                    // **Refused where it was found, rather than passed down the chain.** The
+                    // candidate that cannot say which package it means is the one `priority`
+                    // put first, and taking the next manager's answer would resolve the line
+                    // to a different program than the one the user ordered first (`J8`).
+                    Verdict::Ambiguous(why) => {
+                        let grammar = GrammarError::new(origin, why).with_hint(
+                            "write the name the manager uses: `emerge:app-misc/jq`, not `jq`.",
+                        );
+                        return Err(Error::Unresolvable {
+                            message: grammar.to_string(),
+                            name,
+                        });
+                    }
                 }
             }
             match found {
@@ -1076,12 +1105,12 @@ impl<'a> StateResolver<'a> {
                 // If one of them could not answer, this pick is the best available guess
                 // and not a decision: leaving it out of the lock is what makes the next
                 // sync ask again, and move the package once the silent manager is back.
-                Some(backend) if silent.is_empty() => {
+                Some((backend, qualified)) if silent.is_empty() => {
                     debug!("`{}` resolved to `{}`.", name, backend);
                     lock_changed |= lock.record(&name, &backend);
-                    answers.insert(name, backend);
+                    answers.insert(name, BareAnswer { backend, qualified });
                 }
-                Some(backend) => {
+                Some((backend, qualified)) => {
                     warn!(
                         "`{}` is being taken from `{}` only because {}. Not recorded — the \
                          next sync asks again, and moves `{}` if the manager that could not \
@@ -1091,7 +1120,7 @@ impl<'a> StateResolver<'a> {
                         silent.join("; "),
                         name,
                     );
-                    answers.insert(name, backend);
+                    answers.insert(name, BareAnswer { backend, qualified });
                 }
                 // Every candidate was asked and none has it — except that some could not
                 // be asked, and "not found" would then be a lie.
@@ -1434,10 +1463,18 @@ impl<'a> StateResolver<'a> {
                 let answers = self
                     .probe_bare_names(&stmts, &priority, Coverage::OneLine)
                     .await?;
-                answers
-                    .get(decl.selector.as_str())
-                    .cloned()
-                    .unwrap_or_else(|| BARE.to_string())
+                // The same rename `collect` makes, on the path a typed command takes: one
+                // `shall install jq` on Portage plans `emerge:app-misc/jq`, because that is
+                // what has to reach emerge's argv and what its listing reports back (`J8`).
+                match answers.get(decl.selector.as_str()).cloned() {
+                    Some(answer) => {
+                        if let Some(qualified) = answer.qualified {
+                            decl.selector = statement::Selector::Name(qualified);
+                        }
+                        answer.backend
+                    }
+                    None => BARE.to_string(),
+                }
             }
         };
 
@@ -1528,7 +1565,7 @@ impl<'a> StateResolver<'a> {
         };
 
         let head = self.ask(first, name, constraint).await;
-        if matches!(head, Verdict::Has) || rest.is_empty() {
+        if matches!(head, Verdict::Has(_)) || rest.is_empty() {
             // Done, and nobody else was troubled. The caller stops at the first `Has`, so the
             // verdicts it never reads are the ones never asked for.
             return vec![head];
@@ -1556,6 +1593,41 @@ impl<'a> StateResolver<'a> {
         out
     }
 
+    /// What one backend calls a bare name, when that backend qualifies its names.
+    ///
+    /// `None` for every other manager, and answered without a command: the whole point is that
+    /// a manager whose names are already what the user typed is not asked a second question.
+    async fn qualified_name(
+        &self,
+        backend_name: &str,
+        package_name: &str,
+    ) -> Result<Option<String>> {
+        let Some(searchable) = self
+            .registry
+            .get(backend_name)
+            .and_then(|b| b.as_searchable().cloned())
+        else {
+            return Ok(None);
+        };
+        if !searchable.qualifies_names() {
+            return Ok(None);
+        }
+        match searchable.lookup(package_name).await {
+            Ok(Some(pkg)) if pkg.name != package_name => Ok(Some(pkg.name)),
+            // Not found, or found under the name as typed. Neither is this function's business
+            // to refuse: the lock already decided this manager answers, and a name that has
+            // since left the tree is the planner's finding rather than the resolver's.
+            Ok(_) => Ok(None),
+            Err(crate::core::Error::Refused(why)) => Err(Error::Unresolvable {
+                message: why,
+                name: package_name.to_string(),
+            }),
+            // The manager could not be asked. The lock's answer stands unqualified rather than
+            // the run failing over a question only one backend needed answered.
+            Err(_) => Ok(None),
+        }
+    }
+
     async fn ask(
         &self,
         backend_name: &str,
@@ -1581,18 +1653,26 @@ impl<'a> StateResolver<'a> {
         let found = match searchable.lookup(package_name).await {
             Ok(Some(pkg)) => pkg,
             Ok(None) => return Verdict::Lacks,
+            // A manager that has the name more than once has not failed to answer — it has
+            // answered that the question is under-specified, which is a different verdict and
+            // must not read as "this manager could not be reached" (`J8`).
+            Err(crate::core::Error::Refused(why)) => return Verdict::Ambiguous(why),
             Err(e) => return Verdict::CouldNotTell(e.to_string()),
         };
 
+        // What the manager calls it, when that is not what was typed. Carried from here rather
+        // than re-derived downstream: this is the only place that has both strings.
+        let qualified = (found.name != package_name).then(|| found.name.clone());
+
         let Some(req) = constraint else {
-            return Verdict::Has;
+            return Verdict::Has(qualified);
         };
         // It has the package but will not say which version. The manager is the one that
         // enforces the pin at install time; refusing here would send the name to a manager that
         // merely talks about versions more.
         match found.version.as_deref() {
             Some(ver) if !self.satisfies_constraint(ver, req) => Verdict::Lacks,
-            _ => Verdict::Has,
+            _ => Verdict::Has(qualified),
         }
     }
 
@@ -1777,6 +1857,7 @@ mod tests {
                 machine_list: None,
                 outdated: None,
                 search_source: SearchSource::Command,
+                qualified_names: false,
             };
             let core = Arc::new(GenericBackendCore {
                 name: name.into(),

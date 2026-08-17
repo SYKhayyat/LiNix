@@ -109,6 +109,7 @@ pub(super) fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecu
                 silence_is_none: false,
             }),
             search_source: SearchSource::Command,
+            qualified_names: false,
         },
         parser: Arc::new(LambdaParser {
             installed_fn: |o| windows::parse_installed("winget", o),
@@ -191,6 +192,7 @@ pub(super) fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecut
                 silence_is_none: false,
             }),
             search_source: SearchSource::Command,
+            qualified_names: false,
         },
         parser: Arc::new(LambdaParser {
             installed_fn: |o| windows::parse_installed("scoop", o),
@@ -283,6 +285,7 @@ pub(super) fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecut
                 silence_is_none: false,
             }),
             search_source: SearchSource::Command,
+            qualified_names: false,
         },
         parser: Arc::new(LambdaParser {
             installed_fn: |o| windows::parse_installed("choco", o),
@@ -349,6 +352,7 @@ pub(super) fn register_mas(reg: &mut BackendRegistry, executor: &CommandExecutor
             machine_list: None,
             outdated: None,
             search_source: SearchSource::Command,
+            qualified_names: false,
         },
         parser: Arc::new(LambdaParser {
             installed_fn: crate::parsers::macos::parse_mas_list,

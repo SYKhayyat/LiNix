@@ -587,7 +587,7 @@ jobs:
           # nightly, and had one again hours later. An argv gate that can only run on the days
           # the base image feels like shipping a toolchain reports nothing on the other days.
           - { distro: tools,     backend: apt,      pkg: jq, flags: '', probe: 'cargo test --test suite --' }
-          - { distro: gentoo,    backend: emerge,   pkg: jq, flags: '-e SMOKE_ONLY=1', probe: 'suite' }
+          - { distro: gentoo,    backend: emerge,   pkg: htop, flags: '-e SMOKE_ONLY=1', probe: 'suite' }
           # Slackware is here rather than in the fast matrix for the reason gentoo is: the
           # image builds for tens of minutes. `slackpkg` had never met its own manager in any
           # harness before 2026-08-14 — it was argv-tested only, with no image to run it in.

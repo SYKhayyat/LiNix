@@ -395,10 +395,68 @@ pub trait Searchable: Send + Sync {
         Ok(None)
     }
 
+    /// Whether this manager's own names carry a qualifier the user is not required to type
+    /// (`J8`).
+    ///
+    /// Portage's names are `category/name` — `app-misc/jq` — and its `qlist -I` reports them
+    /// that way, so a declaration reading `jq` and a machine holding `app-misc/jq` are the same
+    /// package under two spellings. **Default `false`, and that direction is the safe one**: a
+    /// manager that says nothing keeps the exact-name rule, which can only refuse to resolve a
+    /// name. The other default would let `lookup` answer about `foo/bar` when the user asked for
+    /// `bar` on a manager where the two are different packages.
+    ///
+    /// `pacman` is the counter-example and does **not** set this: its search prints
+    /// `core/bash`, but the repository is not part of the name and `pacman -S bash` is what its
+    /// own listing reports back, so its parser strips the prefix instead. The test is which
+    /// string the manager's *installed* listing gives you.
+    fn qualifies_names(&self) -> bool {
+        false
+    }
+
+    /// **Is this name one this manager has, and what does the manager call it?**
+    ///
+    /// The exact match first, always: it is what every manager whose search prints the name you
+    /// typed needs, and it is the only answer for a manager that has both `bar` and `foo/bar`.
+    ///
+    /// Then, and only for a manager that [`qualifies_names`](Self::qualifies_names), the name is
+    /// matched against the unqualified half of what it printed. **Exactly one match resolves;
+    /// more than one is refused, naming them** — which is what Portage does with a bare
+    /// `emerge jq` that could mean `app-misc/jq` or `dev-python/jq`. Picking the first would be
+    /// choosing a package on the user's behalf out of a list the manager itself declined to
+    /// choose from (`J8`).
     async fn lookup(&self, name: &str) -> Result<Option<Package>> {
         let results = self.search(name).await?;
-        Ok(results.into_iter().find(|p| p.name == name))
+        if let Some(exact) = results.iter().find(|p| p.name == name) {
+            return Ok(Some(exact.clone()));
+        }
+        if !self.qualifies_names() {
+            return Ok(None);
+        }
+        let mut qualified = results.into_iter().filter(|p| unqualified(&p.name) == name);
+        match (qualified.next(), qualified.next()) {
+            (Some(only), None) => Ok(Some(only)),
+            (Some(first), Some(second)) => {
+                let mut all: Vec<String> = vec![first.name, second.name];
+                all.extend(qualified.map(|p| p.name));
+                Err(crate::core::Error::Refused(format!(
+                    "`{}` has more than one package called `{}`: {}. Write the one you mean.",
+                    first.backend,
+                    name,
+                    all.join(", ")
+                )))
+            }
+            _ => Ok(None),
+        }
     }
+}
+
+/// The half of a qualified name a user types: everything after the last `/`.
+///
+/// A free function rather than a method, because it is the same rule for reading a manager's
+/// answer and for reporting it back, and two spellings of one rule is how a name comes to match
+/// in the resolver and not in the planner.
+pub fn unqualified(name: &str) -> &str {
+    name.rsplit('/').next().unwrap_or(name)
 }
 
 #[async_trait]
@@ -602,5 +660,124 @@ impl BackendCapabilitiesBuilder {
             repo_manager: self.repo_manager,
             metadata_provider: self.metadata_provider,
         }
+    }
+}
+
+/// **What `lookup` does with a name a manager spells differently** (`J8`).
+///
+/// Driven through the trait's own default rather than through a backend, because the default is
+/// what every manager gets and the rule has three outcomes that look alike from outside: found
+/// under the name as typed, found under one qualified name, and found under several. The last
+/// one used to be impossible to reach — the comparison was `p.name == name` and Portage's names
+/// are atoms, so no bare name on that manager ever resolved at all.
+#[cfg(test)]
+mod lookup_tests {
+    use super::*;
+
+    /// A manager whose search answers whatever it was handed, spelling names as `answers` says.
+    struct Catalogue {
+        answers: Vec<&'static str>,
+        qualifies: bool,
+    }
+
+    #[async_trait]
+    impl Searchable for Catalogue {
+        fn qualifies_names(&self) -> bool {
+            self.qualifies
+        }
+        async fn search(&self, _query: &str) -> Result<Vec<Package>> {
+            Ok(self
+                .answers
+                .iter()
+                .map(|n| Package::new(*n, "mock-manager"))
+                .collect())
+        }
+    }
+
+    fn catalogue(qualifies: bool, answers: &[&'static str]) -> Catalogue {
+        Catalogue {
+            answers: answers.to_vec(),
+            qualifies,
+        }
+    }
+
+    /// The exact name wins wherever it appears, and on a manager that qualifies nothing it is
+    /// the only rule there is.
+    #[tokio::test]
+    async fn an_exact_name_is_the_answer_and_the_only_one_an_ordinary_manager_gives() {
+        let plain = catalogue(false, &["jq-mode", "jq", "jqp"]);
+        assert_eq!(
+            plain.lookup("jq").await.unwrap().map(|p| p.name),
+            Some("jq".to_string())
+        );
+
+        // The same catalogue without the exact name: an ordinary manager says no rather than
+        // guessing at a near miss, which is what stops a typo becoming an install.
+        let near = catalogue(false, &["jq-mode", "jqp"]);
+        assert_eq!(near.lookup("jq").await.unwrap(), None);
+
+        // And a qualified name is not a near miss to be found by a manager that does not
+        // qualify: `foo/bar` and `bar` are two packages there.
+        let unqualifying = catalogue(false, &["app-misc/jq"]);
+        assert_eq!(unqualifying.lookup("jq").await.unwrap(), None);
+    }
+
+    /// On a manager that qualifies, one matching atom resolves — and the *atom* comes back,
+    /// because that is the string the manager will want and will report.
+    #[tokio::test]
+    async fn one_matching_atom_resolves_and_answers_with_the_atom() {
+        let portage = catalogue(true, &["app-emacs/jq-mode", "app-misc/jq"]);
+        assert_eq!(
+            portage.lookup("jq").await.unwrap().map(|p| p.name),
+            Some("app-misc/jq".to_string()),
+            "`jq-mode` is not a package called jq, and `app-misc/jq` is"
+        );
+    }
+
+    /// An exact name beats a qualified one even where both are on offer: the user wrote a name
+    /// this manager also has literally, and that is not a guess to be improved on.
+    #[tokio::test]
+    async fn an_exact_name_beats_an_atom_that_ends_the_same_way() {
+        let both = catalogue(true, &["app-misc/jq", "jq"]);
+        assert_eq!(
+            both.lookup("jq").await.unwrap().map(|p| p.name),
+            Some("jq".to_string())
+        );
+    }
+
+    /// More than one, and Shall refuses by name rather than taking the first.
+    ///
+    /// Portage refuses the same bare `emerge jq` itself. Picking `app-misc/jq` because it sorts
+    /// first would be choosing a package for the user out of a list the manager declined to
+    /// choose from — and it is the *quiet* half of that which matters: the wrong one installs
+    /// and reports success.
+    #[tokio::test]
+    async fn more_than_one_atom_is_refused_and_names_them_all() {
+        let ambiguous = catalogue(true, &["app-misc/jq", "dev-python/jq", "app-emacs/jq-mode"]);
+        let err = ambiguous
+            .lookup("jq")
+            .await
+            .expect_err("two packages called jq is not an answer");
+        let said = err.to_string();
+        assert!(said.contains("app-misc/jq"), "{said}");
+        assert!(said.contains("dev-python/jq"), "{said}");
+        assert!(
+            !said.contains("jq-mode"),
+            "`jq-mode` is not one of the candidates and naming it would send the reader to a \
+             package nothing was ambiguous about: {said}"
+        );
+        assert!(
+            matches!(err, crate::core::Error::Refused(_)),
+            "an under-specified question is a refusal, not a manager that could not be reached"
+        );
+    }
+
+    /// The rule for reading the manager's half of the name, in one place.
+    #[test]
+    fn the_unqualified_half_is_everything_after_the_last_slash() {
+        assert_eq!(unqualified("app-misc/jq"), "jq");
+        assert_eq!(unqualified("jq"), "jq");
+        assert_eq!(unqualified("a/b/c"), "c");
+        assert_eq!(unqualified(""), "");
     }
 }

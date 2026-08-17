@@ -745,6 +745,12 @@ search_args = ["--search"]
 upgrade_args = ["--update", "--deep", "--newuse", "--ask=n", "@world"]
 reads = "names_only"
 searches = "emerge"
+# Portage's names are `category/name`, and `qlist -I` reports them that way — so a line reading
+# `jq` and a machine holding `app-misc/jq` are one package under two spellings. Without this,
+# `Searchable::lookup` compares the string the user typed against an atom and never matches, so
+# no bare name on this backend resolves at all (`J8`). The category is not dropped: it is what
+# reaches emerge's argv, because Portage refuses a bare `emerge jq` as ambiguous.
+qualified_names = true
 needs_root = true
 is_exclusive = true
 

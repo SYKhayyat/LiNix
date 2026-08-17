@@ -451,6 +451,10 @@ pub struct CustomBackendDef {
     pub repo_list_shape: Option<RepoListShapeDef>,
     /// Where `search` gets its answers: the manager's own command, or a registry over HTTP.
     pub search_source: Option<SearchSourceDef>,
+    /// This manager's own names carry a qualifier the user need not type — Portage's
+    /// `app-misc/jq` against a declaration reading `jq` (`J8`). Absent means `false`, which is
+    /// the exact-name rule every other manager wants.
+    pub qualified_names: Option<bool>,
     /// Programs that must ALSO be on `PATH` before this backend counts as available.
     ///
     /// For a manager that is a plugin of another: `kubectl` alone is not krew, and a host with
@@ -1252,6 +1256,7 @@ pub(crate) fn build_capabilities(
             .search_source
             .map(Into::into)
             .unwrap_or(SearchSource::Command),
+        qualified_names: def.qualified_names.unwrap_or(false),
     };
 
     let core = Arc::new(GenericBackendCore {

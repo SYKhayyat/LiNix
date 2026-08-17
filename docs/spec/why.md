@@ -6879,3 +6879,47 @@ registering a task on this Windows needs an elevated shell and the container har
 provision schedules. That is the same unproven row the NixOS rebuild sits in, and it is named
 here rather than implied.
 
+
+**V.192 — Why a bare name on Portage resolves to an atom, and why more than one is a refusal.**
+
+`Searchable::lookup` is the whole of *"does this manager have `jq`"*, and its rule was
+`search(name).find(|p| p.name == name)` — the string the user typed against the string the
+manager printed. That is right for every manager whose search prints the name you asked about,
+which is all of them but one. Portage prints `app-misc/jq`, so on `emerge` the comparison could
+never be true and **no bare name resolved at all**: `shall install jq` on Gentoo answered *"no
+package manager this line accepts has `jq`"* while `emerge --search jq` was printing three
+packages called jq.
+
+**It went unseen for weeks because the leg that would have shown it was answering from
+crates.io.** The gentoo integration image is built on `gentoo/stage3`, which shipped a Rust
+toolchain — so the `cargo` backend was READY on it, and `jq` is a crate. Measured by building
+both images and diffing the two harness runs, where the only difference is one line:
+
+    < READY backends: appimage cargo emerge github link service web
+    > READY backends: appimage emerge github link service web
+
+The leg named for `emerge` was resolving its canary through `cargo`. Removing the toolchain — a
+change made for an unrelated reason, so the probe would stop depending on a rolling base image —
+removed the accidental answerer and the defect surfaced the same day. **A canary wants a name no
+other ready backend carries**, and a leg wants its READY list read at least once; this is the
+second instance of the class, after the guix leg that measured Debian's `apt`.
+
+**Stripping the category instead would have been wrong twice, which is why this is a rule about
+resolution rather than a fix in the parser.** `pacman`'s parser does strip — `core/bash` is read
+as `bash` — and that is correct there, because the repository is not part of a pacman name and
+`pacman -Qm` reports `bash` back. Portage is the other case: `emerge` refuses a bare `jq` as
+ambiguous, and `qlist -I` reports `app-misc/jq`. A stripped name would therefore resolve, fail at
+the manager, and — worse — never match the installed listing, so every sync would plan the
+install again over a package that was already there. The test is not "does the search print a
+slash", it is **which string the manager's own installed listing gives you back**.
+
+**And more than one match is a refusal rather than a first-past-the-post.** `jq` is `app-misc/jq`
+and `dev-python/jq`; Portage declines to choose and says so. Shall choosing on the user's behalf
+would install one of them and report success, which is the quiet half of the failure — the loud
+half, a refusal naming both, costs one edit and cannot install the wrong package.
+
+**What the lock keeps.** `locks/bare.HOST.toml` freezes *which manager* answered a bare name,
+because that is a choice between managers that would otherwise change under an unedited line. The
+atom is not a choice — it is how the winning manager spells what the user typed, and it has to
+agree with what that manager's listing reports back today. So a locked name is still asked of its
+one backend for the spelling, and only of a backend that says its names are qualified.

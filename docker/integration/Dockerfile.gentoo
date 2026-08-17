@@ -7,7 +7,14 @@
 # real Portage system without paying a source build.
 #
 #   docker build -f docker/integration/Dockerfile.gentoo -t shall-it-gentoo .
-#   docker run --rm shall-it-gentoo            # SMOKE_ONLY=1 baked in; runs: emerge jq
+#   docker run --rm shall-it-gentoo            # SMOKE_ONLY=1 baked in; runs: emerge htop
+#
+# **The canary is `htop`, and it was `jq` until 2026-08-17.** `jq` is two packages on Gentoo —
+# `app-misc/jq` and `dev-python/jq` — so a bare `jq` is a name Portage itself refuses as
+# ambiguous, and under `J8` Shall refuses it too, naming both. That is correct behaviour and it
+# makes a poor canary: this leg exists to drive a lifecycle, not a refusal. `htop` resolves to
+# exactly one atom (`sys-process/htop`), measured against the tree this image carries. Pick any
+# replacement the same way — `emerge --search --quiet '^name$'` must print one line.
 #
 # The binary is built on Ubuntu and copied in (both Ubuntu 24.04 and current Gentoo ship
 # glibc >= 2.39 and openssl 3, so the dynamic link resolves). If your Gentoo base is older,
@@ -86,4 +93,4 @@ COPY --from=builder /usr/local/bin/suite /usr/local/bin/suite
 RUN mkdir -p /src/docker/integration
 WORKDIR /src
 ENTRYPOINT ["sh", "/src/docker/integration/run-in-container.sh"]
-CMD ["emerge", "jq"]
+CMD ["emerge", "htop"]

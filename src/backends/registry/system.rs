@@ -128,6 +128,7 @@ pub(super) fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor
                 silence_is_none: false,
             }),
             search_source: SearchSource::Command,
+            qualified_names: false,
         },
         parser: Arc::new(crate::parsers::apt::AptParser),
     });
@@ -541,6 +542,7 @@ pub(super) fn register_aur_helper(
             machine_list: None,
             outdated: None,
             search_source: SearchSource::Command,
+            qualified_names: false,
         },
         parser: Arc::new(LambdaParser {
             installed_fn,
@@ -638,6 +640,7 @@ pub(super) fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor
                 silence_is_none: false,
             }),
             search_source: SearchSource::Command,
+            qualified_names: false,
         },
         parser: Arc::new(LambdaParser {
             // `apk info -v` emits `name-version-revision` as a single dash-joined token
@@ -728,6 +731,7 @@ pub(super) fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecu
                 silence_is_none: false,
             }),
             search_source: SearchSource::Command,
+            qualified_names: false,
         },
         parser: Arc::new(LambdaParser {
             installed_fn: crate::parsers::dnf::parse_zypper_search,
@@ -799,6 +803,7 @@ pub(super) fn register_macports(reg: &mut BackendRegistry, executor: &CommandExe
             machine_list: None,
             outdated: None,
             search_source: SearchSource::Command,
+            qualified_names: false,
         },
         parser: Arc::new(LambdaParser {
             installed_fn: crate::parsers::macos::parse_macports_installed,
@@ -868,6 +873,7 @@ pub(super) fn register_pkgin(reg: &mut BackendRegistry, executor: &CommandExecut
             machine_list: None,
             outdated: None,
             search_source: SearchSource::Command,
+            qualified_names: false,
         },
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::pkgsrc::parse_pkgin(o),
@@ -945,6 +951,7 @@ pub(super) fn register_pkg_freebsd(reg: &mut BackendRegistry, executor: &Command
             machine_list: None,
             outdated: None,
             search_source: SearchSource::Command,
+            qualified_names: false,
         },
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::bsd::parse_pkg(o),
@@ -1018,6 +1025,7 @@ pub(super) fn register_pkg_add_openbsd(reg: &mut BackendRegistry, executor: &Com
             machine_list: None,
             outdated: None,
             search_source: SearchSource::Command,
+            qualified_names: false,
         },
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::bsd::parse_pkg_add(o),

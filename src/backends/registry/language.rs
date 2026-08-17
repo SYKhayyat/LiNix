@@ -79,6 +79,7 @@ pub(super) fn register_pip(reg: &mut BackendRegistry, executor: &CommandExecutor
             // on as a bespoke `Searchable`, so it is the same mechanism `npm_registry` uses
             // and a row can ask for it.
             search_source: SearchSource::PyPi,
+            qualified_names: false,
         },
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::language::parse_installed("pip", o),
@@ -145,6 +146,7 @@ pub(super) fn register_gem(reg: &mut BackendRegistry, executor: &CommandExecutor
                 silence_is_none: false,
             }),
             search_source: SearchSource::Command,
+            qualified_names: false,
         },
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::language::parse_installed("gem", o),
@@ -212,6 +214,7 @@ pub(super) fn register_bun(reg: &mut BackendRegistry, executor: &CommandExecutor
             machine_list: None,
             outdated: None,
             search_source: SearchSource::Command,
+            qualified_names: false,
         },
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::language::parse_installed("bun", o),
@@ -304,6 +307,7 @@ pub(super) fn register_dotnet(reg: &mut BackendRegistry, executor: &CommandExecu
             }),
             outdated: None,
             search_source: SearchSource::Command,
+            qualified_names: false,
         },
         parser: Arc::new(LambdaParser {
             installed_fn: crate::parsers::dotnet::parse_dotnet_list,

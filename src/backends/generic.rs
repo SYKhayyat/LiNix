@@ -464,6 +464,9 @@ pub struct ManagerConfig {
     pub outdated: Option<OutdatedProbe>,
     /// Where `search` gets its answers. Defaults to running `search_args`.
     pub search_source: SearchSource,
+    /// This manager's names carry a qualifier the user need not type — see
+    /// [`Searchable::qualifies_names`](crate::core::Searchable::qualifies_names).
+    pub qualified_names: bool,
     /// This manager has no upgrade-all verb: upgrading means re-installing each installed
     /// package unpinned, with THESE args rather than `install_args`.
     ///
@@ -1624,6 +1627,10 @@ pub struct GenericSearchable {
 
 #[async_trait]
 impl Searchable for GenericSearchable {
+    fn qualifies_names(&self) -> bool {
+        self.core.config.qualified_names
+    }
+
     async fn search(&self, query: &str) -> Result<Vec<Package>> {
         match self.core.config.search_source {
             SearchSource::NpmRegistry => {
@@ -2303,6 +2310,7 @@ mod tests {
                 machine_list: None,
                 outdated: None,
                 search_source: SearchSource::Command,
+                qualified_names: false,
             },
             parser: Arc::new(LambdaParser {
                 installed_fn: |_| Ok(vec![]),
@@ -3532,6 +3540,7 @@ mod settings_interpolation_tests {
             machine_list: None,
             outdated: None,
             search_source: SearchSource::Command,
+            qualified_names: false,
             upgrade_reinstall_args: None,
             extra_probes: None,
         }

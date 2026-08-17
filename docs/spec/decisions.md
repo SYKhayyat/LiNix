@@ -1,4 +1,4 @@
-# The decision register — 217 entries, one open
+# The decision register — 217 entries, none open
 **One file, six features, nothing waiting on the owner.** Every decision this design forces lives
 here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -22,16 +22,17 @@ HALF RULED had no rows, the five that remained summed to 206 against 210, and
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **211** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **212** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 | **DEFERRED** | Asked, and the owner chose to answer it later. | A ruling, when the owner returns to it. | **1** |
 | **HALF RULED** | Part of the question was answered and part was not. | A ruling on the remaining half. | **2** |
 
-**Three of these seven statuses now describe nothing, and they stay.** The categories are not
-decoration: *OPEN* refilled on 2026-08-17 with `J8`, the moment a nightly leg stopped being
-answered by the wrong package manager, and *BUILT, NEVER RULED* has refilled three times — once with twelve entries at once, and again on 2026-08-14 with
+**Four of these seven statuses now describe nothing, and they stay.** The categories are not
+decoration: *OPEN* refilled and emptied on 2026-08-17 with `J8` — raised the moment a nightly leg
+stopped being answered by the wrong package manager, ruled the same day — and *BUILT, NEVER
+RULED* has refilled three times — once with twelve entries at once, and again on 2026-08-14 with
 `J3`, which was ruled on 2026-08-16 and emptied it — the moment somebody implemented a work
 order, or a defect fix with a visible choice inside it, before it was put to the owner. Deleting
 an empty category is how the next one goes unnoticed.
@@ -107,7 +108,7 @@ the same coin and is not ruled: what a version pin means when *Shall* recorded i
 has since dropped it. The `G` round then ran the
 other way round: `docs/GRADE-2026-08-12.md`'s work order was implemented in one pass, and the nine
 changes in it that a user would notice shipped ahead of any ruling. All 217 are accounted
-for: **211 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 0 BUILT NEVER RULED, 1 OPEN** — and this line
+for: **212 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -421,7 +422,7 @@ opposite way to the recommendation that was put to him.*
 
 | | question | ruled |
 |---|---|---|
-| **J8** | **OPEN.** How does a bare package name reach a manager whose own names carry a category? `emerge` cannot resolve one at all, and the leg that would have shown it was answering from crates.io. | 2026-08-17 |
+| **J8** | How does a bare package name reach a manager whose own names carry a category? RULED: **one matching atom resolves and the plan names it; more than one is refused, listing them.** `emerge` could not resolve one at all, and the leg that would have shown it was answering from crates.io. | 2026-08-17 |
 | **H1** | Is a declaration Shall was told to act on and could not a **failure of the run**, or a line that does not apply to this host? RULED: **a failure.** `sync` exits 1 and no longer returns `Converged` over it. | 2026-08-13 |
 | **H2** | Should a read-only command that finds work exit 2, beyond `check`? RULED: **yes for `plan`, no for `list --outdated`.** | 2026-08-13 |
 | **H3** | `outdated` — remove the dead name from the latency class table, or promote `list --outdated` to a subcommand? RULED: **remove the name; the flag stays a flag.** | 2026-08-13 |
@@ -8984,8 +8985,20 @@ command that has one, which is the duplication this rewrite exists to remove.
 
 ## J8
 
-**Status: OPEN — 2026-08-17. How does a bare package name reach a manager whose own names carry
-a category?**
+**Status: ANSWERED — ruled 2026-08-17, and built in the same commit.** The owner took the
+recommendation below as written: a backend may declare that its names are qualified; on one, a
+bare name matching exactly one atom resolves and **the plan names the atom**, and a bare name
+matching more than one is **refused, listing them**. The rule is [Part II](target-state.md)'s
+bare-name section and its reason is **V.192**. `emerge` is the only backend that declares it
+today (`qualified_names = true`); the flag is read by `GenericSearchable::qualifies_names`, and
+the default is `false`, which is the exact-name rule every other manager wants.
+
+**The lock was the part the recommendation did not say out loud, and it is settled the same
+way**: `locks/bare.HOST.toml` freezes which *manager* answered, because that is a choice between
+managers; the atom is not a choice and is re-read each run from the one backend that owns it, so
+a second sync cannot plan `emerge:jq` off a lock written by the first.
+
+**The question as it was asked, kept because the diagnosis is the reason for the rule:**
 
 **The finding, and it is not the one the failure looks like.** `shall install jq` on Gentoo
 answers *"no package manager this line accepts has `jq`"* while `emerge --search jq` is printing
@@ -9029,8 +9042,7 @@ and what comes back from `qlist -I` are the same string; a bare name matching mo
 **refused, listing them** — which is what Portage does, and it is a better answer than picking
 the first. The owner decides; this is not built.
 
-**Until it is ruled the gentoo leg stays red on those five checks, deliberately.** It is a
-finding held in the harness rather than hidden by editing the canary to `app-misc/jq`, which is
-the precedent `lvm:`'s `@size` set: that leg failed by name every run until `Q18` ruled the table
-wrong. The other 233 checks pass, and the leg's own `search finds something` passes in the same
-run — which is the pair of facts that names the seam.
+**The gentoo leg was held red rather than made green by editing the canary to `app-misc/jq`**,
+on the precedent `lvm:`'s `@size` set — that leg failed by name every run until `Q18` ruled the
+table wrong. It is green now because the product resolves the name, not because the check stopped
+asking.

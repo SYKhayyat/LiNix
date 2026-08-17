@@ -200,7 +200,7 @@ pub struct Resolver<'a> {
     priority: &'a Priority,
     facts: HostFacts,
     now: DateTime<Utc>,
-    bare: HashMap<String, String>,
+    bare: HashMap<String, BareAnswer>,
     /// `[vars] source` from preferences (Part IX): which provider is active when the repo holds
     /// more than one. `None` selects the sole provider file, or none.
     vars_source: Option<String>,
@@ -242,7 +242,7 @@ impl<'a> Resolver<'a> {
     /// Supplying them before `collect` is what makes `ripgrep` and `apt:ripgrep` meet each
     /// other. Keyed on the resolved backend, they are one declaration and reconcile decides
     /// between them; keyed on `BARE`, they would be two, and both would be installed.
-    pub fn with_bare(mut self, answers: HashMap<String, String>) -> Self {
+    pub fn with_bare(mut self, answers: HashMap<String, BareAnswer>) -> Self {
         self.bare = answers;
         self
     }
@@ -832,7 +832,7 @@ impl<'a> Resolver<'a> {
             scopes,
         };
         for (stmt, origin, gates) in statements {
-            let (decl, present) = match stmt {
+            let (mut decl, present) = match stmt {
                 Statement::Package(d) => (d, true),
                 Statement::Absent(d) => (d, false),
                 // V.47/V.15: a `repo:` names a backend, and a backend not in `priority` is
@@ -908,6 +908,17 @@ impl<'a> Resolver<'a> {
             };
 
             let backend = self.backend_for(&decl, &origin)?;
+            // **The manager's spelling wins from here on.** A bare `jq` that resolved to
+            // Portage becomes `app-misc/jq` before the key is built, so the set math, the
+            // planner's comparison against `qlist -I` and the argv that reaches emerge are all
+            // one string. Renaming later would mean three places agreeing by hand (`J8`).
+            if let Some(qualified) = self
+                .bare
+                .get(decl.selector.as_str())
+                .and_then(|a| a.qualified.as_deref())
+            {
+                decl.selector = Selector::Name(qualified.to_string());
+            }
             let key = format!("{}:{}", backend, decl.selector.as_str());
 
             if dating_of(&decl.options, self.now) == super::dated::Dating::Lapsed {
@@ -1037,7 +1048,7 @@ impl<'a> Resolver<'a> {
                 // question is passed on marked, so nothing downstream mistakes it for a
                 // decision.
                 match self.bare.get(decl.selector.as_str()) {
-                    Some(b) => Ok(b.clone()),
+                    Some(answer) => Ok(answer.backend.clone()),
                     None => Ok(BARE.to_string()),
                 }
             }
@@ -1049,6 +1060,31 @@ impl<'a> Resolver<'a> {
 /// the tool *through* the shim, so there is nothing to confine without one.
 pub fn wants_a_shim(options: &Options) -> bool {
     options.one("shim") == Some("true") || options.one("sandbox") == Some("true")
+}
+
+/// What the prober learned about one bare name: which manager has it, and — when that manager
+/// spells it differently from the line — what the manager calls it (`J8`).
+///
+/// **Two facts, because they are frozen differently.** The backend is a choice between managers
+/// and is recorded in `locks/bare.HOST.toml`; the qualified name is not a choice at all, it is
+/// how the winning manager writes the name the user typed, and it is re-read every run because
+/// it has to agree with what that manager's own listing reports back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BareAnswer {
+    pub backend: String,
+    /// `None` when the manager's name for it is the one that was typed, which is every manager
+    /// but Portage today.
+    pub qualified: Option<String>,
+}
+
+impl BareAnswer {
+    /// The common case, for tests and for callers with nothing to qualify.
+    pub fn to(backend: &str) -> Self {
+        Self {
+            backend: backend.to_string(),
+            qualified: None,
+        }
+    }
 }
 
 /// The backend of a bare name, before probing. Never reaches a backend: `Resolver::resolve`
@@ -1949,9 +1985,9 @@ apt:nginx
 
     /// Resolve with the prober's answers already in hand, as the caller does.
     fn resolve_probed(f: &Fx, answers: &[(&str, &str)]) -> Result<DesiredState> {
-        let table: HashMap<String, String> = answers
+        let table: HashMap<String, BareAnswer> = answers
             .iter()
-            .map(|(n, b)| (n.to_string(), b.to_string()))
+            .map(|(n, b)| (n.to_string(), BareAnswer::to(b)))
             .collect();
         let r = Resolver::new(&f.layout, &known, &f.priority)
             .with_facts(facts())

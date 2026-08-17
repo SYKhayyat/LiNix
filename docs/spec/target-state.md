@@ -1137,6 +1137,23 @@ accepting it.
 to one manager on one machine, so picking either list silently would make the other line a lie —
 the same reasoning as rule 5.
 
+**A manager whose own names carry a category answers about the bare half, and the plan then
+names the whole** (owner ruling, 2026-07-17b, `J8`). Portage calls jq `app-misc/jq` and `qlist
+-I` reports it that way, so a line reading `jq` and a machine holding `app-misc/jq` are one
+package under two spellings. Such a backend declares `qualified_names`, and then:
+
+- **the exact name still wins wherever it exists** — on that manager and on every other;
+- **one matching atom resolves, and the resolved name replaces the bare one** everywhere
+  downstream, so the set math, the comparison against the manager's own listing and the argv
+  that reaches it are one string;
+- **more than one matching atom is refused, naming them all.** Portage refuses the same bare
+  `emerge jq` itself; taking the first would be choosing a package out of a list the manager
+  declined to choose from.
+
+**The lock freezes which manager answered, not how it spells the name.** The backend is a choice
+between managers and belongs in `locks/bare.HOST.toml`; the atom is not a choice, so a locked
+name is still asked of its one manager for the spelling. See **V.192**.
+
 **A manager that could not answer has not said no** (owner ruling, 2026-07-22). Asking a
 candidate has three outcomes, not two: it has the name, it does not, or **it could not be
 asked** — a package index that was never fetched, a registry that timed out, a command that

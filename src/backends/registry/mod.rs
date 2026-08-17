@@ -257,6 +257,7 @@ pub(crate) fn base_config(name: &str) -> ManagerConfig {
         machine_list: None,
         outdated: None,
         search_source: SearchSource::Command,
+        qualified_names: false,
     }
 }
 
