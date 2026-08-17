@@ -652,7 +652,19 @@ impl Transaction {
                     return Err(final_err);
                 }
                 ready.sort();
-            } else if in_progress.is_empty() && self.completed_indices.len() < total_nodes {
+            } else {
+                // **Nothing was joined, which can only mean the pool was already empty.**
+                // `join_next` answers `None` for an empty `JoinSet` and for nothing else, so
+                // reaching here says every task ever dispatched has been joined and accounted
+                // for — every node of them removed from `in_progress` or returned on — and that
+                // this pass dispatched nothing to replace them. The loop's own condition says
+                // there is still work. That is a graph no scheduler can advance.
+                //
+                // This used to guard the report with `in_progress.is_empty() &&
+                // completed < total`. Both are implied here and neither can be false, so the
+                // guard could not change the outcome; what it could do is make the report
+                // conditional on a fact nothing establishes, which is how a stall becomes an
+                // infinite loop instead of a message.
                 return Err(Error::Transaction(
                     "DAG Logic Stall: Cycle detected in closure.".into(),
                 ));
@@ -1062,7 +1074,7 @@ impl Transaction {
 
         let mut attempt = 0;
         let mut last_error = None;
-        let mut lock_waited = Duration::ZERO;
+        let mut lock_budget = LockBudget::of(config.manager_lock_wait);
 
         while attempt <= config.max_retries {
             attempt += 1;
@@ -1116,13 +1128,13 @@ impl Transaction {
                 // One budget across the whole retry loop, not one per attempt. A queue of
                 // holders taking the lock in turn is a real machine state, and three full waits
                 // in a row would be three times the bound the setting promises.
-                let budget = config.manager_lock_wait.saturating_sub(lock_waited);
+                let budget = lock_budget.remaining();
                 match lock_wait_verdict(&last_error, &b_name, budget, &|b| {
                     crate::app::stale_lock::held_for_on_this_machine(b)
                 }) {
                     LockWait::Wait(who) => {
                         match wait_for_manager_lock(&b_name, &who, budget, &cancel_token).await {
-                            Ok(spent) => lock_waited += spent,
+                            Ok(spent) => lock_budget.spend(spent),
                             Err(err) => {
                                 last_error = Some(err);
                                 break;
@@ -1534,6 +1546,41 @@ enum LockWait {
     Backoff,
 }
 
+/// How much of `manager_lock_wait_secs` a batch has left to spend waiting for another manager.
+///
+/// **One budget across the whole retry loop, not one per attempt** — a queue of holders taking
+/// the lock in turn is a real machine state, and three full waits in a row would be three times
+/// the bound the setting promises. Written as a type for the reason [`backoff_for`] was written
+/// as a function: the running total was a `Duration` accumulated at one site and subtracted at
+/// another, and neither arithmetic could be reached without a second package manager to hold a
+/// real lock. Here they are two named operations with a test each.
+#[derive(Debug, Clone, Copy)]
+struct LockBudget {
+    total: Duration,
+    spent: Duration,
+}
+
+impl LockBudget {
+    fn of(total: Duration) -> Self {
+        Self {
+            total,
+            spent: Duration::ZERO,
+        }
+    }
+
+    /// What is left to wait with. Saturating, because a wait that overran its share leaves
+    /// nothing rather than a negative bound — and zero is the value `lock_wait_verdict` reads as
+    /// "do not wait", which is the right answer once the budget is gone.
+    fn remaining(&self) -> Duration {
+        self.total.saturating_sub(self.spent)
+    }
+
+    /// Charge a wait that has already happened.
+    fn spend(&mut self, waited: Duration) {
+        self.spent += waited;
+    }
+}
+
 /// Which of the three a failure is.
 ///
 /// The verdict is taken from the machine and not from the message: the manager only says *"could
@@ -1844,6 +1891,41 @@ mod manager_lock_tests {
             .await
             .expect_err("a cancelled wait does not succeed");
         assert!(matches!(out, Error::Cancelled), "{out:?}");
+    }
+
+    /// Two waits in a row cost the setting once between them.
+    ///
+    /// The value that made this worth extracting: reaching the running total in the engine needs
+    /// a second package manager holding a real lock and letting go of it twice, which no
+    /// hermetic test can arrange. Every intermediate value is asserted, because a budget that
+    /// counted *down* from zero and a budget that never moved both leave the same final answer
+    /// once it saturates.
+    #[test]
+    fn the_wait_budget_is_spent_across_attempts_and_not_per_attempt() {
+        let mut budget = LockBudget::of(Duration::from_secs(300));
+        assert_eq!(budget.remaining(), Duration::from_secs(300));
+
+        budget.spend(Duration::from_secs(120));
+        assert_eq!(
+            budget.remaining(),
+            Duration::from_secs(180),
+            "the second wait gets what the first one left, not the whole setting again"
+        );
+
+        budget.spend(Duration::from_secs(60));
+        assert_eq!(budget.remaining(), Duration::from_secs(120));
+    }
+
+    /// A budget that has been overrun is spent, not negative.
+    ///
+    /// `lock_wait_verdict` reads a zero wait as "the user opted out", which is the right answer
+    /// once there is nothing left — and it is reached by saturating rather than by a subtraction
+    /// that would panic on the way past.
+    #[test]
+    fn a_spent_budget_is_zero_rather_than_a_negative_one() {
+        let mut budget = LockBudget::of(Duration::from_secs(30));
+        budget.spend(Duration::from_secs(45));
+        assert_eq!(budget.remaining(), Duration::ZERO);
     }
 }
 

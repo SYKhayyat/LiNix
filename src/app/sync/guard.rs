@@ -318,6 +318,14 @@ pub enum Objection {
 #[derive(Debug, Default, Clone)]
 pub struct GuardReport {
     pub objections: Vec<Objection>,
+    /// The objections a mass flag answered, kept rather than dropped on the floor.
+    ///
+    /// **A report that only subtracts cannot say what it let through.** Clearing an objection
+    /// and never having raised one produce the same `objections` list, so the only difference
+    /// between "the flag was needed" and "the flag was idle" used to be a `warn!` line — and a
+    /// line is something a caller has to overhear rather than something it can read. Recorded
+    /// here so [`allow_the_count`] announces a value it holds.
+    pub allowed_by_flag: Vec<Objection>,
 }
 
 /// How many individual packages a refusal names before summarizing. A mass-removal plan
@@ -494,37 +502,56 @@ pub async fn inspect(
 /// `--allow-mass-install`, because a total is made of both (`N8`) — and to nothing else, which
 /// is why this is a match on the setting rather than a blanket retain.
 ///
-/// **The `before != after` below survives mutation and no test here kills it, deliberately.**
-/// Its only observable is the `warn!`: flipped to `==`, the line is announced on every run that
-/// did *not* need an override and withheld from the runs that did, and the report is byte for
-/// byte the same either way. A test was written for it and withdrawn the same day, because
-/// asserting on `tracing` output from this binary is a **race, measured rather than suspected**:
-/// callsite `Interest` is cached globally, other tests create and drop dispatchers on other
-/// threads throughout the run, and the capture came back empty in 2 of 3 identical Linux runs
-/// while passing every time on Windows and every time when run alone. The remedy —
-/// `tracing_core::callsite::rebuild_interest_cache` — means a new dependency to make a flaky
-/// test less flaky, which is not a fix. Killing this wants the announcement to be a value
-/// something can read, not a line something has to overhear; that is a shape change to a report
-/// two call sites share, and it is not being made on the way past.
+/// **What the flag answered is moved, not deleted.** This was a `retain` and a
+/// `before != after` around the `warn!`, whose only observable was the line itself: flipped to
+/// `==`, the announcement went to every run that did *not* need an override and was withheld
+/// from the runs that did, while the report stayed byte for byte the same. A test that read the
+/// `tracing` output was written for it and withdrawn the same day — callsite `Interest` is
+/// cached globally and other tests create and drop dispatchers on other threads throughout the
+/// run, so the capture came back empty in 2 of 3 identical Linux runs. Partitioning answers it
+/// without a subscriber: the objections the flag cleared are on the report, so what was allowed
+/// is a value a caller reads rather than a line it has to overhear.
 fn allow_the_count(config: &Config, report: &mut GuardReport, scope: GuardScope, noun: &str) {
     if !config.allow_mass_removal && !config.allow_mass_install {
         return;
     }
-    let before = report.objections.len();
-    report.objections.retain(|o| match o {
-        // `--allow-mass-install` clears the total, because a total is made of installs too, and
-        // it clears nothing else: the flag that means "yes, install that many" must not also
-        // answer "yes, remove that many". That conflation is II.10's whole point, one ceiling up.
-        Objection::TooMany { setting, .. } => !(config.allow_mass_removal || *setting == TOTAL_KEY),
-        _ => true,
-    });
-    if before != report.objections.len() {
-        warn!(
-            "the {} count for '{}' was allowed by --allow-mass-removal.",
-            noun,
-            scope.as_str()
-        );
+    let (allowed, kept): (Vec<Objection>, Vec<Objection>) = std::mem::take(&mut report.objections)
+        .into_iter()
+        .partition(|o| match o {
+            // `--allow-mass-install` clears the total, because a total is made of installs too,
+            // and it clears nothing else: the flag that means "yes, install that many" must not
+            // also answer "yes, remove that many". That conflation is II.10's whole point, one
+            // ceiling up.
+            Objection::TooMany { setting, .. } => {
+                config.allow_mass_removal || *setting == TOTAL_KEY
+            }
+            _ => false,
+        });
+    report.objections = kept;
+    if let Some(said) = announcement(&allowed, scope, noun) {
+        warn!("{}", said);
     }
+    // Extended rather than assigned: nothing calls this twice on one report today, and a report
+    // that forgot the first answer when asked a second time would be a silent one.
+    report.allowed_by_flag.extend(allowed);
+}
+
+/// What a run says when a mass flag answered its count — `None` when none did.
+///
+/// A function returning the sentence rather than an `if` around the `warn!`, for the same reason
+/// the objections are moved rather than dropped: a condition whose only consequence is whether a
+/// log line exists can be reversed without failing anything, and the test that would catch it has
+/// to subscribe to `tracing` from a binary where the callsite cache is shared with every other
+/// test on every other thread.
+fn announcement(allowed: &[Objection], scope: GuardScope, noun: &str) -> Option<String> {
+    if allowed.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "the {} count for '{}' was allowed by --allow-mass-removal.",
+        noun,
+        scope.as_str()
+    ))
 }
 
 /// What is being taken away. Every kind answers to `protected_packages` and to a ceiling; they
@@ -1959,8 +1986,11 @@ mod tests {
                 setting: "max_removals",
             }))
             .collect();
-        let msg =
-            GuardReport { objections }.message(GuardScope::PurgeUndeclared, RemovalKind::Package);
+        let msg = GuardReport {
+            objections,
+            ..Default::default()
+        }
+        .message(GuardScope::PurgeUndeclared, RemovalKind::Package);
         let count_line = msg.find("removes 25 packages").expect("count line present");
         let first_pkg = msg.find("apt:pkg0").expect("a package listed");
         assert!(count_line < first_pkg, "the count must lead");
@@ -2203,6 +2233,116 @@ mod tests {
             .await
             .is_ok(),
             "--allow-mass-removal answers both counts at once"
+        );
+    }
+
+    /// What a mass flag answered is **on the report**, not only in the log.
+    ///
+    /// The three states this distinguishes look identical from the objection list alone: an
+    /// objection that was never raised, one that was raised and cleared, and one that was raised
+    /// and stands. Two of the three end with the same empty list, which is why the only witness
+    /// used to be a `warn!` — and a line nothing can read is a fact nothing can check.
+    #[tokio::test]
+    async fn a_mass_flag_moves_the_count_onto_the_report_rather_than_deleting_it() {
+        let reg = Arc::new(BackendRegistry::new());
+        let mut cfg = config_with(2);
+        let over_the_limit = pairs(&["a", "b", "c"]);
+
+        // No flag: the count objects, and nothing has been answered.
+        let mut report = inspect_removals(
+            &cfg,
+            &reg,
+            &over_the_limit,
+            RemovalKind::Package,
+            &Reaping::new(),
+        )
+        .await;
+        allow_the_count(&cfg, &mut report, GuardScope::Sync, "removal");
+        assert!(
+            matches!(
+                report.objections.as_slice(),
+                [Objection::TooMany { setting, .. }] if *setting == "max_removals"
+            ),
+            "{:?}",
+            report.objections
+        );
+        assert!(
+            report.allowed_by_flag.is_empty(),
+            "no flag was passed, so nothing was allowed: {:?}",
+            report.allowed_by_flag
+        );
+
+        // With it: the same objection is answered, and the report says which one and how far
+        // over it was — the numbers, so a permutation of the list cannot pass for a clearance.
+        cfg.allow_mass_removal = true;
+        let mut report = inspect_removals(
+            &cfg,
+            &reg,
+            &over_the_limit,
+            RemovalKind::Package,
+            &Reaping::new(),
+        )
+        .await;
+        allow_the_count(&cfg, &mut report, GuardScope::Sync, "removal");
+        assert!(report.is_empty(), "{:?}", report.objections);
+        assert!(
+            matches!(
+                report.allowed_by_flag.as_slice(),
+                [Objection::TooMany {
+                    count: 3,
+                    limit: 2,
+                    setting,
+                }] if *setting == "max_removals"
+            ),
+            "{:?}",
+            report.allowed_by_flag
+        );
+
+        // A protection is not a count. The flag neither clears it nor claims to have.
+        let mut report = inspect_removals(
+            &cfg,
+            &reg,
+            &pairs(&["python3"]),
+            RemovalKind::Package,
+            &Reaping::new(),
+        )
+        .await;
+        allow_the_count(&cfg, &mut report, GuardScope::Sync, "removal");
+        assert!(
+            matches!(report.objections.as_slice(), [Objection::Protected { .. }]),
+            "{:?}",
+            report.objections
+        );
+        assert!(
+            report.allowed_by_flag.is_empty(),
+            "a refusal is not something a flag answers (V.26): {:?}",
+            report.allowed_by_flag
+        );
+    }
+
+    /// A run that needed no override says nothing, and one that did names what it overrode.
+    #[test]
+    fn the_announcement_is_made_only_by_a_run_that_needed_one() {
+        assert_eq!(
+            announcement(&[], GuardScope::Sync, "removal"),
+            None,
+            "announcing an override on every run that did not need one is the same defect \
+             pointing the other way"
+        );
+        let said = announcement(
+            &[Objection::TooMany {
+                count: 40,
+                limit: 10,
+                setting: "max_extra_removals",
+            }],
+            GuardScope::PurgeUndeclared,
+            "teardown",
+        )
+        .expect("an objection a flag cleared is announced");
+        assert!(said.contains("teardown"), "{said}");
+        assert!(
+            said.contains("purge-undeclared"),
+            "the line has to name the command that was allowed: {said}"
         );
     }
 
@@ -2529,6 +2669,7 @@ mod tests {
                     reason: "protected by config rule `x`".into(),
                 })
                 .collect(),
+            ..Default::default()
         };
 
         let exactly = protected(MAX_LISTED).message(GuardScope::Sync, RemovalKind::Package);

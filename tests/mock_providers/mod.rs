@@ -9,6 +9,11 @@
 //! `mod mock_providers;` resolves here unchanged — so no caller moved.
 #![allow(clippy::field_reassign_with_default, dead_code)]
 
+/// A backend that answers `pins_version` and `supports_purge` both ways and records what the
+/// engine sent it. Its own file because it is a *backend*, not one more provider double, and
+/// because the engine's argv decisions are the one subject `MockExecutor` sits too low to reach.
+pub mod recording_backend;
+
 use async_trait::async_trait;
 use chrono::{Duration as ChronoDuration, Utc};
 use dashmap::DashMap;
