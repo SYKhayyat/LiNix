@@ -503,7 +503,19 @@ impl Transaction {
             if !dispatching.is_empty() && in_progress.is_empty() {
                 waves += 1;
             }
-            for batch in Self::batches(&self.graph, dispatching, max_batch) {
+            // **An empty batch is not work, and dispatching one looks exactly like progress.**
+            // `execute_batch_with_retry` returns at once for a batch with no members, so the
+            // join below succeeds, completes nothing, and the loop comes round to dispatch
+            // another — for ever, against a `total_timeout` measured in hours. `batches` cannot
+            // produce one; the filter is what stops it *mattering* whether that stays true,
+            // because with nothing dispatched the pass falls through to the stall report a few
+            // lines down and says so in milliseconds. The sweep found this the expensive way:
+            // the mutation that makes `batches` answer one empty batch was reported as a
+            // two-hour timeout in three consecutive nightlies.
+            for batch in Self::batches(&self.graph, dispatching, max_batch)
+                .into_iter()
+                .filter(|b| !b.is_empty())
+            {
                 let permit = match semaphore.clone().acquire_owned().await {
                     Ok(p) => p,
                     Err(e) => return Err(Error::Transaction(format!("Semaphore failure: {}", e))),
