@@ -1076,8 +1076,19 @@ impl Transaction {
         let mut last_error = None;
         let mut lock_budget = LockBudget::of(config.manager_lock_wait);
 
-        while attempt <= config.max_retries {
-            attempt += 1;
+        // **A range, not a counter the body increments.** `while attempt <= max_retries` with
+        // `attempt += 1` at the top is the same loop until the increment is wrong, and then it
+        // is not a loop at all: read as `*=`, the counter stays at nought and a batch whose
+        // command fails retries for ever. The mutation sweep reported that as a *timeout* —
+        // neither caught nor survived, a shard red for two hours while naming no defect — and
+        // no test could convert it, because the hang is in whichever test happens to fail an
+        // install, not in the one written for the retry. A `for` over `1..=n` cannot run more
+        // times than the config allows however the body behaves.
+        //
+        // The tries are `max_retries + 1`: the first attempt is not a retry, which is the same
+        // arithmetic `retries_behind` reads back out.
+        for this_attempt in 1..=config.max_retries.saturating_add(1) {
+            attempt = this_attempt;
             if cancel_token.is_cancelled() {
                 // **A cancelled batch closes its entries, exactly as a failed one does.** This
                 // return sits between `record_start` and the `record_success`/`record_failure`
