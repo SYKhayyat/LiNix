@@ -493,6 +493,19 @@ pub async fn inspect(
 /// one question (`Y20`). `max_total_changes` answers to that flag *and* to
 /// `--allow-mass-install`, because a total is made of both (`N8`) — and to nothing else, which
 /// is why this is a match on the setting rather than a blanket retain.
+///
+/// **The `before != after` below survives mutation and no test here kills it, deliberately.**
+/// Its only observable is the `warn!`: flipped to `==`, the line is announced on every run that
+/// did *not* need an override and withheld from the runs that did, and the report is byte for
+/// byte the same either way. A test was written for it and withdrawn the same day, because
+/// asserting on `tracing` output from this binary is a **race, measured rather than suspected**:
+/// callsite `Interest` is cached globally, other tests create and drop dispatchers on other
+/// threads throughout the run, and the capture came back empty in 2 of 3 identical Linux runs
+/// while passing every time on Windows and every time when run alone. The remedy —
+/// `tracing_core::callsite::rebuild_interest_cache` — means a new dependency to make a flaky
+/// test less flaky, which is not a fix. Killing this wants the announcement to be a value
+/// something can read, not a line something has to overhear; that is a shape change to a report
+/// two call sites share, and it is not being made on the way past.
 fn allow_the_count(config: &Config, report: &mut GuardReport, scope: GuardScope, noun: &str) {
     if !config.allow_mass_removal && !config.allow_mass_install {
         return;
@@ -2598,90 +2611,5 @@ mod tests {
             );
             seen.push(text);
         }
-    }
-
-    /// Clearing a count says so; clearing nothing says nothing.
-    ///
-    /// The flag is the one place a refusal turns into a pass, so the line announcing it is the
-    /// only record that it happened. `before != after` reads `==` without failing a test —
-    /// which inverts it into announcing an override on every run that did NOT need one, and
-    /// staying silent on the runs that did.
-    #[test]
-    fn allowing_the_count_is_announced_and_only_when_it_happened() {
-        use std::io::Write;
-        use std::sync::{Arc, Mutex};
-
-        #[derive(Clone, Default)]
-        struct Captured(Arc<Mutex<Vec<u8>>>);
-        impl Write for Captured {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().unwrap().extend_from_slice(buf);
-                Ok(buf.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
-            type Writer = Captured;
-            fn make_writer(&'a self) -> Self::Writer {
-                self.clone()
-            }
-        }
-
-        let log_of = |report: &mut GuardReport| {
-            let captured = Captured::default();
-            {
-                let _guard = tracing::subscriber::set_default(
-                    tracing_subscriber::fmt()
-                        .with_writer(captured.clone())
-                        .with_max_level(tracing::Level::WARN)
-                        .finish(),
-                );
-                let cfg = Config {
-                    allow_mass_removal: true,
-                    ..Default::default()
-                };
-                allow_the_count(&cfg, report, GuardScope::Sync, "package");
-            }
-            let bytes = captured.0.lock().unwrap().clone();
-            String::from_utf8_lossy(&bytes).into_owned()
-        };
-
-        let mut cleared = GuardReport {
-            objections: vec![Objection::TooMany {
-                count: 42,
-                limit: 20,
-                setting: "max_removals",
-            }],
-        };
-        let said = log_of(&mut cleared);
-        assert!(
-            cleared.objections.is_empty(),
-            "the flag exists to clear the count"
-        );
-        assert!(
-            said.contains("--allow-mass-removal"),
-            "a refusal was overridden and nothing recorded it:\n{said}"
-        );
-
-        // Nothing to clear: a protected package is not the count, and the run must not claim
-        // an override that never happened.
-        let mut untouched = GuardReport {
-            objections: vec![Objection::Protected {
-                key: "apt:python3".into(),
-                reason: "an OS essential".into(),
-            }],
-        };
-        let quiet = log_of(&mut untouched);
-        assert_eq!(
-            untouched.objections.len(),
-            1,
-            "protection is never cleared by a mass flag"
-        );
-        assert!(
-            !quiet.contains("--allow-mass-removal"),
-            "nothing was overridden, so nothing should have been announced:\n{quiet}"
-        );
     }
 }
