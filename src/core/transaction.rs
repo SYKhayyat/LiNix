@@ -1125,9 +1125,6 @@ impl Transaction {
                 // half a second do not outlast an `apt upgrade`. Only ever entered against a
                 // holder proved to be alive: a lock left behind by a killed run is reported at
                 // once, because waiting on it would never end.
-                // One budget across the whole retry loop, not one per attempt. A queue of
-                // holders taking the lock in turn is a real machine state, and three full waits
-                // in a row would be three times the bound the setting promises.
                 let budget = lock_budget.remaining();
                 match lock_wait_verdict(&last_error, &b_name, budget, &|b| {
                     crate::app::stale_lock::held_for_on_this_machine(b)
