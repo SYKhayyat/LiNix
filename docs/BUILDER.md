@@ -482,7 +482,11 @@ Tiers 1–5 reach **A**. A+ needs test *kinds* this repo does not have. Specifie
 - **pty coverage on every read command**, not just `list`; all four stdin/stderr handle
   combinations for mutations; real `sudo` with a password in a container.
 - **Destructive effectors in disposable VMs** — btrfs/zfs/lvm restore on loopback filesystems,
-  `dpkg -i`/`rpm -U`, U30 storage removal. Currently argv-tested and unrun.
+  `dpkg -i`/`rpm -U`, U30 storage removal. **U30 storage removal is no longer in this list as of
+  2026-08-18**: the `storage` leg destroys a btrfs subvolume, an LVM volume and a ZFS dataset
+  through Shall on every run and asserts each is gone. Still unrun: the two restores, the
+  local-file handoff, and a **protected** storage object refused by the guard in front of a real
+  destroy — which has no argv to test, so a live run is its only possible proof.
 - **Crash recovery**: `SIGKILL` mid-transaction at every step boundary, then `heal`, asserting the
   machine and the journal agree. This is the WAL's entire reason to exist and nothing tests it
   under a real crash.

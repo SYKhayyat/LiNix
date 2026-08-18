@@ -1000,6 +1000,19 @@ right shape (no two of everything). So the danger has two answers together: the 
 every storage removal (the normal gate), and a volume a user cares about can be marked so the
 guard will not destroy it even then.
 
+**What has actually been executed, recorded 2026-08-18 because three documents said "unrun"
+while it was running.** The `storage` leg destroys a real object through Shall on every run and
+asserts it is gone from `list`: a btrfs subvolume and an LVM logical volume since 2026-07-31, and
+a ZFS dataset since today (CI 32132445664). `README.md`, `plan.md` item 0c and `BUILDER.md` all
+carried "argv-tested and unrun" for eighteen days after the first half of that stopped being
+true, and all three are corrected.
+
+**The half still unexecuted is the protection, and it is the half that matters most.** No gate
+has ever marked a storage object protected and watched the guard refuse to destroy it. It is also
+the one item in this area that **cannot** be argv-tested, because a refusal never reaches a
+manager and so produces no argv to assert — a live run is its only possible proof. That is a
+lifecycle step the harness does not have yet, not a ruling in question.
+
 **Build note (owner, 2026-07-26): the providers do not exist yet and must actually be built.**
 Only `backends/btrfs.rs` declares storage objects today; **zfs datasets and lvm volumes have no
 implementation at all.** This ruling is the contract for code that is still owed — the shared

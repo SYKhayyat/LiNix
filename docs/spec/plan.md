@@ -57,7 +57,16 @@ what blocks the next one.
     thing a developer runs by hand, which is the wrong way round.
 0c. **Close the live-validation gap on the destructive effectors**, in this order, because each
     is a path where being wrong costs a filesystem: btrfs restore, then zfs/lvm, then D5's
-    `dpkg -i`/`rpm -U` handoff, then U30 storage removal. All are argv-tested; none has run.
+    `dpkg -i`/`rpm -U` handoff, then U30 storage removal.
+    **Two of those four have run, as of 2026-08-18, and the sentence that said none had was
+    stale for eighteen days.** `zfs/lvm` and `U30 storage removal` are the same run: the
+    `storage` leg creates a btrfs subvolume, an LVM logical volume and a ZFS dataset on
+    loopback devices, and **destroys each one through Shall and asserts it is gone**
+    (CI 32132445664 for the zfs half; btrfs and lvm since 2026-07-31). What remains is
+    `btrfs restore`, D5's local-file handoff, and the half of U30 nothing has touched:
+    **a storage object marked protected, in front of a real destroy, watching the guard
+    refuse.** That last one is not argv-testable — a refusal that never reaches a manager
+    has no argv — so it is the only item here whose only possible proof is a live run.
 0d. ~~**`helm` cannot remove what it installs** — install takes a URL, uninstall takes a name.~~
     **FIXED (2026-07-26), ruled as U39.** The name is the identity and the URL is an option:
     `helm:diff@url=…`. `ManagerConfig::install_source_option` carries the key, a line without it

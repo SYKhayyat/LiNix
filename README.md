@@ -1023,9 +1023,17 @@ right one, and no machine in this project's CI has ever run it:
 | `emerge` | smoke-only: `gentoo/stage3` ships a binary-package host but no portage tree, so the closing move is a build-time `emerge-webrsync` nobody has paid for |
 | `stack` | its toolchain can be baked in; the per-package source build cannot, so it is minutes per run for ever |
 
-Two code paths are also unexecuted rather than untested: the `dpkg -i` / `rpm -U` local-file
-handoff, and storage removal (`U30`). An argv test proves a command line was constructed
-correctly. It does not prove the manager accepts it.
+One code path is also unexecuted rather than untested: the `dpkg -i` / `rpm -U` local-file
+handoff. An argv test proves a command line was constructed correctly. It does not prove the
+manager accepts it.
+
+**Storage removal used to be named here and no longer is, because it runs.** The `storage` leg
+destroys a real object through Shall on every run and asserts it is gone — a btrfs subvolume, an
+LVM logical volume, and as of 2026-08-18 a ZFS dataset, each on a loopback device. What is still
+unexecuted is narrower and is the other half of `U30`: **no gate has ever marked a storage object
+protected and watched the guard refuse to destroy it.** The guard's protection is tested over
+package names, and a storage object is protectable by exactly that mechanism rather than a second
+one — but a protected volume has never been put in front of a real `zfs destroy`.
 
 ### Exit codes
 
