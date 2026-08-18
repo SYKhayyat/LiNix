@@ -23,23 +23,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sudo util-linux passwd \
     btrfs-progs lvm2 xfsprogs kmod \
     && rm -rf /var/lib/apt/lists/*
-# **The ZFS userland, built from source at the version the host builds its module from.** The
-# kernel module belongs to the host and is checked for at run time rather than assumed; these are
+# **The ZFS userland, built from source at the version of the module the host actually loaded.**
+# The module belongs to the host and is checked for at run time rather than assumed; these are
 # the tools that talk to it, and OpenZFS does not promise that a `zpool` of one version can drive
-# a module of another. `ZFS_VERSION` comes from the job that builds both (`.github/workflows/
-# ci.yml`), so the two halves cannot drift apart in a way that reads as a broken pool.
+# a module of another. `ZFS_VERSION` is read off `/sys/module/zfs/version` by the job that runs
+# this image, so a runner whose module moves takes the tools with it and there is no constant
+# anywhere to update. Measured, not feared: 2.4.3 tools against a 2.3.4 module fail `zpool
+# create` outright, and the harness names both versions when they disagree.
 #
-# Ubuntu's `zfsutils-linux` was what stood here and cannot be either half: it is 2.2.2, whose
-# `Linux-Maximum` is 6.6, and no runner or developer kernel in this matrix is that old.
+# Ubuntu's `zfsutils-linux` was what stood here and cannot serve: 24.04 packages 2.2.2, which is
+# neither what any host in this matrix loads nor buildable against any kernel in it.
+#
+# The default below is for a host with no module at all, where the tools cannot be matched to
+# anything and exist only so the harness reports a missing module rather than a missing binary.
 #
 # `--with-config=user` builds the tools and not the module. `libtirpc-dev` is not optional and
-# not obvious: configure fails outright without it, because glibc dropped sunrpc.
+# not obvious: configure fails outright without it, because glibc dropped sunrpc. `--fail` on
+# the fetch, because a version with no upstream tag otherwise arrives as an HTML error page and
+# is reported by `tar`.
 ARG ZFS_VERSION=2.4.3
 RUN apt-get update && apt-get install -y --no-install-recommends \
       autoconf automake libtool gawk libblkid-dev uuid-dev libudev-dev \
       zlib1g-dev libaio-dev libattr1-dev libelf-dev libpam0g-dev libtirpc-dev \
       python3 python3-dev python3-setuptools python3-cffi libffi-dev python3-packaging \
-    && curl -sSL -o /tmp/zfs.tar.gz \
+    && curl -sSLf -o /tmp/zfs.tar.gz \
       "https://github.com/openzfs/zfs/releases/download/zfs-${ZFS_VERSION}/zfs-${ZFS_VERSION}.tar.gz" \
     && tar xzf /tmp/zfs.tar.gz -C /tmp \
     && cd "/tmp/zfs-${ZFS_VERSION}" \
