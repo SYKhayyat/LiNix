@@ -1043,13 +1043,23 @@ setup_storage_devices() {
     fi
 
     # ZFS is out of tree, so whether it is available is a property of the kernel the container
-    # borrowed. On the WSL2 kernel this project is developed against, `modprobe -n zfs` says no.
-    # That must read as "this machine cannot", never as "this backend is excused" (Q17).
+    # borrowed, and nobody ships it prebuilt: the WSL2 kernel this project is developed against
+    # has no module, and neither does a GitHub runner - the CI job builds one against the
+    # runner's own kernel and loads it before this harness starts. Either way, a kernel without
+    # one must read as "this machine cannot", never as "this backend is excused" (Q17).
     if ! command -v zpool >/dev/null 2>&1; then
         soft "zfs: no zpool in this image"
     elif ! modprobe zfs >/dev/null 2>&1; then
-        soft "zfs: this kernel has no ZFS module — it is out-of-tree and the WSL2 kernel ships without it. This is the release blocker Q4 counts, not an exemption."
+        soft "zfs: the host kernel has no ZFS module loaded — it is out of tree, so whoever runs this harness builds and loads it. This is the release blocker Q4 counts, not an exemption."
     else
+        # The tools and the module are two builds of one project, and a version disagreement
+        # between them fails later in ways that read as a broken pool rather than a mismatched
+        # installation. `zpool version` prints both, so this asks instead of trusting the image.
+        _zfs_user="$(zpool version 2>/dev/null | sed -n '1s/^zfs-//p')"
+        _zfs_kmod="$(zpool version 2>/dev/null | sed -n '2s/^zfs-kmod-//p')"
+        if [ -n "$_zfs_user" ] && [ -n "$_zfs_kmod" ] && [ "$_zfs_user" != "$_zfs_kmod" ]; then
+            soft "zfs: the userland is $_zfs_user and the module is $_zfs_kmod — one of the two builds is at the wrong version"
+        fi
         rm -f /var/tmp/shall-zfs.img
         truncate -s 512M /var/tmp/shall-zfs.img
         if zpool create -f shallpool /var/tmp/shall-zfs.img >/dev/null 2>&1; then
