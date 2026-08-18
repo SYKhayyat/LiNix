@@ -2,7 +2,7 @@
 
 All notable changes to Shall are documented here.
 
-## [0.8.0] — unreleased — published binaries, NixOS as a system, and schedules that report
+## [0.8.0] — 2026-08-18 — published binaries, NixOS as a system, and schedules that report
 
 **The first release anyone can install without a Rust toolchain.** `0.7.0` named the rewrite in
 this file and was never tagged, so no binary was ever published and `install.sh` compiled 448
