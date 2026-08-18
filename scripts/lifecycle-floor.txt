@@ -73,15 +73,6 @@ container-linux-alpine-local 7
 # lists, and removes `figlet` — a canary chosen because `hello`, its old one, is also cabal's
 # and cabal cannot uninstall.
 container-linux-tools-local 26
-# Added 2026-07-31, each read off that image's own first green run rather than estimated. The
-# `storage` image is the only one that needs `--privileged` and the host's /lib/modules.
-#
-# Raised 3 → 5 the same day, on the first run of that image with NO failures (pass=274 fail=0):
-# apt, github, btrfs, cargo and lvm. `lvm` is the one `Q18` unblocked — it had no legal
-# declaration at all until the option table admitted `@size` — and `btrfs`'s canary now carries
-# `@quota` and `@mount` as well, so the number covers the mount path and not just creation.
-# `zfs` is still not in it: this kernel has no ZFS module, which `Q4` counts as a release
-# blocker rather than an exemption.
 container-linux-opensuse-local 7
 # Added 2026-08-14 from that image's first run with no failures (pass=322 fail=1 -> the one
 # failure was a fixture this mirror does not carry, now softened, and the number below was read
@@ -93,4 +84,21 @@ container-linux-slackware-local 7
 # small, honest, and the only one that can rise as canaries land.
 container-linux-guix-local 3
 container-linux-void-local 9
-container-linux-storage-local 5
+# Added 2026-07-31, read off that image's own first green run rather than estimated. The
+# `storage` image is the only one that needs `--privileged` and the host's /lib/modules.
+#
+# Raised 3 → 5 the same day, on the first run of that image with NO failures (pass=274 fail=0):
+# apt, github, btrfs, cargo and lvm. `lvm` is the one `Q18` unblocked — it had no legal
+# declaration at all until the option table admitted `@size` — and `btrfs`'s canary now carries
+# `@quota` and `@mount` as well, so the number covers the mount path and not just creation.
+#
+# **This paragraph sat above `container-linux-opensuse-local` until 2026-08-18**, four lines
+# from the number it describes, which in a file whose entire content is numbers-with-reasons is
+# a comment pointing at the wrong one.
+#
+# Raised 5 → 8 on 2026-08-18, measured on CI run 32132445664 (pass=378 fail=0). One of the three
+# is this change: `zfs` completes a real install → list → uninstall → gone for the first time
+# anywhere. The other two are work that landed between 2026-07-31 and now and was never recorded
+# here, which is visible in the run before this one measuring 7. Nothing in any of the three
+# touches a network, so the "wait for two runs" caution on the windows line does not apply.
+container-linux-storage-local 8

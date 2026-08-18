@@ -979,6 +979,14 @@ fi
 STORAGE_BTRFS=""
 STORAGE_LVM=""
 STORAGE_ZFS=""
+# Set by 13c when the *kernel* is what is missing, which is a different fact from a device that
+# could not be built: a container borrows the host's kernel, so a host without btrfs, without
+# device-mapper or without the out-of-tree ZFS module can never drive that backend no matter what
+# the image carries. `no_lifecycle_reason` reads these, so the coverage gate can tell "this
+# machine cannot" from "this run could not", and only the second one is a defect (Q17).
+STORAGE_BTRFS_NO_KERNEL=""
+STORAGE_LVM_NO_KERNEL=""
+STORAGE_ZFS_NO_KERNEL=""
 
 setup_storage_devices() {
     [ -n "${SHALL_IT_STORAGE:-}" ] || return 0
@@ -988,6 +996,7 @@ setup_storage_devices() {
     if ! command -v mkfs.btrfs >/dev/null 2>&1; then
         soft "btrfs: no mkfs.btrfs in this image, so there is no filesystem to make a subvolume in"
     elif ! modprobe btrfs >/dev/null 2>&1 && ! grep -qw btrfs /proc/filesystems; then
+        STORAGE_BTRFS_NO_KERNEL=1
         soft "btrfs: this kernel has no btrfs — a container borrows the HOST's kernel, so that is a fact about the machine and not about Shall"
     else
         rm -f /var/tmp/shall-btrfs.img
@@ -1005,6 +1014,7 @@ setup_storage_devices() {
     if ! command -v lvcreate >/dev/null 2>&1; then
         soft "lvm: no lvcreate in this image"
     elif ! modprobe dm_mod >/dev/null 2>&1 && [ ! -e /dev/mapper/control ]; then
+        STORAGE_LVM_NO_KERNEL=1
         soft "lvm: this kernel has no device-mapper — again a fact about the machine"
     else
         rm -f /var/tmp/shall-lvm.img
@@ -1050,7 +1060,8 @@ setup_storage_devices() {
     if ! command -v zpool >/dev/null 2>&1; then
         soft "zfs: no zpool in this image"
     elif ! modprobe zfs >/dev/null 2>&1; then
-        soft "zfs: the host kernel has no ZFS module loaded — it is out of tree, so whoever runs this harness builds and loads it. This is the release blocker Q4 counts, not an exemption."
+        STORAGE_ZFS_NO_KERNEL=1
+        soft "zfs: the host kernel has no ZFS module — it is out of tree, so a host either carries one or does not, and a container cannot supply it"
     else
         # The tools and the module are two builds of one project, and a version disagreement
         # between them fails later in ways that read as a broken pool rather than a mismatched
@@ -1159,7 +1170,20 @@ echo "[14] Real lifecycle, every other manager on this image"
 # remainder: on the only image where `SHALL_IT_STORAGE` is set, `btrfs` and `lvm` get canaries
 # and `zfs` does not. So 1 is the largest true count, and the gate now fails on the next backend
 # added without either — which at 11 it could not have done.
-LIFECYCLE_GAP_CEILING=1
+#
+# **Lowered to 0 on 2026-08-18, and that empties the set Q4 is about.** `zfs` now drives a real
+# install → list → uninstall → gone on the storage image, measured on CI run 32132445664:
+# `8 real lifecycle`, `pass=378 fail=0`. Two things had to be true and only one of them was
+# Shall's: a GitHub runner turns out to carry a ZFS module (2.3.4) already, and the pool has to
+# be built on a loop device rather than on a file in the container's overlay filesystem, which
+# is what the btrfs and lvm probes above had always done.
+#
+# **0 is a real gate and not a formality**, which is the whole reason the run-time exemptions
+# above were made to name themselves: a host whose kernel has no ZFS module reports that in
+# `no_lifecycle_reason` and is not counted, while a pool this run FAILED to build leaves `zfs` in
+# neither table and fails the run by name. The difference between "this machine cannot" and "this
+# run could not" is now the difference between green and red, which is what Q4 asked for.
+LIFECYCLE_GAP_CEILING=0
 canary() {
     case "$1" in
         # **One binary name per backend.** `cowsay` was the canary for npm, pnpm, yarn AND bun,
@@ -1347,12 +1371,26 @@ no_lifecycle_reason() {
         # an install target", which is not what the code does, and that sentence is why the
         # three most destructive backends in the program had never been run (Q17).
         #
-        # What they need is a real device, so the reason is whatever 13b could not build — and
-        # it is DETECTED there and printed there. Silence here means either a canary exists or
-        # 13b already said why not, and an unexplained skip is impossible in both directions.
+        # What they need is a real device, so the reason is whatever 13c could not build — and
+        # it is DETECTED there and printed there.
+        #
+        # On the storage image the reason is the KERNEL and nothing else. A device this run
+        # failed to build is a defect and must reach the gap count; a kernel that does not carry
+        # the filesystem, device-mapper, or the out-of-tree ZFS module is an exemption detected at
+        # run time and named — which is what Q17 requires an exemption to be, and the only reason
+        # the ceiling below can sit at 0. Silence here means either a canary exists or this run
+        # owes an explanation, and an unexplained skip is impossible in every direction.
         btrfs|lvm|zfs)
-            [ -n "${SHALL_IT_STORAGE:-}" ] \
-                || echo "needs a real block device, which only the \`storage\` image (--privileged) provides — plan-smoked here" ;;
+            if [ -z "${SHALL_IT_STORAGE:-}" ]; then
+                echo "needs a real block device, which only the \`storage\` image (--privileged) provides — plan-smoked here"
+            else
+                case "$1" in
+                    btrfs) [ -n "$STORAGE_BTRFS_NO_KERNEL" ] && echo "this kernel has no btrfs — detected in 13c, and a container borrows the host's kernel" ;;
+                    lvm)   [ -n "$STORAGE_LVM_NO_KERNEL" ]   && echo "this kernel has no device-mapper — detected in 13c, and a container borrows the host's kernel" ;;
+                    zfs)   [ -n "$STORAGE_ZFS_NO_KERNEL" ]   && echo "this kernel has no ZFS module — detected in 13c; it is out of tree, so a host either carries one or does not" ;;
+                esac
+            fi
+            true ;;
         web)      echo "installs from a pasted URL; no stable public canary — smoked in 15" ;;
         appimage) echo "needs FUSE, which a plain container does not have — smoked in 15" ;;
         # A PRICE, not a wall, and the difference is the whole lesson of the `nix` finding

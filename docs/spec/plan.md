@@ -1859,6 +1859,31 @@ both in full.
 **Q4's item 4 is what the ceiling enforces today:** no new backend is added until the current
 set passes. Adding one without a canary or a stated reason raises the count and fails the sweep.
 
+**The set is empty as of 2026-08-18, and the ceiling is 0.** `zfs` was the last name in it — the
+one backend with no real lifecycle in any harness and no stated reason — and it now completes a
+real install → list → uninstall → gone on the `storage` image, measured on CI run 32132445664:
+`8 real lifecycle`, `pass=378 fail=0`. Neither of the two things that were in the way was a
+defect in Shall, and neither was what the earlier text here assumed:
+
+- **A GitHub runner already carries a ZFS module** (2.3.4), by a route other than
+  `linux-modules-extra`, which was measured and ships none. A run that built the module against
+  the runner's kernel headers was written, worked, and was deleted: it produced a *different*
+  version from the one the host had loaded, and 2.4.3 tools against a 2.3.4 module fail
+  `zpool create` outright. The image now builds its userland at the version read off
+  `/sys/module/zfs/version`, so the two cannot disagree.
+- **The pool has to be built on a loop device**, not on a file in the container's overlay
+  filesystem — which is what the `btrfs` and `lvm` probes beside it had done since 2026-07-31.
+  The `zfs` branch was the sibling that never got the treatment, and it also swallowed the error
+  that would have said so.
+
+**A ceiling of 0 needs the exemptions to name themselves, and that is the second half of this
+change.** A kernel with no btrfs, no device-mapper or no ZFS module is detected in section 13c
+and reported through `no_lifecycle_reason`, so a developer's machine is not failed for what its
+kernel lacks; a device this run *failed to build* stays in neither table and fails the run by
+name. "This machine cannot" and "this run could not" are now the difference between green and
+red, which is the distinction `Q17` requires and the only thing that makes 0 enforceable rather
+than decorative.
+
 ---
 
 # Part IV — Verification

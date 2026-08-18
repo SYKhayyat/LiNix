@@ -490,6 +490,13 @@ crash.*
 - **Release assets are named for their target.** All four builds produce a file called `shall`,
   so the release job as written would have published one binary and let three platforms download
   the wrong architecture.
+- **Every registered backend has now been driven against its real manager in an automated gate,
+  `zfs` last of all.** The coverage rule is that a backend nothing has installed, listed and
+  removed for real does not ship (`Q4`), and `zfs` was the one name left: it needs a kernel
+  module that is out of tree, and the machine this project is developed on has none. The storage
+  leg builds its pool on a loop device now and matches its tools to the module the host loaded,
+  so a `zfs:` declaration is a thing that has been created and destroyed on a real pool rather
+  than a code path with a test beside it.
 
 ### Performance
 

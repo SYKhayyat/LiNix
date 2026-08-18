@@ -4454,8 +4454,12 @@ The edit is made **in the module file and applied by `sync`**, never by re-runni
 that was broken, which was the planner deciding a volume already present under its name still
 needs work. **The second line is the one that could not be got any other way:** D13's failure
 mode is a comparison that reports a change on every sync for ever, and a harness that syncs once
-cannot see it. `btrfs:` and `zfs:` did not run here — this kernel has neither module (Q4's
-release blocker, unchanged) — so `@quota` re-apply is argv-and-unit-tested and not yet executed.
+cannot see it. `btrfs:` and `zfs:` did not run here — the kernel that run borrowed had neither
+module — so `@quota` re-apply is argv-and-unit-tested and not yet executed. **The `zfs:` half of
+that sentence stopped being about Q4's release blocker on 2026-08-18**: the `storage` leg drives
+a real `zfs` install → list → uninstall → gone in CI (run 32132445664), which empties the set Q4
+counts. What remains here is narrower and still true — that leg creates and destroys a pool, so
+the *re-apply* of `@quota` on a dataset that already carries one is not what it measures.
 
 **Deleting the option is not declaring "no limit".** A line that drops `@quota=` stops declaring
 a quota; it does not ask for the existing one to be lifted. That is the same reading `@mount`
