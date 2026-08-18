@@ -1055,18 +1055,37 @@ setup_storage_devices() {
         # The tools and the module are two builds of one project, and a version disagreement
         # between them fails later in ways that read as a broken pool rather than a mismatched
         # installation. `zpool version` prints both, so this asks instead of trusting the image.
+        #
+        # Compared on the upstream version and not on the packaging: a source build says
+        # `zfs-2.3.4-1` and Ubuntu's build of the same OpenZFS says `2.3.4-1ubuntu2`, and reading
+        # those as a disagreement reports a defect on a machine where there is none.
         _zfs_user="$(zpool version 2>/dev/null | sed -n '1s/^zfs-//p')"
         _zfs_kmod="$(zpool version 2>/dev/null | sed -n '2s/^zfs-kmod-//p')"
-        if [ -n "$_zfs_user" ] && [ -n "$_zfs_kmod" ] && [ "$_zfs_user" != "$_zfs_kmod" ]; then
+        if [ -n "$_zfs_user" ] && [ -n "$_zfs_kmod" ] \
+           && [ "${_zfs_user%%-*}" != "${_zfs_kmod%%-*}" ]; then
             soft "zfs: the userland is $_zfs_user and the module is $_zfs_kmod — one of the two builds is at the wrong version"
         fi
         rm -f /var/tmp/shall-zfs.img
         truncate -s 512M /var/tmp/shall-zfs.img
-        if zpool create -f shallpool /var/tmp/shall-zfs.img >/dev/null 2>&1; then
+        # A loop device, which is what btrfs and lvm above already use, and what this section is
+        # named for. A pool on a file inside the container's overlay filesystem is a different
+        # question from a pool on a block device, and the second one is what `zfs:` is for.
+        #
+        # The failure is reported with the command's own words, for the reason spelled out
+        # against lvm: "zpool create still failed" is a sentence nobody can act on, and it stood
+        # here while the sibling twelve lines up had already been fixed for exactly that.
+        _zwhy=""
+        _zloop="$(losetup -f --show /var/tmp/shall-zfs.img 2>&1)"
+        if [ ! -b "$_zloop" ]; then
+            _zwhy="losetup: $_zloop"
+        elif ! _zout="$(zpool create -f shallpool "$_zloop" 2>&1)"; then
+            _zwhy="zpool create on $_zloop: $(echo "$_zout" | tr '\n' ' ')"
+        fi
+        if [ -z "$_zwhy" ]; then
             STORAGE_ZFS=shallpool
             PASS=$((PASS + 1)); echo "  PASS  zfs: pool $STORAGE_ZFS is imported"
         else
-            soft "zfs: the module is loaded and zpool create still failed"
+            soft "zfs: the module is loaded and the pool could not be created — $_zwhy"
         fi
     fi
 }
