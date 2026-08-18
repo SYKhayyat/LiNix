@@ -417,6 +417,20 @@ jobs:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
+
+    # **Without this the publish step is refused, and every other step passes.** This workflow
+    # declared no `permissions:` at all, so it inherited the repository default of read-only, and
+    # `softprops/action-gh-release` creates the release through the API with `GITHUB_TOKEN`. The
+    # first tag that ever reached this job built all seven binaries, named them, asserted every
+    # one present — and then answered `403 Resource not accessible by integration`. That is the
+    # third distinct way this job has been impossible on a tag while looking healthy on every
+    # push: no tag trigger, a retired runner label, and now a token that cannot write.
+    #
+    # Declared on the job rather than the workflow, and `contents` alone: this is the only job
+    # here that writes anything back to the repository. The alternative fix is the repository's
+    # Actions setting, which is a click nobody can see in a diff and does not travel with a fork.
+    permissions:
+      contents: write
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
 
     steps:
