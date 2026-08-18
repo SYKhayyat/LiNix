@@ -66,6 +66,19 @@ pub enum Class {
 /// So neither number is absolute now. What is actually being asserted is that the fan-out is not
 /// **serial**, and a serial run has an exact signature: overlap ≈ 1.0 and one wave per child.
 /// Both bounds are expressed against that, which makes them true on a host nobody has measured.
+///
+/// **`min_overlap` came down from 1.5 to 1.25 on 2026-08-18, and the reading that moved it is the
+/// kind this doc block already predicts.** The `cargo mutants` job runs the whole suite as its
+/// unmutated baseline under `-j2`, so it is the only place this gate is measured on a host
+/// running two test suites at once. There, `sbom` reported **1.4× over 21 children and 5 waves**
+/// — under the floor, over nothing else, and green on the same machine's control run of `list`.
+/// A shard failed its baseline for it while two other shards of the same tree passed.
+///
+/// 1.5 was set from healthy hosts, where the lowest legitimate reading is 2.0. That is a target
+/// wearing a detector's clothes: a contended host is not a serialised fan-out, and 1.4× is 40%
+/// above the serial signature this rule says it is testing for. 1.25 keeps a quarter's margin
+/// over collapse and stops reporting a busy machine as a design regression. The wave ceiling is
+/// untouched and is the load-independent half of the pair — it passed on the run that failed.
 #[derive(Debug, Clone, Copy)]
 pub struct Shape {
     /// Summed child time over wall clock. A collapse to serial is ~1.0; the lowest legitimate
@@ -139,7 +152,7 @@ impl Class {
     pub fn shape(self) -> Option<Shape> {
         match self {
             Class::EveryBackend => Some(Shape {
-                min_overlap: 1.5,
+                min_overlap: 1.25,
                 waves_per_child: 2,
                 min_waves_allowed: 4,
                 min_children: 4,
