@@ -1,4 +1,4 @@
-# The decision register — 217 entries, none open
+# The decision register — 219 entries, none open
 **One file, six features, nothing waiting on the owner.** Every decision this design forces lives
 here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -24,7 +24,7 @@ HALF RULED had no rows, the five that remained summed to 206 against 210, and
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **212** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **214** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 | **DEFERRED** | Asked, and the owner chose to answer it later. | A ruling, when the owner returns to it. | **1** |
 | **HALF RULED** | Part of the question was answered and part was not. | A ruling on the remaining half. | **2** |
@@ -102,13 +102,16 @@ status loses that, so it is kept here:
 
 ## Index
 
-**Two questions are open, and nine entries are waiting.** `Q53` — what a version pin means on a manager
-that cannot express one — was raised, measured and ruled on 2026-08-10. `J4` is the other side of
-the same coin and is not ruled: what a version pin means when *Shall* recorded it and the archive
-has since dropped it. The `G` round then ran the
-other way round: `docs/GRADE-2026-08-12.md`'s work order was implemented in one pass, and the nine
-changes in it that a user would notice shipped ahead of any ruling. All 217 are accounted
-for: **212 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN** — and this line
+**Two halves of two questions are what is left, and five entries in total want something.**
+`Q53` — what a version pin means on a manager that cannot express one — was raised, measured and
+ruled on 2026-08-10. `J4` is the other side of the same coin and is ruled only in part: what a
+version pin means when *Shall* recorded it and the archive has since dropped it is settled, and
+whether a bare `shall lock` still freezes all three axes is not. `Q29`'s computation half is the
+other one. The `G` round ran the opposite way round — `docs/GRADE-2026-08-12.md`'s work order was
+implemented in one pass and the nine changes in it that a user would notice shipped ahead of any
+ruling — and all twelve were confirmed by the owner on 2026-08-14, which is why nothing from it
+is waiting now. All 219 are accounted
+for: **214 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -271,7 +274,7 @@ there). It is when the question stopped being open, not when the code landed.
 | **U42** | Do the overlapping command clusters get consolidated? | 2026-07-27 |
 | **U43** | How much does an ordinary run say about itself? | 2026-07-27 |
 
-### Q — the production-readiness round and the grading rounds after it — 54
+### Q — the production-readiness round and the grading rounds after it — 55
 
 *Not a proposal part. These are the questions the readiness assessment forced — behaviour a
 user notices, or a published contract — raised because `CLAUDE.md` requires a ruling for them
@@ -363,6 +366,7 @@ II.19 and the reasons in V.115–V.118.*
 | **Y5** | Nothing said *which* manager a run waited on, so "why was that slow" could only be answered by timing the managers by hand outside Shall — RULED: **`--timings`**, off by default, on stderr, reporting wall clock against summed child time. | 2026-08-03 |
 | **Y6** | Every run re-asked every manager the same question about a machine nothing had touched — may an answer outlive its run? — RULED: **yes, opt-in.** `installed_cache_secs`, 0 by default, dropped on every mutation and by `clean-cache`, bypassed by `--no-cache`. | 2026-08-03 |
 | **Y7** | `winget list` reports names with spaces in them and "a package name is one word" refused them, so a name Shall printed was a name Shall could not be given — RULED: **quote it.** `winget:"ARP\Machine\X64\Mozilla Firefox"`. | 2026-08-03 |
+| **Y7a** | Should `adopt` take Windows services at all, or leave them to a human? — RULED: **adopt them as live lines**, uncommented, next to the packages. Owner: *"services too get put in with no comment, just like packages."* Deleting one stops and disables the service, and the manifest header says so in those words. | 2026-08-03 |
 | **Y8** | Nine managers started 5.4 s into a 9.1 s `check drift` and the run was idle before they did — why did it not overlap? — RULED: **ask every manager the run will ask, at once.** Not slower children: unasked ones. 9.1 s → 3.9 s, 2.7× → 5.4×, same report. | 2026-08-03 |
 | **Y9** | The planner asked seven backends what each declared package depends on and installed the answers — which took ownership of packages nobody declared, and split the one command line it had a reason to keep. RULED: **no.** Shall installs what you declared, and `@requires` keeps splitting the wave. | 2026-08-06 |
 | **Y10** | The write-ahead log had two variants and all nine `apply/` modules referenced it zero times, while a `dotfiles:` tree destroyed the user's file with no backup, no ledger row and therefore no teardown — four documents said otherwise. RULED: **the log covers what cannot be recomputed**, and **a tree is the `link:` lines it stands for.** | 2026-08-06 |
@@ -372,6 +376,7 @@ II.19 and the reasons in V.115–V.118.*
 | **Q52** | Shall started processes it did not own — SIGKILL for a package manager mid-transaction, and seventeen sites that detached a child or parked a runtime worker. RULED: **every child has an owner, through one of three doors.** | 2026-08-10 |
 | **Q53** | What does `@version=` mean on a manager that cannot express one? `brew` builds a formula name that does not exist and the sync dies; ten other backends drop the pin and report success. — RULED: **record everywhere, replay only where it can be replayed.** A recorded version is never fed back as an install argument to a manager that cannot take one, so drift detection keeps working everywhere; a pin somebody *typed* that cannot be honoured is refused at plan time by name, and is fatal under `--locked`. `brew` stops inventing `name@version`. (II.53, V.183) | 2026-08-10 |
 | **Q54** | A removal that removed nothing reported success. `uninstall` deletes the declaration and lets the sync take the package away as drift — and drift removal only removes what Shall manages, so a package on the machine that Shall has no ownership record for plans no change, prints `already up to date` and exits 0 with the binary still on PATH (`S87`). — RULED (owner, 2026-08-11): **it should say it did not remove it and does not own it.** The command now fails, names the package, says Shall has no record of installing it, and names `adopt` as the way to take ownership. Checked only for names the registry did not carry when the command started, so an ordinary uninstall pays for nothing. (II.56, V.186) | 2026-08-11 |
+| **Q55** | Should the `S87` ownership repair read the **manifest** rather than replay the write-ahead log — is a package this machine declares and already has Shall's, whoever installed it? — RULED: **yes — declaring a package you already had makes it Shall's.** | 2026-08-11 |
 | **Q48** | Every `link:` on Windows took the cross-drive COPY fallback, same drive or not: `is_same_drive` compared a verbatim prefix against a plain one — and the limitation it guarded does not exist, since a Windows symlink spans volumes. RULED: **a `link:` links; only a missing privilege gets a copy, and it says so.** | 2026-08-06 |
 | **Y11** | Two backends built install and remove argv by hand and lost the `--` terminator; forty backends could not clear a cache because no row could say how; one manager took two locks over one database. The argv table recorded all of it and checked none of it. RULED: **one path per backend, and a capability the machinery lacks is a field.** | 2026-08-06 |
 | **Y12** | `ChangePlanner::plan` took `Option<Scope>`, where `None` meant both "do not filter the desired set" and "reap every backend on the box"; five of eight callers passed it and four wanted only the first — the transient shell, whose desired set is its own requests, planned a removal for every other package on the machine. RULED: **a plan says what it is computed over, and the case that reaps cannot be written without the list that bounds it.** | 2026-08-06 |
@@ -382,6 +387,10 @@ II.19 and the reasons in V.115–V.118.*
 | **Y17** | The dialect `Y16` kept was dead on Windows: `CreateProcess` answers *"not a valid application for this OS platform"* for any script file, because Windows has no shebang mechanism — so a `#!` hook that worked on the author's Linux box failed on a teammate's machine with a message blaming the script. Refuse there, or make it work? — RULED: **read the shebang ourselves**, on every platform. `python3` finds a Windows `python` (then `py`); an absolute interpreter that exists is used as written, so Unix launches what the kernel would have; a missing one is named. `exec:` and event hooks read it too — they had been ignoring it on *both* platforms. | 2026-08-07 |
 | **Y18** | `named_commands_exist_tests` was built around the property rather than the artifact, and then its roots were drawn around `src/`-and-friends — so 2.5 MB of specification went unscanned, and a **CLOSED** owner ruling (`bugs.md` F4) rested its whole justification on `shall doctor`, a command `S38` folded into `check <section>`. Pointed at `docs/` under the weaker property a record can satisfy — *a dead command named here is one II.17 says is dead* — 62 raw hits reduce to three, and all three are Part II: the sync nudge says `shall clean` where the verb is `remove-orphans`; the `adopt` header says `shall forget` where the code already writes `shall unmanage`; and II.17's register never recorded `shim`, which leaves a **verified open bug against a command that does not exist**. **RULED 2026-08-09** — the first three corrected in Part II on the 8th; the fourth ruled *make `@source=` work*, and built: the shim reads the provider off its own line, and the `PATH` lookup that would have found the shim again is closed. | 2026-08-09 |
 | **Y23** | `@channel` on a `flatpak:` line reaches the machine and is never read back — the listing asked for `application,version`, so D13's drift check had nothing to compare and a channel edit did nothing for ever. Ruled *make it visible and make the repair real*: flatpak has no channel switch, so the declared ref is installed and `make-current` points the app at it, the old branch is left alone, and an app on two branches reports no channel rather than a guess. | 2026-08-09 |
+| **Y19** | `parse_installed` could not say *"I read four hundred bytes and recognised nothing"* — a manager whose output format changed reported an empty machine, which reads as clean. Should an unreadable read fail instead? — RULED: **yes, keep it.** A manager that fails is safe; one that succeeds with a changed format reports the whole machine as drifted and adopts nothing. The louder answer is the correct one. | 2026-08-10 |
+| **Y20** | Closing an undeclared port is a path that removes — should it count against `max_removals`? — RULED: **yes, it is a removal and yes, it counts — against its own ceiling.** `max_port_closures`, answering to `--allow-mass-removal` like every other removal count. | 2026-08-09 |
+| **Y21** | 2.5 MB of specification was written under documentation economics and is read under context economics. Does the corpus get cut, and where? — RULED: **cut it.** The record is distilled into a short list of lessons; `docs/archive/` and `docs/spec/proposals/` go, recoverable from git by SHA. | 2026-08-08 |
+| **Y22** | `flatpak`'s scope is a boolean where the data path needs a value — rename the key? — RULED: **yes, and there are no legacy users to migrate.** `scope = "user" \| "system"`, defaulting to `system`; the old key is **refused by name** rather than honoured, which is a rejection and not a shim. | 2026-08-08 |
 
 ### G — the release-adversarial round (GRADE-2026-08-12) — 11
 
@@ -422,12 +431,34 @@ opposite way to the recommendation that was put to him.*
 
 | | question | ruled |
 |---|---|---|
-| **J8** | How does a bare package name reach a manager whose own names carry a category? RULED: **one matching atom resolves and the plan names it; more than one is refused, listing them.** `emerge` could not resolve one at all, and the leg that would have shown it was answering from crates.io. | 2026-08-17 |
 | **H1** | Is a declaration Shall was told to act on and could not a **failure of the run**, or a line that does not apply to this host? RULED: **a failure.** `sync` exits 1 and no longer returns `Converged` over it. | 2026-08-13 |
 | **H2** | Should a read-only command that finds work exit 2, beyond `check`? RULED: **yes for `plan`, no for `list --outdated`.** | 2026-08-13 |
 | **H3** | `outdated` — remove the dead name from the latency class table, or promote `list --outdated` to a subcommand? RULED: **remove the name; the flag stays a flag.** | 2026-08-13 |
 | **H4** | Should `sandbox.fallback_allowed` default to `false`, so an unavailable sandbox refuses instead of running unconfined? RULED: **no — it stays `true`, and the run is made loud and honest instead.** | 2026-08-13 |
 | **H5** | Is `StateResolver` (38 methods, 1,483 production lines) to be split, and are the three `Skipped` structs to be collapsed? RULED: **neither** — measured, argued, and the seam named for whenever something needs it. | 2026-08-13 |
+| **H6** | Should `upgrade` run `exec:` steps, which only `sync` had ever run? RULED: **yes, and opted into per step** — `@on=sync\|upgrade\|both`, through the same approval gate, ledger and journal. A blanket widening would have handed every already-approved script to a verb nobody consented to. | 2026-08-13 |
+| **H7** | Should `check` report managed-file *content* drift, given that `sync` heals it? RULED: **the premise was false — it already does.** Measured with a tampered destination rather than reasoned; reading `ChangePlanner` alone says otherwise because a `link:` is an extra and never reaches the planner. | 2026-08-13 |
+| **H8** | Should a catalogue of known upgrade steps ship with the binary? RULED: **build it, as rows compiled in** — `exec:step/NAME` on a reserved prefix, no approval, argv rather than shipped scripts. Owner: *"aliases come defined in a text file and shipped. so yes."* | 2026-08-13 |
+
+### J — the nightly and release round of 2026-08-14 to 2026-08-17 — 9
+
+*Not a proposal part and not one grading document: these came out of the nightly integration legs
+and the first published release. Each was raised by a leg that went red, or by a measurement taken
+on a real machine, rather than by a review reading the tree — which is why several of them
+overturn something the code was confident about. `J4` is the one entry here that is not finished:
+the owner ruled its substance and one question under it is still his.*
+
+| | question | ruled |
+|---|---|---|
+| **J1** | What guards `purge-undeclared` on a machine where the ratio is the only thing guarding it? The macOS nightly swept 276 packages unrefused: the ratio's denominator had quietly shrunk, and outside Linux the protected list named the OS's vocabulary, which no manager has ever reported. RULED: **favour power users, and make the unsafe part configurable.** | 2026-08-14 |
+| **J2** | A `setting:` is never read back, so a sync that changed one reported that it changed nothing — and `plan` contradicted itself in two consecutive lines. RULED: **a bug.** Owner: *"yes, of course. this is a bug."* | 2026-08-16 |
+| **J3** | `pacman`, `yay` and `paru` are three clients of one database, so every Arch machine counted each package three times and became unconvergeable. RULED: **the owner for a repository package, the helper for a foreign one** — no longer one answer. Owner: *"make it intuitive, easy, flexible and powerful."* | 2026-08-16 |
+| **J4** | A plain `sync` honours a lockfile `shall lock` wrote as a side effect, so a machine stops syncing the day its archive drops a recorded version. **HALF RULED:** selective pinning, a switch per part, an error that explains itself and selective upgrade are ruled; **does a bare `shall lock` still freeze all three axes?** is not. | 2026-08-16 |
+| **J5** | On NixOS, `nix profile install` is a side door the OS does not know about — two sources of truth for one machine, which is the condition this tool exists to remove. RULED: **Shall writes the system configuration and lets NixOS execute it**, four answers in one sitting. The published binary could not start on NixOS or Alpine at all until the static `musl` build. | 2026-08-16 |
+| **J6** | `schedule:` reported nothing to do about a schedule it was about to rewrite — `J2`'s sibling, and `J2`'s fix does not transfer, because a schedule's name **is** its identity at the OS scheduler. RULED: **the durable fix.** Owner: *"feature rich and configurable, for power users."* | 2026-08-16 |
+| **J7** | Three release questions: the version, whether `nixos:` ships in it, and whether there is a `shall doctor`. RULED: **`0.8.0`; yes; and no — there will not be one.** The handoff item that raised the third assumed a command that never shipped. | 2026-08-16 |
+| **J8** | How does a bare package name reach a manager whose own names carry a category? RULED: **one matching atom resolves and the plan names it; more than one is refused, listing them.** `emerge` could not resolve one at all, and the leg that would have shown it was answering from crates.io. | 2026-08-17 |
+| **J9** | Two guard messages named `--allow-mass-removal` whatever the caller passed, though `max_total_changes` answers to either flag — so a run of `--allow-mass-install` was told a removal count had been allowed by a flag it never typed, and a blocked one was told to authorize mass deletion to get its installs through. RULED: **name the flag the run passed; the total's refusal offers both.** | 2026-08-17 |
 
 ---
 
@@ -5686,6 +5717,16 @@ the single list (its comment records that three copies had drifted until
 keyword impossible to ship undocumented, without closing anything. That is an afternoon and it is
 sequenced ahead of this ruling in `docs/archive/DIRECTIONS-2026-08-03.md` §6.
 
+## Q30
+
+**Status: ANSWERED — ruled 2026-08-04.** Filed inside `Q29`'s entry for its first three months,
+with no heading of its own — so the register could not count it, `decision-count.sh` never saw
+it, and the status it inherited by position was `Q29`'s **HALF RULED** rather than its own. It
+had an index row the whole time, and `registry/mod.rs`, `backend_is_data_not_code_tests.rs` and
+`terminator_probe_tests.rs` all cite `Q30` by name. **A decision the code names and the register
+cannot count is the drift this file exists to end**, so it is promoted here rather than left
+where it was written (`J9`'s round).
+
 **Q30 — Is the `--` terminator a property of a label, and is the table keyed on the wrong thing?**
 **RULED 2026-08-04: read the terminator off the tokens; keep one key per binary.**
 
@@ -9046,3 +9087,62 @@ the first. The owner decides; this is not built.
 on the precedent `lvm:`'s `@size` set — that leg failed by name every run until `Q18` ruled the
 table wrong. It is green now because the product resolves the name, not because the check stopped
 asking.
+
+## J9
+
+**Status: ANSWERED — ruled 2026-08-17, and built in the same commit.** The owner agreed to the
+recommendation as put: **the line names the flag the run actually passed, and the refusal names
+both flags for the one ceiling either of them answers.** No run's outcome changes — the same
+commands proceed and the same commands are refused — only the words do.
+
+**Two guard messages named `--allow-mass-removal` whatever the caller typed.** `max_total_changes`
+counts everything one command does, so **either** mass flag answers it (`N8`), and both surfaces
+that talk about it were written as though only one existed.
+
+| | what a run of `sync --allow-mass-install` saw | what is wrong with it |
+|---|---|---|
+| after the fact | `the removal count for 'sync' was allowed by --allow-mass-removal.` | names a flag the caller never passed, a ceiling it did not clear, and a *removal* on a run that removed nothing |
+| while blocked | `<command> --allow-mass-removal carry out this run anyway` | the only way out it offers is a removal flag, on a run whose changes are installs |
+
+The second is the expensive one. An announcement is read afterwards and confuses; a refusal's
+*What to do* block is read by someone who is stopped, and this one told them that the way to get
+their installs through was to authorize mass deletion. Some fraction of people stop there.
+
+**Both halves came from the wrong place, and one of them already had a rule against it.**
+`counted_as` exists precisely so a sentence and the `[guard]` key it names cannot describe
+different things, and its own doc says so — but `announcement` took its noun from the *caller*
+and its flag from a literal. It now reads the ceiling off each objection's `setting` and the
+flags off the config, so the two things a reader acts on are both facts of the run:
+
+```text
+'sync' makes 62 changes in total, over the limit of 50 ([guard] max_total_changes) — allowed by --allow-mass-install.
+```
+
+The count clause is spelled the way the *refusal* spells the same fact, so one ceiling reads
+identically whether it stopped the run or was waved through; two clauses join with `; ` when a
+per-kind ceiling and the total were cleared together.
+
+**Both flags are named when both were passed**, rather than one being attributed. Deciding which
+was load-bearing is not answerable for the one ceiling either answers: either one of them was.
+
+**Two other surfaces were already right, and that is what settles the direction.** `shall
+protected`'s help has printed *"Either flag answers `max_total_changes`; neither answers a
+protected name"* since the ceiling shipped, and the README says *"either answers the total — a
+total is made of both"*. The guard's own two messages were the only places contradicting the
+documentation of the thing they implement, so this is not a new rule being chosen — it is two
+surfaces being made to say what the other two already said. **Where one surface already states
+the rule, the others are wrong rather than different**, and finding the sibling that reads
+correctly is worth doing before treating a discrepancy as an open design question.
+
+**What was checked and deliberately left alone.**
+
+- **The per-kind refusals** — `max_removals`, `max_extra_removals`, `max_port_closures` — keep
+  offering `--allow-mass-removal` alone. Those ceilings answer to that flag and no other (`Y20`),
+  so adding the install flag there would print advice that does not work.
+- **The install ceiling's own line** (`the install count for 'sync' (62) was allowed by
+  --allow-mass-install.`) is correct as written: `max_installs` answers to one flag, and that
+  flag is the condition on the branch that prints it, so it cannot name one the caller did not
+  pass.
+- **`shall protected`'s help** already states the rule and needed no change.
+
+Rule in [Part II](target-state.md) II.28, reasoning in **V.159**.

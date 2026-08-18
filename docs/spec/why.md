@@ -4959,6 +4959,37 @@ number and over the total at once. Reporting one of them sends the reader to rai
 and meet the other — twice the interruption for one decision, and the second one arrives looking
 like the fix did not work.
 
+**And why the same is true of the way out** *(ruled 2026-08-17 — `J9`)*. Both messages about the
+mass flags named `--allow-mass-removal`, whatever the caller had typed, for as long as the total
+existed. So a run of `sync --allow-mass-install` was told *"the removal count for 'sync' was
+allowed by --allow-mass-removal"* — a ceiling it had not cleared, a flag it had not passed, and a
+removal on a run that removed nothing; and a run blocked by the total was offered a removal flag
+as the only way to get its installs through. The second is the one that costs something. An
+announcement is read afterwards by somebody whose command already succeeded; a *What to do* block
+is read by somebody who is stopped, and telling them to authorize mass deletion in order to
+install is an instruction a careful person will refuse to follow.
+
+**Neither half was a judgement call that went the wrong way — both read from the wrong place.**
+The ceiling came from the caller's noun and the flag from a string literal, so the sentence
+described the code's assumptions rather than the run. `counted_as` had existed since `S55`
+precisely to stop that, and its own doc says why: *derived from the setting rather than from the
+caller, so the sentence and the key it names cannot describe different things*. The rule was
+already written; one function was not following it. The fix is that both halves are read off what
+happened — the ceiling off the objection that was cleared, the flags off the config.
+
+**The direction was not a choice, because a third surface had been right the whole time.** `shall
+protected` prints *"Either flag answers `max_total_changes`; neither answers a protected name"*,
+and has since the ceiling shipped. So this was not two defensible readings of a new question; it
+was two messages contradicting the documentation of the thing they implement. **Where one surface
+already states the rule, the others are wrong, not different** — and the sibling that reads
+correctly is worth looking for before treating a discrepancy as an open design question.
+
+**What deliberately did not change.** The per-kind refusals still offer `--allow-mass-removal`
+alone, because `max_removals`, `max_extra_removals` and `max_port_closures` answer to that flag
+and no other; adding the install flag there would print advice that does not work, which is worse
+than advice that is merely incomplete. Symmetry between messages is not the goal — each one names
+what actually opens the door in front of it.
+
 ---
 
 **V.160 — Why the kind is a type, and what the two catch-alls were quietly doing.**

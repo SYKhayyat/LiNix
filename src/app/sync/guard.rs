@@ -511,7 +511,7 @@ pub async fn inspect(
 /// run, so the capture came back empty in 2 of 3 identical Linux runs. Partitioning answers it
 /// without a subscriber: the objections the flag cleared are on the report, so what was allowed
 /// is a value a caller reads rather than a line it has to overhear.
-fn allow_the_count(config: &Config, report: &mut GuardReport, scope: GuardScope, noun: &str) {
+fn allow_the_count(config: &Config, report: &mut GuardReport, scope: GuardScope) {
     if !config.allow_mass_removal && !config.allow_mass_install {
         return;
     }
@@ -528,7 +528,7 @@ fn allow_the_count(config: &Config, report: &mut GuardReport, scope: GuardScope,
             _ => false,
         });
     report.objections = kept;
-    if let Some(said) = announcement(&allowed, scope, noun) {
+    if let Some(said) = announcement(&allowed, config, scope) {
         warn!("{}", said);
     }
     // Extended rather than assigned: nothing calls this twice on one report today, and a report
@@ -543,15 +543,57 @@ fn allow_the_count(config: &Config, report: &mut GuardReport, scope: GuardScope,
 /// log line exists can be reversed without failing anything, and the test that would catch it has
 /// to subscribe to `tracing` from a binary where the callsite cache is shared with every other
 /// test on every other thread.
-fn announcement(allowed: &[Objection], scope: GuardScope, noun: &str) -> Option<String> {
-    if allowed.is_empty() {
+///
+/// **Both halves of the sentence are read off what happened, never off the caller.** The ceiling
+/// comes from each objection's own `setting` — [`counted_as`], for the reason its own doc gives —
+/// and the flags from the config. Written from the caller's noun and a hardcoded
+/// `--allow-mass-removal`, it told a run that passed only `--allow-mass-install` that a *removal*
+/// count had been allowed by a *removal* flag: a ceiling, a noun and a flag, none of which were
+/// that run's. `shall protected` has always printed the true rule — *"either flag answers
+/// `max_total_changes`"* — so the guard's own line was the one surface contradicting it (`J9`).
+fn announcement(allowed: &[Objection], config: &Config, scope: GuardScope) -> Option<String> {
+    let flags = flags_that_allowed(config)?;
+    let counts: Vec<String> = allowed
+        .iter()
+        .filter_map(|o| match o {
+            Objection::TooMany {
+                count,
+                limit,
+                setting,
+            } => {
+                let (verb, noun) = counted_as(setting);
+                Some(format!(
+                    "{} {} {}, over the limit of {} ([guard] {})",
+                    verb, count, noun, limit, setting
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    if counts.is_empty() {
         return None;
     }
     Some(format!(
-        "the {} count for '{}' was allowed by --allow-mass-removal.",
-        noun,
-        scope.as_str()
+        "'{}' {} — allowed by {}.",
+        scope.as_str(),
+        counts.join("; "),
+        flags
     ))
+}
+
+/// The mass flags this run actually passed, as a user would type them — `None` when it passed
+/// neither, because then nothing was allowed and the sentence has no subject.
+///
+/// Both are named when both were passed. Attributing one of them instead would mean deciding
+/// which was load-bearing, and for `max_total_changes` — the one ceiling either flag answers
+/// (`N8`) — either one of them was.
+fn flags_that_allowed(config: &Config) -> Option<&'static str> {
+    match (config.allow_mass_removal, config.allow_mass_install) {
+        (true, true) => Some("--allow-mass-removal and --allow-mass-install"),
+        (true, false) => Some("--allow-mass-removal"),
+        (false, true) => Some("--allow-mass-install"),
+        (false, false) => None,
+    }
 }
 
 /// What is being taken away. Every kind answers to `protected_packages` and to a ceiling; they
@@ -864,7 +906,7 @@ pub async fn preview_refusals(
         (extra_removals, RemovalKind::Extra),
     ] {
         let mut report = inspect_removals(config, registry, pairs, kind, &reaping).await;
-        allow_the_count(config, &mut report, scope, "removal");
+        allow_the_count(config, &mut report, scope);
         if !report.is_empty() {
             refusals.push(report.message(scope, kind));
         }
@@ -921,16 +963,7 @@ async fn enforce_kind(
 ) -> Result<Reaped> {
     let mut report = inspect_removals(config, registry, removals, kind, reaping).await;
 
-    allow_the_count(
-        config,
-        &mut report,
-        scope,
-        match kind {
-            RemovalKind::Package => "removal",
-            RemovalKind::Extra => "teardown",
-            RemovalKind::Port => "port closure",
-        },
-    );
+    allow_the_count(config, &mut report, scope);
 
     if report.is_empty() {
         // Recorded only once the set is cleared: a refused command stops here, and a removal
@@ -1101,7 +1134,11 @@ fn enforce_total(
     scope: GuardScope,
     noun: &str,
 ) -> Result<()> {
-    let Some(Objection::TooMany { count, limit, .. }) = too_many_changes(config, reaping, count)
+    let Some(Objection::TooMany {
+        count,
+        limit,
+        setting,
+    }) = too_many_changes(config, reaping, count)
     else {
         return Ok(());
     };
@@ -1109,13 +1146,17 @@ fn enforce_total(
     // (`Y20`) — and a total is made of removals and installs both. A third flag for the third
     // ceiling would be a third way to say one thing.
     if config.allow_mass_removal || config.allow_mass_install {
-        warn!(
-            "the {} count for '{}' ({}) was allowed past [guard] {}.",
-            noun,
-            scope.as_str(),
-            count,
-            TOTAL_KEY
-        );
+        if let Some(said) = announcement(
+            &[Objection::TooMany {
+                count,
+                limit,
+                setting,
+            }],
+            config,
+            scope,
+        ) {
+            warn!("{}", said);
+        }
         return Ok(());
     }
     refuse(format!(
@@ -1127,7 +1168,8 @@ fn enforce_total(
          What to do:\n  \
          shall plan                     see exactly what would change\n  \
          [guard] {}       raise or clear the total (preferences.toml)\n  \
-         <command> --allow-mass-removal carry out this run anyway",
+         <command> --allow-mass-removal carry out this run anyway\n  \
+         <command> --allow-mass-install the same — this total answers to either flag",
         scope.as_str(),
         noun,
         count,
@@ -2257,7 +2299,7 @@ mod tests {
             &Reaping::new(),
         )
         .await;
-        allow_the_count(&cfg, &mut report, GuardScope::Sync, "removal");
+        allow_the_count(&cfg, &mut report, GuardScope::Sync);
         assert!(
             matches!(
                 report.objections.as_slice(),
@@ -2283,7 +2325,7 @@ mod tests {
             &Reaping::new(),
         )
         .await;
-        allow_the_count(&cfg, &mut report, GuardScope::Sync, "removal");
+        allow_the_count(&cfg, &mut report, GuardScope::Sync);
         assert!(report.is_empty(), "{:?}", report.objections);
         assert!(
             matches!(
@@ -2307,7 +2349,7 @@ mod tests {
             &Reaping::new(),
         )
         .await;
-        allow_the_count(&cfg, &mut report, GuardScope::Sync, "removal");
+        allow_the_count(&cfg, &mut report, GuardScope::Sync);
         assert!(
             matches!(report.objections.as_slice(), [Objection::Protected { .. }]),
             "{:?}",
@@ -2362,8 +2404,10 @@ mod tests {
     /// A run that needed no override says nothing, and one that did names what it overrode.
     #[test]
     fn the_announcement_is_made_only_by_a_run_that_needed_one() {
+        let mut cfg = config_with(10);
+        cfg.allow_mass_removal = true;
         assert_eq!(
-            announcement(&[], GuardScope::Sync, "removal"),
+            announcement(&[], &cfg, GuardScope::Sync),
             None,
             "announcing an override on every run that did not need one is the same defect \
              pointing the other way"
@@ -2374,14 +2418,137 @@ mod tests {
                 limit: 10,
                 setting: "max_extra_removals",
             }],
+            &cfg,
             GuardScope::PurgeUndeclared,
-            "teardown",
         )
         .expect("an objection a flag cleared is announced");
-        assert!(said.contains("teardown"), "{said}");
+        assert!(said.contains("managed resources"), "{said}");
         assert!(
             said.contains("purge-undeclared"),
             "the line has to name the command that was allowed: {said}"
+        );
+    }
+
+    /// The line names the flag **this run passed**, and the ceiling **that objection carried**.
+    ///
+    /// Both halves used to come from somewhere else: the flag was the literal
+    /// `--allow-mass-removal` whatever was passed, and the noun was the caller's, so a run of
+    /// `sync --allow-mass-install` — which answers `max_total_changes` and nothing else (`N8`) —
+    /// read *"the removal count … was allowed by --allow-mass-removal"*, naming a ceiling it had
+    /// not cleared and a flag it had not been given (`J9`).
+    ///
+    /// **Asserted with `!contains` in both directions.** A sentence that names both flags every
+    /// time passes every `contains` here and is exactly as wrong as the literal it replaced;
+    /// only the absent half distinguishes them.
+    #[test]
+    fn the_announcement_names_the_flag_the_run_passed_and_the_ceiling_it_cleared() {
+        let total = |c, l| Objection::TooMany {
+            count: c,
+            limit: l,
+            setting: TOTAL_KEY,
+        };
+        let per_kind = |c, l| Objection::TooMany {
+            count: c,
+            limit: l,
+            setting: "max_removals",
+        };
+
+        // Install-only: the flag answers the total, so the total is what the line may name.
+        let mut cfg = config_with(10);
+        cfg.allow_mass_install = true;
+        let said = announcement(&[total(62, 50)], &cfg, GuardScope::Sync).expect("a cleared count");
+        assert!(said.contains("--allow-mass-install"), "{said}");
+        assert!(
+            !said.contains("--allow-mass-removal"),
+            "a run that never typed it must not be told it was used: {said}"
+        );
+        assert!(
+            said.contains("makes 62 changes in total") && said.contains(TOTAL_KEY),
+            "the ceiling comes off the objection, not off the caller's noun: {said}"
+        );
+        assert!(
+            !said.contains("removal count"),
+            "an install-only run removed nothing: {said}"
+        );
+
+        // Removal-only, the mirror image, on a per-kind ceiling only that flag can clear.
+        let mut cfg = config_with(10);
+        cfg.allow_mass_removal = true;
+        let said =
+            announcement(&[per_kind(40, 10)], &cfg, GuardScope::Sync).expect("a cleared count");
+        assert!(said.contains("--allow-mass-removal"), "{said}");
+        assert!(
+            !said.contains("--allow-mass-install"),
+            "the sentence must not name every flag that exists: {said}"
+        );
+        assert!(said.contains("removes 40 packages"), "{said}");
+
+        // Both passed: both named, because for the one ceiling either answers, either did.
+        let mut cfg = config_with(10);
+        cfg.allow_mass_removal = true;
+        cfg.allow_mass_install = true;
+        let said = announcement(&[total(62, 50)], &cfg, GuardScope::Sync).expect("a cleared count");
+        assert!(
+            said.contains("--allow-mass-removal") && said.contains("--allow-mass-install"),
+            "{said}"
+        );
+
+        // Two ceilings cleared at once: both are named, as the refusal names both when they
+        // stand. A run told about one of them raises that number and meets the other.
+        let said = announcement(&[per_kind(40, 10), total(62, 50)], &cfg, GuardScope::Sync)
+            .expect("a cleared count");
+        assert!(
+            said.contains("max_removals") && said.contains(TOTAL_KEY),
+            "{said}"
+        );
+
+        // Neither flag: there is no sentence at all, rather than a sentence with a placeholder
+        // where the flag belongs. An announcement is a report that an override was used, so a
+        // run that used none has nothing to announce however many objections it is handed.
+        let cfg = config_with(10);
+        assert_eq!(
+            announcement(&[total(62, 50)], &cfg, GuardScope::Sync),
+            None,
+            "no flag was passed, so nothing allowed anything"
+        );
+    }
+
+    /// The way past `max_total_changes` is **either** flag, and the refusal that blocks a run
+    /// has to say so.
+    ///
+    /// It named `--allow-mass-removal` alone, which is the more expensive half of `J9`: this is
+    /// the instruction someone reads while blocked, so a pure-install run was told that the way
+    /// to get its installs through was to authorize mass deletion. `shall protected` has printed
+    /// the true rule all along — the guard's own refusal was the surface contradicting it.
+    #[test]
+    fn the_total_ceiling_refusal_offers_both_flags() {
+        let mut cfg = config_with(10);
+        cfg.guard.max_total_changes = 2;
+        let err = enforce_total(&cfg, 3, &Reaping::new(), GuardScope::Sync, "install")
+            .expect_err("three changes over a total of two is a refusal");
+        let err = err.to_string();
+        assert!(err.contains("--allow-mass-removal"), "{err}");
+        assert!(
+            err.contains("--allow-mass-install"),
+            "either flag answers this ceiling, and the blocked run has to be told: {err}"
+        );
+
+        // The per-kind ceilings are *not* siblings of this: `max_removals`,
+        // `max_extra_removals` and `max_port_closures` answer to `--allow-mass-removal` alone
+        // (`Y20`), so offering the install flag there would name one that does not work.
+        let report = GuardReport {
+            objections: vec![Objection::TooMany {
+                count: 40,
+                limit: 10,
+                setting: "max_removals",
+            }],
+            allowed_by_flag: Vec::new(),
+        };
+        let refusal = report.message(GuardScope::Sync, RemovalKind::Package);
+        assert!(refusal.contains("--allow-mass-removal"), "{refusal}");
+        assert!(
+            !refusal.contains("--allow-mass-install"),
+            "a removal ceiling does not answer to it: {refusal}"
         );
     }
 

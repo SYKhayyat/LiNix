@@ -217,6 +217,51 @@ for _h in $(grep -oE '^### [A-Z] .*— [0-9]+$' "$REG" | sed 's/^### \([A-Z]\) .
         || say_bad "decisions.md's ${_series} heading says $_stated where the series holds $_actual"
 done
 
+# --- the index's rows, one per entry, both directions ----------------------------------
+#
+# **Every check above this line is about a number, and the index is not a number — it is a
+# claim per entry.** So all of them passed while sixteen entries had no row in it at all and
+# one row named an entry that did not exist. The series counts directly above are counted from
+# the `## <ID>` headings, so they were right about how many entries each series held while the
+# table underneath listed a different set.
+#
+# That is this file's own failure mode, on its own subject. The register exists because an
+# index once advertised 59 open questions over 59 entries that each said ANSWERED four lines
+# below, and anyone reading the index instead of the body would have re-opened a settled
+# question. Sixteen missing rows are the same defect, quieter: a ruling that is not in the
+# index is a ruling the next reader does not know was made.
+#
+# A row with no entry is checked too, and it is not the harmless direction. `Q30` had one for
+# three months while its text sat inside `Q29`'s entry with no heading — so the register could
+# not count it, this script never saw it, and the status it inherited by position was `Q29`'s
+# `HALF RULED` and not its own `ANSWERED`. Three source files cite `Q30` by name.
+INDEX="$ROOT/.decision-index.$$"
+awk '
+/^## [A-Z][0-9]+[a-z]?$/ { entry[$2] = 1; order[++n] = $2; next }
+# An index row opens `| **ID** |`. Anchored, so a bold ID in ordinary prose is not a row.
+match($0, /^\| \*\*[A-Z][0-9]+[a-z]?\*\* \|/) {
+    id = $0
+    sub(/^\| \*\*/, "", id)
+    sub(/\*\*.*$/, "", id)
+    row[id]++
+}
+END {
+    for (i = 1; i <= n; i++)
+        if (!(order[i] in row))
+            printf "%s is ruled in the body and has no row in the index\n", order[i]
+    for (r in row) {
+        if (!(r in entry))
+            printf "the index has a row for %s, and no entry answers to that ID\n", r
+        else if (row[r] > 1)
+            printf "the index lists %s %d times\n", r, row[r]
+    }
+}
+' "$REG" > "$INDEX"
+if [ -s "$INDEX" ]; then
+    while IFS= read -r l; do say_bad "decisions.md: $l"; done < "$INDEX"
+fi
+rm -f "$INDEX"
+
 # --- every PARKED entry's condition must still be unmet --------------------------------
 #
 # **`PARKED` is not a state, it is a promise to come back**: "not asking you yet, and here is what

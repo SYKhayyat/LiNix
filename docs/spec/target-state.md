@@ -2832,6 +2832,15 @@ meant it", and a total is made of both — but the flag that means *install* tha
 also mean *remove* that many. Protection remains a refusal (V.26): nothing overrides it, on any
 kind.
 
+**A refusal names every flag that answers it, and an allowance names the flag the run passed**
+(`J9`). These are the same rule as *a refusal names every ceiling it hit*, applied to the way
+out rather than to the wall: `max_total_changes` is answered by either flag, so a refusal
+offering one of them tells a run that installs and removes nothing that the way to proceed is to
+authorize mass deletion — and a per-kind refusal offering both would name one that does not
+work. The line printed afterwards is the mirror of it: the ceiling comes off the objection that
+was cleared and the flags off what the caller typed, never off a literal, so a run is never told
+about a flag it did not pass.
+
 ## II.29 A kind is a type, and every dispatch over it is exhaustive (`S56`, V.160)
 
 **`ResourceKind` is what a declaration declares.** `Statement::kind()` returns it; the extras
