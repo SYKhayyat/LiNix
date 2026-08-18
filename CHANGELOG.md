@@ -190,6 +190,32 @@ The probe and the installer now ask one function. A read only counts if it **exi
 schema the store does not know, a hive this account cannot open, or a `@scope=system` line
 against a store with no machine-wide commands stays unverifiable and is never reported as drift.
 
+### A bare name resolves on a manager whose names are qualified
+
+`Searchable::lookup` compared the name a user typed against the name a manager's search printed.
+That is right for every manager but Portage, whose names are `category/name`: `emerge --search
+jq` prints `app-misc/jq`, `dev-python/jq` and `app-emacs/jq-mode`, so the comparison could never
+be true and **no bare name resolved on that manager at all** — `shall install jq` on Gentoo
+answered *"no package manager this line accepts has `jq`"* while `emerge` was printing three
+packages called jq (`J8`).
+
+- **A backend declares that its names are qualified.** `emerge` is the only one that does; the
+  default is the exact-name rule every other manager wants, and an exact name still wins wherever
+  it exists.
+- **One matching atom resolves, and the plan names the atom** — so the declaration, what comes
+  back from `qlist -I` and the argv that reaches Portage are one string.
+- **More than one is refused, listing them all.** Portage refuses the same bare `emerge jq`
+  itself; picking the first would choose out of a list the manager declined to choose from, and
+  the wrong one would install and report success.
+- **The lock freezes the manager, never the atom.** `locks/bare.HOST.toml` records which manager
+  answered, because that is a choice between managers; the atom is not a choice and is re-read
+  each run from the backend that owns it, so a second sync cannot plan `emerge:jq` off a lock the
+  first one wrote.
+
+Stripping the category the way `pacman`'s parser does was rejected, and for a reason specific to
+this manager: the stripped name resolves and then fails at Portage, and it never matches `qlist
+-I`, so every sync would plan an install over a package that is already there.
+
 ### An AUR package is named under a manager that can put it back
 
 `pacman`, `yay` and `paru` are three clients of one database, and the row that survives the
@@ -353,6 +379,16 @@ the same answer.
   counts everything one command does — installs and upgrades, removals of every kind, resources
   written, ports opened and closed. A refusal now names every ceiling it hit rather than the
   first, and `shall protected` prints all five instead of `max_removals` alone.
+
+- **A mass-change message names the flag the run actually passed** (`J9`). `max_total_changes`
+  counts every change a command makes, so either mass flag answers it — but both places that
+  talked about it were written as though only `--allow-mass-removal` existed. A run of `sync
+  --allow-mass-install` was told *"the removal count for 'sync' was allowed by
+  `--allow-mass-removal`"*: a ceiling it had not cleared, a flag it had not passed, and a removal
+  on a run that removed nothing. The line is read off the run now, and the total's refusal offers
+  both flags rather than telling a run made of installs to authorize mass deletion. The per-kind
+  refusals still offer the removal flag alone, because `max_removals`, `max_extra_removals` and
+  `max_port_closures` answer to that one and no other.
 
 ### Other package managers, and the processes Shall starts
 
