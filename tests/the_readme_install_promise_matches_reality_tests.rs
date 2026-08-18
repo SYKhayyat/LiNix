@@ -27,23 +27,35 @@ const NOTE: &str = "No release has been tagged yet";
 
 /// Whether this clone knows of a `v*` tag.
 ///
-/// `None` when git cannot answer — a shallow CI checkout may fetch no tags at all, and a test
-/// that read that as "no release exists" would assert the note must be present on a tree where a
-/// release does exist. Unknown is reported, never guessed.
+/// `None` when git cannot answer, and `None` when the clone knows of no tags at all. The second
+/// case is not a repository without releases, it is a checkout that was never told about them:
+/// `actions/checkout` fetches no tags by default, so `git tag --list v*` comes back empty and
+/// successful on a tree whose release is tagged. Read as "no release exists" that turned this
+/// gate upside down and failed every test job on the commit after the 0.8.0 tag. Unknown is
+/// reported, never guessed.
 fn has_a_version_tag() -> Option<bool> {
+    let tags = git(&["tag", "--list"])?;
+    if tags.lines().all(|l| l.trim().is_empty()) {
+        return None;
+    }
+    Some(
+        git(&["tag", "--list", "v*"])?
+            .lines()
+            .any(|l| !l.trim().is_empty()),
+    )
+}
+
+/// `None` when git cannot answer at all.
+fn git(args: &[&str]) -> Option<String> {
     let out = Command::new("git")
-        .args(["tag", "--list", "v*"])
+        .args(args)
         .current_dir(repo())
         .output()
         .ok()?;
     if !out.status.success() {
         return None;
     }
-    Some(
-        String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .any(|l| !l.trim().is_empty()),
-    )
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 #[test]
@@ -55,7 +67,7 @@ fn the_no_release_yet_note_is_present_exactly_while_there_is_no_release() {
 
     let Some(tagged) = has_a_version_tag() else {
         eprintln!(
-            "install promise: SKIPPED — `git tag` did not answer, so whether a release exists is \
+            "install promise: SKIPPED — this clone knows of no tags, so whether a release exists is \
              unknown. The README currently {} the note.",
             if note_present { "carries" } else { "omits" }
         );

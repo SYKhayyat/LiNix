@@ -220,7 +220,12 @@ jobs:
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ startsWith(github.ref, 'refs/tags/v') && '1' || '16' }}
 
     steps:
+    # `fetch-tags` because a test in this job reads them. `actions/checkout` fetches none by
+    # default, so `git tag --list v*` answers "no release exists" on a tree whose release is
+    # tagged, and the README/tag agreement test inverted itself on the commit after 0.8.0.
     - uses: actions/checkout@v7
+      with:
+        fetch-tags: true
 
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@master
