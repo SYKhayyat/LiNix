@@ -2,6 +2,7 @@
 # artifacts (esp. Windows/MSVC target/) or VCS/editor cruft into the integration images.
 target/
 **/target/
+mutants.out/
 .git/
 *.log
 *.tmp
