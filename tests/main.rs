@@ -52,6 +52,7 @@ mod a_lister_cannot_report_what_was_removed_tests;
 mod a_machine_converges_tests;
 mod a_module_is_a_subject_not_a_pile_tests;
 mod a_parser_can_say_it_did_not_understand_tests;
+mod a_pinned_toolchain_would_replace_the_version_matrix_tests;
 mod a_plan_installs_only_declarations_tests;
 mod a_plan_reaps_only_what_it_was_asked_about_tests;
 mod a_pub_fn_nobody_calls_is_dead_tests;
