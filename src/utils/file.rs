@@ -326,11 +326,22 @@ pub fn strip_archive_suffixes(filename: &str) -> &str {
 /// directory for it exactly as it does for an absolute path. Whatever the platform counts as
 /// more than a bare file name, `components()` already knows.
 ///
+/// **And what one platform counts, the other must count too.** `components()` answers for the
+/// platform it is compiled on: on Unix a backslash is an ordinary filename character, so
+/// `..\..\x` is one `Normal` component and this returned `None` for it. That is not an escape
+/// on the machine that parsed it — the file lands inside the bin directory, backslashes and
+/// all — but a manifest is a file that travels, and the same line is a traversal on Windows.
+/// A rule that means one thing per platform is a rule the user cannot check by reading it, so
+/// both separators are refused everywhere and the answer is a property of the text.
+///
 /// Shared with [`url_filename`] because the two questions are one question: both take text
 /// from outside and turn it into a name to join onto a directory Shall owns.
 fn not_a_bare_file_name(name: &str) -> Option<&'static str> {
     if name.is_empty() {
         return Some("it is empty");
+    }
+    if name.contains('/') || name.contains('\\') {
+        return Some("it contains a path separator");
     }
     let mut parts = Path::new(name).components();
     match (parts.next(), parts.next()) {
@@ -575,6 +586,10 @@ mod bin_destination_tests {
             "../../.bashrc",
             "../.ssh/authorized_keys",
             r"..\..\x",
+            // Not a traversal on either platform, and refused on both anyway: the rule is a
+            // property of the text, so a manifest means the same thing wherever it is read.
+            r"a\b",
+            r"\server\share",
             "sub/dir",
             "..",
             ".",

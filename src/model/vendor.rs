@@ -43,7 +43,7 @@ impl Source {
         if let Some(rest) = s.strip_prefix("github:") {
             let (owner, repo) = rest.split_once('/')?;
             let repo = repo.trim_end_matches(".git").trim_end_matches('/');
-            if owner.is_empty() || repo.is_empty() || repo.contains('/') {
+            if owner.is_empty() || repo.is_empty() || repo.contains('/') || repo.contains('\\') {
                 return None;
             }
             return Some(Source::Github {
@@ -155,7 +155,14 @@ pub fn safe_relative(rel: &Path) -> Option<PathBuf> {
     let mut clean = PathBuf::new();
     for comp in rel.components() {
         match comp {
-            Component::Normal(c) => clean.push(c),
+            // A component the *running* platform calls ordinary may still be a separator on the
+            // other one: Unix reads `..\..\x` as a single filename, Windows as a climb out. A
+            // vendored tree is a stranger's, so the answer must not depend on which machine
+            // fetched it — see `not_a_bare_file_name`, where the same asymmetry was live.
+            Component::Normal(c) => match c.to_str() {
+                Some(s) if s.contains('/') || s.contains('\\') => return None,
+                _ => clean.push(c),
+            },
             // A leading `./` is harmless noise; drop it.
             Component::CurDir => {}
             // Everything else — `..`, a root, a drive prefix — is an escape attempt.
@@ -308,6 +315,13 @@ mod tests {
             None
         );
         assert_eq!(safe_relative(Path::new("/etc/passwd")), None);
+        // **The same answer on both platforms.** `components()` reads a backslash as a
+        // separator on Windows and as an ordinary filename character on Unix, so this pair
+        // was refused on one and accepted on the other — from a tree a stranger supplied. It
+        // is the same asymmetry that let `..\\..\\x` through `@bin=` on Linux and macOS
+        // while the Windows gate passed, which is how it reached CI unseen.
+        assert_eq!(safe_relative(Path::new(r"..\..\.bashrc")), None);
+        assert_eq!(safe_relative(Path::new(r"modules\..\x")), None);
         // A clean relative path survives, with a leading `./` stripped.
         assert_eq!(
             safe_relative(Path::new("./modules/x.txt")),
