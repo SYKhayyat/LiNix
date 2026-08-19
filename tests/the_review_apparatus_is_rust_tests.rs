@@ -747,28 +747,44 @@ fn every_asset_name_the_installers_ask_for_is_one_the_release_writes() {
     );
 }
 
-/// Why a matrix block would expand to fewer jobs than it has rows, or `None` if it is sound.
-///
 /// A base key beside `include:` gives the matrix one combination, and GitHub merges an include
 /// entry into an existing combination whenever it overwrites none of the base values — so every
-/// row lands in that same job in turn and only the last survives. A row without its own copy of
-/// the base key is the same defect written the other way round.
+/// row lands in that same job in turn and only the last survives.
+///
+/// **What is checked is the base key, not a per-row copy of it.** This used to also require one
+/// `rust:` per row, on the reasoning that a row without one must be borrowing from a base. That
+/// is a proxy, and it went false when the compiler moved to `RUST_PINNED` in the workflow's
+/// `env:` — where one literal serves every job and no row needs a channel at all. A proxy that
+/// fires on the correct arrangement is a rule people delete rather than read.
+///
+/// The direct rule is stricter than the one it replaces: **any** key beside `include:` collapses
+/// the matrix, whatever it is called, and it is caught whether it is written as a flow list
+/// (`rust: [stable]`) or as a block one — the block spelling has no `: [` in it and the old
+/// check could not see it.
 fn collapses_to_one_job(matrix: &str) -> Option<String> {
     let include_at = matrix.find("include:")?;
     let before = &matrix[..include_at];
-    if before.contains(": [") {
-        return Some(format!(
-            "the build matrix has a base key above its `include:` rows:\n{before}\nThat makes \
-             ONE combination, and every include row merges into it in turn — the last row wins \
-             and the rest never run. Put the key on each row instead."
-        ));
-    }
-    let rows = matrix.matches("- os:").count();
-    let toolchains = matrix.matches("rust:").count();
-    (rows != toolchains).then(|| {
+    // Children of `matrix:` are indented eight; `include:` is the only legitimate one. Rows and
+    // their continuation lines sit deeper, and `- ` items belong to a key already reported.
+    let base_keys: Vec<&str> = before
+        .lines()
+        .map(str::trim_end)
+        .filter(|l| {
+            let body = l.trim_start();
+            !body.is_empty()
+                && !body.starts_with('#')
+                && !body.starts_with('-')
+                && body != "include:"
+                && l.len() - body.len() == 8
+        })
+        .collect();
+    (!base_keys.is_empty()).then(|| {
         format!(
-            "{rows} matrix row(s) and {toolchains} `rust:` key(s) — a row without one has to \
-             borrow from a base key, and a base key is what collapsed this matrix"
+            "the build matrix has {} base key(s) beside its `include:` rows: {base_keys:?}. That \
+             makes ONE combination, and every include row merges into it in turn — the last row \
+             wins and the rest never run. Put the value on each row, or somewhere that is not \
+             the matrix at all.",
+            base_keys.len()
         )
     })
 }
@@ -880,29 +896,32 @@ fn the_matrix_scan_objects_to_the_shape_that_shipped() {
     );
     assert!(why.contains("base key"), "{why}");
 
-    // A row missing its toolchain is the same defect the other way round.
-    let uneven = r"      matrix:
+    // The block spelling of the same defect, which the check this replaced could not see: it
+    // looked for `: [`, and a base key written as a YAML block list has no bracket in it.
+    let block_spelled = r"      matrix:
+        rust:
+          - stable
         include:
           - os: ubuntu-latest
             target: a
-            rust: stable
           - os: windows-latest
             target: b
 ";
     assert!(
-        collapses_to_one_job(uneven).is_some(),
-        "an uneven matrix passed"
+        collapses_to_one_job(block_spelled).is_some(),
+        "a base key written as a block list passed; it collapses the matrix exactly as the flow \
+         spelling does"
     );
 
     // And the control, so a green run above is not explained by "it objects to everything".
+    // No row names a compiler here, which is the shape the workflow actually has now that
+    // `RUST_PINNED` chooses it — the arrangement this predicate must not object to.
     let sound = r"      matrix:
         include:
           - os: ubuntu-latest
             target: a
-            rust: stable
           - os: windows-latest
             target: b
-            rust: stable
 ";
     assert_eq!(collapses_to_one_job(sound), None);
 }

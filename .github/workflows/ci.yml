@@ -44,9 +44,29 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: ${{ (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')) || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
 
+# **The pinned compiler, named once.**
+#
+# Every gating job installs this exact toolchain rather than whatever `stable` resolves to on
+# the day it runs. A gate on a floating compiler turns red on a tree nobody touched — six
+# weeks is one Rust release, and a release brings new clippy lints that `-D warnings` rates
+# fatal. Repairing that is Rust work this repository's owner has said he cannot do, so a red
+# `main` he did not cause is a gate reporting something he cannot act on.
+#
+# The drift is still measured: `newest-rust` below builds and lints on `stable` and is allowed
+# to fail. A future compiler that breaks this tree is reported the day it lands, as one
+# advisory job, rather than by taking the whole board down.
+#
+# **This is not `rust-toolchain.toml`, and the difference is the point.** A pin file overrides
+# the toolchain *after* the workflow installed one, which is how `e7c9e75` cost the
+# cross-compile rows their target's `std` and left the msrv job measuring 1.97.1 in green. This
+# value is read where the target is chosen, so `targets:` still applies to it, and the msrv job
+# still installs the floor it names.
+#
+# To move it: change the line below, and nothing else in this file.
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  RUST_PINNED: "1.97.1"
 
 jobs:
   # **The supply-chain gate this repo had none of.**
@@ -63,7 +83,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v7
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ env.RUST_PINNED }}
     - name: cargo-deny
       uses: EmbarkStudios/cargo-deny-action@v2
       with:
@@ -82,6 +104,36 @@ jobs:
   # file would be free to disagree with the first, which is the whole failure this job exists to
   # end. `cargo check --all-targets` and not `test`: the question is whether the toolchain can
   # compile the tree, and the test *run* is every other job's business.
+  # **The compiler drift detector, and it is allowed to fail.**
+  #
+  # Everything else in this file is pinned to `RUST_PINNED`, which means a Rust release can no
+  # longer turn this board red on its own. That safety costs something real: without this job,
+  # the first time anyone learned the tree had stopped compiling on current Rust would be the
+  # day somebody moved the pin, with an unknown number of releases' worth of breakage arriving
+  # at once. A pin with no drift detector is not stability, it is a debt with the statement
+  # switched off.
+  #
+  # `continue-on-error` is what makes it honest in both directions: the failure is on the run
+  # page the day it appears, and it never blocks a merge. Clippy is here and not only `check`
+  # because new lints, rather than broken code, are what a new release almost always brings.
+  #
+  # `--locked` for the reason the msrv job uses it: this job answers a question about the
+  # compiler, and letting it resolve a different dependency graph would let it answer a
+  # different question under this name.
+  newest-rust:
+    name: Compiles on the newest Rust (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+    - uses: actions/checkout@v7
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy
+    - name: Which Rust this is, so the run page names the version that broke
+      run: rustc --version
+    - run: cargo check --all-targets --locked
+    - run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
   msrv:
     name: Builds on the declared MSRV
     runs-on: ubuntu-latest
@@ -135,7 +187,7 @@ jobs:
       # target still ships; what it loses is a native test run, which `native: true` below marks
       # honestly rather than pretending the cross build was exercised.
       #
-      # **Every row carries its own `rust`, and there is no base matrix.** With `rust: [stable]`
+      # **There is no base matrix, and adding one deletes rows.** With `rust: [stable]`
       # above the `include:`, the matrix had exactly ONE combination, and GitHub merges an
       # include entry into an existing combination when it overwrites none of the base values —
       # so all four rows merged into that same job in turn and the last one won. Measured, not
@@ -143,11 +195,15 @@ jobs:
       # and no others. Linux and both Macs were never built here at all, while the release job
       # below asserts four binaries in `dist/` — the same shape as the assets that were all
       # named `shall`, and found the same way, by reading what the run actually did.
+      #
+      # An include-only matrix is one job per entry, which is why no row names a compiler: the
+      # install step reads `RUST_PINNED`, and a `rust:` key here would be a second place to
+      # change it. Only `target` and `native` vary between these rows, and both are facts about
+      # the machine rather than about the toolchain.
       matrix:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            rust: stable
             native: true
           # **The most obvious gap in the release until now**: every arm64 Linux box — a Pi, a
           # Graviton instance, an arm64 container — fell through to `install.sh`'s source build,
@@ -160,7 +216,6 @@ jobs:
           # compiles or goes red, and `native: false` says plainly that its tests did not run.
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
-            rust: stable
             native: false
           # **The distros where a `-gnu` binary cannot start at all.** A dynamically linked
           # glibc binary hard-codes `/lib64/ld-linux-x86-64.so.2` as its interpreter, and
@@ -174,7 +229,6 @@ jobs:
           # three: `shall 0.8.0` from nixos/nix, alpine:3.20 and ubuntu:24.04 alike.
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            rust: stable
             native: false
           # And the same argument on arm64, which the row above could not carry. `install.sh`
           # sent every aarch64 Linux box to `-gnu`, so an arm64 Alpine or NixOS machine fell
@@ -190,20 +244,16 @@ jobs:
           # crate compiled, the link step clean.
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
-            rust: stable
             native: false
             zigbuild: true
           - os: macos-latest
             target: x86_64-apple-darwin
-            rust: stable
             native: false
           - os: macos-latest
             target: aarch64-apple-darwin
-            rust: stable
             native: true
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            rust: stable
             native: true
 
     # **Fat LTO and one codegen unit are settings for a binary somebody downloads, not for a
@@ -230,7 +280,7 @@ jobs:
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@master
       with:
-        toolchain: ${{ matrix.rust }}
+        toolchain: ${{ env.RUST_PINNED }}
         targets: ${{ matrix.target }}
         components: rustfmt, clippy
 
@@ -792,7 +842,9 @@ jobs:
     runs-on: macos-latest
     steps:
     - uses: actions/checkout@v7
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ env.RUST_PINNED }}
     - name: Build
       run: cargo build --release
     # The sweep bounds every command it runs, and macOS ships no `timeout`. It degrades
@@ -816,7 +868,9 @@ jobs:
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v7
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ env.RUST_PINNED }}
     - name: Build
       run: cargo build --release
     - name: Install scoop (the default backend for this sweep)
@@ -846,7 +900,9 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
     - uses: actions/checkout@v7
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ env.RUST_PINNED }}
     - name: Ask every installed manager whether it still has these subcommands
       run: "cargo test --release --test suite -- argv_drift_tests:: --nocapture"
 
@@ -992,7 +1048,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v7
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ env.RUST_PINNED }}
     - name: Stub the binary and count what still passes
       run: bash scripts/harness-mutation-test.sh --check
 
@@ -1062,7 +1120,9 @@ jobs:
           - { what: the transaction 4/4, file: src/core/transaction.rs, slug: transaction-4, shard: 3/4 }
     steps:
     - uses: actions/checkout@v7
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ env.RUST_PINNED }}
     - uses: Swatinem/rust-cache@v2
     - name: Install cargo-mutants
       run: cargo install cargo-mutants --locked

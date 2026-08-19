@@ -79,3 +79,67 @@ fn ci_installs_the_matrix_target_with_the_toolchain() {
          compiles against a std that was never downloaded"
     );
 }
+
+fn ci_yml() -> String {
+    std::fs::read_to_string(repo().join(".github/workflows/ci.yml")).expect("ci.yml")
+}
+
+/// The pin that replaced the pin file: `RUST_PINNED` in `ci.yml` chooses the compiler where the
+/// target is also chosen, so a cross row still receives its `std`. Named once, because a second
+/// literal is how one of them goes stale and a gate quietly measures a compiler nobody meant.
+#[test]
+fn ci_names_the_pinned_compiler_exactly_once() {
+    let ci = ci_yml();
+    let declarations: Vec<&str> = ci
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("RUST_PINNED:"))
+        .collect();
+    assert_eq!(
+        declarations.len(),
+        1,
+        "RUST_PINNED is declared {} times: {declarations:?}",
+        declarations.len()
+    );
+    let version = declarations[0]
+        .split('"')
+        .nth(1)
+        .expect("RUST_PINNED names a quoted version");
+    assert!(
+        version.starts_with("1.") && version.split('.').count() >= 2,
+        "RUST_PINNED is {version:?}, which is not an exact Rust release. A channel name here floats, and the pin then buys nothing"
+    );
+}
+
+/// Exactly one job may install a floating toolchain, and it is the one that is allowed to fail.
+/// Any other `@stable` install is a gate a Rust release can turn red on a tree nobody touched,
+/// which is the failure this pin exists to prevent, reintroduced one job at a time.
+#[test]
+fn only_the_advisory_job_installs_a_floating_toolchain() {
+    let ci = ci_yml();
+    let floating = ci.matches("dtolnay/rust-toolchain@stable").count();
+    assert_eq!(
+        floating, 1,
+        "{floating} job(s) install a floating toolchain. Only `newest-rust` may, because only it is continue-on-error; every other job takes the pinned toolchain"
+    );
+    assert!(
+        ci.contains("  newest-rust:"),
+        "the advisory drift job is gone, which leaves the pin a debt with the statement switched off"
+    );
+}
+
+/// The advisory job has to stay advisory. Dropping `continue-on-error` hands a Rust release the
+/// power to block every merge again, which is the arrangement the pin replaced.
+#[test]
+fn the_drift_detector_cannot_block_a_merge() {
+    let ci = ci_yml();
+    let after = ci
+        .split_once("  newest-rust:")
+        .expect("the advisory job exists")
+        .1;
+    let body = after.split_once("\n  msrv:").map_or(after, |(b, _)| b);
+    assert!(
+        body.contains("continue-on-error: true"),
+        "`newest-rust` is not continue-on-error, so one new clippy lint blocks every merge"
+    );
+}

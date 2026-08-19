@@ -235,7 +235,13 @@ fn every_ci_job_has_something_local_that_runs_it() {
         ("install-script", "scripts/install.sh"),
         ("install-script-windows", "scripts/install.ps1"),
     ];
-    let drives_nothing = ["release"];
+    // `release` publishes artifacts on a tag. `newest-rust` is the compiler-drift detector:
+    // it is `continue-on-error` by design, it needs a toolchain the developer deliberately
+    // does not have pinned, and a release script that printed a scary line about a job CI
+    // itself is content to see fail would be teaching people to ignore its output. Neither is
+    // a gate, so neither needs a local driver — which is a different claim from "unreachable",
+    // and the reason this list is spelled out rather than inferred.
+    let drives_nothing = ["release", "newest-rust"];
 
     let unreachable: Vec<String> = jobs
         .iter()
