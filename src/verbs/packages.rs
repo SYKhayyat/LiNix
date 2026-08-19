@@ -998,7 +998,7 @@ pub async fn suspend_for_session(app: &App, packages: &[String]) -> Result<()> {
             warn!("'{}' is not installed under any backend you use.", pkg_str);
         }
     }
-    app.state.lock().await.save()?;
+    crate::core::save_off_the_runtime(&app.state).await?;
     Ok(())
 }
 
@@ -1046,15 +1046,19 @@ pub async fn handle_hold(
         return Ok(());
     }
     let mut n = 0usize;
-    let recorded = {
+    // Serialised under the lock and written after it: the flush inside `save` is a physical
+    // one, and holding the global state mutex across it stalls every other task wanting the
+    // registry.
+    let snapshot = {
         let mut state = state.lock().await;
         for p in packages {
             if state.hold(p) {
                 n += 1;
             }
         }
-        state.save()?
+        state.snapshot()?
     };
+    let recorded = snapshot.write_off_the_runtime().await?;
     if recorded {
         println!(
             "Held {} package(s). `shall upgrade` will skip them until `shall unhold`.",
@@ -1073,15 +1077,16 @@ pub async fn handle_unhold(
 ) -> Result<()> {
     resolver.require_known_spec_backends(packages).await?;
     let mut n = 0usize;
-    let recorded = {
+    let snapshot = {
         let mut state = state.lock().await;
         for p in packages {
             if state.unhold(p) {
                 n += 1;
             }
         }
-        state.save()?
+        state.snapshot()?
     };
+    let recorded = snapshot.write_off_the_runtime().await?;
     if recorded {
         println!("Released {} hold(s).", n);
     } else {

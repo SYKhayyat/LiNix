@@ -122,9 +122,15 @@ pub async fn supervised_output(command: Command, what: &str, mirror: bool) -> Re
 
 /// The same, for a tool that is handed something on stdin and then sees it close.
 ///
-/// The payload is written before the output is drained, so it must be small enough for the pipe
-/// buffer — every caller here sends a JSON fact sheet of a few hundred bytes. A large one would
-/// deadlock against a child that will not read until it has written.
+/// **The payload has no size limit, and the reason it needs none is the ordering below.**
+/// It used to be written before the output was drained, under a comment asserting that every
+/// caller sends a fact sheet of a few hundred bytes. One did not: `Event::OnDrift` feeds the
+/// whole `SyncReport`, one entry per install and per removal, which crosses Linux's 64 KiB
+/// pipe buffer somewhere under a thousand changes — and a fresh config makes every installed
+/// package a removal. Past that point `write_all` blocked on a full pipe while nothing drained
+/// the child, the child filled its own output pipe and stopped reading, and neither moved
+/// again. The idle bound that exists for exactly this is passed *into* `wait_watched`, which
+/// had not been reached, so nothing was armed and the hang was unbounded and silent.
 pub async fn supervised_output_fed(
     command: Command,
     what: &str,
@@ -181,18 +187,37 @@ async fn supervise(
     let mut child = command
         .spawn()
         .map_err(|e| Error::command_failed(format!("could not start {what}: {e}")))?;
-    if let (Some(feed), Some(mut pipe)) = (feed, child.stdin.take()) {
-        use tokio::io::AsyncWriteExt;
-        // A tool that ignores stdin closes the pipe, and writing to a closed pipe is that tool's
-        // choice rather than an error: it was told, and it may not care.
-        let _ = pipe.write_all(feed.as_bytes()).await;
-        let _ = pipe.shutdown().await;
-    }
-    RawExecutor::wait_watched(
+    // The feed runs concurrently with the drain, never before it. A payload larger than the
+    // pipe buffer parks `write_all` until the child reads, and a child that will not read
+    // until it has written needs its output taken at the same time or neither side moves.
+    let feeding = match (feed, child.stdin.take()) {
+        (Some(feed), Some(mut pipe)) => {
+            let bytes = feed.as_bytes().to_vec();
+            Some(tokio::spawn(async move {
+                use tokio::io::AsyncWriteExt;
+                // A tool that ignores stdin closes the pipe, and writing to a closed pipe is
+                // that tool's choice rather than an error: it was told, and it may not care.
+                let _ = pipe.write_all(&bytes).await;
+                let _ = pipe.shutdown().await;
+            }))
+        }
+        _ => None,
+    };
+
+    let out = RawExecutor::wait_watched(
         child,
         what,
         mirror && std::io::stderr().is_terminal(),
         command_idle_timeout(),
     )
-    .await
+    .await;
+
+    // Joined rather than detached: the task owns the write half of the child's stdin, and a
+    // detached one outlives the call that made it — the shape `SudoKeepalive` was built to
+    // stop. It cannot outlast the child, because a child that exits or is killed for idleness
+    // closes the pipe and fails the write.
+    if let Some(handle) = feeding {
+        let _ = handle.await;
+    }
+    out
 }

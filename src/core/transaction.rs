@@ -147,8 +147,14 @@ pub struct Transaction {
     /// issued here, at execution time, and never pass the plan-time gate in `sync` — so this is
     /// the only place they can be checked, and a guard on one path is a guard on nothing.
     app_config: Arc<crate::config::Config>,
-    /// Optional lifecycle hooks. When set, `before_install`/`after_install` fire
-    /// per package at the moment it is installed (interleaved with parallel execution).
+    /// Optional lifecycle hooks. When set, `before_install` fires for every member of a batch
+    /// before the batch runs and `after_install` for every member that installed, both fanned
+    /// out at `max_concurrent` — a hook is about its own package, not about the batch.
+    ///
+    /// A failing `before_install` takes that one package out of the batch and leaves the rest
+    /// of the command alone; a failing `after_install` is logged and undoes nothing, because
+    /// rolling back a healthy package over a cosmetic hook error is more surprising than the
+    /// failure.
     hooks: Option<Arc<LuaHooks>>,
     completed_indices: HashSet<NodeIndex>,
     /// Each finished node with what its target looked like before it ran. Rollback walks this
@@ -936,6 +942,11 @@ impl Transaction {
         // one listing per manager serves every question in the run.
         let priors: Vec<Prior> = if config.auto_rollback {
             use futures::stream::StreamExt;
+            // **`needless_collect` fires here and it is wrong.** `stream::iter` does take
+            // any `IntoIterator`, but dropping the `collect` leaves the stream's items
+            // borrowing `members` inside a future that has to be `'static` for the worker
+            // pool, and rustc rejects the closure as "not general enough". The `Vec` is what
+            // makes the names owned. One allocation per batch, deliberately.
             futures::stream::iter(members.iter().map(|m| m.2.clone()).collect::<Vec<_>>())
                 .map(|name| {
                     let backend_cap = backend_cap.clone();
@@ -948,47 +959,45 @@ impl Transaction {
             vec![Prior::Unknown; members.len()]
         };
 
-        // The WAL, per package and before the manager is invoked. Recovery depends on the
-        // entry reaching disk first, and a batch does not change that — it changes how many
-        // bytes each entry costs (see `core::journal`).
-        let mut ids: Vec<String> = Vec::with_capacity(members.len());
-        {
+        // The WAL, per package and before the manager is invoked. Recovery depends on every
+        // entry reaching disk first, and batching does not change that — `record_starts`
+        // writes all of them and flushes once, so each is durable before this returns. What it
+        // changes is the price: the loop this replaces called `record_start` per member, and
+        // that is one physical flush per package, serialised, under the journal mutex, on the
+        // path that opens every wave. On the 298-package config the planner's own comment
+        // cites, ~298 flushes before a single manager was invoked.
+        let ids: Vec<String> = {
             let mut j = journal.lock().await;
-            for (_, action, _) in &members {
-                let j_action = match action {
+            let actions: Vec<JournalAction> = members
+                .iter()
+                .map(|(_, action, _)| match action {
                     GraphAction::Install(s) => JournalAction::Install(s.clone()),
                     GraphAction::Remove { name, backend } => JournalAction::Remove {
                         name: name.clone(),
                         backend: backend.clone(),
                     },
-                };
-                match j.record_start(j_action) {
-                    Ok(id) => ids.push(id),
-                    Err(e) => {
-                        // **Close what this batch already opened before leaving.** `ids` holds
-                        // the entries `record_start` did accept, and an early return past them
-                        // leaves each one `InProgress` for ever — which is the state that means
-                        // "a process died holding this" and sends `heal` looking for a crash
-                        // that never happened. None can already be closed: the manager has not
-                        // been invoked yet.
-                        let why = format!("WAL error before this batch ran: {}", e);
-                        for id in &ids {
-                            let _ = j.record_failure(id, &why);
-                        }
-                        drop(j);
-                        for i in 0..members.len() {
-                            refused.push(stillborn(
-                                members[i].0,
-                                members[i].2.clone(),
-                                priors[i].clone(),
-                                Error::Journal(format!("WAL error: {}", e)),
-                            ));
-                        }
-                        return refused;
+                })
+                .collect();
+            match j.record_starts(actions) {
+                Ok(ids) => ids,
+                Err(e) => {
+                    // **Nothing to close.** The batch is all-or-nothing: a failure here left
+                    // neither the file nor the in-memory map touched, so there is no entry
+                    // stuck at `InProgress` to send `heal` looking for a crash that never
+                    // happened — which the per-entry loop had to clean up by hand.
+                    drop(j);
+                    for i in 0..members.len() {
+                        refused.push(stillborn(
+                            members[i].0,
+                            members[i].2.clone(),
+                            priors[i].clone(),
+                            Error::Journal(format!("WAL error: {}", e)),
+                        ));
                     }
+                    return refused;
                 }
             }
-        }
+        };
 
         // `before_install` fires per package, before any install attempt. A failing pre-hook
         // takes that package out of the batch — its declared prerequisites were not met — and
@@ -996,11 +1005,44 @@ impl Transaction {
         let mut keep: Vec<usize> = Vec::with_capacity(members.len());
         if is_install {
             if let Some(h) = &hooks {
-                for (i, (idx, _, name)) in members.iter().enumerate() {
-                    match h.run_hook("before_install", name).await {
-                        Ok(_) => keep.push(i),
-                        Err(e) => {
-                            let msg = format!("before_install hook failed: {}", e);
+                // **Fanned out, because each hook is about a different package.** The field
+                // doc on `hooks` has always said these fire "interleaved with parallel
+                // execution"; they did not — both loops were sequential and bracketed the one
+                // part that was made concurrent, so a batch of *k* paid *2k* serial hook
+                // invocations around it. Each is a process spawn, an mlua eval or a Rhai eval
+                // that can block on HTTP. `before_install` must precede *its own* package's
+                // install, not everybody else's.
+                use futures::stream::StreamExt;
+                let asked: Vec<(usize, String)> = members
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (_, _, name))| (i, name.clone()))
+                    .collect();
+                let mut outcomes: Vec<(usize, std::result::Result<(), String>)> =
+                    futures::stream::iter(asked)
+                        .map(|(i, name)| {
+                            let h = h.clone();
+                            async move {
+                                let r = h
+                                    .run_hook("before_install", &name)
+                                    .await
+                                    .map(|_| ())
+                                    .map_err(|e| format!("before_install hook failed: {}", e));
+                                (i, r)
+                            }
+                        })
+                        .buffer_unordered(config.max_concurrent.max(1))
+                        .collect()
+                        .await;
+                // Declaration order restored before anything acts on it: `keep` indexes
+                // `members`, and the batch below and every result it produces read it in
+                // order. A fan-out that returns as it finishes must not decide that order.
+                outcomes.sort_by_key(|(i, _)| *i);
+                for (i, outcome) in outcomes {
+                    match outcome {
+                        Ok(()) => keep.push(i),
+                        Err(msg) => {
+                            let (idx, _, name) = &members[i];
                             let mut j = journal.lock().await;
                             let _ = j.record_failure(&ids[i], &msg);
                             drop(j);
@@ -1224,12 +1266,28 @@ impl Transaction {
                     // more surprising than the failure itself).
                     if is_install {
                         if let Some(h) = &hooks {
-                            for &i in &keep {
-                                let name = &members[i].2;
-                                if let Err(e) = h.run_hook("after_install", name).await {
-                                    warn!("after_install hook for '{}' failed: {}", name, e);
-                                }
-                            }
+                            // Fanned out for the same reason as `before_install`: each is
+                            // about one package, and a failure here is logged rather than
+                            // acted on, so nothing downstream depends on the order they
+                            // finish in.
+                            use futures::stream::StreamExt;
+                            let asked: Vec<String> =
+                                keep.iter().map(|&i| members[i].2.clone()).collect();
+                            futures::stream::iter(asked)
+                                .map(|name| {
+                                    let h = h.clone();
+                                    async move {
+                                        if let Err(e) = h.run_hook("after_install", &name).await {
+                                            warn!(
+                                                "after_install hook for '{}' failed: {}",
+                                                name, e
+                                            );
+                                        }
+                                    }
+                                })
+                                .buffer_unordered(config.max_concurrent.max(1))
+                                .collect::<Vec<()>>()
+                                .await;
                         }
                     }
                     refused.extend(keep.iter().map(|&i| {

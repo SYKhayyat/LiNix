@@ -7,6 +7,17 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
+/// The name every snap verb takes the exclusive lock under.
+///
+/// Asked of `stale_lock`, which owns the table of which programs share one package
+/// database, rather than spelled as a literal here — a second copy of that table is
+/// exactly what its own doc says goes stale. A verb that changes the manager takes
+/// the manager's lock; install and remove already did, and `update` and the cache
+/// cleaners did not.
+fn lock_key() -> &'static str {
+    crate::app::stale_lock::lock_key("snap")
+}
+
 pub struct SnapBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
@@ -235,7 +246,7 @@ impl Installable for SnapInstallable {
             let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
             self.core
                 .executor
-                .run_exclusive("snap", "snap", &arg_refs, sudo)
+                .run_exclusive(lock_key(), "snap", &arg_refs, sudo)
                 .await?;
         }
         Ok(())
@@ -261,7 +272,7 @@ impl Installable for SnapInstallable {
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         self.core
             .executor
-            .run_exclusive("snap", "snap", &arg_refs, sudo)
+            .run_exclusive(lock_key(), "snap", &arg_refs, sudo)
             .await?;
         Ok(())
     }
@@ -412,7 +423,7 @@ impl Upgradable for SnapUpgradable {
         debug!("Snap: Refreshing all snaps...");
         self.core
             .executor
-            .run_exclusive("snap", "snap", &["refresh"], sudo)
+            .run_exclusive(lock_key(), "snap", &["refresh"], sudo)
             .await?;
         Ok(())
     }

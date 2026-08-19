@@ -225,6 +225,14 @@ async fn probe_all_health(app: &App) -> Vec<(String, crate::core::HealthReport)>
         .filter(|(_, r)| r.status == HealthStatus::Ok)
         .map(|(n, _)| n.clone())
         .collect();
+    /// The floor under `check`'s per-backend `list` bound, in seconds. See below.
+    const LIST_BOUND_FLOOR_SECS: u64 = 60;
+    let bound = match config.query_idle_timeout_secs {
+        0 => None,
+        secs => Some(std::time::Duration::from_secs(
+            secs.max(LIST_BOUND_FLOOR_SECS),
+        )),
+    };
     let probed: Vec<(String, Option<String>)> = futures::stream::iter(healthy)
         .map(|name| {
             let backend = backends.get(&name);
@@ -233,18 +241,29 @@ async fn probe_all_health(app: &App) -> Vec<(String, crate::core::HealthReport)>
                     return (name, None); // nothing to ask; not a claim it failed
                 };
                 // Bounded, because `check` is a read-only command and a wedged manager must
-                // not hold the whole report open. 60s, and the number is evidence rather than
-                // taste: `list` measured 2-7s per backend on this machine, and an earlier 20s
-                // cap with eight in flight timed out scoop and winget — which take 1.2s each
-                // on their own. A limit tight enough to fail on contention manufactures the
+                // not hold the whole report open. The floor is evidence rather than taste:
+                // `list` measured 2-7s per backend on this machine, and an earlier 20s cap
+                // with eight in flight timed out scoop and winget — which take 1.2s each on
+                // their own. A limit tight enough to fail on contention manufactures the
                 // defect it claims to find.
-                let answer =
-                    tokio::time::timeout(std::time::Duration::from_secs(60), q.list_installed())
-                        .await;
+                //
+                // **But the number is no longer only a literal.** `planner.rs` states the
+                // rule this broke — *"a cap that ignores the setting is a cap the user cannot
+                // move"* — and a user who raised `query_idle_timeout_secs` for a slow machine
+                // still got `check` failing at 60s with a message blaming the manager. The
+                // configured bound wins when it is larger; `0` there means no bound at all,
+                // and this honours that too.
+                let answer = match bound {
+                    Some(bound) => tokio::time::timeout(bound, q.list_installed()).await,
+                    None => Ok(q.list_installed().await),
+                };
                 let complaint = match answer {
                     Ok(Ok(_)) => None,
                     Ok(Err(e)) => Some(format!("says it is ready but cannot list: {}", e)),
-                    Err(_) => Some("says it is ready but `list` did not answer in 60s".into()),
+                    Err(_) => Some(format!(
+                        "says it is ready but `list` did not answer in {}s",
+                        bound.map(|b| b.as_secs()).unwrap_or_default()
+                    )),
                 };
                 (name, complaint)
             }
@@ -323,9 +342,7 @@ pub async fn check_summary(app: &App, out: Output) -> Result<()> {
     let mut findings: Vec<Finding> = Vec::new();
 
     // config — does everything the active profiles reach resolve?
-    let resolver =
-        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
-            .await;
+    let resolver = app.resolver().await;
     let state = match resolver.resolve_model().await {
         Ok(state) => {
             // **Resources counted beside packages, because a config can declare none of the

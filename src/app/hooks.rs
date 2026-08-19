@@ -22,6 +22,7 @@ use rhai::{Engine, Scope};
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::process::Command;
 use tracing::{debug, info};
 
@@ -61,7 +62,9 @@ impl Dialect {
 }
 
 pub struct LuaHooks {
-    rhai_engine: Engine,
+    /// Behind an `Arc` so a Rhai evaluation can be handed to the blocking pool. See
+    /// [`LuaHooks::run_rhai`].
+    rhai_engine: Arc<Engine>,
     pub hooks: HashMap<String, HashMap<String, String>>,
     /// The repo's `locks/` directory, where the hook approval ledger lives (II.12).
     locks_dir: PathBuf,
@@ -70,7 +73,7 @@ pub struct LuaHooks {
 impl LuaHooks {
     pub fn new(config: &Config) -> Result<Self> {
         Ok(Self {
-            rhai_engine: crate::core::rhai_stdlib::engine("hook"),
+            rhai_engine: Arc::new(crate::core::rhai_stdlib::engine("hook")),
             hooks: config.hooks.clone(),
             locks_dir: config.config_root().join("locks"),
         })
@@ -218,7 +221,7 @@ impl LuaHooks {
                     self.run_external_polyglot(&body, hook_name, package_name)
                         .await?
                 }
-                (Dialect::Rhai, body) => self.run_rhai(&body, hook_name, package_name)?,
+                (Dialect::Rhai, body) => self.run_rhai(&body, hook_name, package_name).await?,
                 (Dialect::Lua, body) => self.run_lua(&body, hook_name, package_name).await?,
             }
         }
@@ -226,16 +229,35 @@ impl LuaHooks {
         Ok(())
     }
 
-    fn run_rhai(&self, code: &str, hook: &str, pkg: &str) -> Result<()> {
-        let mut scope = Scope::new();
-        for (name, value) in Self::hook_facts(hook, pkg) {
-            scope.push_constant(name, value);
-        }
-
-        self.rhai_engine
-            .run_with_scope(&mut scope, code)
-            .map_err(|e| Error::LuaScript(format!("Rhai execution error: {}", e)))?;
-        Ok(())
+    /// Evaluate a `#rhai` hook body, **off the runtime**.
+    ///
+    /// **It used to be a synchronous `fn` called straight from the async `run_hook`, with no
+    /// `block_in_place` and no `spawn_blocking` at all.** Rhai's own `http_get` then does a
+    /// blocking `rx.recv()` on a `std::sync::mpsc::sync_channel` while a spawned task performs
+    /// the request — so a hook making one HTTP call held the task it was on for the whole
+    /// round trip. Hooks run per package around each batch, and the hottest fan-outs are
+    /// multiplexed onto a single task, so that stalled every other package in the wave rather
+    /// than one of them.
+    ///
+    /// `block_in_place` would not have fixed it: it moves the runtime's *other tasks* off this
+    /// worker and does nothing for futures sharing this task. The evaluation has to leave the
+    /// runtime, which is what `off_the_runtime` is for — and it makes the blocking `recv`
+    /// inside `http_get` correct rather than merely survivable, because a blocking-pool thread
+    /// is a thread that is allowed to sit on something.
+    async fn run_rhai(&self, code: &str, hook: &str, pkg: &str) -> Result<()> {
+        let engine = self.rhai_engine.clone();
+        let code = code.to_string();
+        let facts = Self::hook_facts(hook, pkg);
+        crate::core::off_the_runtime(move || {
+            let mut scope = Scope::new();
+            for (name, value) in facts {
+                scope.push_constant(name, value);
+            }
+            engine
+                .run_with_scope(&mut scope, &code)
+                .map_err(|e| Error::LuaScript(format!("Rhai execution error: {}", e)))
+        })
+        .await?
     }
 
     /// What every hook knows about why it is running, whatever dialect it is written in. One

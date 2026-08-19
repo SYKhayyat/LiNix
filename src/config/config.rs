@@ -67,6 +67,24 @@ pub struct GuardSettings {
     /// really do manage this one myself".
     #[serde(default)]
     pub unprotected_packages: Vec<String>,
+    /// The two lists above, lowered once.
+    ///
+    /// **A matcher that allocates is a matcher on the removal path.** `first_match` called
+    /// `p.to_lowercase()` inside its `find` closure, so every pattern was re-lowered — a fresh
+    /// `String` — for every comparison against every package, over lists that come from
+    /// `preferences.toml` and do not change during a run. `inspect_removals` asks once per
+    /// removal, on every removal path: a 500-package purge against 30 rules is ~45,000
+    /// throwaway allocations to answer a question about data that never moved. This is the
+    /// shape `utils::regex_cache` exists to fix one directory over.
+    ///
+    /// Filled on first use rather than at load, so a `GuardSettings` built by hand — a test,
+    /// a default — is as correct as one that came through the config loader.
+    /// Never written by hand — `Default::default()` is the only correct value, and the cell
+    /// fills itself from the two lists above the first time anything asks. Public only because
+    /// `GuardSettings { .., ..Default::default() }` is how tests build one.
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub matchers: std::sync::OnceLock<Matchers>,
     /// Refuse a plan that removes more than this many packages unless explicitly opted into.
     /// `0` disables the check. Counted over the whole command, not per phase.
     #[serde(default = "default_max_removals")]
@@ -182,6 +200,7 @@ impl Default for GuardSettings {
             confine_bin: default_confine_bin(),
             require_signed_history: false,
             never_unattended: default_never_unattended(),
+            matchers: std::sync::OnceLock::new(),
         }
     }
 }
@@ -1160,6 +1179,27 @@ impl Config {
         self.retention.snapshots.clone()
     }
 
+    /// Whether anything protects `package_name`, and what — in **one** pass over each list.
+    ///
+    /// The two questions used to be asked separately, and the second one re-asked the first:
+    /// `guard::protection_of` called `unprotect_rule`, then `protection_rule`, which opens by
+    /// scanning `unprotected_packages` again before it looks at the protected list. Reaching
+    /// that line means the identical scan over the identical list with the identical input has
+    /// already answered `None`, so the second one was dead work whose result was known. Three
+    /// scans where two would do, and one of the three provably could not answer differently.
+    pub fn protection_of(&self, package_name: &str) -> ProtectionAnswer<'_> {
+        let m = self.guard.matchers();
+        // An explicit unprotect entry always wins, including over a package the OS itself
+        // flags as essential. Nothing overrides the user's stated intent.
+        if let Some(rule) = Matchers::first_match(&m.unprotected, package_name) {
+            return ProtectionAnswer::Unprotected(rule);
+        }
+        match Matchers::first_match(&m.protected, package_name) {
+            Some(rule) => ProtectionAnswer::Protected(rule),
+            None => ProtectionAnswer::Neither,
+        }
+    }
+
     /// The `protected_packages` entry that protects `package_name`, or `None` if nothing does.
     ///
     /// **The rule, never a bool.** `is_protected` returned one, and its last caller — the
@@ -1173,37 +1213,102 @@ impl Config {
     /// `libc`/`apt`/`kernel` also shielded `libc-bin`, `aptitude` and `kernelshark` from
     /// removal.
     pub fn protection_rule(&self, package_name: &str) -> Option<&str> {
-        let name_lower = package_name.to_lowercase();
-        // An explicit unprotect entry always wins, including over a package the OS itself
-        // flags as essential. Nothing overrides the user's stated intent.
-        if Self::first_match(&self.guard.unprotected_packages, &name_lower).is_some() {
-            return None;
+        match self.protection_of(package_name) {
+            ProtectionAnswer::Protected(rule) => Some(rule),
+            ProtectionAnswer::Unprotected(_) | ProtectionAnswer::Neither => None,
         }
-        Self::first_match(&self.guard.protected_packages, &name_lower)
     }
 
     /// The `unprotected_packages` entry exempting `package_name`, if any.
     pub fn unprotect_rule(&self, package_name: &str) -> Option<&str> {
-        Self::first_match(
-            &self.guard.unprotected_packages,
-            &package_name.to_lowercase(),
-        )
+        Matchers::first_match(&self.guard.matchers().unprotected, package_name)
+    }
+}
+
+/// What the two protection lists say about one package. See [`Config::protection_of`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtectionAnswer<'a> {
+    /// A `protected_packages` entry matched, and here it is.
+    Protected(&'a str),
+    /// An `unprotected_packages` entry matched, which wins over everything including the OS's
+    /// own essential flag.
+    Unprotected(&'a str),
+    /// Neither list has anything to say.
+    Neither,
+}
+
+/// One protection entry, lowered once.
+#[derive(Debug, Clone)]
+struct Pattern {
+    /// The entry, lowercased, with any trailing `*` removed.
+    lowered: String,
+    /// Whether the entry ended in `*` and so matches as a prefix.
+    is_prefix: bool,
+    /// The entry as written, which is what a refusal reports.
+    as_written: String,
+}
+
+/// Both protection lists, lowered once. An implementation detail of [`GuardSettings`], public
+/// only because the field that holds it has to be.
+#[derive(Debug, Clone, Default)]
+pub struct Matchers {
+    protected: Vec<Pattern>,
+    unprotected: Vec<Pattern>,
+}
+
+impl Matchers {
+    fn build(protected: &[String], unprotected: &[String]) -> Self {
+        Self {
+            protected: protected.iter().map(|p| Pattern::new(p)).collect(),
+            unprotected: unprotected.iter().map(|p| Pattern::new(p)).collect(),
+        }
     }
 
-    /// The first pattern matching `name_lower`: exact (case-insensitive), or a prefix when
-    /// the pattern ends in `*`. Bare entries stay exact so `libc` never silently swallows
-    /// `libc-bin` — the wildcard has to be asked for.
-    fn first_match<'a>(patterns: &'a [String], name_lower: &str) -> Option<&'a str> {
+    /// The first pattern matching `name`: exact (case-insensitive), or a prefix when the entry
+    /// ended in `*`. Bare entries stay exact so `libc` never silently swallows `libc-bin` —
+    /// the wildcard has to be asked for. Substring matching was a bug: protecting
+    /// `libc`/`apt`/`kernel` also shielded `libc-bin`, `aptitude` and `kernelshark`.
+    fn first_match<'a>(patterns: &'a [Pattern], name: &str) -> Option<&'a str> {
+        if patterns.is_empty() {
+            return None;
+        }
+        let name_lower = name.to_lowercase();
         patterns
             .iter()
             .find(|p| {
-                let p = p.to_lowercase();
-                match p.strip_suffix('*') {
-                    Some(prefix) => name_lower.starts_with(prefix),
-                    None => name_lower == p,
+                if p.is_prefix {
+                    name_lower.starts_with(&p.lowered)
+                } else {
+                    name_lower == p.lowered
                 }
             })
-            .map(|s| s.as_str())
+            .map(|p| p.as_written.as_str())
+    }
+}
+
+impl Pattern {
+    fn new(entry: &str) -> Self {
+        let lowered = entry.to_lowercase();
+        match lowered.strip_suffix('*') {
+            Some(prefix) => Self {
+                lowered: prefix.to_string(),
+                is_prefix: true,
+                as_written: entry.to_string(),
+            },
+            None => Self {
+                lowered,
+                is_prefix: false,
+                as_written: entry.to_string(),
+            },
+        }
+    }
+}
+
+impl GuardSettings {
+    /// The two protection lists, lowered on first use and kept.
+    fn matchers(&self) -> &Matchers {
+        self.matchers
+            .get_or_init(|| Matchers::build(&self.protected_packages, &self.unprotected_packages))
     }
 }
 

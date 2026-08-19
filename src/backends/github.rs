@@ -14,7 +14,7 @@ use crate::utils::archive::extract_archive;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
@@ -94,7 +94,21 @@ pub struct GithubBackendCore {
     pub github_token: Option<String>,
     /// `rate_limit_max_wait_secs`: the ceiling on waiting out a 403 (S26).
     pub rate_limit_max_wait: Duration,
-    pub internal_lock: Mutex<()>,
+    /// The deployment records, in memory, behind the lock that guards the file.
+    ///
+    /// **The read and the modify used to be two separate critical sections.** `load_state`
+    /// took the lock, read the whole file and released it; `save_state` took it again and
+    /// wrote the whole file — and in `install` those two calls are 490 lines and a release
+    /// download apart. Two `github:` packages in one wave both loaded `{}`, and whichever
+    /// saved last wrote a map with only its own record in it. A package whose record vanished
+    /// reads as unmanaged: the next sync cannot see what it deployed and teardown has nothing
+    /// to remove. That is the hazard `core::datalock`'s own doc states for the data directory
+    /// — *"two whole writes are last-one-wins"* — one layer down, without the lock that
+    /// lesson produced.
+    ///
+    /// `None` until the file is first read; after that the map is the truth and the file is
+    /// its copy, so no install re-reads what this process already knows.
+    state: Mutex<Option<HashMap<String, GithubState>>>,
 }
 
 /// What to do with a response that may be a rate limit (S26).
@@ -177,7 +191,7 @@ impl GithubBackendCore {
             cache_dirs,
             github_token,
             rate_limit_max_wait,
-            internal_lock: Mutex::new(()),
+            state: Mutex::new(None),
         }
     }
 
@@ -265,24 +279,87 @@ impl GithubBackendCore {
         one_release(repo, pin, found_bare, found_prefixed)
     }
 
+    /// The records as they stand, for reading. A copy, deliberately: a caller that held a
+    /// borrow would hold the lock across its whole install, and the download in the middle of
+    /// that is the reason this backend is concurrent at all.
     async fn load_state_internal(&self) -> HashMap<String, GithubState> {
-        let _guard = self.internal_lock.lock().await;
-        if !tokio::fs::try_exists(&self.state_file)
-            .await
-            .unwrap_or(false)
-        {
-            return HashMap::new();
-        }
-        let data = tokio::fs::read_to_string(&self.state_file)
-            .await
-            .unwrap_or_default();
-        serde_json::from_str(&data).unwrap_or_default()
+        let mut guard = self.state.lock().await;
+        Self::loaded(&mut guard, &self.state_file).await.clone()
     }
 
-    async fn save_state_internal(&self, state: &HashMap<String, GithubState>) -> Result<()> {
-        let _guard = self.internal_lock.lock().await;
-        let data = serde_json::to_string_pretty(state).map_err(Error::from)?;
-        crate::utils::file::persist(&self.state_file, &data).map(|_| ())
+    /// Read the file into the memo the first time, and hand back the map either way.
+    async fn loaded<'a>(
+        guard: &'a mut Option<HashMap<String, GithubState>>,
+        state_file: &Path,
+    ) -> &'a mut HashMap<String, GithubState> {
+        if guard.is_none() {
+            let map = if tokio::fs::try_exists(state_file).await.unwrap_or(false) {
+                let data = tokio::fs::read_to_string(state_file)
+                    .await
+                    .unwrap_or_default();
+                serde_json::from_str(&data).unwrap_or_default()
+            } else {
+                HashMap::new()
+            };
+            *guard = Some(map);
+        }
+        guard.as_mut().expect("just filled")
+    }
+
+    /// Apply one task's changes to the shared records and the artifact ledger, and write both.
+    ///
+    /// **The whole read-modify-write is inside one critical section.** A caller hands over
+    /// what it changed, not the map it thinks the file should hold, so a concurrent installer's
+    /// records are merged rather than overwritten. The ledger is re-read here rather than at
+    /// the top of `install` for the same reason — it is per-backend, so it is shared by exactly
+    /// the concurrent installs above, and it had the identical lost-update shape.
+    ///
+    /// The write itself goes to the blocking pool: `persist` is an atomic write ending in
+    /// `sync_all`, a physical flush, and this runs inside the install wave, where a parked
+    /// worker is not one task's latency but the whole wave's (II.52).
+    async fn commit_state(
+        &self,
+        installed: Vec<(String, GithubState)>,
+        removed: Vec<String>,
+        recorded: Vec<(String, Vec<ArtifactLock>)>,
+        forgotten: Vec<String>,
+    ) -> Result<()> {
+        let mut guard = self.state.lock().await;
+        let map = Self::loaded(&mut guard, &self.state_file).await;
+        // **A preview changes the memo as little as it changes the disk.** The merge happens on
+        // a copy, and the copy is only adopted for a run that acts. `persist` already refuses
+        // the write under `--dry-run` and says "would write"; before this map existed, each
+        // call re-read the file, so a preview's changes could not survive to the next question.
+        // With a memo they would — and the next `list_installed` in the same run would report a
+        // package the preview only said it would install.
+        let mut merged = map.clone();
+        for name in &removed {
+            merged.remove(name);
+        }
+        merged.extend(installed);
+        if !crate::core::dry_run::active() {
+            *map = merged.clone();
+        }
+        let map = merged;
+
+        // Compact, not pretty. This is a machine-read record of deployed artifacts that
+        // nobody opens, and `core::state` already ruled the same question the same way for
+        // the registry next to it: pretty printing roughly doubles the bytes for nothing.
+        let data = serde_json::to_string(&map).map_err(Error::from)?;
+        let state_file = self.state_file.clone();
+        let locks_file = self.locks_file.clone();
+        crate::core::off_the_runtime(move || -> Result<()> {
+            crate::utils::file::persist(&state_file, &data)?;
+            let mut ledger = ArtifactLedger::load(&locks_file)?;
+            for name in &forgotten {
+                ledger.forget(name);
+            }
+            for (name, locks) in recorded {
+                ledger.record(name, locks);
+            }
+            ledger.save(&locks_file)
+        })
+        .await?
     }
 }
 
@@ -484,6 +561,11 @@ impl Installable for GithubInstallable {
     async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
         let mut state = self.core.load_state_internal().await;
         let mut ledger = ArtifactLedger::load(&self.core.locks_file)?;
+        // What this call changed, kept apart from the copies it reads. Only the changes are
+        // committed, so a concurrent install of another package is merged rather than
+        // overwritten — see `commit_state`.
+        let mut installed_records: Vec<(String, GithubState)> = Vec::new();
+        let mut recorded_locks: Vec<(String, Vec<ArtifactLock>)> = Vec::new();
 
         // Which system installers this machine has, computed once: it gates whether a `.deb`/
         // `.rpm` is installable here at all (D5), and a missing one turns such a line into a
@@ -725,16 +807,16 @@ impl Installable for GithubInstallable {
                     installed_artifacts.len(),
                     release.version
                 );
+                recorded_locks.push((spec.name.clone(), locks.clone()));
                 ledger.record(spec.name.clone(), locks);
-                state.insert(
-                    spec.name.clone(),
-                    GithubState {
-                        repo: spec.name.clone(),
-                        version: release.version,
-                        install_path: pkg_dir.to_string_lossy().to_string(),
-                        artifacts: installed_artifacts,
-                    },
-                );
+                let record = GithubState {
+                    repo: spec.name.clone(),
+                    version: release.version,
+                    install_path: pkg_dir.to_string_lossy().to_string(),
+                    artifacts: installed_artifacts,
+                };
+                installed_records.push((spec.name.clone(), record.clone()));
+                state.insert(spec.name.clone(), record);
                 continue;
             }
 
@@ -957,20 +1039,21 @@ impl Installable for GithubInstallable {
                 }
             }
 
+            recorded_locks.push((spec.name.clone(), locks.clone()));
             ledger.record(spec.name.clone(), locks);
-            state.insert(
-                spec.name.clone(),
-                GithubState {
-                    repo: spec.name.clone(),
-                    version: release.version,
-                    install_path: pkg_dir.to_string_lossy().to_string(),
-                    artifacts: installed_artifacts,
-                },
-            );
+            let record = GithubState {
+                repo: spec.name.clone(),
+                version: release.version,
+                install_path: pkg_dir.to_string_lossy().to_string(),
+                artifacts: installed_artifacts,
+            };
+            installed_records.push((spec.name.clone(), record.clone()));
+            state.insert(spec.name.clone(), record);
         }
 
-        self.core.save_state_internal(&state).await?;
-        ledger.save(&self.core.locks_file)?;
+        self.core
+            .commit_state(installed_records, Vec::new(), recorded_locks, Vec::new())
+            .await?;
         Ok(())
     }
 
@@ -981,8 +1064,9 @@ impl Installable for GithubInstallable {
         _reaped: crate::app::sync::guard::Reaped,
     ) -> Result<()> {
         let mut state = self.core.load_state_internal().await;
-        let mut ledger = ArtifactLedger::load(&self.core.locks_file)?;
         let mut failures = Vec::new();
+        // As in `install`: what this call changed, committed rather than the whole map.
+        let mut removed_names: Vec<String> = Vec::new();
         for name in names {
             if let Some(pkg) = state.remove(name) {
                 // One release can deploy several artifacts, which is the only way this record
@@ -1004,21 +1088,23 @@ impl Installable for GithubInstallable {
                 )
                 .await;
                 if errors.is_empty() {
-                    // The lock describes what is installed. Leaving the entry behind would
-                    // pin a future install to an artifact chosen for a declaration that is
-                    // gone.
-                    ledger.forget(name);
+                    removed_names.push(name.clone());
                     info!("removed {}", name);
                 } else {
                     // The binary is still on disk and still on PATH. Dropping it from state
-                    // anyway would make it drift no `sync` can see, so put the record back.
-                    state.insert(name.clone(), pkg);
+                    // anyway would make it drift no `sync` can see — so the name never joins
+                    // `removed_names`, and the shared record it was taken from stands.
+                    let _ = pkg;
                     failures.push(format!("{}: {}", name, errors.join("; ")));
                 }
             }
         }
-        self.core.save_state_internal(&state).await?;
-        ledger.save(&self.core.locks_file)?;
+        // A removal that succeeded drops the record and the lock entry together: the lock
+        // describes what is installed, and an entry left behind would pin a future install to
+        // an artifact chosen for a declaration that is gone.
+        self.core
+            .commit_state(Vec::new(), removed_names.clone(), Vec::new(), removed_names)
+            .await?;
         if !failures.is_empty() {
             return Err(still_installed("GitHub package", &failures));
         }

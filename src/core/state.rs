@@ -225,6 +225,29 @@ impl StateSnapshot {
         }
         Ok(written)
     }
+
+    /// Write these bytes on the blocking pool, and give back the same answer.
+    ///
+    /// **The second half of what `snapshot` is for, and the half most callers skipped.**
+    /// `persist` ends in `sync_all` — a physical flush — so a caller that writes on a runtime
+    /// worker parks it on the disk (II.52), and eleven of them did it while still holding the
+    /// global state mutex, which made every one of the sixty other `state.lock()` sites wait
+    /// out that flush. In `leases` and `upgrade` that is a stall injected into the middle of a
+    /// concurrent wave. Durability is not what is traded away: the flush still happens, on a
+    /// thread that is allowed to sit on it.
+    pub async fn write_off_the_runtime(self) -> Result<bool> {
+        crate::core::off_the_runtime(move || self.write()).await?
+    }
+}
+
+/// Serialise the registry under the lock, then write it off the runtime.
+///
+/// The whole of [`StateRegistry::save`] for a caller that has nothing else to do under the
+/// lock. A caller that mutates first takes [`StateRegistry::snapshot`] from its own guard and
+/// calls [`StateSnapshot::write_off_the_runtime`] after dropping it.
+pub async fn save_off_the_runtime(state: &tokio::sync::Mutex<StateRegistry>) -> Result<bool> {
+    let snapshot = state.lock().await.snapshot()?;
+    snapshot.write_off_the_runtime().await
 }
 
 impl StateRegistry {

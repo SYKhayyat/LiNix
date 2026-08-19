@@ -8,6 +8,7 @@
 //! so the search never deletes a directory, never matches on a prefix, and is bounded in depth.
 //! A file named exactly like the artifact that was fetched is the only thing it will touch.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// How deep to look inside a cache directory. Deep enough to reach a manager's own
@@ -32,9 +33,17 @@ pub fn standard_cache_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// Every regular file at or below `root` (bounded depth) whose file name equals `basename`.
-fn matches_in(root: &Path, basename: &str) -> Vec<PathBuf> {
-    if basename.is_empty() {
+/// Every regular file at or below `root` (bounded depth) whose file name is one of `wanted`.
+///
+/// **A set, not a name.** The rule each file is judged by is unchanged — exact name, regular
+/// files only, bounded depth — but the walk is done once for however many names are being
+/// looked for rather than once per name. A package with five cached artifacts used to cost
+/// five full crawls of `~/.cache` *and* `/var/cache`; twenty such packages cost a hundred
+/// crawls of the same two trees looking for a different name each time. `planner.rs` states
+/// the shape one layer up: *"asking per package would be one subprocess each; asking per
+/// backend is one, and the answer is a set."*
+fn matches_in(root: &Path, wanted: &HashSet<&str>) -> Vec<PathBuf> {
+    if wanted.is_empty() {
         return Vec::new();
     }
     walkdir::WalkDir::new(root)
@@ -43,7 +52,7 @@ fn matches_in(root: &Path, basename: &str) -> Vec<PathBuf> {
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
-        .filter(|e| e.file_name().to_string_lossy() == basename)
+        .filter(|e| wanted.contains(e.file_name().to_string_lossy().as_ref()))
         .map(|e| e.into_path())
         .collect()
 }
@@ -51,6 +60,16 @@ fn matches_in(root: &Path, basename: &str) -> Vec<PathBuf> {
 /// Find every cached copy of `basename` across the user's `extra` dirs and the standard ones.
 /// Pure discovery — nothing is deleted here, so it is testable without touching real caches.
 pub fn find_cached(basename: &str, extra: &[PathBuf]) -> Vec<PathBuf> {
+    find_cached_set(std::slice::from_ref(&basename), extra)
+}
+
+/// The same, for several names in one pass over each root.
+pub fn find_cached_set(basenames: &[&str], extra: &[PathBuf]) -> Vec<PathBuf> {
+    let wanted: HashSet<&str> = basenames
+        .iter()
+        .copied()
+        .filter(|b| !b.is_empty())
+        .collect();
     let mut seen = std::collections::BTreeSet::new();
     let mut roots: Vec<PathBuf> = extra.to_vec();
     roots.extend(standard_cache_dirs());
@@ -58,21 +77,44 @@ pub fn find_cached(basename: &str, extra: &[PathBuf]) -> Vec<PathBuf> {
         if !root.is_dir() {
             continue;
         }
-        for hit in matches_in(&root, basename) {
+        for hit in matches_in(&root, &wanted) {
             seen.insert(hit);
         }
     }
     seen.into_iter().collect()
 }
 
-/// Delete every cached copy of `basename`. Returns the paths actually removed; a delete that
-/// fails is warned about and skipped rather than aborting the removal that triggered this.
-pub async fn clean_cached(basename: &str, extra: &[PathBuf]) -> Vec<PathBuf> {
+/// Delete every cached copy of every name in `basenames`, from one pass over each root.
+///
+/// **There is no one-name sibling of this, deliberately.** There used to be, and it was the
+/// whole of I9: `teardown` called it once per cached artifact, so a release deploying five
+/// files crawled `~/.cache` and `/var/cache` five times over, looking for a different name each
+/// time. Taking a set is what makes that impossible to write again.
+///
+/// Returns the paths actually removed; a delete that fails is warned about and skipped rather
+/// than aborting the removal that triggered it.
+///
+/// **The crawl runs on the blocking pool.** `MAX_DEPTH` bounds the *extent* of the walk and
+/// says why — *"shallow enough that `/var/cache` is not a full-disk walk"* — but it is not a
+/// bound on the cost: four levels of `~/.cache` and `/var/cache` on a working machine is
+/// thousands to tens of thousands of `stat` calls, and this is reached from the removal path,
+/// where a parked runtime worker stalls the whole wave rather than one task (II.52). This is
+/// the case `core::blocking::off_the_runtime`'s own doc describes.
+pub async fn clean_cached_set(basenames: &[&str], extra: &[PathBuf]) -> Vec<PathBuf> {
+    let owned: Vec<String> = basenames.iter().map(|b| (*b).to_string()).collect();
+    let extra = extra.to_vec();
+    let found = crate::core::off_the_runtime(move || {
+        let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
+        find_cached_set(&refs, &extra)
+    })
+    .await
+    .unwrap_or_default();
+
     let mut removed = Vec::new();
-    for path in find_cached(basename, extra) {
+    for path in found {
         match tokio::fs::remove_file(&path).await {
             Ok(()) => {
-                tracing::info!("cleaned cached copy of {} at {}", basename, path.display());
+                tracing::info!("cleaned cached copy at {}", path.display());
                 removed.push(path);
             }
             Err(e) => tracing::warn!("could not clean cached {}: {}", path.display(), e),

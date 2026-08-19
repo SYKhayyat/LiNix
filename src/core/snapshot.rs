@@ -678,12 +678,23 @@ impl SnapshotManager {
         priority: &[String],
     ) -> Option<Box<dyn SnapshotProvider>> {
         // Which are actually usable on this machine, in registration order.
-        let mut available: Vec<Box<dyn SnapshotProvider>> = Vec::new();
-        for p in providers {
-            if p.is_available().await {
-                available.push(p);
-            }
-        }
+        //
+        // Probed concurrently: each `is_available` is a real `command_exists` plus a path
+        // check, and this sits in front of the snapshot a sync takes. `buffered` preserves the
+        // registration order the rest of this function depends on, which `buffer_unordered`
+        // would not.
+        //
+        // The width is the number of providers, not a setting: this is the built-in
+        // registration list, a handful of entries fixed at compile time, so "all of them at
+        // once" is a statement about the list rather than a cap somebody might want to move.
+        use futures::stream::StreamExt;
+        let width = providers.len().max(1);
+        let mut available: Vec<Box<dyn SnapshotProvider>> = futures::stream::iter(providers)
+            .map(|p| async move { p.is_available().await.then_some(p) })
+            .buffered(width)
+            .filter_map(|p| async move { p })
+            .collect()
+            .await;
         if priority.is_empty() {
             return available.into_iter().next();
         }

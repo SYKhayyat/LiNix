@@ -264,6 +264,23 @@ pub fn lock_of(backend: &str) -> Option<&'static ManagerLock> {
     MANAGER_LOCKS.iter().find(|l| l.backends.contains(&backend))
 }
 
+/// The name a manager's verbs take the exclusive lock under.
+///
+/// **One key per package database, not per program.** OpenBSD installs with `pkg_add` and
+/// removes with `pkg_delete`, and keying on the program gave those two verbs two different
+/// locks over one database; `pacman` and `yay` in one config were two locks over one database,
+/// so a sync touching both ran them concurrently and let pacman's own `db.lck` decide, which it
+/// does by failing the loser.
+///
+/// **The one place that answers this.** `GenericBackendCore::lock_key` used to be it, and the
+/// hand-written backends each spelled their key as a literal instead — `run_exclusive("brew",
+/// "brew", …)`. Every literal happened to equal what this returns, because none of brew,
+/// flatpak, go, mise, nix or emacs is in a lock family; that is the definition of a second copy
+/// of a table waiting to go stale, which is what the table's own doc says about second copies.
+pub fn lock_key(backend: &str) -> &str {
+    lock_of(backend).map_or(backend, |l| l.holder())
+}
+
 /// Whether this failure text is the manager saying someone else holds its lock.
 ///
 /// Asked of the failure Shall already has rather than of the filesystem, because the manager is

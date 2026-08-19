@@ -18,24 +18,56 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
+/// One program's help, and whether it has been asked for yet.
+///
+/// **The lock is per key and it is held across the probe**, which is what makes the cache do
+/// what its doc claims. It used to be one map lock taken to read, dropped, and taken again to
+/// write — a check-then-act with a process spawn in the gap — so *k* tasks that missed together
+/// all spawned the probe. This is reached from the install argv path, per package, inside the
+/// wave, and because the hottest fan-outs are multiplexed onto one task, each duplicate stalls
+/// every other package in that wave rather than one of them.
+///
+/// The shape is `InstalledListings::once`'s and `VARS_MEMO`'s, both of which hold a per-key
+/// lock across their fetch for exactly this reason. No generation counter here: `--help` output
+/// does not change because Shall installed something.
+type HelpSlot = std::sync::Arc<Mutex<Option<Option<String>>>>;
+
 /// Help text already obtained this run, by `program <chain…>`. A manager's help does not change
 /// while Shall is running, and an install of forty plugins must not launch forty help processes.
 ///
 /// The text and not the answer: two questions are asked of the same help — does it document
 /// this flag, and does it document verification at all — and caching per question would run the
 /// probe twice for one process's output.
-fn cache() -> &'static Mutex<HashMap<String, Option<String>>> {
-    static CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
+fn cache() -> &'static Mutex<HashMap<String, HelpSlot>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, HelpSlot>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// What `program <chain…> --help` prints, or `None` when it could not be asked.
 fn help_text(program: &str, chain: &[String]) -> Option<String> {
     let key = format!("{} {}", program, chain.join(" "));
-    if let Some(hit) = cache().lock().ok().and_then(|c| c.get(&key).cloned()) {
-        return hit;
+    // The outer lock only hands out the slot; it is never held across the spawn, so two
+    // different programs still probe concurrently.
+    let slot = match cache().lock() {
+        Ok(mut map) => map.entry(key).or_default().clone(),
+        // A poisoned cache means some caller panicked mid-probe. Answer without it rather than
+        // propagating a panic into an argv builder.
+        Err(_) => return probe(program, chain),
+    };
+    let mut slot = match slot.lock() {
+        Ok(slot) => slot,
+        Err(_) => return probe(program, chain),
+    };
+    if let Some(hit) = slot.as_ref() {
+        return hit.clone();
     }
+    let answer = probe(program, chain);
+    *slot = Some(answer.clone());
+    answer
+}
 
+/// Run `program <chain…> --help` and return what it printed.
+fn probe(program: &str, chain: &[String]) -> Option<String> {
     let mut args: Vec<String> = chain.to_vec();
     args.push("--help".to_string());
     // Through the executor's launcher, or a shimmed manager on Windows cannot be run at all —
@@ -43,7 +75,7 @@ fn help_text(program: &str, chain: &[String]) -> Option<String> {
     let (prog, argv) = crate::core::launch::effective_command(program, &args);
     let mut cmd = std::process::Command::new(prog);
     cmd.args(&argv).stdin(std::process::Stdio::null());
-    let answer = crate::core::blocking::command_output(&mut cmd)
+    crate::core::blocking::command_output(&mut cmd)
         .ok()
         .map(|o| {
             format!(
@@ -52,12 +84,7 @@ fn help_text(program: &str, chain: &[String]) -> Option<String> {
                 crate::utils::text::sanitize(&String::from_utf8_lossy(&o.stdout)),
                 crate::utils::text::sanitize(&String::from_utf8_lossy(&o.stderr))
             )
-        });
-
-    if let Ok(mut c) = cache().lock() {
-        c.insert(key, answer.clone());
-    }
-    answer
+        })
 }
 
 /// Does `program <chain…> --help` document verification **at all** — any flag that turns it on,

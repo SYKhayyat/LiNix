@@ -4,7 +4,9 @@ pub mod grammar;
 pub mod parser;
 pub mod settings;
 
-pub use config::{CliOverrides, Config, GuardSettings, VarsSettings, PREFERENCES_FILE_NAME};
+pub use config::{
+    CliOverrides, Config, GuardSettings, ProtectionAnswer, VarsSettings, PREFERENCES_FILE_NAME,
+};
 pub use settings::{resolve_root, ResolvedRoot, RootSource, Settings};
 
 /// A config file's text without the byte-order mark a Windows editor puts in front of it (Q22).

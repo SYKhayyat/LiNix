@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::core::{Error, Package, Result, StateRegistry};
+use crate::core::{Package, Result, StateRegistry};
 use chrono::Local;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -520,7 +520,7 @@ impl Adopter {
             })
         );
 
-        let recorded;
+        let snapshot;
         {
             let mut state_mut = self.state.lock().await;
             let source_meta = "adopt";
@@ -546,11 +546,15 @@ impl Adopter {
                 );
             }
 
-            let state_to_persist = state_mut.clone();
-            recorded = tokio::task::spawn_blocking(move || state_to_persist.save())
-                .await
-                .map_err(|e| Error::Other(format!("State-save thread failure: {}", e)))??;
+            // `snapshot`, not `clone`. This is the largest registry the program ever holds
+            // — `adopt`'s whole job is to take ownership of every package already on the
+            // machine — and it was the one call site still deep-cloning it, every
+            // `ManagedPackage` with its `properties: HashMap`, to cross a thread boundary
+            // with data that was about to be serialised anyway. The fix that removed that
+            // clone landed on `sync`, which holds the smallest one.
+            snapshot = state_mut.snapshot()?;
         }
+        let recorded = snapshot.write_off_the_runtime().await?;
 
         debug!("state registry aligned");
 

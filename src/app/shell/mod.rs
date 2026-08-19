@@ -1,7 +1,7 @@
 // src/app/shell/mod.rs
 
 use crate::app::sandbox::{Confinement, Sandbox, SandboxConfig};
-use crate::app::sync::{ChangePlanner, PlanScope, StateResolver, SyncEngine};
+use crate::app::sync::{ChangePlanner, PlanScope, SyncEngine};
 use crate::app::Machinery;
 use crate::core::{Error, PackageSpec, Result};
 
@@ -60,7 +60,7 @@ impl EphemeralShell {
 
         let mut store_paths = Vec::new();
         for pkg_req in packages {
-            let resolver = StateResolver::new(&self.m.config, self.m.registry.clone(), false).await;
+            let resolver = self.m.resolver().await;
             if let Ok(spec) = resolver.parse_and_probe_spec(pkg_req).await {
                 if let Some(path) = self.locate_package_root(&spec).await? {
                     debug!("Mapping root for {}: {:?}", spec.name, path);
@@ -107,11 +107,21 @@ impl EphemeralShell {
         }
 
         {
-            let mut state_guard = self.m.state.lock().await;
-            state_guard.active_session_id = None;
+            // Serialised under the lock, written after it: `save` flushes to the disk, and a
+            // teardown that holds the global state mutex across that flush stalls whatever
+            // else is still running.
+            let snapshot = {
+                let mut state_guard = self.m.state.lock().await;
+                state_guard.active_session_id = None;
+                state_guard.snapshot()
+            };
             // Don't drop this write silently (H2): if it fails, `active_session_id` stays
             // set on disk and the next run believes an ephemeral session is still live.
-            if let Err(e) = state_guard.save() {
+            let written = match snapshot {
+                Ok(snapshot) => snapshot.write_off_the_runtime().await,
+                Err(e) => Err(e),
+            };
+            if let Err(e) = written {
                 warn!(
                     "could not persist session teardown ({}); the on-disk state \
                      still marks a session active, which the next `shall shell` will clear \
@@ -248,7 +258,7 @@ impl EphemeralShell {
         requests: &[String],
         _session_id: &str,
     ) -> Result<()> {
-        let resolver = StateResolver::new(&self.m.config, self.m.registry.clone(), false).await;
+        let resolver = self.m.resolver().await;
 
         let mut transient_desired = HashMap::new();
         for req in requests {

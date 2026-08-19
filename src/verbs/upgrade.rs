@@ -240,7 +240,7 @@ pub async fn upgrade_targeted(
         }
     }
 
-    app.state.lock().await.save()?;
+    crate::core::save_off_the_runtime(&app.state).await?;
     println!(
         "Upgraded {} package(s){}.",
         upgraded,
@@ -378,7 +378,7 @@ pub async fn upgrade_security(app: &App, except: &[String], out: Output) -> Resu
             Err(e) => eprintln!("  warning: could not upgrade {}:{}: {}", backend, name, e),
         }
     }
-    app.state.lock().await.save()?;
+    crate::core::save_off_the_runtime(&app.state).await?;
 
     if out.is_json() {
         let mut held_list: Vec<_> = held_keys.iter().cloned().collect();
@@ -597,9 +597,7 @@ async fn upgrade_modes(app: &App, req: UpgradeRequest<'_>) -> Result<Option<usiz
     };
     let out = req.out;
 
-    let resolver =
-        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
-            .await;
+    let resolver = app.resolver().await;
     let desired = resolver.resolve_desired_state().await?;
     enforce_policy(app, &desired).await?;
 

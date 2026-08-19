@@ -722,10 +722,26 @@ impl<'a> Resolver<'a> {
             }
         }
 
+        // `set_key` is `Statement::key`, which builds its answer with `format!` — one
+        // `String` per call. Called inside the `.any()` closure it ran once per
+        // (base element × candidate) pair rather than once per base element: a 300-line module
+        // intersected against a 300-line one is up to 90,000 allocations where 300 would do,
+        // and the `subtract` line is worse in the common case, because a package that is *not*
+        // being subtracted scans the whole list and so always hits the worst case.
+        //
+        // Hoisted, not replaced by a `HashSet`: `same_package` is deliberately fuzzy — a bare
+        // `vim` matches `apt:vim` while `apt:vim` does not match `cargo:vim` — so the linear
+        // scan is not naively replaceable, and it is bounded by the set sizes anyway.
         for keep in &intersects {
-            base.retain(|(s, ..)| keep.iter().any(|k| same_package(k, &set_key(s))));
+            base.retain(|(s, ..)| {
+                let key = set_key(s);
+                keep.iter().any(|k| same_package(k, &key))
+            });
         }
-        base.retain(|(s, ..)| !subtract.iter().any(|k| same_package(k, &set_key(s))));
+        base.retain(|(s, ..)| {
+            let key = set_key(s);
+            !subtract.iter().any(|k| same_package(k, &key))
+        });
 
         Ok(base)
     }

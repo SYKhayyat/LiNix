@@ -115,7 +115,7 @@ impl Leases<'_> {
                 }
             }
         }
-        self.state.lock().await.save()?;
+        crate::core::save_off_the_runtime(self.state).await?;
         // Reported to the caller rather than swallowed. `perform_maintenance` still decides
         // that a failed sweep must not fail the user's command — housekeeping is not the
         // command — but the decision is now made at the call site, in a line a reader can see,
@@ -211,7 +211,7 @@ impl Leases<'_> {
                 }
             }
         }
-        self.state.lock().await.save()?;
+        crate::core::save_off_the_runtime(self.state).await?;
         Ok(())
     }
 }

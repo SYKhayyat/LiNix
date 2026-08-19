@@ -10,6 +10,17 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info};
 
+/// The name every flatpak verb takes the exclusive lock under.
+///
+/// Asked of `stale_lock`, which owns the table of which programs share one package
+/// database, rather than spelled as a literal here — a second copy of that table is
+/// exactly what its own doc says goes stale. A verb that changes the manager takes
+/// the manager's lock; install and remove already did, and `update` and the cache
+/// cleaners did not.
+fn lock_key() -> &'static str {
+    crate::app::stale_lock::lock_key("flatpak")
+}
+
 pub struct FlatpakBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
@@ -274,7 +285,7 @@ impl Installable for FlatpakInstallable {
         info!("Flatpak: Installing {} package(s)...", specs.len());
         self.core
             .executor
-            .run_exclusive("flatpak", "flatpak", &arg_refs, sudo)
+            .run_exclusive(lock_key(), "flatpak", &arg_refs, sudo)
             .await?;
 
         // **flatpak has no channel switch.** `snap refresh --channel=` moves a snap; installing
@@ -304,7 +315,7 @@ impl Installable for FlatpakInstallable {
             let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("flatpak", "flatpak", &arg_refs, sudo)
+                .run_exclusive(lock_key(), "flatpak", &arg_refs, sudo)
                 .await?;
         }
         Ok(())
@@ -329,7 +340,7 @@ impl Installable for FlatpakInstallable {
         info!("Flatpak: Removing {} package(s)...", names.len());
         self.core
             .executor
-            .run_exclusive("flatpak", "flatpak", &arg_refs, sudo)
+            .run_exclusive(lock_key(), "flatpak", &arg_refs, sudo)
             .await?;
         Ok(())
     }
@@ -425,7 +436,7 @@ impl Upgradable for FlatpakUpgradable {
         debug!("Flatpak: Refreshing remotes...");
         self.core
             .executor
-            .run_exclusive("flatpak", "flatpak", &args, sudo)
+            .run_exclusive(lock_key(), "flatpak", &args, sudo)
             .await?;
         Ok(())
     }
@@ -437,7 +448,7 @@ impl Upgradable for FlatpakUpgradable {
         info!("Flatpak: Upgrading all applications...");
         self.core
             .executor
-            .run_exclusive("flatpak", "flatpak", &args, sudo)
+            .run_exclusive(lock_key(), "flatpak", &args, sudo)
             .await?;
         Ok(())
     }

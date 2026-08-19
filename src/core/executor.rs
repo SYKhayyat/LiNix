@@ -256,6 +256,25 @@ static SUDO_PRIMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 /// it would mean asking sudo again, which is the thing being avoided.
 static SUDO_REFUSED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
+/// One task at a time may probe and prompt for sudo.
+///
+/// **`SUDO_PRIMED` and `SUDO_REFUSED` are read, then acted on, and nothing joined the two.**
+/// *N* escalated commands start together in the first wave — ordinary with `max_parallel > 1`
+/// and more than one root-needing backend — and all *N* read `primed == false`, all *N* find
+/// no recorded refusal, all *N* run `sudo -n -v` and fail, and all *N* reach `sudo -v` with
+/// **inherited stdin**. That is several processes reading a password from one tty: keystrokes
+/// split between them, prompts interleave, and whichever fails first records a *permanent*
+/// refusal that then fails the whole run for the others.
+///
+/// `S88` and `S89` are what made this reachable, by doing the right thing: `-n` on every
+/// command so no manager invocation sits on a prompt, and a remembered refusal so the bound
+/// costs 120s rather than 900. Both turned the priming call into the single funnel every
+/// escalated command passes through — which is exactly what turns an unsynchronised
+/// check-then-act into a thundering herd.
+///
+/// One task probes and prompts; the rest wait for its answer and then re-read the two cells.
+static SUDO_PRIMING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Remember a refusal, and hand back the error to return.
 fn sudo_refused(why: String) -> Error {
     if let Ok(mut slot) = SUDO_REFUSED.lock() {
@@ -378,16 +397,19 @@ impl RawExecutor {
             mirror: bool,
             last: Arc<SyncMutex<Instant>>,
         ) -> std::io::Result<Vec<u8>> {
-            let mut collected = Vec::new();
+            let mut collected = crate::core::capture::Capped::new();
             let mut buf = [0u8; 8192];
             let mut sink = tokio::io::stderr();
             loop {
                 let n = src.read(&mut buf).await?;
                 *last.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
                 if n == 0 {
-                    return Ok(collected);
+                    return Ok(collected.finish());
                 }
-                collected.extend_from_slice(&buf[..n]);
+                collected.push(&buf[..n]);
+                // Reading never stops at the cap, only *keeping* does: a child whose output
+                // nobody drained blocks on a full pipe forever, which is the failure the
+                // concurrent drain above exists to prevent.
                 if mirror {
                     sink.write_all(&buf[..n]).await?;
                     sink.flush().await?;
@@ -1683,6 +1705,18 @@ impl CommandExecutor {
         if let Some(why) = SUDO_REFUSED.lock().ok().and_then(|s| s.clone()) {
             return Err(Error::command_failed_permanently(why));
         }
+
+        // Everything above is a fast path off an already-settled answer. Past here the call
+        // may spawn a probe and may put a prompt on the terminal, so only one task does it —
+        // and both cells are re-read after the wait, because the task that held the lock has
+        // just written whichever of them applies.
+        let _priming = SUDO_PRIMING.lock().await;
+        if SUDO_PRIMED.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        if let Some(why) = SUDO_REFUSED.lock().ok().and_then(|s| s.clone()) {
+            return Err(Error::command_failed_permanently(why));
+        }
         // Warm timestamp, `NOPASSWD`, or an already-primed session: `-n` makes this instant and
         // silent, and it is the common case on every run after the first.
         let warm = Command::new("sudo")
@@ -1766,6 +1800,12 @@ impl CommandExecutor {
         if cfg!(windows) || Self::is_root() || self.dry_run {
             return SudoKeepalive(None);
         }
+        // A machine that has already recorded a permanent refusal will not start answering
+        // `sudo -n -v`, so refreshing a timestamp that does not exist is one pointless process
+        // every sixty seconds for the rest of the run.
+        if SUDO_REFUSED.lock().ok().and_then(|s| s.clone()).is_some() {
+            return SudoKeepalive(None);
+        }
         SudoKeepalive(Some(tokio::spawn(async move {
             loop {
                 // `-n` so this never prompts. The foreground command owns the terminal; a
@@ -1837,6 +1877,7 @@ mod path_lookup_tests {
 #[cfg(test)]
 mod child_process_tests {
     use super::{ChildStdin, CommandExecutor, ExecutionLayer, MockExecutor, RawExecutor};
+
     use crate::core::Retryability;
     use dashmap::DashMap;
     use std::collections::HashMap;

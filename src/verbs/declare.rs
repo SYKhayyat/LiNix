@@ -509,7 +509,7 @@ pub async fn handle_hook_record(
     for target in targets {
         record_hooked_target(declarations, state, manager, op, target).await?;
     }
-    state.lock().await.save()?;
+    crate::core::save_off_the_runtime(state).await?;
     vcs.autocommit("shall: record hooked package change");
     Ok(())
 }
@@ -548,7 +548,10 @@ pub async fn handle_hook_reconcile(
         }
     };
     let mut newly = 0usize;
-    {
+    // Serialised under the lock and written after it: `save` would hold the global state
+    // mutex across a physical flush, on a runtime worker, and every other task wanting the
+    // registry waits that out.
+    let snapshot = {
         let mut state = state.lock().await;
         for pkg in &installed {
             if !state.is_managed(manager, &pkg.name) {
@@ -563,8 +566,9 @@ pub async fn handle_hook_reconcile(
                 newly += 1;
             }
         }
-        state.save()?;
-    }
+        state.snapshot()?
+    };
+    snapshot.write_off_the_runtime().await?;
     if newly > 0 {
         info!(
             "hook-reconcile: adopted {} new {}-installed package(s).",
@@ -607,7 +611,7 @@ pub async fn handle_hook_observe(
         record_hooked_target(&app.declarations(), &app.state, &manager, op, target).await?;
     }
     if !targets.is_empty() {
-        app.state.lock().await.save()?;
+        crate::core::save_off_the_runtime(&app.state).await?;
         app.vcs()
             .autocommit("shall: observed manual package change");
     }

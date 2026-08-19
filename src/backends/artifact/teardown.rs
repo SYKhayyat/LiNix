@@ -108,9 +108,11 @@ pub async fn tear_down(
     // Only once the machine is actually clean. A cache dropped beside a file that would not
     // delete turns the next install into a fresh download for no gain.
     if errors.is_empty() && clean_cache {
-        for basename in &deployed.cached {
-            crate::model::cache::clean_cached(basename, cache_dirs).await;
-        }
+        // One pass over each cache root for all of this package's artifacts, not one per
+        // artifact. A release deploying five files used to crawl `~/.cache` and `/var/cache`
+        // five times over, looking for a different name each time.
+        let wanted: Vec<&str> = deployed.cached.iter().map(String::as_str).collect();
+        crate::model::cache::clean_cached_set(&wanted, cache_dirs).await;
     }
 
     errors

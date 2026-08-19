@@ -698,7 +698,7 @@ impl GenericBackendCore {
     /// lock* and *which lock is left behind when one is killed* are the same fact, and the
     /// second copy of it would be the one that went stale.
     pub fn lock_key(&self) -> &str {
-        crate::app::stale_lock::lock_of(&self.name).map_or(self.name.as_str(), |l| l.holder())
+        crate::app::stale_lock::lock_key(&self.name)
     }
 
     /// The program that removes. Falls back to [`binary`](Self::binary), not to the name, so a
@@ -1402,7 +1402,7 @@ impl Queryable for GenericQueryable {
         ))
     }
 
-    async fn essential(&self) -> Result<Vec<String>> {
+    async fn fetch_essential(&self) -> Result<Vec<String>> {
         let Some(ref essential_args) = self.core.config.essential_args else {
             return Ok(Vec::new());
         };
@@ -1445,11 +1445,21 @@ impl Queryable for GenericQueryable {
         let Some(mut pkg) = found else {
             return Ok(None);
         };
-        for probe in &self.core.config.property_probes {
-            if let Some(value) = probe.resolve(&self.core, name).await {
-                pkg.properties.insert(probe.property.clone(), value);
-            }
-        }
+        // Concurrently: each probe is a subprocess and they have nothing to say to one
+        // another. The outer fan-out overlaps *packages*, so a serial loop here is P extra
+        // serial spawns inside each of them rather than a serial run overall — which is
+        // exactly the shape that hides. The width is the number of probes configured for this
+        // backend, not a cap: it is a statement about the list, and a user who declared four
+        // property probes asked for four questions, not for them to be rationed.
+        let probes = &self.core.config.property_probes;
+        let answers = futures::future::join_all(probes.iter().map(|probe| async move {
+            probe
+                .resolve(&self.core, name)
+                .await
+                .map(|value| (probe.property.clone(), value))
+        }))
+        .await;
+        pkg.properties.extend(answers.into_iter().flatten());
         Ok(Some(pkg))
     }
 }

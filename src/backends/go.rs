@@ -19,6 +19,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{info, warn};
 
+/// The name every go verb takes the exclusive lock under.
+///
+/// Asked of `stale_lock`, which owns the table of which programs share one package
+/// database, rather than spelled as a literal here — a second copy of that table is
+/// exactly what its own doc says goes stale. A verb that changes the manager takes
+/// the manager's lock; install and remove already did, and `update` and the cache
+/// cleaners did not.
+fn lock_key() -> &'static str {
+    crate::app::stale_lock::lock_key("go")
+}
+
 #[derive(Clone)]
 pub struct GoBackendCore {
     pub executor: CommandExecutor,
@@ -183,7 +194,7 @@ impl Installable for GoInstallable {
             let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("go", "go", &arg_refs, false)
+                .run_exclusive(lock_key(), "go", &arg_refs, false)
                 .await?;
         }
         Ok(())
@@ -233,26 +244,40 @@ pub struct GoQueryable {
 impl GoQueryable {
     async fn scan(&self) -> Result<Vec<Package>> {
         let dir = self.core.bin_dir().await?;
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(e) => e,
-            // No bin dir yet ⇒ nothing installed.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
-            Err(e) => {
-                return Err(Error::Io(format!(
-                    "failed to read {}: {}",
-                    dir.display(),
-                    e
-                )))
-            }
-        };
+        // Off the runtime: `read_dir` plus an `is_file` per entry is a synchronous filesystem
+        // walk, and this sits on `list_installed`, inside the planner's fan-out — where a
+        // parked worker costs the whole wave rather than this one task (II.52). Small extent
+        // (`$GOPATH/bin` is a flat directory of a few dozen entries), same class as the cache
+        // crawl above it.
+        let dir_for_scan = dir.clone();
+        let files: Vec<(String, String)> = crate::core::off_the_runtime(move || {
+            let entries = match std::fs::read_dir(&dir_for_scan) {
+                Ok(e) => e,
+                // No bin dir yet ⇒ nothing installed.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+                Err(e) => {
+                    return Err(Error::Io(format!(
+                        "failed to read {}: {}",
+                        dir_for_scan.display(),
+                        e
+                    )))
+                }
+            };
+            Ok(entries
+                .flatten()
+                .filter(|entry| entry.path().is_file())
+                .map(|entry| {
+                    (
+                        entry.file_name().to_string_lossy().to_string(),
+                        entry.path().to_string_lossy().to_string(),
+                    )
+                })
+                .collect())
+        })
+        .await??;
+
         let mut packages = Vec::new();
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            let file_name = entry.file_name().to_string_lossy().to_string();
-            let path_str = path.to_string_lossy().to_string();
+        for (file_name, path_str) in files {
             let mut ver_args = vec!["version".to_string(), "-m".to_string()];
             crate::core::argv::push_names(&mut ver_args, "go", [&path_str]);
             let ver_refs: Vec<&str> = ver_args.iter().map(String::as_str).collect();
@@ -328,7 +353,7 @@ impl Upgradable for GoUpgradable {
             let _ = self
                 .core
                 .executor
-                .run_exclusive("go", "go", &arg_refs, false)
+                .run_exclusive(lock_key(), "go", &arg_refs, false)
                 .await;
         }
         Ok(())

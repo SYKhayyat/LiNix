@@ -7,6 +7,17 @@ use serde_json::Value;
 use std::sync::Arc;
 use tracing::info;
 
+/// The name every nix verb takes the exclusive lock under.
+///
+/// Asked of `stale_lock`, which owns the table of which programs share one package
+/// database, rather than spelled as a literal here — a second copy of that table is
+/// exactly what its own doc says goes stale. A verb that changes the manager takes
+/// the manager's lock; install and remove already did, and `update` and the cache
+/// cleaners did not.
+fn lock_key() -> &'static str {
+    crate::app::stale_lock::lock_key("nix")
+}
+
 pub struct NixBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
@@ -86,7 +97,7 @@ impl Installable for NixInstallable {
             let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("nix", "nix", &arg_refs, sudo)
+                .run_exclusive(lock_key(), "nix", &arg_refs, sudo)
                 .await?;
         }
         Ok(())
@@ -132,7 +143,7 @@ impl Installable for NixInstallable {
             let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("nix", "nix", &arg_refs, sudo)
+                .run_exclusive(lock_key(), "nix", &arg_refs, sudo)
                 .await?;
         }
 
@@ -156,7 +167,7 @@ impl Installable for NixInstallable {
             let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("nix", "nix", &arg_refs, sudo)
+                .run_exclusive(lock_key(), "nix", &arg_refs, sudo)
                 .await?;
         }
         Ok(())
@@ -259,7 +270,7 @@ impl Upgradable for NixUpgradable {
         info!("Nix: Upgrading all packages in user profile...");
         self.core
             .executor
-            .run_exclusive("nix", "nix", &["profile", "upgrade", "--all"], sudo)
+            .run_exclusive(lock_key(), "nix", &["profile", "upgrade", "--all"], sudo)
             .await?;
         Ok(())
     }
@@ -269,9 +280,14 @@ impl Upgradable for NixUpgradable {
             "Nix: Performing garbage collection (GC, older than {})...",
             self.core.gc_age
         );
+        // **Keyed on the store, not on the program.** `nix-collect-garbage` is a different
+        // binary from `nix`, and that is precisely the OpenBSD `pkg_add`/`pkg_delete` shape
+        // `lock_key` exists for: garbage collection mutates the store that `nix profile
+        // install` locks, so the two must not be two locks.
         self.core
             .executor
-            .run(
+            .run_exclusive(
+                lock_key(),
                 "nix-collect-garbage",
                 &["--delete-older-than", &self.core.gc_age],
                 sudo,

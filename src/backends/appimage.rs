@@ -6,8 +6,9 @@ use crate::core::{
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +30,16 @@ pub struct AppImageBackendCore {
     /// the one a sandboxed config moves (2026-07-29; it was built from `dirs::home_dir()` here).
     pub bin_dir: PathBuf,
     pub state_file: PathBuf,
+    /// The deployment records, in memory, behind a lock.
+    ///
+    /// **The third of the three backends that keep a private state file, and the one that had
+    /// no lock at all.** `github:` and `web:` at least took one for each half; here `install`
+    /// read the whole file at the top, downloaded, and wrote the whole file at the bottom with
+    /// nothing in between. Two `appimage:` lines in one wave both read `{}`, and whichever
+    /// finished last wrote a map with only its own record. The record that lost describes a
+    /// deployed binary and its symlink, so the package reads as unmanaged and teardown has
+    /// nothing to remove.
+    state: Mutex<Option<HashMap<String, AppImageState>>>,
 }
 
 impl AppImageBackendCore {
@@ -50,6 +61,7 @@ impl AppImageBackendCore {
             install_dir,
             bin_dir,
             state_file: state,
+            state: Mutex::new(None),
         }
     }
 
@@ -66,21 +78,61 @@ impl AppImageBackendCore {
         Ok(self.bin_dir.clone())
     }
 
+    /// The records as they stand, for reading. A copy: holding a borrow would hold the lock
+    /// across the download, which is the whole reason this backend is concurrent.
     async fn load_state(&self) -> HashMap<String, AppImageState> {
-        if !tokio::fs::try_exists(&self.state_file)
-            .await
-            .unwrap_or(false)
-        {
-            return HashMap::new();
-        }
-        let data = tokio::fs::read_to_string(&self.state_file)
-            .await
-            .unwrap_or_default();
-        serde_json::from_str(&data).unwrap_or_default()
+        let mut guard = self.state.lock().await;
+        Self::loaded(&mut guard, &self.state_file).await.clone()
     }
 
-    async fn save_state(&self, state: &HashMap<String, AppImageState>) -> Result<()> {
-        let data = serde_json::to_string_pretty(state).map_err(Error::from)?;
+    /// Read the file into the memo the first time, and hand back the map either way.
+    async fn loaded<'a>(
+        guard: &'a mut Option<HashMap<String, AppImageState>>,
+        state_file: &Path,
+    ) -> &'a mut HashMap<String, AppImageState> {
+        if guard.is_none() {
+            let map = if tokio::fs::try_exists(state_file).await.unwrap_or(false) {
+                let data = tokio::fs::read_to_string(state_file)
+                    .await
+                    .unwrap_or_default();
+                serde_json::from_str(&data).unwrap_or_default()
+            } else {
+                HashMap::new()
+            };
+            *guard = Some(map);
+        }
+        guard.as_mut().expect("just filled")
+    }
+
+    /// Apply one task's changes to the shared records and write them, under one lock.
+    ///
+    /// A caller hands over what it changed, not the map it believes the file should hold, so a
+    /// concurrent installer's records are merged rather than overwritten. Compact, not pretty,
+    /// for the reason `core::state` gives about the registry beside it. The write is
+    /// `write_atomic`, which is already `spawn_blocking` underneath and already answers to
+    /// `--dry-run`.
+    async fn commit_state(
+        &self,
+        installed: Vec<(String, AppImageState)>,
+        removed: Vec<String>,
+    ) -> Result<()> {
+        let mut guard = self.state.lock().await;
+        let map = Self::loaded(&mut guard, &self.state_file).await;
+        // **A preview changes the memo as little as it changes the disk.** The merge happens on
+        // a copy, and the copy is only adopted for a run that acts. `persist` already refuses
+        // the write under `--dry-run` and says "would write"; before this map existed, each
+        // call re-read the file, so a preview's changes could not survive to the next question.
+        // With a memo they would — and the next `list_installed` in the same run would report a
+        // package the preview only said it would install.
+        let mut merged = map.clone();
+        for name in &removed {
+            merged.remove(name);
+        }
+        merged.extend(installed);
+        if !crate::core::dry_run::active() {
+            *map = merged.clone();
+        }
+        let data = serde_json::to_string(&merged).map_err(Error::from)?;
         self.executor.write_atomic(&self.state_file, &data).await
     }
 }
@@ -119,6 +171,8 @@ impl Installable for AppImageInstallable {
     async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
         let bin_dir = self.core.ensure_dirs().await?;
         let mut state = self.core.load_state().await;
+        // What this call changed, kept apart from the copy it reads.
+        let mut installed_records: Vec<(String, AppImageState)> = Vec::new();
 
         for spec in specs {
             let url = &spec.name;
@@ -213,17 +267,18 @@ impl Installable for AppImageInstallable {
                 );
             }
 
-            state.insert(
-                spec.name.clone(),
-                AppImageState {
-                    url: url.clone(),
-                    local_path: dest_path.to_string_lossy().to_string(),
-                    symlink_path,
-                },
-            );
+            let record = AppImageState {
+                url: url.clone(),
+                local_path: dest_path.to_string_lossy().to_string(),
+                symlink_path,
+            };
+            installed_records.push((spec.name.clone(), record.clone()));
+            state.insert(spec.name.clone(), record);
         }
 
-        self.core.save_state(&state).await?;
+        self.core
+            .commit_state(installed_records, Vec::new())
+            .await?;
         Ok(())
     }
 
@@ -236,6 +291,8 @@ impl Installable for AppImageInstallable {
         let mut state = self.core.load_state().await;
 
         let mut failures = Vec::new();
+        // What this call changed, committed rather than the whole map.
+        let mut removed_names: Vec<String> = Vec::new();
         for name in names {
             if let Some(info) = state.remove(name) {
                 debug!("AppImage: Removing local files for {}", name);
@@ -253,9 +310,12 @@ impl Installable for AppImageInstallable {
                 )
                 .await;
                 if errors.is_empty() {
+                    removed_names.push(name.clone());
                     info!("AppImage: Removed {}", name);
                 } else {
-                    state.insert(name.clone(), info);
+                    // Still on disk and still on PATH: the name never joins `removed_names`,
+                    // so the shared record it was taken from stands.
+                    let _ = info;
                     failures.push(format!("{}: {}", name, errors.join("; ")));
                 }
             } else {
@@ -263,7 +323,7 @@ impl Installable for AppImageInstallable {
             }
         }
 
-        self.core.save_state(&state).await?;
+        self.core.commit_state(Vec::new(), removed_names).await?;
         if !failures.is_empty() {
             return Err(still_installed("AppImage", &failures));
         }
@@ -353,9 +413,9 @@ mod tests {
         tokio::fs::create_dir_all(&core.install_dir)
             .await
             .expect("the install dir");
-        let mut state = core.load_state().await;
-        state.insert(name.to_string(), entry);
-        core.save_state(&state).await.expect("writing the state");
+        core.commit_state(vec![(name.to_string(), entry)], Vec::new())
+            .await
+            .expect("writing the state");
     }
 
     fn reaped() -> Reaped {

@@ -294,12 +294,7 @@ impl SyncEngine {
             // Serialised under the lock, written after it: the alternative was a deep clone of
             // every managed package — `properties` HashMap included — purely to cross a thread
             // boundary with data that was about to become one string anyway.
-            let to_write = self.state.lock().await.snapshot()?;
-            tokio::task::spawn_blocking(move || to_write.write())
-                .await
-                .map_err(|e| {
-                    Error::Other(format!("Kernel panic during state persistence: {}", e))
-                })??;
+            crate::core::save_off_the_runtime(&self.state).await?;
 
             if self.config.quiet {
                 self.metrics.print_summary_quiet();
@@ -1008,15 +1003,14 @@ impl SyncEngine {
         // Written here and not left to the caller: `shall heal` is a whole command, and an
         // ownership record that dies with the process leaves the package exactly as orphaned
         // as it was.
-        let to_write = self.state.lock().await.snapshot()?;
-        tokio::task::spawn_blocking(move || to_write.write())
+        crate::core::save_off_the_runtime(&self.state)
             .await
             .map_err(|e| {
                 Error::Other(format!(
                     "writing the registry after reconciling ownership: {}",
                     e
                 ))
-            })??;
+            })?;
         // Announced, not silent. Taking ownership is what makes a package removable when its
         // declaration goes, so a machine that quietly adopted software the user installed by
         // hand would be deciding something on their behalf without saying so.
@@ -1474,10 +1468,9 @@ impl SyncEngine {
         // ownership record died with the process and the orphan came straight back on the next
         // one. The group-kill scenario is that run: dpkg is wedged, every replay fails.
         if !recovered.is_empty() || !kept.is_empty() || !failed.is_empty() {
-            let to_write = self.state.lock().await.snapshot()?;
-            tokio::task::spawn_blocking(move || to_write.write())
+            crate::core::save_off_the_runtime(&self.state)
                 .await
-                .map_err(|e| Error::Other(format!("writing the registry after heal: {}", e)))??;
+                .map_err(|e| Error::Other(format!("writing the registry after heal: {}", e)))?;
         }
         {
             let mut j = self.journal.lock().await;

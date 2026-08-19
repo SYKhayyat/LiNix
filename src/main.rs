@@ -159,7 +159,10 @@ async fn main() -> Result<()> {
 
     // 5. One writer at a time. Held for the whole run, released when `main` returns — a
     //    lock dropped before the last write is a lock over part of a set that must agree.
-    let _data_lock = acquire_data_lock(&cli.command).await?;
+    let _data_lock = match acquire_data_lock(&[&cli.command]).await? {
+        LockedRun::Proceed(lock) => lock,
+        LockedRun::StandDown => return Ok(()),
+    };
 
     // 6. Kernel Initialization
     let app = App::new(config).await?;
@@ -850,6 +853,14 @@ pub(crate) fn stands_down_inside_shall(commands: &[&Commands]) -> bool {
         && commands.iter().any(|c| c.is_manager_hook())
 }
 
+/// What taking the lock decided about whether this run happens at all.
+pub(crate) enum LockedRun {
+    /// The lock is held, or the command needs none. The run proceeds.
+    Proceed(Option<shall::core::datalock::DataLock>),
+    /// A manager hook found the directory locked, and stood down rather than waiting.
+    StandDown,
+}
+
 /// Take the lock for a mutating command, asking the command itself.
 ///
 /// It used to be read from argv and matched against a hand-written list of twenty-one names,
@@ -859,15 +870,40 @@ pub(crate) fn stands_down_inside_shall(commands: &[&Commands]) -> bool {
 /// install path, and `fleet` was off it while touching nothing local. `Commands::writes` is
 /// exhaustive, so a subcommand added later does not compile until it answers, which is the
 /// property the argv read was reaching for and could not have.
-pub(crate) async fn acquire_data_lock(
-    command: &Commands,
-) -> Result<Option<shall::core::datalock::DataLock>> {
-    if !command.writes() {
-        return Ok(None);
+///
+/// **A `hook-*` subcommand never waits for the lock, marker or no marker.** The environment
+/// stand-down above cannot be relied on to fire: `SHALL_INSIDE` is set on the child
+/// environment, and every manager `pm_hooks` targets — apt, dnf, zypper — is `needs_root`, so
+/// the argv goes through `sudo`, whose `env_reset` rebuilds the environment and keeps only
+/// `env_keep`. The marker is not in that set, so on the ordinary configuration — a normal
+/// user on a normal Linux desktop — the hook arrives with no marker and waits out the full
+/// 120 seconds for a lock its own grandparent holds and will not release until the sync ends.
+///
+/// Depending on the environment surviving `sudo` is the mistake; not depending on it is the
+/// fix. A hook that finds the directory locked has nothing a wait can buy it — by the time it
+/// won, the run holding the lock has finished and recorded what the hook was going to. That
+/// also covers the case the marker is legitimately absent for: an `apt install` a person typed
+/// while a `shall sync` runs, where the stand-down should not fire and the wait still costs
+/// two minutes.
+pub(crate) async fn acquire_data_lock(commands: &[&Commands]) -> Result<LockedRun> {
+    let Some(writer) = commands.iter().find(|c| c.writes()) else {
+        return Ok(LockedRun::Proceed(None));
+    };
+    let name = shall::core::latency::subcommand_name(writer);
+
+    // `any`, not the writer alone, for the reason `stands_down_inside_shall` gives: one hook
+    // step is enough to make the whole sequence wait on a lock this process's parent holds.
+    if commands.iter().any(|c| c.is_manager_hook()) {
+        return Ok(
+            match shall::core::datalock::DataLock::try_for_one_step(&name)? {
+                Some(lock) => LockedRun::Proceed(Some(lock)),
+                None => LockedRun::StandDown,
+            },
+        );
     }
-    let name = shall::core::latency::subcommand_name(command);
+
     let lock = shall::core::datalock::DataLock::for_one_step(&name).await?;
-    Ok(Some(lock))
+    Ok(LockedRun::Proceed(Some(lock)))
 }
 
 pub(crate) fn known_subcommands() -> std::collections::HashSet<String> {
@@ -1051,9 +1087,10 @@ pub(crate) async fn run_user_verb(steps: Vec<Vec<String>>) -> Result<()> {
     // The lock spans the whole verb, so the question is whether any step writes — not whether
     // the first one does. Taking it per step would release it between two commands that have
     // to agree about the same registry.
-    let _data_lock = match parsed.iter().find(|c| c.command.writes()) {
-        Some(writer) => acquire_data_lock(&writer.command).await?,
-        None => None,
+    let commands: Vec<&Commands> = parsed.iter().map(|c| &c.command).collect();
+    let _data_lock = match acquire_data_lock(&commands).await? {
+        LockedRun::Proceed(lock) => lock,
+        LockedRun::StandDown => return Ok(()),
     };
     let app = App::new(config).await?;
     for step in &steps {

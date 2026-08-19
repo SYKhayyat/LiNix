@@ -53,13 +53,27 @@ pub struct Inventory<'a> {
     pub(crate) state: &'a Arc<Mutex<StateRegistry>>,
     /// The registry paired with `priority` — what Shall may use, already resolved.
     pub(crate) backends: &'a Backends,
+    /// The run's parsed pin file and its remote-lookup cap, borrowed from the `App`.
+    pub(crate) locks: &'a crate::app::machinery::SharedLocks,
+    pub(crate) remote_gate: &'a Arc<tokio::sync::Semaphore>,
 }
 
 impl Inventory<'_> {
     /// A resolver over the same config and registry, for the questions about what a *name*
     /// means. One per call rather than one per question: `info` asked four and built four.
     async fn resolver(&self) -> StateResolver<'_> {
-        StateResolver::new(self.config, self.registry.clone(), false).await
+        let locks = self
+            .locks
+            .get_or_init(|| async { StateResolver::read_locks(self.config, false).await })
+            .await
+            .clone();
+        StateResolver::with_shared(
+            self.config,
+            self.registry.clone(),
+            false,
+            locks,
+            self.remote_gate.clone(),
+        )
     }
 
     pub async fn list(&self, backend_filter: Option<&str>) -> Result<Vec<Package>> {

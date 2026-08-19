@@ -3,6 +3,7 @@ pub mod argv;
 pub mod artifact_lock;
 pub mod bare_lock;
 pub mod blocking;
+pub mod capture;
 pub mod datalock;
 pub mod download;
 pub mod dry_run;
@@ -77,7 +78,7 @@ pub use exit::Exit;
 pub use extras_lock::{extra_key, ExtraKey, ExtrasLedger};
 pub use regex_lock::RegexLock;
 
-pub use state::{ManagedPackage, StateRegistry};
+pub use state::{save_off_the_runtime, ManagedPackage, StateRegistry};
 
 pub use validator::Validator;
 

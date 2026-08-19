@@ -28,9 +28,7 @@ pub async fn handle_status(app: &App, out: Output) -> Result<()> {
     // either way — asked here they answer at once instead of in the order the sections below
     // happen to need them (`App::warm_installed`).
     app.inventory().await.warm_installed().await;
-    let resolver =
-        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
-            .await;
+    let resolver = app.resolver().await;
     let state = resolver.resolve_model().await?;
     let desired = state.packages.clone();
     // A deleted `service:`/`link:`/`repo:` line is drift a sync will undo (S20), and `status`
@@ -214,9 +212,7 @@ pub async fn compute_full_changes(
     app: &App,
     frozen_vars: Option<crate::model::vars::Vars>,
 ) -> Result<FullChanges> {
-    let resolver =
-        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
-            .await;
+    let resolver = app.resolver().await;
     let resolver = match frozen_vars {
         Some(v) => resolver.with_vars(v),
         None => resolver,
@@ -578,7 +574,8 @@ pub async fn write_version_locks(
         }
     }
     let doc = serde_json::json!({ "locks": locks });
-    crate::utils::file::persist(path, &serde_json::to_string_pretty(&doc)?)
+    crate::utils::file::persist_off_the_runtime(path, &serde_json::to_string_pretty(&doc)?)
+        .await
         .with_context(|| format!("Failed to write {}", path.display()))
 }
 

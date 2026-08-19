@@ -19,6 +19,9 @@ use tracing::info;
 pub struct Declarations<'a> {
     pub(crate) config: &'a Arc<Config>,
     pub(crate) registry: &'a Arc<BackendRegistry>,
+    /// The run's parsed pin file and its remote-lookup cap, borrowed from the `App`.
+    pub(crate) locks: &'a crate::app::machinery::SharedLocks,
+    pub(crate) remote_gate: &'a Arc<tokio::sync::Semaphore>,
 }
 
 impl Declarations<'_> {
@@ -26,7 +29,18 @@ impl Declarations<'_> {
     /// usable, what is the vocabulary, what are this host's facts). `App` built a fresh one
     /// for each of the three.
     async fn resolver(&self) -> StateResolver<'_> {
-        StateResolver::new(self.config, self.registry.clone(), false).await
+        let locks = self
+            .locks
+            .get_or_init(|| async { StateResolver::read_locks(self.config, false).await })
+            .await
+            .clone();
+        StateResolver::with_shared(
+            self.config,
+            self.registry.clone(),
+            false,
+            locks,
+            self.remote_gate.clone(),
+        )
     }
 
     /// "Added" when the file changed, "Would add" when a preview only says it would.

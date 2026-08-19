@@ -111,7 +111,7 @@ fn only_the_verbs_that_ask_about_the_machine_see_past_priority() {
         .map(|(f, m, _)| format!("{f} :: {m}"))
         .collect();
     found.sort();
-    let mut allowed_sorted = allowed.clone();
+    let mut allowed_sorted = allowed;
     allowed_sorted.sort();
 
     assert_eq!(

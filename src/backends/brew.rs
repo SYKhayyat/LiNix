@@ -7,6 +7,17 @@ use serde_json::Value;
 use std::sync::Arc;
 use tracing::info;
 
+/// The name every brew verb takes the exclusive lock under.
+///
+/// Asked of `stale_lock`, which owns the table of which programs share one package
+/// database, rather than spelled as a literal here — a second copy of that table is
+/// exactly what its own doc says goes stale. A verb that changes the manager takes
+/// the manager's lock; install and remove already did, and `update` and the cache
+/// cleaners did not.
+fn lock_key() -> &'static str {
+    crate::app::stale_lock::lock_key("brew")
+}
+
 pub struct BrewBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
@@ -81,7 +92,7 @@ impl Installable for BrewInstallable {
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         self.core
             .executor
-            .run_exclusive("brew", "brew", &arg_refs, false)
+            .run_exclusive(lock_key(), "brew", &arg_refs, false)
             .await?;
         Ok(())
     }
@@ -102,7 +113,7 @@ impl Installable for BrewInstallable {
             let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("brew", "brew", &arg_refs, false)
+                .run_exclusive(lock_key(), "brew", &arg_refs, false)
                 .await?;
         }
         Ok(())
@@ -259,13 +270,20 @@ pub struct BrewUpgradable {
 #[async_trait]
 impl Upgradable for BrewUpgradable {
     async fn update(&self, _sudo: bool) -> Result<()> {
-        self.core.executor.run("brew", &["update"], false).await?;
+        // `brew update` rewrites taps — manager state that `install` locks. A verb that
+        // changes the manager takes the manager's lock; install and remove did and this did
+        // not, which left the partition `managers.rs` relies on resting on the fact that
+        // nothing currently runs two brew verbs at once.
+        self.core
+            .executor
+            .run_exclusive(lock_key(), "brew", &["update"], false)
+            .await?;
         Ok(())
     }
     async fn upgrade(&self, _sudo: bool) -> Result<()> {
         self.core
             .executor
-            .run_exclusive("brew", "brew", &["upgrade"], false)
+            .run_exclusive(lock_key(), "brew", &["upgrade"], false)
             .await?;
         Ok(())
     }
@@ -286,7 +304,11 @@ impl Upgradable for BrewUpgradable {
     }
 
     async fn clean_cache(&self, _sudo: bool) -> Result<()> {
-        self.core.executor.run("brew", &["cleanup"], false).await?;
+        // `brew cleanup` deletes old versions and cached bottles. Same argument as `update`.
+        self.core
+            .executor
+            .run_exclusive(lock_key(), "brew", &["cleanup"], false)
+            .await?;
         Ok(())
     }
 }

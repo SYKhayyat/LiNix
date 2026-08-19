@@ -272,7 +272,7 @@ async fn test_link_backend_vfs_integrity() {
 #[tokio::test]
 async fn rebuild_puts_every_root_backend_before_every_user_backend() {
     let kernel = TestKernel::new().await;
-    let registry = kernel.app.registry.clone();
+    let registry = kernel.app.registry;
 
     let names: Vec<String> = registry
         .present_on_this_machine()

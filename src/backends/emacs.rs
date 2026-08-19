@@ -6,6 +6,17 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::info;
 
+/// The name every emacs verb takes the exclusive lock under.
+///
+/// Asked of `stale_lock`, which owns the table of which programs share one package
+/// database, rather than spelled as a literal here — a second copy of that table is
+/// exactly what its own doc says goes stale. A verb that changes the manager takes
+/// the manager's lock; install and remove already did, and `update` and the cache
+/// cleaners did not.
+fn lock_key() -> &'static str {
+    crate::app::stale_lock::lock_key("emacs")
+}
+
 /// Emacs package names become elisp symbols inside an `--eval` form. Reject anything
 /// that isn't a plain package symbol so a crafted name (whitespace, parens, quotes,
 /// backslash) cannot break out of the form and inject arbitrary Lisp.
@@ -60,8 +71,11 @@ impl EmacsBackendCore {
     /// The same evaluation, for a *change*. `run_output` reports a failed batch run as
     /// empty output and exit-zero, so an install that never happened read as done.
     async fn change_lisp(&self, lisp: &str) -> Result<()> {
+        // A change, so it takes the lock — the same one `install` and `remove` take. This was
+        // the one door into `package.el` that did not, which made it two locks over one
+        // package directory.
         self.executor
-            .run("emacs", &["--batch", "--eval", lisp], false)
+            .run_exclusive(lock_key(), "emacs", &["--batch", "--eval", lisp], false)
             .await
             .map(|_| ())
     }
@@ -122,7 +136,7 @@ impl Installable for EmacsInstallable {
         );
         self.core
             .executor
-            .run_exclusive("emacs", "emacs", &["--batch", "--eval", &lisp], false)
+            .run_exclusive(lock_key(), "emacs", &["--batch", "--eval", &lisp], false)
             .await?;
         Ok(())
     }
@@ -146,7 +160,7 @@ impl Installable for EmacsInstallable {
         );
         self.core
             .executor
-            .run_exclusive("emacs", "emacs", &["--batch", "--eval", &lisp], false)
+            .run_exclusive(lock_key(), "emacs", &["--batch", "--eval", &lisp], false)
             .await?;
         Ok(())
     }
@@ -260,7 +274,7 @@ impl Upgradable for EmacsUpgradable {
                         (ignore-errors (package-upgrade pkg)))))) ";
         self.core
             .executor
-            .run_exclusive("emacs", "emacs", &["--batch", "--eval", lisp], false)
+            .run_exclusive(lock_key(), "emacs", &["--batch", "--eval", lisp], false)
             .await?;
         Ok(())
     }

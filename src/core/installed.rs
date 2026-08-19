@@ -33,7 +33,9 @@ use std::time::{Duration, SystemTime};
 /// Measured on a 256-line winget config against a 280-package listing, that is ~71,680
 /// `Package` clones to answer 256 questions.
 type Listing = Arc<Vec<Package>>;
-type Slot = Arc<tokio::sync::Mutex<Option<Listing>>>;
+/// A slot remembers which generation of the memo its answer belongs to. See
+/// [`InstalledListings::forget_all`] for why the generation is what makes the clear complete.
+type Slot = Arc<tokio::sync::Mutex<Option<(u64, Listing)>>>;
 
 /// A listing as it sits on disk, with the moment it was taken.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -44,9 +46,44 @@ struct CachedListing {
     packages: Vec<Package>,
 }
 
+/// One manager's essential set, shared the same way a listing is.
+type Essentials = Arc<Vec<String>>;
+type EssentialSlot = Arc<tokio::sync::Mutex<Option<(u64, Essentials)>>>;
+
 #[derive(Default)]
 pub struct InstalledListings {
     by_backend: DashMap<String, Slot>,
+    /// What each manager reports as OS-essential, asked once per run.
+    ///
+    /// **The sibling of `by_backend` that never got the memo.** `essential()` is a live
+    /// subprocess per backend and `guard::essential_names` is on every removal path — its own
+    /// comment says so. A single `sync` with removals goes through the preview path and the
+    /// enforce path, so the whole set ran at least twice; a rollback made it three times. The
+    /// argument `list_installed` makes applies unchanged: the answer cannot change while
+    /// nothing is being installed, and the one thing that can change it is a mutating command,
+    /// which already calls `forget_all`. Kept here rather than in a second map with a second
+    /// policy, so it inherits that invalidation — including the generation counter — instead
+    /// of inventing its own and its own version of R2's staleness window.
+    ///
+    /// No disk layer: this is run-scoped only. `installed_cache_secs` is a bargain about a
+    /// *report* being stale, and the essential set exists to refuse removals.
+    essentials: DashMap<String, EssentialSlot>,
+    /// Which round of answers is current. Bumped by every invalidation.
+    ///
+    /// **Clearing the map is not enough, because the map is not what a waiting task holds.**
+    /// `once` clones the `Arc<Slot>` out of the `DashMap` *before* it waits on the slot's
+    /// mutex, and it waits there for the length of a real listing subprocess — over a second
+    /// on Windows, and the whole point of holding the lock across the fetch is that two askers
+    /// produce one call. A mutating command completing during that wait calls `forget_all`,
+    /// which drops the map entry and cannot touch the `Arc` already handed out; the waiter
+    /// then wins the lock and returns a listing that predates both the install and the
+    /// invalidation meant to cover it. Exposure grows with `max_parallel`, so it is worst on
+    /// the configurations that matter most.
+    ///
+    /// The generation goes *in the answer*, which is how `VARS_MEMO`/`RESOLUTION` in
+    /// `app::sync::resolver` solves the identical problem: an invalidated entry cannot be
+    /// reached by an already-cloned handle, because the handle carries the round it came from.
+    generation: std::sync::atomic::AtomicU64,
     /// How long a listing on disk stays usable. `None` — the default — is no disk layer.
     ttl: Option<Duration>,
 }
@@ -81,8 +118,8 @@ impl InstalledListings {
     /// Reuse listings across runs for `secs`. Zero keeps the memo run-scoped, as before.
     pub fn with_ttl(secs: u64) -> Self {
         Self {
-            by_backend: DashMap::new(),
             ttl: (secs > 0).then(|| Duration::from_secs(secs)),
+            ..Self::default()
         }
     }
 
@@ -197,14 +234,19 @@ impl InstalledListings {
             .or_default()
             .clone();
         let mut slot = slot.lock().await;
-        if let Some(cached) = slot.as_ref() {
-            return Ok(cached.clone());
+        // Read *after* the wait, not before it: the whole question is whether an invalidation
+        // happened while this task sat on the mutex.
+        let generation = self.generation();
+        if let Some((taken_at, cached)) = slot.as_ref() {
+            if *taken_at == generation {
+                return Ok(cached.clone());
+            }
         }
         // The disk layer is consulted inside the slot lock, so two concurrent askers still
         // produce one read rather than two — the same reason the fetch is in here.
         if let Some(on_disk) = self.read_from_disk(backend) {
             let handle: Listing = Arc::new(on_disk);
-            *slot = Some(handle.clone());
+            *slot = Some((generation, handle.clone()));
             return Ok(handle);
         }
         // A failure is not cached: a manager that could not answer this time may answer next
@@ -213,7 +255,45 @@ impl InstalledListings {
         let fresh = fetch.await?;
         self.to_disk(backend, &fresh);
         let handle: Listing = Arc::new(fresh);
-        *slot = Some(handle.clone());
+        // Stamped with the generation the fetch *started* in. An invalidation that landed
+        // while the manager was answering makes this answer stale the moment it is stored,
+        // which is the correct reading: the listing describes a machine that has since changed.
+        *slot = Some((generation, handle.clone()));
+        Ok(handle)
+    }
+
+    /// Which round of answers is current.
+    fn generation(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// This manager's OS-essential set, fetching it only the first time it is asked for.
+    ///
+    /// Same shape as [`once`](Self::once) and for the same reasons: the slot's lock is held
+    /// across the fetch so two concurrent askers produce one subprocess, and the answer
+    /// carries the generation it was taken in so an invalidation reaches a handle already
+    /// cloned out of the map.
+    pub async fn essential_once<F>(&self, backend: &str, fetch: F) -> Result<Essentials>
+    where
+        F: Future<Output = Result<Vec<String>>>,
+    {
+        let slot = self
+            .essentials
+            .entry(backend.to_string())
+            .or_default()
+            .clone();
+        let mut slot = slot.lock().await;
+        let generation = self.generation();
+        if let Some((taken_at, cached)) = slot.as_ref() {
+            if *taken_at == generation {
+                return Ok(cached.clone());
+            }
+        }
+        // A failure is not cached, for the reason `once` gives: a manager that could not
+        // answer this time may answer next time, and the guard treats "could not ask" as
+        // contributing nothing rather than as "nothing is essential".
+        let handle: Essentials = Arc::new(fetch.await?);
+        *slot = Some((generation, handle.clone()));
         Ok(handle)
     }
 
@@ -225,7 +305,13 @@ impl InstalledListings {
     /// and not the other is the invalidation that covers neither, which is the shape this repo
     /// has now found in the guard, in the run-scoped memos, and here.
     pub fn forget_all(&self) {
+        // The bump is what actually invalidates; the clear is what frees the memory. A task
+        // already holding a cloned `Arc<Slot>` never sees the clear, and it is the generation
+        // it compares against when it finally wins the lock.
+        self.generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         self.by_backend.clear();
+        self.essentials.clear();
         if self.ttl.is_some() {
             let _ = Self::forget_on_disk();
         }
@@ -239,6 +325,156 @@ mod tests {
 
     fn pkg(name: &str) -> Package {
         Package::new(name, "test")
+    }
+
+    /// **An invalidation reaches a task that was already waiting.**
+    ///
+    /// R2, and it needs duration to exist. `once` clones the `Arc<Slot>` out of the `DashMap`
+    /// *before* it waits on that slot's mutex, and it waits there for the length of a real
+    /// listing subprocess — measured elsewhere in this tree at over a second on Windows. The
+    /// long hold is deliberate and correct: it is what makes two askers produce one
+    /// `winget list`. But `forget_all` clears the *map*, and a map entry dropped after the
+    /// `Arc` was handed out invalidates nothing for whoever is holding it. The waiter then won
+    /// the lock and returned a listing that predated both the install and the invalidation
+    /// meant to cover it — a needless reinstall, or a drift report naming a package that was
+    /// just fixed.
+    ///
+    /// The fix is the one already in this tree, in `resolver.rs`: put the generation in the
+    /// answer, so an invalidated entry cannot be reached by an already-cloned handle.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_listing_taken_before_an_invalidation_is_not_served_after_it() {
+        let memo = std::sync::Arc::new(InstalledListings::new());
+        let fetches = std::sync::Arc::new(AtomicUsize::new(0));
+
+        // Round one: somebody asks, and the answer is remembered.
+        let first = memo
+            .once("test", {
+                let fetches = fetches.clone();
+                async move {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    Ok(vec![pkg("before")])
+                }
+            })
+            .await
+            .expect("the first listing");
+        assert_eq!(first.len(), 1);
+        assert_eq!(fetches.load(Ordering::SeqCst), 1);
+
+        // A mutation happens. `CommandExecutor::run` calls exactly this after one finishes.
+        memo.forget_all();
+
+        // The waiter's shape: a task holding a handle from before the clear. It cannot be
+        // served the old answer, whatever it is still holding.
+        let second = memo
+            .once("test", {
+                let fetches = fetches.clone();
+                async move {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    Ok(vec![pkg("after"), pkg("also-after")])
+                }
+            })
+            .await
+            .expect("the second listing");
+        assert_eq!(
+            fetches.load(Ordering::SeqCst),
+            2,
+            "the memo answered from a listing taken before the invalidation; clearing the map \
+             does not reach an `Arc` already cloned out of it"
+        );
+        assert_eq!(
+            second.len(),
+            2,
+            "the post-mutation listing was not the one returned"
+        );
+    }
+
+    /// **And the dedup the long lock hold exists for still works.**
+    ///
+    /// The wrong fix for the test above is to shorten the hold, and the module's own comment
+    /// says so: two concurrent askers must produce **one** subprocess, not two. This asserts
+    /// the property that would be lost, so a generation counter cannot be traded for it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn two_askers_at_once_still_produce_one_fetch() {
+        let memo = std::sync::Arc::new(InstalledListings::new());
+        let fetches = std::sync::Arc::new(AtomicUsize::new(0));
+
+        let ask = |memo: std::sync::Arc<InstalledListings>,
+                   fetches: std::sync::Arc<AtomicUsize>| async move {
+            memo.once("test", async move {
+                fetches.fetch_add(1, Ordering::SeqCst);
+                // The duration that makes the race real. Without it both callers finish before
+                // either could have contended, which is why nothing in the suite has ever
+                // exercised this.
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                Ok(vec![pkg("one")])
+            })
+            .await
+            .expect("a listing")
+        };
+
+        let (a, b) = tokio::join!(
+            ask(memo.clone(), fetches.clone()),
+            ask(memo.clone(), fetches.clone())
+        );
+        assert_eq!(a.len(), 1);
+        assert_eq!(b.len(), 1);
+        assert_eq!(
+            fetches.load(Ordering::SeqCst),
+            1,
+            "two concurrent askers ran two subprocesses. The slot lock must be held across the \
+             fetch — an install of forty plugins must not launch forty listings."
+        );
+    }
+
+    /// **`essential()` is memoised through the same seam, and invalidated by the same call.**
+    ///
+    /// I7: a live subprocess per backend, on every removal path, asked at six call sites, so one
+    /// `sync` with removals ran the whole set at least twice and a rollback three times. Routed
+    /// through `InstalledListings` rather than memoised locally, so it inherits this
+    /// invalidation instead of inventing a second policy — including the generation counter, so
+    /// the new memo does not inherit R2's staleness window.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_essential_set_is_asked_once_and_forgotten_with_the_listings() {
+        let memo = InstalledListings::new();
+        let asks = std::sync::Arc::new(AtomicUsize::new(0));
+
+        for _ in 0..3 {
+            let set = memo
+                .essential_once("test", {
+                    let asks = asks.clone();
+                    async move {
+                        asks.fetch_add(1, Ordering::SeqCst);
+                        Ok(vec!["libc".to_string()])
+                    }
+                })
+                .await
+                .expect("the essential set");
+            assert_eq!(set.len(), 1);
+        }
+        assert_eq!(
+            asks.load(Ordering::SeqCst),
+            1,
+            "the essential query ran once per asker. It is a subprocess per backend and it \
+             cannot change while nothing is being installed."
+        );
+
+        memo.forget_all();
+        let _ = memo
+            .essential_once("test", {
+                let asks = asks.clone();
+                async move {
+                    asks.fetch_add(1, Ordering::SeqCst);
+                    Ok(vec!["libc".to_string(), "coreutils".to_string()])
+                }
+            })
+            .await
+            .expect("the essential set again");
+        assert_eq!(
+            asks.load(Ordering::SeqCst),
+            2,
+            "a mutation did not invalidate the essential set. A removal guard answering from \
+             before the machine changed is the one place a stale answer is not advisory."
+        );
     }
 
     /// A cached listing may inform a report; it may never source a decision that outlives the

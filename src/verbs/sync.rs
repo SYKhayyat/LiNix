@@ -493,9 +493,7 @@ pub async fn handle_rebuild(
         }
     };
 
-    let resolver =
-        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
-            .await;
+    let resolver = app.resolver().await;
     let desired = resolver.resolve_desired_state().await?;
     // A rebuild reinstalls, so it is a change path and the `[guard]` gate applies. Checked
     // against the declared set before anything is removed — a `deny_packages` hit must stop

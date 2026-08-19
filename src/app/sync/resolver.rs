@@ -119,7 +119,8 @@ pub struct StateResolver<'a> {
     /// ever, so a preference that had a name in the code had no name a user could write.
     prefer_locks: bool,
     /// "backend:package" -> version.
-    locks: HashMap<String, String>,
+    /// Behind an `Arc` because it is shared, not rebuilt. See [`App::resolver`].
+    locks: Arc<HashMap<String, String>>,
     /// Pre-resolved variables to use instead of running the provider (Part IX, IX.6). Set when
     /// applying a saved plan: re-running a clock/shell/network provider at apply time could
     /// disagree with what the plan froze, so `apply` resolves the model against the plan's own
@@ -140,14 +141,61 @@ pub struct StateResolver<'a> {
     /// There are two nested fan-outs — every bare name at once, and within each name every
     /// candidate manager at once — and bounding them separately multiplies. One gate held by
     /// the leaf that actually talks to a registry is the number a user set.
+    ///
+    /// **Handed in, not built here.** `network_parallel` means "this many remote lookups at
+    /// once, for this run" to whoever set it, and a semaphore constructed in this constructor
+    /// is a cap on one short-lived object instead — `App::resolver()` was not memoised, so it
+    /// minted a fresh resolver, and a fresh gate, at every one of its 34 call sites. Every one
+    /// of those is sequential today, which is the only reason the cap currently holds; the
+    /// first concurrent caller would multiply it silently, with nothing to notice. That is the
+    /// mistake `core::ratelimiter` already wrote down one directory over — *"a per-clone cell
+    /// would silently double every limit here"*.
     remote_gate: Arc<tokio::sync::Semaphore>,
 }
 
 impl<'a> StateResolver<'a> {
     pub async fn new(config: &'a Config, registry: Arc<BackendRegistry>, locked: bool) -> Self {
-        // Read unconditionally: recorded versions are preferred on every ordinary run now, so
-        // this file is no longer only a strict-mode input. A missing file is the ordinary state
-        // of a machine that has not run `shall lock`, never an error.
+        let locks = Self::read_locks(config, locked).await;
+        let gate = Arc::new(tokio::sync::Semaphore::new(config.network_parallel.max(1)));
+        Self::with_shared(config, registry, locked, locks, gate)
+    }
+
+    /// The same resolver, over a locks map and a remote gate somebody else owns.
+    ///
+    /// **What `App::resolver` uses, and why it exists.** Building a resolver is not cheap — a
+    /// `try_exists`, a whole-file read, a `serde_json` parse and a map built from every entry —
+    /// and it was done afresh at each of 34 call sites, three of them inside loops: once per
+    /// manifest line in `verbs::packages`, once per named backend in `verbs::declare`, once per
+    /// named manager in `verbs::plan`. On a machine with hundreds of pins, `shall install` over
+    /// a multi-line input re-read and re-parsed the entire pin file for every line. Sharing the
+    /// parsed map also shares the gate, which is the whole of R5.
+    pub fn with_shared(
+        config: &'a Config,
+        registry: Arc<BackendRegistry>,
+        locked: bool,
+        locks: Arc<HashMap<String, String>>,
+        remote_gate: Arc<tokio::sync::Semaphore>,
+    ) -> Self {
+        Self {
+            config,
+            registry,
+            layout: config.layout(),
+            locked,
+            prefer_locks: config.lock.replay,
+            locks,
+            vars_override: None,
+            active_override: None,
+            may_record_locks: false,
+            remote_gate,
+        }
+    }
+
+    /// Read `locks/versions.json`.
+    ///
+    /// Read unconditionally: recorded versions are preferred on every ordinary run now, so this
+    /// file is no longer only a strict-mode input. A missing file is the ordinary state of a
+    /// machine that has not run `shall lock`, never an error.
+    pub async fn read_locks(config: &Config, locked: bool) -> Arc<HashMap<String, String>> {
         let mut locks = HashMap::new();
         let lock_path = config.config_root().join("locks").join("versions.json");
         if tokio::fs::try_exists(&lock_path).await.unwrap_or(false) {
@@ -165,19 +213,7 @@ impl<'a> StateResolver<'a> {
         } else if locked {
             warn!("Locked mode requested but locks/versions.json is missing.");
         }
-
-        Self {
-            config,
-            registry,
-            layout: config.layout(),
-            locked,
-            prefer_locks: config.lock.replay,
-            locks,
-            vars_override: None,
-            active_override: None,
-            may_record_locks: false,
-            remote_gate: Arc::new(tokio::sync::Semaphore::new(config.network_parallel.max(1))),
-        }
+        Arc::new(locks)
     }
 
     /// `sync --upgrade`: ignore what was recorded and take what the managers offer now. Moving
@@ -845,7 +881,14 @@ impl<'a> StateResolver<'a> {
         }
 
         lock_changed |= lock.retain_declared(&declared);
-        if lock_changed {
+        // Gated exactly as the bare lock is, and for the same two reasons. `may_record_locks`
+        // is what says this resolution belongs to a run that will act on it: without it every
+        // `Reader` — `check`, `list`, `plan`, `diff`, `why`, `info` — froze what a pattern
+        // matched, and did it under no lock at all, because a `Reader` never takes one. Two
+        // of those racing a `sync` are two whole rewrites of one TOML file, last-one-wins,
+        // and the expansion that loses is silently gone. `dry_run` is the second: a preview
+        // that freezes what it guessed at makes the real run afterwards use that guess.
+        if lock_changed && self.may_record_locks && !self.config.dry_run {
             lock.save(&lock_path)?;
         }
         *statements = expanded;

@@ -264,15 +264,18 @@ pub fn protection_of(
         return Some(Protection::Undeclarable);
     }
 
-    // An explicit un-protect entry wins over everything, including the OS's own essential
-    // flag. It is the user saying "I know, I manage this one myself", and nothing should
-    // be able to overrule that — otherwise the escape hatch does not open for exactly the
-    // packages someone would need it for.
-    if config.unprotect_rule(name).is_some() {
-        return None;
-    }
-    if let Some(rule) = config.protection_rule(name) {
-        return Some(Protection::Rule(rule.to_string()));
+    // One question, one pass. An explicit un-protect entry wins over everything, including
+    // the OS's own essential flag — the user saying "I know, I manage this one myself", and
+    // nothing should overrule that, or the escape hatch does not open for exactly the packages
+    // someone would need it for. Asking it as two calls meant `protection_rule` re-scanned
+    // `unprotected_packages` after `unprotect_rule` had already answered `None` over the same
+    // list with the same input.
+    match config.protection_of(name) {
+        crate::config::ProtectionAnswer::Unprotected(_) => return None,
+        crate::config::ProtectionAnswer::Protected(rule) => {
+            return Some(Protection::Rule(rule.to_string()))
+        }
+        crate::config::ProtectionAnswer::Neither => {}
     }
     if let Some(b) = backend {
         if os_essential.contains(&format!("{}:{}", b, name)) {
@@ -447,7 +450,7 @@ pub async fn essential_names(
                         );
                         Some(
                             names
-                                .into_iter()
+                                .iter()
                                 .map(|n| format!("{}:{}", name, n))
                                 .collect::<Vec<_>>(),
                         )
@@ -2685,7 +2688,7 @@ mod tests {
         async fn info(&self, _: &str) -> crate::core::Result<Option<crate::core::Package>> {
             Ok(None)
         }
-        async fn essential(&self) -> crate::core::Result<Vec<String>> {
+        async fn fetch_essential(&self) -> crate::core::Result<Vec<String>> {
             Ok(self.essential.clone())
         }
     }

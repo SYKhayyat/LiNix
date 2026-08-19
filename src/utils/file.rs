@@ -50,9 +50,42 @@ pub fn persist(path: &Path, content: &str) -> Result<bool> {
 /// A crash partway through leaves a truncated final line rather than a corrupt file, which is
 /// the property that makes the format worth having — the reader drops an unparseable tail and
 /// keeps everything before it.
+/// [`persist`], from an `async fn`, without parking a runtime worker.
+///
+/// `persist` ends in `sync_all` — a physical flush — so calling it straight from an `async fn`
+/// parks the worker on the disk for as long as the disk takes (II.52). Most of the callers that
+/// did that were writing a whole registry while holding the lock that everything else wants;
+/// the rest are one-shot writes at the end of a command, where the cost is small and the rule
+/// is still the rule. Having one door means there are no exceptions to remember, which is what
+/// `a_blocking_wait_is_off_the_runtime` enforces.
+pub async fn persist_off_the_runtime(path: &Path, content: &str) -> Result<bool> {
+    let path = path.to_path_buf();
+    let content = content.to_string();
+    crate::core::off_the_runtime(move || persist(&path, &content)).await?
+}
+
 pub fn append_line(path: &Path, line: &str) -> Result<bool> {
+    append_lines(path, std::slice::from_ref(&line))
+}
+
+/// Add several lines to the end of a file, durably, in **one** flush.
+///
+/// **The guarantee is the same one `append_line` gives, and the cost is not.** `sync_data` is a
+/// physical flush; a caller opening a whole wave's worth of WAL entries paid one per entry, so
+/// a 298-package config spent ~298 flushes on the critical path — each of them, because the
+/// hottest fan-outs are multiplexed onto a single task, stalling the whole wave rather than one
+/// member of it. All the lines are written and then flushed once, so every one of them is on
+/// disk before this returns, which is precisely what the per-entry version promised.
+///
+/// A crash partway through leaves a truncated final line rather than a corrupt file, which is
+/// the property that makes the format worth having — the reader drops an unparseable tail and
+/// keeps everything before it.
+pub fn append_lines(path: &Path, lines: &[&str]) -> Result<bool> {
     if crate::core::dry_run::active() {
         crate::would_warn!("would append to {}", path.display());
+        return Ok(false);
+    }
+    if lines.is_empty() {
         return Ok(false);
     }
     if let Some(dir) = path.parent() {
@@ -65,11 +98,15 @@ pub fn append_line(path: &Path, line: &str) -> Result<bool> {
         .map_err(Error::from)?;
     // A file whose last line was written without one — a `.gitignore` a user edited by hand,
     // a log a crash truncated — would otherwise have this appended onto the end of it.
+    let mut body = String::new();
     if ends_mid_line(path) {
-        file.write_all(b"\n").map_err(Error::from)?;
+        body.push('\n');
     }
-    file.write_all(line.as_bytes()).map_err(Error::from)?;
-    file.write_all(b"\n").map_err(Error::from)?;
+    for line in lines {
+        body.push_str(line);
+        body.push('\n');
+    }
+    file.write_all(body.as_bytes()).map_err(Error::from)?;
     file.sync_data().map_err(Error::from)?;
     Ok(true)
 }
@@ -484,6 +521,64 @@ mod bin_destination_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **`append_lines` writes every line and flushes once.**
+    ///
+    /// B3: the WAL flushed per entry, so opening a wave of *k* packages cost *k* physical
+    /// flushes, serialised, under the journal mutex, before a single manager was invoked — ~298
+    /// of them on the 298-package config the planner's own comment cites. The guarantee that
+    /// matters is unchanged and is what this asserts: every line is on disk when the call
+    /// returns, in order, so recovery's promise that the record precedes the work still holds.
+    #[test]
+    fn several_lines_are_appended_in_order_and_all_of_them_arrive() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wal.jsonl");
+
+        assert!(append_lines(&path, &["one", "two", "three"]).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "one\ntwo\nthree\n",
+            "a batch must be indistinguishable from the same lines appended one at a time"
+        );
+
+        // And a second batch continues rather than replacing — this is an append log, and the
+        // failure mode of getting that wrong is losing every entry before the last wave.
+        assert!(append_lines(&path, &["four"]).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "one\ntwo\nthree\nfour\n"
+        );
+    }
+
+    /// A file whose last line was written without a newline gets one before the batch, not
+    /// between every pair of lines. The single-line version already did this; the batch has to
+    /// do it exactly once or it writes a blank line into the log on every call.
+    #[test]
+    fn a_batch_repairs_a_torn_tail_once_and_not_per_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("torn.jsonl");
+        std::fs::write(&path, "half-written").unwrap();
+
+        assert!(append_lines(&path, &["a", "b"]).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "half-written\na\nb\n"
+        );
+    }
+
+    /// An empty batch writes nothing and says so, rather than opening the file to add a
+    /// newline. A wave with no members is an ordinary thing, and it must not touch the log.
+    #[test]
+    fn an_empty_batch_does_not_touch_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("untouched.jsonl");
+        assert!(!append_lines(&path, &[]).unwrap());
+        assert!(
+            !path.exists(),
+            "an empty batch created the file; a wave with nothing in it must leave no trace"
+        );
+    }
+
     use tempfile::TempDir;
 
     /// An artifact directory with one executable in it, and the bin dir it deploys into.

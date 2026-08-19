@@ -8,7 +8,7 @@ use crate::utils::archive::extract_archive;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
@@ -44,7 +44,15 @@ pub struct WebBackendCore {
     /// one a sandboxed config moves (2026-07-29; it was built from `dirs::home_dir()` here).
     pub bin_dir: PathBuf,
     pub state_file: PathBuf,
-    pub internal_lock: Mutex<()>,
+    /// The deployment records, in memory, behind the lock that guards the file.
+    ///
+    /// **The read and the modify used to be two separate critical sections**, 220 lines and a
+    /// download apart in `install`. Two `web:` packages in one wave both loaded `{}` and
+    /// whichever saved last wrote a map holding only its own record; the one that lost reads
+    /// as unmanaged, so the next sync cannot see what it deployed and teardown has nothing to
+    /// remove. Identical shape and identical fix in `github.rs` — the family is these two, and
+    /// no other backend keeps a private state file.
+    state: Mutex<Option<HashMap<String, WebState>>>,
 }
 
 impl WebBackendCore {
@@ -66,28 +74,73 @@ impl WebBackendCore {
             install_dir,
             bin_dir,
             state_file,
-            internal_lock: Mutex::new(()),
+            state: Mutex::new(None),
         }
     }
 
+    /// The records as they stand, for reading. A copy: a caller holding a borrow would hold
+    /// the lock across its whole install, and the download in the middle of that is the
+    /// reason this backend is concurrent at all.
     async fn load_state(&self) -> HashMap<String, WebState> {
-        let _guard = self.internal_lock.lock().await;
-        if !tokio::fs::try_exists(&self.state_file)
-            .await
-            .unwrap_or(false)
-        {
-            return HashMap::new();
-        }
-        let data = tokio::fs::read_to_string(&self.state_file)
-            .await
-            .unwrap_or_default();
-        serde_json::from_str(&data).unwrap_or_default()
+        let mut guard = self.state.lock().await;
+        Self::loaded(&mut guard, &self.state_file).await.clone()
     }
 
-    async fn save_state(&self, state: &HashMap<String, WebState>) -> Result<()> {
-        let _guard = self.internal_lock.lock().await;
-        let data = serde_json::to_string_pretty(state).map_err(Error::from)?;
-        crate::utils::file::persist(&self.state_file, &data).map(|_| ())
+    /// Read the file into the memo the first time, and hand back the map either way.
+    async fn loaded<'a>(
+        guard: &'a mut Option<HashMap<String, WebState>>,
+        state_file: &Path,
+    ) -> &'a mut HashMap<String, WebState> {
+        if guard.is_none() {
+            let map = if tokio::fs::try_exists(state_file).await.unwrap_or(false) {
+                let data = tokio::fs::read_to_string(state_file)
+                    .await
+                    .unwrap_or_default();
+                serde_json::from_str(&data).unwrap_or_default()
+            } else {
+                HashMap::new()
+            };
+            *guard = Some(map);
+        }
+        guard.as_mut().expect("just filled")
+    }
+
+    /// Apply one task's changes to the shared records and write them, under one lock.
+    ///
+    /// A caller hands over what it changed, not the map it believes the file should hold, so
+    /// a concurrent installer's records are merged rather than overwritten. The write goes to
+    /// the blocking pool: `persist` ends in `sync_all`, a physical flush, and this runs inside
+    /// the install wave where a parked worker costs the whole wave (II.52).
+    ///
+    /// Compact, not pretty, for the reason `core::state` gives about the registry beside it:
+    /// this is machine-read bookkeeping nobody opens, and pretty printing doubles the bytes.
+    async fn commit_state(
+        &self,
+        installed: Vec<(String, WebState)>,
+        removed: Vec<String>,
+    ) -> Result<()> {
+        let mut guard = self.state.lock().await;
+        let map = Self::loaded(&mut guard, &self.state_file).await;
+        // **A preview changes the memo as little as it changes the disk.** The merge happens on
+        // a copy, and the copy is only adopted for a run that acts. `persist` already refuses
+        // the write under `--dry-run` and says "would write"; before this map existed, each
+        // call re-read the file, so a preview's changes could not survive to the next question.
+        // With a memo they would — and the next `list_installed` in the same run would report a
+        // package the preview only said it would install.
+        let mut merged = map.clone();
+        for url in &removed {
+            merged.remove(url);
+        }
+        merged.extend(installed);
+        if !crate::core::dry_run::active() {
+            *map = merged.clone();
+        }
+        let data = serde_json::to_string(&merged).map_err(Error::from)?;
+        let state_file = self.state_file.clone();
+        crate::core::off_the_runtime(move || {
+            crate::utils::file::persist(&state_file, &data).map(|_| ())
+        })
+        .await?
     }
 }
 
@@ -122,6 +175,8 @@ pub struct WebInstallable {
 impl Installable for WebInstallable {
     async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
         let mut state = self.core.load_state().await;
+        // What this call changed, kept apart from the copy it reads.
+        let mut installed_records: Vec<(String, WebState)> = Vec::new();
 
         for spec in specs {
             // SEC2: checked before a byte is fetched, so a refusal costs nothing and cannot
@@ -215,19 +270,18 @@ impl Installable for WebInstallable {
                     );
                     self.core.executor.run(iprog, &irefs, true).await?;
 
-                    state.insert(
-                        spec.name.clone(),
-                        WebState {
-                            url: spec.name.clone(),
-                            // No local tree Shall owns: the manager placed the files.
-                            local_path: String::new(),
-                            bin_link: None,
-                            etag: remote_etag,
-                            last_modified: remote_mod,
-                            installed_by: Some(installer.to_string()),
-                            system_package: Some(system_package),
-                        },
-                    );
+                    let record = WebState {
+                        url: spec.name.clone(),
+                        // No local tree Shall owns: the manager placed the files.
+                        local_path: String::new(),
+                        bin_link: None,
+                        etag: remote_etag,
+                        last_modified: remote_mod,
+                        installed_by: Some(installer.to_string()),
+                        system_package: Some(system_package),
+                    };
+                    installed_records.push((spec.name.clone(), record.clone()));
+                    state.insert(spec.name.clone(), record);
                     continue;
                 }
             }
@@ -328,21 +382,22 @@ impl Installable for WebInstallable {
                 }
             }
 
-            state.insert(
-                spec.name.clone(),
-                WebState {
-                    url: spec.name.clone(),
-                    local_path: dest_dir.to_string_lossy().to_string(),
-                    bin_link: final_bin_link,
-                    etag: remote_etag,
-                    last_modified: remote_mod,
-                    installed_by: None,
-                    system_package: None,
-                },
-            );
+            let record = WebState {
+                url: spec.name.clone(),
+                local_path: dest_dir.to_string_lossy().to_string(),
+                bin_link: final_bin_link,
+                etag: remote_etag,
+                last_modified: remote_mod,
+                installed_by: None,
+                system_package: None,
+            };
+            installed_records.push((spec.name.clone(), record.clone()));
+            state.insert(spec.name.clone(), record);
         }
 
-        self.core.save_state(&state).await?;
+        self.core
+            .commit_state(installed_records, Vec::new())
+            .await?;
         Ok(())
     }
 
@@ -354,6 +409,8 @@ impl Installable for WebInstallable {
     ) -> Result<()> {
         let mut state = self.core.load_state().await;
         let mut failures = Vec::new();
+        // What this call changed, committed rather than the whole map — see `commit_state`.
+        let mut removed_urls: Vec<String> = Vec::new();
         for url in urls {
             if let Some(entry) = state.remove(url) {
                 let deployed = Deployed::default()
@@ -372,16 +429,18 @@ impl Installable for WebInstallable {
                 )
                 .await;
                 if errors.is_empty() {
+                    removed_urls.push(url.clone());
                     info!("Web: Removed resource: {}", url);
                 } else {
                     // The file is still on disk and still on PATH. Dropping it from state
-                    // anyway would make it drift no `sync` can see, so put the record back.
-                    state.insert(url.clone(), entry);
+                    // anyway would make it drift no `sync` can see — so the url never joins
+                    // `removed_urls`, and the shared record it was taken from stands.
+                    let _ = entry;
                     failures.push(format!("{}: {}", url, errors.join("; ")));
                 }
             }
         }
-        self.core.save_state(&state).await?;
+        self.core.commit_state(Vec::new(), removed_urls).await?;
         if !failures.is_empty() {
             return Err(still_installed("web resource", &failures));
         }
@@ -482,9 +541,162 @@ mod tests {
     }
 
     async fn record(core: &WebBackendCore, url: &str, entry: WebState) {
-        let mut state = core.load_state().await;
-        state.insert(url.to_string(), entry);
-        core.save_state(&state).await.expect("writing the state");
+        core.commit_state(vec![(url.to_string(), entry)], Vec::new())
+            .await
+            .expect("writing the state");
+    }
+
+    /// **Two concurrent installs both keep their record.**
+    ///
+    /// The lost-update race this closes: `load_state` took the internal lock, read the whole
+    /// file and released it; `save_state` took it again and wrote the whole file. In `install`
+    /// those two calls are 220 lines and a download apart, so two `web:` packages in one wave
+    /// both read `{}` and whichever saved last wrote a map holding only its own record. The
+    /// record that lost describes a deployed file and its `bin_link`: the package then reads as
+    /// unmanaged, the next sync cannot see what it deployed, and teardown has nothing to remove.
+    ///
+    /// **What makes this reproduce, where nothing in the suite did.** `MockExecutor` has had a
+    /// `delays` map since it was written — *"how long a command takes, for tests about
+    /// concurrency rather than about output"* — and it was used on exactly two commands, both
+    /// *reads*, in one file about graph ordering. No mutating command anywhere was ever given a
+    /// non-zero duration, which is precisely why R1, R2 and R4 could all be real and never fire:
+    /// mocked, the "download" returns in microseconds and the window is essentially closed. The
+    /// yields below are that missing duration, at the one point that matters — between reading
+    /// the state and committing to it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn two_concurrent_installs_do_not_lose_each_other() {
+        let (web, _mock, _tmp) = backend("race");
+        let core = web.core.clone();
+
+        // Both tasks read first, both then wait, and only then does either commit — which is
+        // the interleaving `install` produces when two packages download at once. Under the old
+        // read-modify-write this is the exact sequence that loses A.
+        let a = {
+            let core = core.clone();
+            tokio::spawn(async move {
+                let _seen = core.load_state().await;
+                tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+                core.commit_state(
+                    vec![(
+                        "https://example.test/a".into(),
+                        handed_to("dpkg", "a", "https://example.test/a"),
+                    )],
+                    Vec::new(),
+                )
+                .await
+                .expect("A commits");
+            })
+        };
+        let b = {
+            let core = core.clone();
+            tokio::spawn(async move {
+                let _seen = core.load_state().await;
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                core.commit_state(
+                    vec![(
+                        "https://example.test/b".into(),
+                        handed_to("dpkg", "b", "https://example.test/b"),
+                    )],
+                    Vec::new(),
+                )
+                .await
+                .expect("B commits");
+            })
+        };
+        a.await.expect("A");
+        b.await.expect("B");
+
+        let state = core.load_state().await;
+        assert!(
+            state.contains_key("https://example.test/a"),
+            "A's record was overwritten by B's whole-map write — the read-modify-write is back. \
+             The state must be merged under one lock, not rewritten from what each task read \
+             before its download."
+        );
+        assert!(
+            state.contains_key("https://example.test/b"),
+            "B's record is missing, which is the same defect with the tasks the other way round"
+        );
+
+        // And on disk, not only in the memo: a map that is right in memory and wrong in the
+        // file is the same bug one process later.
+        let on_disk = std::fs::read_to_string(&core.state_file).expect("the state file");
+        assert!(
+            on_disk.contains("/a") && on_disk.contains("/b"),
+            "the file holds only one of the two records:\n{on_disk}"
+        );
+        assert!(
+            !on_disk.contains("\n  "),
+            "the state file is pretty-printed again. `core::state` ruled this for the registry \
+             beside it — machine-read bookkeeping nobody opens, and pretty printing roughly \
+             doubles the bytes."
+        );
+    }
+
+    /// **A removal that fails leaves the record alone, even while another task is committing.**
+    ///
+    /// The other half of the same merge. `remove` used to put the entry back into its *local*
+    /// copy and then write that copy whole; now it simply never names the url as removed, and
+    /// the shared record stands. A merge that dropped it anyway would make a still-installed
+    /// package invisible to the next sync — drift nothing can see, which is worse than the
+    /// failure it came from.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_commit_beside_a_removal_keeps_both_answers() {
+        let (web, _mock, _tmp) = backend("race2");
+        let core = web.core.clone();
+        record(
+            &core,
+            "https://example.test/kept",
+            handed_to("dpkg", "kept", "https://example.test/kept"),
+        )
+        .await;
+        record(
+            &core,
+            "https://example.test/gone",
+            handed_to("dpkg", "gone", "https://example.test/gone"),
+        )
+        .await;
+
+        let remover = {
+            let core = core.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                core.commit_state(Vec::new(), vec!["https://example.test/gone".into()])
+                    .await
+                    .expect("the removal commits");
+            })
+        };
+        let installer = {
+            let core = core.clone();
+            tokio::spawn(async move {
+                core.commit_state(
+                    vec![(
+                        "https://example.test/new".into(),
+                        handed_to("dpkg", "new", "https://example.test/new"),
+                    )],
+                    Vec::new(),
+                )
+                .await
+                .expect("the install commits");
+            })
+        };
+        remover.await.expect("remover");
+        installer.await.expect("installer");
+
+        let state = core.load_state().await;
+        assert!(
+            state.contains_key("https://example.test/kept"),
+            "an untouched record vanished"
+        );
+        assert!(
+            state.contains_key("https://example.test/new"),
+            "the concurrent install was lost"
+        );
+        assert!(
+            !state.contains_key("https://example.test/gone"),
+            "the removal was undone by the concurrent install's write — which is the lost update \
+             in the other direction, and it leaves a record for a file that is gone"
+        );
     }
 
     fn handed_to(installer: &str, package: &str, url: &str) -> WebState {

@@ -8,6 +8,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::info;
 
+/// The name every mise verb takes the exclusive lock under.
+///
+/// Asked of `stale_lock`, which owns the table of which programs share one package
+/// database, rather than spelled as a literal here — a second copy of that table is
+/// exactly what its own doc says goes stale. A verb that changes the manager takes
+/// the manager's lock; install and remove already did, and `update` and the cache
+/// cleaners did not.
+fn lock_key() -> &'static str {
+    crate::app::stale_lock::lock_key("mise")
+}
+
 #[derive(Clone)]
 pub struct MiseBackendCore {
     pub executor: CommandExecutor,
@@ -94,7 +105,7 @@ impl Installable for MiseInstallable {
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         self.core
             .executor
-            .run_exclusive("mise", "mise", &arg_refs, false)
+            .run_exclusive(lock_key(), "mise", &arg_refs, false)
             .await?;
         Ok(())
     }
@@ -114,7 +125,7 @@ impl Installable for MiseInstallable {
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         self.core
             .executor
-            .run_exclusive("mise", "mise", &arg_refs, false)
+            .run_exclusive(lock_key(), "mise", &arg_refs, false)
             .await?;
         Ok(())
     }
@@ -260,9 +271,10 @@ pub struct MiseUpgradable {
 impl Upgradable for MiseUpgradable {
     async fn update(&self, _sudo: bool) -> Result<()> {
         info!("Mise: Updating plugin repository metadata...");
+        // `mise plugins update` rewrites the plugin repositories the installer reads.
         self.core
             .executor
-            .run("mise", &["plugins", "update"], false)
+            .run_exclusive(lock_key(), "mise", &["plugins", "update"], false)
             .await?;
         Ok(())
     }
@@ -271,16 +283,17 @@ impl Upgradable for MiseUpgradable {
         info!("Mise: Upgrading all globally installed tools...");
         self.core
             .executor
-            .run_exclusive("mise", "mise", &["upgrade"], false)
+            .run_exclusive(lock_key(), "mise", &["upgrade"], false)
             .await?;
         Ok(())
     }
 
     async fn clean_cache(&self, _sudo: bool) -> Result<()> {
         info!("Mise: Pruning unused tool versions from cache...");
+        // `mise prune --force` removes tool versions — the same state `install` locks.
         self.core
             .executor
-            .run("mise", &["prune", "--force"], false)
+            .run_exclusive(lock_key(), "mise", &["prune", "--force"], false)
             .await?;
         Ok(())
     }

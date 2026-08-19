@@ -42,11 +42,29 @@ fn declared_settings() -> Vec<String> {
     let src = std::fs::read_to_string(repo_root().join("src/config/config.rs"))
         .expect("src/config/config.rs should be readable");
     let mut out = Vec::new();
+    // **`#[serde(skip)]` is not a setting.** A field serde never reads cannot be written in
+    // `preferences.toml`, is not documented as a knob, and has no user to disappoint — it is a
+    // derived cache that happens to live on the same struct as the settings it is derived from
+    // (`GuardSettings::matchers` holds the protection lists pre-lowered). Counting one as a
+    // setting reports "declared, documented and defaulted, and nothing reads it" about
+    // something that is none of those three, which is a checker crying wolf — and a checker
+    // that cries wolf gets switched off.
+    let mut skipped = false;
     for line in src.lines() {
         let t = line.trim();
+        if t.starts_with("#[serde(skip)]") {
+            skipped = true;
+            continue;
+        }
         let Some(rest) = t.strip_prefix("pub ") else {
+            // Doc comments and other attributes sit between the `#[serde(skip)]` and the field,
+            // so the flag survives them and is cleared only by the field it belongs to.
             continue;
         };
+        if skipped {
+            skipped = false;
+            continue;
+        }
         let Some((name, _)) = rest.split_once(':') else {
             continue;
         };

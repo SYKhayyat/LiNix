@@ -607,7 +607,8 @@ pub async fn handle_config(config: &Config, cmd: &ConfigCommand) -> Result<()> {
                     tokio::fs::create_dir_all(parent).await.ok();
                 }
             }
-            if crate::utils::file::persist(&path, CONFIG_TEMPLATE)
+            if crate::utils::file::persist_off_the_runtime(&path, CONFIG_TEMPLATE)
+                .await
                 .with_context(|| format!("Failed to write config to {}", path.display()))?
             {
                 println!("Wrote commented default preferences to {}", path.display());
@@ -839,9 +840,7 @@ pub async fn handle_canary(
         ));
     }
 
-    let resolver =
-        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
-            .await;
+    let resolver = app.resolver().await;
     let desired = resolver.resolve_desired_state().await?;
     enforce_policy(app, &desired).await?;
 
@@ -914,9 +913,7 @@ pub async fn handle_policy(app: &App) -> Result<()> {
         println!("No [guard] install/change rules are set — nothing to check.");
         return Ok(());
     }
-    let resolver =
-        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
-            .await;
+    let resolver = app.resolver().await;
     let desired = resolver.resolve_desired_state().await?;
     // **The preview calls the thing it previews.** This used to re-implement `enforce_policy`
     // minus `deny_vulnerable`, then print a footnote admitting the gap — so `shall policy` could

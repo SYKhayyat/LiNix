@@ -1,6 +1,6 @@
-# The decision register — 219 entries, none open
-**One file, six features, nothing waiting on the owner.** Every decision this design forces lives
-here, with its
+# The decision register — 223 entries, four open
+**One file, six features, four questions waiting on the owner.** Every decision this design forces
+lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
 already settled in code could be re-opened by anyone reading the register instead of the tree.
@@ -22,16 +22,17 @@ HALF RULED had no rows, the five that remained summed to 206 against 210, and
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **4** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
 | **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **214** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 | **DEFERRED** | Asked, and the owner chose to answer it later. | A ruling, when the owner returns to it. | **1** |
 | **HALF RULED** | Part of the question was answered and part was not. | A ruling on the remaining half. | **2** |
 
-**Four of these seven statuses now describe nothing, and they stay.** The categories are not
-decoration: *OPEN* refilled and emptied on 2026-08-17 with `J8` — raised the moment a nightly leg
-stopped being answered by the wrong package manager, ruled the same day — and *BUILT, NEVER
+**Three of these seven statuses now describe nothing, and they stay.** The categories are not
+decoration: *OPEN* emptied on 2026-08-17 with `J8` — raised the moment a nightly leg
+stopped being answered by the wrong package manager, ruled the same day — and refilled the next
+day with the four entries of the `L` round, which is the third time it has done so. *BUILT, NEVER
 RULED* has refilled three times — once with twelve entries at once, and again on 2026-08-14 with
 `J3`, which was ruled on 2026-08-16 and emptied it — the moment somebody implemented a work
 order, or a defect fix with a visible choice inside it, before it was put to the owner. Deleting
@@ -110,8 +111,8 @@ whether a bare `shall lock` still freezes all three axes is not. `Q29`'s computa
 other one. The `G` round ran the opposite way round — `docs/GRADE-2026-08-12.md`'s work order was
 implemented in one pass and the nine changes in it that a user would notice shipped ahead of any
 ruling — and all twelve were confirmed by the owner on 2026-08-14, which is why nothing from it
-is waiting now. All 219 are accounted
-for: **214 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN** — and this line
+is waiting now. All 223 are accounted
+for: **214 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 0 BUILT NEVER RULED, 4 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -459,6 +460,24 @@ the owner ruled its substance and one question under it is still his.*
 | **J7** | Three release questions: the version, whether `nixos:` ships in it, and whether there is a `shall doctor`. RULED: **`0.8.0`; yes; and no — there will not be one.** The handoff item that raised the third assumed a command that never shipped. | 2026-08-16 |
 | **J8** | How does a bare package name reach a manager whose own names carry a category? RULED: **one matching atom resolves and the plan names it; more than one is refused, listing them.** `emerge` could not resolve one at all, and the leg that would have shown it was answering from crates.io. | 2026-08-17 |
 | **J9** | Two guard messages named `--allow-mass-removal` whatever the caller passed, though `max_total_changes` answers to either flag — so a run of `--allow-mass-install` was told a removal count had been allowed by a flag it never typed, and a blocked one was told to authorize mass deletion to get its installs through. RULED: **name the flag the run passed; the total's refusal offers both.** | 2026-08-17 |
+
+---
+
+### L - the concurrency and efficiency audit of 2026-08-18 - 4
+
+*From `docs/AUDIT-2026-08-18-concurrency.md`, which asked three questions of all 367 source files:
+what costs more than it needs to, what blocks when it should not, and what races. Twenty-seven
+findings; twenty-three were bugs against documented intent or mechanical applications of a pattern
+already ruled on, and were built without stopping per `CLAUDE.md`. These four are what is left:
+three trade-offs a user would notice, and one place Part II describes a locking model the code
+deliberately no longer has.*
+
+| | question | ruled |
+|---|---|---|
+| **L1** | Does the WAL flush per package on **success**, or once per wave? Recovery re-runs an interrupted install, and `sync/mod.rs` states that re-running an install over a half-installed package is something every manager Shall drives can do - so a crash between "install succeeded" and "success recorded" costs one idempotent re-run rather than corruption. **OPEN.** | |
+| **L2** | Do the six `locks/` ledgers come under a lock of their own, or is "writer scope plus `may_record_locks`" the ruled protection? They live outside the directory `DataLock` covers, and what protects them today is a pairing nothing asserts. **OPEN.** | |
+| **L3** | Do reader commands accept a torn cross-file view? A `Reader` takes no lock and reads `registry.json`, `journal.jsonl` and the ledgers as separate operations, so `status`, `check drift` and `list` can report a combination of facts that never existed simultaneously. **OPEN.** | |
+| **L4** | Should Part II's II.8 gain the three-scope lock model - `Writer`, `Deferred`, `Reader` - that the code has had since `LockScope` was introduced? Not fixed here: `CLAUDE.md` says do not fix Part II. **OPEN.** | |
 
 ---
 
@@ -9163,3 +9182,102 @@ correctly is worth doing before treating a discrepancy as an open design questio
 - **`shall protected`'s help** already states the rule and needed no change.
 
 Rule in [Part II](target-state.md) II.28, reasoning in **V.159**.
+
+## L1
+
+**Status: OPEN.**
+
+**L1 - Does `record_success` flush per package, or once per wave?** Every `record_start` /
+`record_success` / `record_failure` was one physical `sync_data`, under the journal mutex, on a
+runtime worker. The *opening* half is now batched - `record_starts` writes a whole wave's entries
+and flushes once, which gives every entry the same guarantee at one flush instead of *k*, and is
+free. The closing half is not, because packages finish at different moments and batching their
+completions is a durability trade-off rather than a rewrite of the same one.
+
+*For flushing per package:* the WAL's promise is that its record is never behind reality.
+*Against:* recovery re-runs an interrupted install, and `app/sync/mod.rs` states that re-running
+an install over a half-installed package is something every manager Shall drives can do - so a
+crash in the window between "install succeeded" and "success recorded" costs one idempotent
+re-run, not corruption. On a 298-package config that is ~298 flushes on the critical path, each
+of which stalls the whole wave, to close a window whose cost is a repeated install.
+
+*Recommendation:* batch the completions too, on the strength of the idempotence the tree already
+relies on for recovery - but this is behaviour a user notices after a crash, so it is the owner's.
+---
+
+## L2
+
+**Status: OPEN.**
+
+**L2 - Are the `locks/` ledgers protected by the data lock, by writer scope, or by nothing?**
+`DataLock` guards `safe_data_dir()`. The six ledgers `core::ledger::LockFile` governs - the regex
+expansions, the bare-name resolutions, the exec run counts, the hook approvals, the artifact
+selections, the applied extras - live under `config_root/locks`. Two different trees, and the lock
+covers one of them. Every `LockFile::save` is a whole-file rewrite, so two of them are
+last-one-wins, which is the hazard `core::datalock`'s own doc gives as the reason the lock covers
+a *directory*: *"those files must agree with each other, and a lock over one of a set that must
+agree is the same as no lock."*
+
+What protects them today is two unrelated mechanisms, neither of which is the lock:
+`may_record_locks` keeps most resolutions from recording at all, and the commands that do write
+ledgers - `lock`, `unlock`, `sync` - happen to be `Writer`s and so mutually exclude incidentally.
+The outcome is correct and rests on a pairing nothing asserts. **The regex lock was what that
+looks like when half of it is missing** - it had no `may_record_locks` gate, so `shall check`
+wrote `locks/regex.toml` for real, under no lock; that is fixed, and the other four ledgers were
+traced and write only from explicit `lock`/`unlock`/approval verbs and the apply path.
+
+*Recommendation:* record the status quo as the rule - "ledger writes are protected by writer scope
+plus `may_record_locks`" - rather than bringing `locks/` under a second lock, and keep the new
+reader gate as what asserts it. Either answer is defensible; the status quo being *undocumented*
+is what produced the regex-lock bug.
+---
+
+## L3
+
+**Status: OPEN.**
+
+**L3 - Do reader commands accept a torn cross-file view?** `LockScope::Reader` never takes the
+data lock, so a reader reads `registry.json`, `journal.jsonl` and the `locks/` ledgers as separate,
+unsynchronised operations while a writer in another process updates all three. Each individual
+file is safe - the registry is written by atomic rename and the journal's torn-tail-drop is
+deliberate - but the exposure is *between* them: a reader can observe post-write `registry.json`
+and pre-write `journal.jsonl`, so `shall status`, `shall check drift` and `shall list` can report a
+combination of facts that never existed simultaneously.
+
+The window is milliseconds and the output is advisory, so this is almost certainly nothing a user
+sees. It is raised because the argument that a *directory* lock is necessary for writers is the
+same argument for readers, and only one of the two conclusions was drawn.
+
+*Recommendation:* rule it, do not fix it - "readers accept a torn cross-file view; a shared lock on
+every `shall list` is not worth it" is a perfectly good answer, and what it needs is a status here
+rather than a patch.
+---
+
+## L4
+
+**Status: OPEN.**
+
+**L4 - Part II describes a locking model the code deliberately no longer has.** `CLAUDE.md`:
+*"Anything where Part II looks wrong. **Do not fix Part II yourself.**"* - so this is raised, not
+changed.
+
+`target-state.md` II.8 states: *"Every command that mutates state takes an exclusive lock on the
+data directory **for its whole run**, and a second one waits or says who holds it."* The code has
+had three lock scopes since `LockScope` was introduced, and the change was correct and well
+argued: `Writer` holds it for the run; **`Deferred` does not**, because `watch` is an unbounded
+loop meant to be left running, and held for the run it disabled `install`, `sync` and the
+`hook-reconcile` a hand-typed `apt install` fires for as long as the daemon was up - *"the user who
+followed the documented deployment bricked their own CLI."* `Reader` takes no lock at all.
+`LockScope`, `Deferred` and `Reader` appear nowhere in `docs/spec/`.
+
+**Why it matters beyond bookkeeping.** Read Part II alone and you would conclude that anything a
+mutating command touches is covered by the lock for the duration - which is exactly the belief
+that makes **L2** and **L3** look like non-issues. The spec's model is what a reviewer checks a
+design against, and here it is *more protective* than the code, which is the direction that hides
+findings rather than raising false ones.
+
+*Recommendation:* II.8 gains the three-scope model with `Deferred`'s justification, which is strong
+and already written in `cli/args.rs`; and L2 and L3 are then answered by that rule or given their
+own. Those three questions are one question, and answering them separately is how they drifted
+apart in the first place.
+---

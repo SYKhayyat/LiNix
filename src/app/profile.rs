@@ -1,4 +1,4 @@
-use crate::app::sync::{ChangePlanner, PlanScope, StateResolver, SyncEngine};
+use crate::app::sync::{ChangePlanner, PlanScope, SyncEngine};
 use crate::app::vocab::Vocab;
 use crate::app::Machinery;
 use crate::config::grammar::Origin;
@@ -32,17 +32,11 @@ impl ProfileManager {
     /// What this machine is, plus this run's variables — so a `when $role == travel` block
     /// in `active` is one these verbs can read rather than an unknown key (W8).
     async fn facts(&self) -> Result<HostFacts> {
-        StateResolver::new(&self.m.config, self.m.registry.clone(), false)
-            .await
-            .facts_for_host()
-            .await
+        self.m.resolver().await.facts_for_host().await
     }
 
     async fn vocab(&self) -> Result<Vocab> {
-        let priority = StateResolver::new(&self.m.config, self.m.registry.clone(), false)
-            .await
-            .priority_for_host()
-            .await?;
+        let priority = self.m.resolver().await.priority_for_host().await?;
         Ok(Vocab::new(&self.m.registry, &self.m.config, &priority))
     }
 
@@ -138,7 +132,7 @@ impl ProfileManager {
             body.push_str(name);
             body.push('\n');
         }
-        if !crate::utils::file::persist(&file, &body)? {
+        if !crate::utils::file::persist_off_the_runtime(&file, &body).await? {
             crate::would!("would add {} to active.", added.join(", "));
             return Ok(());
         }
@@ -201,7 +195,7 @@ impl ProfileManager {
             return Ok(());
         }
 
-        if !crate::utils::file::persist(&file, &edit.body)? {
+        if !crate::utils::file::persist_off_the_runtime(&file, &edit.body).await? {
             crate::would!("would deactivate {}.", names.join(", "));
             return Ok(());
         }
@@ -247,17 +241,18 @@ impl ProfileManager {
     pub async fn show(&self, name: &str) -> Result<Vec<String>> {
         self.must_exist(name).await?;
 
-        let mut out: Vec<String> =
-            StateResolver::new(&self.m.config, self.m.registry.clone(), false)
-                .await
-                .as_if_active(active_body(&[name.to_string()]))
-                .resolve_desired_state()
-                .await?
-                .values()
-                .flatten()
-                .filter(|s| s.present)
-                .map(|s| format!("{}:{}", s.backend, s.name))
-                .collect();
+        let mut out: Vec<String> = self
+            .m
+            .resolver()
+            .await
+            .as_if_active(active_body(&[name.to_string()]))
+            .resolve_desired_state()
+            .await?
+            .values()
+            .flatten()
+            .filter(|s| s.present)
+            .map(|s| format!("{}:{}", s.backend, s.name))
+            .collect();
         out.sort();
         out.dedup();
         Ok(out)
@@ -281,7 +276,7 @@ impl ProfileManager {
         tokio::fs::create_dir_all(self.layout.profiles_dir())
             .await
             .ok();
-        crate::utils::file::persist(&path, PROFILE_TEMPLATE)?;
+        crate::utils::file::persist_off_the_runtime(&path, PROFILE_TEMPLATE).await?;
         info!("Created profile '{}' at {}.", name, path.display());
         Ok(())
     }
@@ -289,10 +284,7 @@ impl ProfileManager {
     /// Snapshot what this machine currently wants into a new profile.
     pub async fn save_current_as(&self, name: &str) -> Result<()> {
         self.check_name(name)?;
-        let desired = StateResolver::new(&self.m.config, self.m.registry.clone(), false)
-            .await
-            .resolve_desired_state()
-            .await?;
+        let desired = self.m.resolver().await.resolve_desired_state().await?;
 
         let mut lines: Vec<String> = desired
             .values()
@@ -316,7 +308,7 @@ impl ProfileManager {
              # them. Move them into a module to share them between profiles.\n\n{}\n",
             lines.join("\n")
         );
-        if !crate::utils::file::persist(&path, &body)? {
+        if !crate::utils::file::persist_off_the_runtime(&path, &body).await? {
             crate::would!(
                 "would save profile '{}' with {} package(s) to {}.",
                 name,
@@ -380,14 +372,18 @@ impl ProfileManager {
                 .await
                 .ok();
         }
-        crate::utils::file::persist(&self.layout.active_file(), &active_body(active))
+        crate::utils::file::persist_off_the_runtime(
+            &self.layout.active_file(),
+            &active_body(active),
+        )
+        .await
     }
 
     /// Converge to whatever `active` now says.
     async fn sync_now(&self) -> Result<()> {
         let engine = SyncEngine::new(self.m.clone());
 
-        let resolver = StateResolver::new(&self.m.config, self.m.registry.clone(), false).await;
+        let resolver = self.m.resolver().await;
         let desired = resolver.resolve_desired_state().await?;
         // Activating a profile is a full converge — the whole config is the desired set — so it
         // reaps, and reaps only what `priority` names. It used to reap every backend on the box:

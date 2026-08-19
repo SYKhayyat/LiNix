@@ -56,6 +56,20 @@ pub struct App {
     /// ones Shall may use; this is the accessor that cannot be bypassed, and it is one lazily
     /// resolved answer rather than five identical file reads per command.
     backends: tokio::sync::OnceCell<Backends>,
+    /// `locks/versions.json`, read and parsed once for this run.
+    ///
+    /// Private for the same reason `backends` is: the accessor is the point. Building a
+    /// resolver re-read and re-parsed this file, and three of the 34 places that build one do
+    /// it inside a loop. Shared with every [`Machinery`] this `App` hands out, so the three
+    /// engines read it once between them rather than once each.
+    locks: crate::app::machinery::SharedLocks,
+    /// The run's cap on concurrent remote lookups — `network_parallel`, as a user means it.
+    ///
+    /// **On the `App`, because the `App` is the run.** Held inside `StateResolver` it was a cap
+    /// on an object built 34 times, which is the trap `core::ratelimiter` names: a per-clone
+    /// cell silently multiplies the limit. `backends()` is the neighbouring accessor that
+    /// already had this right.
+    remote_gate: Arc<tokio::sync::Semaphore>,
 }
 
 impl App {
@@ -129,6 +143,7 @@ impl App {
         let journal = Arc::new(Mutex::new(journal));
 
         let scheduler = Arc::new(SchedulerManager::new()?);
+        let network_parallel = config.network_parallel.max(1);
         let config_arc = Arc::new(config);
 
         let diagnostics = Arc::new(FailureDiagnosticEngine::init(&config_arc).await);
@@ -149,6 +164,8 @@ impl App {
             scheduler,
             reaping: Arc::new(crate::app::sync::guard::Reaping::new()),
             backends: tokio::sync::OnceCell::new(),
+            locks: Default::default(),
+            remote_gate: Arc::new(tokio::sync::Semaphore::new(network_parallel)),
         })
     }
 
@@ -183,8 +200,13 @@ impl App {
             reaping: self.reaping.clone(),
             // **Deliberately not carried over.** The edit may name a different config repo, and
             // a resolved `priority` is an answer about the repo it was read from — reusing it
-            // would answer the new run's question with the old run's file.
+            // would answer the new run's question with the old run's file. `locks` is the same
+            // question about `locks/versions.json` and gets the same answer.
             backends: tokio::sync::OnceCell::new(),
+            locks: Default::default(),
+            // Carried over: the cap is on this process's remote lookups, and a second `App`
+            // over the same run is not a second allowance.
+            remote_gate: self.remote_gate.clone(),
         }
     }
 
@@ -214,8 +236,32 @@ impl App {
 
     /// A resolver over this app's config and registry — what a name means here, which managers
     /// this host may use, and what the manifest resolves to.
+    ///
+    /// The expensive shared parts — the parsed pin file and the remote-lookup gate — belong to
+    /// the `App` and are handed to each resolver, so building one is now a struct literal. The
+    /// resolver itself is still built per call rather than memoised: it borrows the config and
+    /// carries per-call builder flags (`upgrading`, `recording_locks`, `vars_override`), so one
+    /// shared instance would have to be mutated by whoever wanted a different answer.
     pub async fn resolver(&self) -> StateResolver<'_> {
-        StateResolver::new(&self.config, self.registry.clone(), false).await
+        StateResolver::with_shared(
+            &self.config,
+            self.registry.clone(),
+            false,
+            self.locks().await.clone(),
+            self.remote_gate.clone(),
+        )
+    }
+
+    /// The pin file, parsed once per run.
+    async fn locks(&self) -> &Arc<std::collections::HashMap<String, String>> {
+        self.locks
+            .get_or_init(|| async { StateResolver::read_locks(&self.config, false).await })
+            .await
+    }
+
+    /// The run's remote-lookup gate, for a caller that builds its own resolver.
+    pub fn remote_gate(&self) -> &Arc<tokio::sync::Semaphore> {
+        &self.remote_gate
     }
 
     /// What this machine has installed, asked of every manager the model uses.
@@ -225,6 +271,8 @@ impl App {
             registry: &self.registry,
             state: &self.state,
             backends: self.backends().await,
+            locks: &self.locks,
+            remote_gate: &self.remote_gate,
         }
     }
 
@@ -233,6 +281,8 @@ impl App {
         Declarations {
             config: &self.config,
             registry: &self.registry,
+            locks: &self.locks,
+            remote_gate: &self.remote_gate,
         }
     }
 
@@ -284,6 +334,8 @@ impl App {
             state: self.state.clone(),
             diagnostics: self.diagnostics.clone(),
             reaping: self.reaping.clone(),
+            remote_gate: self.remote_gate.clone(),
+            locks: self.locks.clone(),
         }
     }
 

@@ -310,8 +310,23 @@ pub trait Queryable: Send + Sync {
 
     /// Names the OS itself marks as essential — packages automated removal must refuse to
     /// touch regardless of what a manifest declares. Default: empty (no such concept).
-    async fn essential(&self) -> Result<Vec<String>> {
+    ///
+    /// **Implemented per backend; not called directly.** Callers use
+    /// [`Queryable::essential`], which asks this once per run.
+    async fn fetch_essential(&self) -> Result<Vec<String>> {
         Ok(Vec::new())
+    }
+
+    /// The same set, asked **once per run**, through the seam `installed_listing` uses.
+    ///
+    /// A live subprocess per backend, on every removal path, previously re-run by each of the
+    /// six call sites that wanted it — so one `sync` with removals asked the whole set at
+    /// least twice and a rollback three times. Routed through `InstalledListings` rather than
+    /// memoised locally, so the invalidation is the one `CommandExecutor::run` already
+    /// performs after a mutation.
+    async fn essential(&self) -> Result<std::sync::Arc<Vec<String>>> {
+        let (memo, key) = self.installed_cache();
+        memo.essential_once(key, self.fetch_essential()).await
     }
 
     /// **Is this installed *here*, and at what version.** `Some` means present on this machine;

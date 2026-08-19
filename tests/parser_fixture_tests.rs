@@ -241,7 +241,7 @@ fn every_fixture_is_read_by_some_test() {
     // `include_str!("../../tests/fixtures/…")` — and the harness scripts, which read by path.
     let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut haystack = String::new();
-    let mut sources = vec![root.clone(), repo.join("src")];
+    let mut sources = vec![root, repo.join("src")];
     while let Some(dir) = sources.pop() {
         for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
             let p = entry.path();

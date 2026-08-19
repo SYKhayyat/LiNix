@@ -42,15 +42,27 @@ impl DataLock {
         crate::core::off_the_runtime(move || Self::acquire(&dir, &command, timeout)).await?
     }
 
-    /// Take the lock, waiting up to `timeout` for whoever holds it.
+    /// Take the lock if it is free at this instant, or report that somebody else holds it.
     ///
-    /// Waiting with no reason given is indistinguishable from hanging, so the wait announces
-    /// the holder — the lock file carries the pid and the command that took it.
-    pub fn acquire(data_dir: &Path, command: &str, timeout: Duration) -> Result<Self> {
+    /// **For a caller with nothing to do with the wait.** A `hook-*` subcommand is fired by a
+    /// manager mid-transaction; if the directory is locked, the run holding it is the run that
+    /// is going to record what the manager just did, so waiting two minutes to be told so
+    /// costs the transaction two minutes and changes nothing. This returns `None` instead,
+    /// and says nothing — contention is the ordinary case here, not a fault.
+    pub fn try_acquire(data_dir: &Path, command: &str) -> Result<Option<Self>> {
+        let (file, owner_path) = Self::open_lock_file(data_dir)?;
+        if file.try_lock_exclusive().is_err() {
+            return Ok(None);
+        }
+        Ok(Some(Self::stamped(file, owner_path, command)))
+    }
+
+    /// Open the lock file and name its owner stamp. Shared so the waiting and non-waiting
+    /// doors cannot disagree about which file in which directory is the lock.
+    fn open_lock_file(data_dir: &Path) -> Result<(File, PathBuf)> {
         crate::utils::file::ensure_dir(data_dir)?;
         let path = data_dir.join("shall.lock");
         let owner_path = data_dir.join("shall.lock.owner");
-
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -58,6 +70,24 @@ impl DataLock {
             .truncate(false)
             .open(&path)
             .map_err(Error::from)?;
+        Ok((file, owner_path))
+    }
+
+    /// Record who holds it. Written after the lock is taken, so the stamp cannot name a
+    /// process that failed to get it.
+    fn stamped(file: File, owner_path: PathBuf, command: &str) -> Self {
+        let stamp = format!("shall {} (pid {})", command, std::process::id());
+        let _ = std::fs::write(&owner_path, stamp);
+        Self { file, owner_path }
+    }
+
+    /// Take the lock, waiting up to `timeout` for whoever holds it.
+    ///
+    /// Waiting with no reason given is indistinguishable from hanging, so the wait announces
+    /// the holder — the lock file carries the pid and the command that took it.
+    pub fn acquire(data_dir: &Path, command: &str, timeout: Duration) -> Result<Self> {
+        let (file, owner_path) = Self::open_lock_file(data_dir)?;
+        let path = data_dir.join("shall.lock");
 
         if file.try_lock_exclusive().is_err() {
             eprintln!(
@@ -91,9 +121,7 @@ impl DataLock {
             }
         }
 
-        let stamp = format!("shall {} (pid {})", command, std::process::id());
-        let _ = std::fs::write(&owner_path, stamp);
-        Ok(Self { file, owner_path })
+        Ok(Self::stamped(file, owner_path, command))
     }
 
     /// Take the lock for one mutating step of a command that does not hold it for its run.
@@ -109,6 +137,15 @@ impl DataLock {
             Duration::from_secs(WAIT_SECS),
         )
         .await
+    }
+
+    /// Take the lock for one step if it is free, standing down rather than waiting.
+    ///
+    /// Beside [`for_one_step`](Self::for_one_step) so the directory stays written down once:
+    /// a caller that spelled `safe_data_dir()` itself would be the fourth copy the doc on
+    /// that function is about.
+    pub fn try_for_one_step(what: &str) -> Result<Option<Self>> {
+        Self::try_acquire(&crate::utils::safe_data_dir(), what)
     }
 
     /// Who is holding the lock, for the message. The stamp lives beside the lock file rather

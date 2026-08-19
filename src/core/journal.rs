@@ -269,12 +269,30 @@ impl Journal {
     ///
     /// One line appended and synced — not a re-serialisation of every entry ever recorded.
     fn append(&self, entry: &JournalEntry) -> Result<()> {
-        trace!("appending to WAL");
-        let line = serde_json::to_string(entry)
-            .map_err(|e| Error::Other(format!("Failed to serialize Journal entry: {}", e)))?;
-        // A preview records no WAL entry: `append_line` answers that, and a run that performed
-        // nothing has nothing to roll back.
-        crate::utils::file::append_line(&self.path, &line)
+        self.append_all(std::slice::from_ref(entry))
+    }
+
+    /// The same, for several entries, at the cost of **one** flush rather than one each.
+    ///
+    /// Every line is on disk before this returns, so each entry keeps exactly the guarantee
+    /// the WAL is for: the record reaches the disk before the manager it describes is invoked.
+    /// What changes is the price of that guarantee. `sync_data` is a physical flush, and
+    /// opening a wave of *k* packages paid *k* of them, serialised, on the critical path,
+    /// while holding the journal mutex throughout — the loop batched the lock acquisition and
+    /// not the thing that costs.
+    fn append_all(&self, entries: &[JournalEntry]) -> Result<()> {
+        trace!("appending {} entr(ies) to WAL", entries.len());
+        let lines = entries
+            .iter()
+            .map(|entry| {
+                serde_json::to_string(entry)
+                    .map_err(|e| Error::Other(format!("Failed to serialize Journal entry: {}", e)))
+            })
+            .collect::<Result<Vec<String>>>()?;
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        // A preview records no WAL entry: `append_lines` answers that, and a run that
+        // performed nothing has nothing to roll back.
+        crate::utils::file::append_lines(&self.path, &refs)
             .map(|_| ())
             .map_err(|e| Error::Persist(format!("Write of WAL Journal failed: {}", e)))
     }
@@ -303,23 +321,44 @@ impl Journal {
 
     /// MUST be called and flushed before invoking any backend command.
     pub fn record_start(&mut self, action: JournalAction) -> Result<String> {
-        let (b_name, p_name) = action.identity();
-        let id = Self::generate_id(b_name, p_name);
+        Ok(self
+            .record_starts(vec![action])?
+            .pop()
+            .expect("one action in, one id out"))
+    }
 
-        let entry = JournalEntry {
-            id: id.clone(),
-            action,
-            status: ActionStatus::InProgress,
-            started_at_unix: Utc::now().timestamp(),
-            finished_at_unix: None,
-            error: None,
-        };
+    /// Open a WAL entry for every member of a wave, in one flush, in order.
+    ///
+    /// **Either all of them are recorded or none is.** The lines are serialised first and
+    /// written second, so a serialisation failure leaves the file untouched and the in-memory
+    /// map untouched with it — which is stronger than the per-entry loop this replaces, where
+    /// a failure on the third entry left the first two on disk and in memory for the caller to
+    /// close by hand.
+    pub fn record_starts(&mut self, actions: Vec<JournalAction>) -> Result<Vec<String>> {
+        let entries: Vec<JournalEntry> = actions
+            .into_iter()
+            .map(|action| {
+                let (b_name, p_name) = action.identity();
+                JournalEntry {
+                    id: Self::generate_id(b_name, p_name),
+                    action,
+                    status: ActionStatus::InProgress,
+                    started_at_unix: Utc::now().timestamp(),
+                    finished_at_unix: None,
+                    error: None,
+                }
+            })
+            .collect();
 
-        self.append(&entry)?;
-        self.entries.insert(id.clone(), entry);
+        self.append_all(&entries)?;
 
-        debug!("Operation {} marked as InProgress in WAL.", id);
-        Ok(id)
+        let mut ids = Vec::with_capacity(entries.len());
+        for entry in entries {
+            debug!("Operation {} marked as InProgress in WAL.", entry.id);
+            ids.push(entry.id.clone());
+            self.entries.insert(entry.id.clone(), entry);
+        }
+        Ok(ids)
     }
 
     pub fn record_success(&mut self, id: &str) -> Result<()> {

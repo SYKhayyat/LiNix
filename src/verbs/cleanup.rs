@@ -628,7 +628,7 @@ pub async fn handle_unmanage(app: &App, packages: &[String], out: Output) -> Res
     // The registry is what Shall believes it manages. A preview that persisted `forget` would
     // leave the package unmanaged for real while promising it had changed nothing.
     if !app.config.dry_run {
-        app.state.lock().await.save()?;
+        crate::core::save_off_the_runtime(&app.state).await?;
     }
 
     if out.is_json() {
