@@ -542,7 +542,8 @@ fn nothing_outside_the_union_reads_the_hold_ledger() {
         ),
         (
             "src/app/sync/planner.rs",
-            "asks per spec, so the declaration is already in its hand and the union it computes              (`state.is_held(..) || spec.declares_hold()`) is this one, for one package",
+            "asks per spec, so the declaration is already in its hand and the union it computes \
+             (`state.is_held(..) || spec.declares_hold()`) is this one, for one package",
         ),
     ];
 
@@ -578,10 +579,14 @@ fn nothing_outside_the_union_reads_the_hold_ledger() {
         "{} place(s) read the hold ledger directly:
   {}
 
-`shall hold` writes the ledger          and `@hold=true` on a manifest line writes nothing there, so a reader that sees only          the ledger upgrades a package the user froze. Ask `App::holds()`, which is the union          of the two.",
+`shall hold` writes the ledger and `@hold=true` on a manifest line writes nothing there, \
+so a reader that sees only the ledger upgrades a package the user froze. Ask \
+`App::holds()`, which is the union of the two.",
         deaf.len(),
-        deaf.join("
-  ")
+        deaf.join(
+            "
+  "
+        )
     );
 
     // And the union has to actually be reached, or the rule above is satisfied by nobody asking
@@ -593,7 +598,8 @@ fn nothing_outside_the_union_reads_the_hold_ledger() {
         .count();
     assert!(
         callers >= 3,
-        "only {callers} module(s) reach `App::holds()`; the readers this finding was about are          `upgrade` (three of them) and `hold`, so this scan is looking at the wrong thing"
+        "only {callers} module(s) reach `App::holds()`; the readers this finding was about are \
+         `upgrade` (three of them) and `hold`, so this scan is looking at the wrong thing"
     );
 }
 

@@ -395,14 +395,13 @@ impl Inventory<'_> {
         // `purge-undeclared` must defer to the recorded installer rather than delete it. Match by
         // name: the installer is `dpkg`/`rpm`, the lister is `apt`/`dnf`, and the name is the one
         // identity they share.
-        let owned = self.owned_system_package_names().await;
+        let owned = self.owned_system_package_names().await?;
         // Probed before the state lock is taken: it runs a child process, and holding a mutex
         // across one is how a lock becomes a bottleneck nobody can see.
         let foreign = crate::backends::shared_database::ForeignSets::probe(self.registry).await;
         // The managed check touches the state lock once, after the process work is done,
         // rather than holding it across every backend's query.
         let state = self.state.lock().await;
-        let managed = state.managed_index();
         Ok(UndeclaredReport {
             // Collapsed BEFORE the managed check, not after: `pacman:jq` being declared is
             // what makes jq declared, and a `yay:jq` row surviving that filter would report a
@@ -413,7 +412,7 @@ impl Inventory<'_> {
                 &foreign,
             )
             .into_iter()
-            .filter(|pkg| !managed.contains(&(pkg.backend.as_str(), pkg.name.as_str())))
+            .filter(|pkg| !state.is_managed(&pkg.backend, &pkg.name))
             .filter(|pkg| !owned.contains(&pkg.name))
             .collect(),
             unanswered,
@@ -424,22 +423,23 @@ impl Inventory<'_> {
     /// Every system package a download backend (`github:`/`web:`) installed through a second
     /// manager (D5), by name. Used to keep those packages out of the unmanaged crawl so they are
     /// neither double-counted nor purged out from under the declaration that owns them.
-    pub async fn owned_system_package_names(&self) -> std::collections::HashSet<String> {
+    pub async fn owned_system_package_names(&self) -> Result<std::collections::HashSet<String>> {
         // What Shall uses: this answers "which system packages did a download backend of ours
         // install", and only a backend of ours can have.
-        let Ok(backends) = self.backends.usable() else {
-            return std::collections::HashSet::new();
-        };
+        let backends = self.backends.usable()?;
         let owned =
             self.query_backends_concurrently(backends, |q| async move {
                 q.owned_system_packages().await
             })
             .await;
-        owned
-            .into_iter()
-            .flatten()
-            .map(|(_installer, pkg)| pkg)
-            .collect()
+        // A backend that cannot read its own record has not answered "none". Reported as none,
+        // these packages read as undeclared drift and `purge-undeclared` deletes what a
+        // download declaration owns.
+        let mut names = std::collections::HashSet::new();
+        for answer in owned {
+            names.extend(answer?.into_iter().map(|(_installer, pkg)| pkg));
+        }
+        Ok(names)
     }
 
     /// Run one read-only query against every queryable backend concurrently, capped at

@@ -2,6 +2,7 @@ use crate::core::{Error, Result};
 use crate::utils::file::persist;
 use crate::utils::safe_data_dir;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, trace};
@@ -54,13 +55,56 @@ pub struct Suspension {
     pub suspended_at: u64,
 }
 
+/// `registry.json` stores the managed packages as a JSON array, and it still does.
+///
+/// The in-memory shape is a map because every question asked of it is a `(backend, name)`
+/// lookup; the file's shape is an array because that is what is on every machine that has run
+/// Shall. **A record format is not a thing to change for an in-memory decision** — a reader
+/// that met the other shape would have to be written, and NO LEGACY means the honest way to
+/// have two shapes is to have the conversion here, once, and one format on disk.
+mod packages_as_list {
+    use super::ManagedPackage;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::collections::BTreeMap;
+
+    pub fn serialize<S: Serializer>(
+        packages: &BTreeMap<(String, String), ManagedPackage>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        packages.values().collect::<Vec<_>>().serialize(s)
+    }
+
+    /// Last row wins for a duplicated `(backend, name)`, which is what the `Vec` did: `add`
+    /// dropped every earlier row for the same key before pushing.
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<BTreeMap<(String, String), ManagedPackage>, D::Error> {
+        Ok(Vec::<ManagedPackage>::deserialize(d)?
+            .into_iter()
+            .map(|p| ((p.backend.clone(), p.name.clone()), p))
+            .collect())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateRegistry {
     /// Skipped by serde, so a deserialized registry carries an empty path until the loader
     /// restores it — saving before that would write to the wrong place.
     #[serde(skip)]
     pub path: PathBuf,
-    pub packages: Vec<ManagedPackage>,
+    /// Keyed by `(backend, name)`, which is the identity every question here asks about.
+    ///
+    /// **A `Vec` made the two commonest operations linear, and one of them reallocating.**
+    /// `is_managed` scanned, and `add` was a full `retain` — an `O(n)` scan *and* a rewrite of
+    /// the whole vector per package added — so `declare`'s loop adopting N packages into a
+    /// registry of M was `O(N·M)` twice over. `managed_index()` was written to treat the scan
+    /// at the two worst sites and reached two of seven; the map removes the class instead, and
+    /// `reconcile_ownership` on the default sync path is the site it was never spread to.
+    ///
+    /// Serialised as the same JSON array it always was — see [`packages_as_list`]. The file
+    /// on every machine that has run Shall is not a thing to rewrite for an in-memory shape.
+    #[serde(with = "packages_as_list")]
+    packages: BTreeMap<(String, String), ManagedPackage>,
     /// Removed packages, kept as a record after uninstall.
     pub active_session_id: Option<String>,
     /// Packages temporarily uninstalled that are awaiting restoration.
@@ -74,7 +118,7 @@ impl StateRegistry {
     pub fn new(path: PathBuf) -> Self {
         Self {
             path,
-            packages: Vec::new(),
+            packages: BTreeMap::new(),
             active_session_id: None,
             suspensions: Vec::new(),
             held: Vec::new(),
@@ -272,9 +316,6 @@ impl StateRegistry {
             None
         };
 
-        self.packages
-            .retain(|p| !(p.backend == backend && p.name == name));
-
         let new_pkg = ManagedPackage {
             name: name.to_string(),
             backend: backend.to_string(),
@@ -295,7 +336,10 @@ impl StateRegistry {
             is_transient
         );
 
-        self.packages.push(new_pkg);
+        // Replaces any row for the same `(backend, name)`, which is what the `retain` here
+        // did, without walking and rewriting the whole registry to do it.
+        self.packages
+            .insert((backend.to_string(), name.to_string()), new_pkg);
         debug!("Package {}:{} is now under management.", backend, name);
     }
 
@@ -310,12 +354,11 @@ impl StateRegistry {
     /// record that no longer existed. Whether a package was uninstalled or merely unmanaged is
     /// not a thing Shall stores, and there is now one function saying so.
     pub fn remove(&mut self, backend: &str, name: &str) -> bool {
-        if let Some(pos) = self
+        if self
             .packages
-            .iter()
-            .position(|p| p.backend == backend && p.name == name)
+            .remove(&(backend.to_string(), name.to_string()))
+            .is_some()
         {
-            self.packages.remove(pos);
             debug!("Package {}:{} is no longer managed.", backend, name);
             true
         } else {
@@ -331,7 +374,7 @@ impl StateRegistry {
     pub fn get_expired_packages(&self) -> Vec<(String, String)> {
         let now = Self::now();
         self.packages
-            .iter()
+            .values()
             .filter(|p| p.expires_at.is_some_and(|expiry| now >= expiry))
             .map(|p| (p.backend.clone(), p.name.clone()))
             .collect()
@@ -343,7 +386,7 @@ impl StateRegistry {
             session_id
         );
         self.packages
-            .iter()
+            .values()
             .filter(|p| p.is_transient && p.session_id.as_deref() == Some(session_id))
             .map(|p| (p.backend.clone(), p.name.clone()))
             .collect()
@@ -424,30 +467,52 @@ impl StateRegistry {
         &self.suspensions
     }
 
-    pub fn is_managed(&self, backend: &str, name: &str) -> bool {
-        self.packages
-            .iter()
-            .any(|p| p.backend == backend && p.name == name)
-    }
-
-    /// Everything under management, as a set to ask many questions of.
+    /// One lookup, not a scan.
     ///
-    /// [`StateRegistry::is_managed`] is a linear scan, which is the right shape for one
-    /// question and the wrong one for a crawl: `installed_but_undeclared` asked it once per
-    /// *installed* package against every *managed* one — on a stock Ubuntu that is ~476 × ~301,
-    /// or about 143,000 double string comparisons, to answer a question a set answers in one
-    /// hash each. Borrowed, so building it allocates the table and not the names.
-    pub fn managed_index(&self) -> std::collections::HashSet<(&str, &str)> {
-        self.packages
-            .iter()
-            .map(|p| (p.backend.as_str(), p.name.as_str()))
-            .collect()
+    /// The allocation is the cost of a `BTreeMap` keyed by owned strings; it is one pair of
+    /// `String`s against a walk of the whole registry, and the seven sites that asked this in a
+    /// loop are why the walk was the thing worth removing. `managed_index()` used to exist to
+    /// dodge the scan and reached two of those seven.
+    pub fn is_managed(&self, backend: &str, name: &str) -> bool {
+        self.get_package(backend, name).is_some()
     }
 
     pub fn get_package(&self, backend: &str, name: &str) -> Option<&ManagedPackage> {
+        self.packages.get(&(backend.to_string(), name.to_string()))
+    }
+
+    /// Everything under management, in `(backend, name)` order.
+    pub fn managed(&self) -> impl Iterator<Item = &ManagedPackage> {
+        self.packages.values()
+    }
+
+    /// How many packages are under management.
+    pub fn managed_count(&self) -> usize {
+        self.packages.len()
+    }
+
+    /// One managed row, mutably — for the few callers that edit a field of a record already
+    /// under management rather than replacing it.
+    pub fn managed_mut(&mut self, backend: &str, name: &str) -> Option<&mut ManagedPackage> {
         self.packages
-            .iter()
-            .find(|p| p.backend == backend && p.name == name)
+            .get_mut(&(backend.to_string(), name.to_string()))
+    }
+
+    /// Put one already-built record under management, replacing any row for the same key.
+    ///
+    /// [`StateRegistry::add`] is the door for a real install — it decides the origin, the
+    /// session and the timestamps. This is for a caller that already holds the whole record.
+    pub fn manage(&mut self, pkg: ManagedPackage) {
+        self.packages
+            .insert((pkg.backend.clone(), pkg.name.clone()), pkg);
+    }
+
+    /// Replace the whole set — for a restore, and for tests that construct a registry.
+    pub fn set_managed(&mut self, packages: impl IntoIterator<Item = ManagedPackage>) {
+        self.packages = packages
+            .into_iter()
+            .map(|p| ((p.backend.clone(), p.name.clone()), p))
+            .collect();
     }
 
     /// Public so callers can validate a user-supplied duration up front (a malformed
@@ -457,16 +522,23 @@ impl StateRegistry {
             return None;
         }
         let unit = duration_str.chars().last()?;
-        let val_part = &duration_str[..duration_str.len() - 1];
+        // Sliced by `len_utf8`, not by one byte: the unit is a `char` and the remainder is a
+        // byte range, so a multi-byte final character put the split inside a codepoint and
+        // `panic = "abort"` turned a typo on a non-Latin keyboard into a dead process with no
+        // message. The refusal below is what the caller is written to report.
+        let (val_part, _) = duration_str.split_at(duration_str.len() - unit.len_utf8());
         let value: u64 = val_part.parse().ok()?;
+        // Checked, because the multiplication wraps: `[profile.release]` sets no
+        // `overflow-checks`, so a duration large enough to overflow produced a restore time in
+        // the near past and the package came back at the wrong moment with no error.
         let seconds = match unit {
             's' => value,
-            'm' => value * 60,
-            'h' => value * 3600,
-            'd' => value * 86400,
+            'm' => value.checked_mul(60)?,
+            'h' => value.checked_mul(3600)?,
+            'd' => value.checked_mul(86400)?,
             _ => return None,
         };
-        Some(Self::now() + seconds)
+        Self::now().checked_add(seconds)
     }
 
     fn now() -> u64 {
@@ -532,7 +604,7 @@ mod tests {
         // not about the shape of the row.
         std::fs::write(&path, &good).unwrap();
         let loaded = StateRegistry::load_from(&path).unwrap();
-        assert_eq!(loaded.packages[0].source, "modules/dev.txt:2");
+        assert_eq!(loaded.managed().next().unwrap().source, "modules/dev.txt:2");
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -545,7 +617,7 @@ mod tests {
         let mut r = reg();
         for source in ["modules/dev.txt:14", "adopt", "imperative", "hook:choco"] {
             r.add("apt", "jq", None, Default::default(), source, false);
-            let row = r.packages.iter().find(|p| p.name == "jq").unwrap();
+            let row = r.get_package("apt", "jq").unwrap();
             assert_eq!(row.source, source);
             assert!(!row.source.is_empty());
         }
@@ -656,5 +728,48 @@ mod tests {
         assert!(!r.is_held("cargo", "ripgrep"));
         assert!(!r.unhold("cargo:ripgrep"), "already gone");
         assert_eq!(r.list_held(), &["curl".to_string()]);
+    }
+    /// **A malformed `--temp` is refused, and refusing it is not the same as dying.**
+    ///
+    /// The unit is read as a `char` and the number as a byte range. Taking one byte off the
+    /// end landed inside a multi-byte character, and with `panic = "abort"` the process was
+    /// gone before `suspend` could turn the `None` into the message it is written to produce.
+    /// The oversized cases cover the other half: the multiplication used to wrap, which turned
+    /// a far-future restore time into one already past.
+    #[test]
+    fn a_malformed_duration_is_refused_rather_than_fatal() {
+        for bad in [
+            "7\u{434}",  // Cyrillic unit, two bytes
+            "7\u{4e00}", // three bytes
+            "\u{434}",   // no digits at all
+            "7x",
+            "7",
+            "",
+            "-1d",
+            "99999999999999999d",    // overflows u64 seconds
+            "18446744073709551615s", // overflows `now + seconds`
+        ] {
+            assert_eq!(
+                StateRegistry::parse_duration(bad),
+                None,
+                "`{}` must be refused",
+                bad
+            );
+        }
+    }
+
+    #[test]
+    fn a_well_formed_duration_is_that_many_seconds_from_now() {
+        let now = StateRegistry::now();
+        for (spec, secs) in [("30s", 30), ("5m", 300), ("2h", 7200), ("7d", 604_800)] {
+            let at = StateRegistry::parse_duration(spec).expect(spec);
+            assert!(
+                at.abs_diff(now + secs) <= 2,
+                "`{}` should be {}s out, got {}",
+                spec,
+                secs,
+                at as i64 - now as i64
+            );
+        }
     }
 }

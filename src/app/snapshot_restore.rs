@@ -318,13 +318,11 @@ impl SnapshotRestore {
     fn calculate_diff(current: &StateRegistry, past: &StateRegistry) -> StateDiff {
         let mut diff = StateDiff::default();
         let curr_map: HashMap<String, &ManagedPackage> = current
-            .packages
-            .iter()
+            .managed()
             .map(|p| (format!("{}:{}", p.backend, p.name), p))
             .collect();
         let past_map: HashMap<String, &ManagedPackage> = past
-            .packages
-            .iter()
+            .managed()
             .map(|p| (format!("{}:{}", p.backend, p.name), p))
             .collect();
 

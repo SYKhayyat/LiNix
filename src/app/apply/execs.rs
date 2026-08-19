@@ -188,7 +188,8 @@ impl Execs<'_> {
                 if let Some(count) = moved {
                     if count < threshold {
                         info!(
-                            "skipping exec:{} — it runs after {} package(s) move and this run                              moved {} ({})",
+                            "skipping exec:{} — it runs after {} package(s) move and this run \
+                             moved {} ({})",
                             script, threshold, count, origin
                         );
                         continue;

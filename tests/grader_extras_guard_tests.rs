@@ -110,7 +110,7 @@ fn undeclaring_managed_extras_goes_through_the_removal_guard() {
          one removal and to protect `f3`.\n\
          It exited {rc} and reported no changes.\n\
          --- shall --dry-run sync ---\n{}\n--- shall sync -y ---\n{}\n\n\
-         src/app/apply/extras.rs:105 calls `inst.remove(...)` directly; the word `guard` does \
+         src/app/apply/extras.rs calls `inst.remove(...)` directly; the word `guard` does \
          not appear in that file. README.md says every path that removes anything goes \
          through one guard.",
         gone.len(),

@@ -137,15 +137,19 @@ impl Adopter {
     async fn owned_system_names(
         &self,
         backends: &[Arc<crate::core::BackendCapabilities>],
-    ) -> HashSet<String> {
+    ) -> Result<HashSet<String>> {
         use futures::stream::StreamExt;
-        futures::stream::iter(backends.iter().filter_map(|b| b.as_queryable().cloned()))
-            .map(|q| async move { q.owned_system_packages().await })
-            .buffer_unordered(self.config.max_parallel.max(1))
-            .flat_map(futures::stream::iter)
-            .map(|(_installer, pkg)| pkg)
-            .collect()
-            .await
+        let answers: Vec<Result<Vec<(String, String)>>> =
+            futures::stream::iter(backends.iter().filter_map(|b| b.as_queryable().cloned()))
+                .map(|q| async move { q.owned_system_packages().await })
+                .buffer_unordered(self.config.max_parallel.max(1))
+                .collect()
+                .await;
+        let mut names = HashSet::new();
+        for answer in answers {
+            names.extend(answer?.into_iter().map(|(_installer, pkg)| pkg));
+        }
+        Ok(names)
     }
 
     /// Each backend's user-chosen packages, as `(backend, how it decided, packages)`.
@@ -188,7 +192,8 @@ impl Adopter {
                         // believing you asked for the 40 that start at boot.
                         Ok(None) => {
                             warn!(
-                                "`{}` cannot say which of its entries this machine starts on                                  its own, so `--enabled-only` has nothing to filter on here —                                  skipping it rather than taking all of them.",
+                                "`{}` cannot say which of its entries this machine starts on \
+                                 its own, so `--enabled-only` has nothing to filter on here —                                  skipping it rather than taking all of them.",
                                 backend.name()
                             );
                             None
@@ -262,6 +267,10 @@ impl Adopter {
             self.owned_system_names(&backends),
             self.manual_listings(&backends, scope)
         );
+        // Propagated, not defaulted: a backend that cannot read its own D5 record does not own
+        // nothing, and treating it as owning nothing offers the user a line adopting a package
+        // a download declaration already owns.
+        let owned_system = owned_system?;
         // Whether this run sweeps `name` at all: everything, unless the command line named
         // backends, in which case only those.
         let sweeping = |name: &str| scope.backends.is_empty() || scope.asked_for(name);
@@ -326,10 +335,25 @@ impl Adopter {
             .filter(|n| !crate::backends::shared_database::owns_its_database(n))
             .collect();
 
+        // **Keyed by database, because that is the question asked of it.** "Managed under any
+        // client of this database" is not a `(backend, name)` lookup, so it is the one place
+        // that wants an index of its own rather than the registry's — and built once for the
+        // whole crawl rather than once per source, under one lock rather than one per source.
+        let managed_by_database: HashSet<(String, String)> = {
+            let state_guard = self.state.lock().await;
+            state_guard
+                .managed()
+                .map(|p| {
+                    (
+                        crate::backends::shared_database::package_database(&p.backend).to_string(),
+                        p.name.clone(),
+                    )
+                })
+                .collect()
+        };
+
         for (name, source, pkgs) in &manual {
             found.sources.insert(name.clone(), source.clone());
-            let state_guard = self.state.lock().await;
-            let managed = state_guard.managed_index();
             for pkg in pkgs {
                 // Keyed on the database, not the client. A name claimed here is claimed for
                 // every backend that shares the database — including when the claim is a skip,
@@ -356,10 +380,7 @@ impl Adopter {
                 // `pacman:jq` an earlier run declared is jq declared, and asking about
                 // `yay:jq` would adopt a second line for the same package — which is the
                 // duplicate this whole relation exists to stop.
-                let already = managed.iter().any(|(b, n)| {
-                    *n == pkg.name.as_str()
-                        && crate::backends::shared_database::package_database(b) == db
-                });
+                let already = managed_by_database.contains(&(db.to_string(), pkg.name.clone()));
                 if !already && !owned_system.contains(&pkg.name) {
                     trace!("candidate: {}", key);
                     candidates.push(pkg.clone());

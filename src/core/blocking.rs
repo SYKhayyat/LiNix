@@ -71,6 +71,106 @@ pub fn command_output(
     on_the_terminal(|| command.output())
 }
 
+/// The same, with a bound — for a child whose command line came from a *script*.
+///
+/// **[`command_output`] returns when the child does and never before**, which is the right
+/// shape for `git commit` and for a `--help` probe and the wrong one for the two doors that run
+/// user-authored code: an external `vars.<ext>` provider, and `sh()` in the Rhai stdlib. Both of
+/// those sit at step 0 of resolution — before any package manager is asked and before any plan
+/// exists — so they are on the path of *every* command, `check` and `list` and `plan` included.
+/// A `vars.py` reading from a network mount that went away, or a `vars.shall` calling
+/// `sh("git fetch")` against an unreachable remote, hung Shall for ever with no output and no
+/// way out but Ctrl-C. On a scheduled run there is nobody to press it.
+///
+/// The reasoning was already written down twice — `events.rs` bounds a hook because it is
+/// "arbitrary code fired by a timer, with nobody at the terminal", and `rhai_stdlib`'s
+/// operation cap names this exact gap: *"it counts Rhai operations, not seconds — a hook whose
+/// `sh()` runs for ten minutes is one."* This is the seconds.
+///
+/// A **whole-command** bound rather than the idle bound the `tokio` doors use: those watch a
+/// stream they are already draining, and a synchronous child's output is drained by the reader
+/// threads below, not by the waiter. `0` in `command_idle_timeout_secs` still means no bound,
+/// so the escape hatch is the one users already know.
+pub fn command_output_bounded(
+    command: &mut std::process::Command,
+    what: &str,
+) -> std::io::Result<std::process::Output> {
+    command_output_within(command, what, crate::core::executor::command_idle_timeout())
+}
+
+/// The body of [`command_output_bounded`] with the bound passed in.
+///
+/// Split out so a test can name its own: the process-wide one is a `OnceCell` seeded at
+/// startup, and a test that set it would decide the value for every other test in the binary.
+fn command_output_within(
+    command: &mut std::process::Command,
+    what: &str,
+    limit: Option<std::time::Duration>,
+) -> std::io::Result<std::process::Output> {
+    let Some(limit) = limit else {
+        return command_output(command);
+    };
+    on_the_terminal(|| {
+        use std::io::Read;
+        use std::process::Stdio;
+        let mut child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        // Drained on their own threads. A child that fills its output pipe stops writing, and a
+        // waiter that is not reading would then be waiting on a child that is waiting on it —
+        // a deadlock the timeout would report as a hang the script did not cause.
+        let mut out = child.stdout.take();
+        let mut err = child.stderr.take();
+        let out_thread = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(pipe) = out.as_mut() {
+                let _ = pipe.read_to_end(&mut buf);
+            }
+            buf
+        });
+        let err_thread = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(pipe) = err.as_mut() {
+                let _ = pipe.read_to_end(&mut buf);
+            }
+            buf
+        });
+
+        let deadline = std::time::Instant::now() + limit;
+        let status = loop {
+            match child.try_wait()? {
+                Some(status) => break status,
+                None if std::time::Instant::now() >= deadline => {
+                    // Killed rather than asked: this is not a package manager mid-transaction
+                    // with a database to unwind, it is a script of the user's that stopped
+                    // answering, and leaving it running is what "unbounded" already meant.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        format!(
+                            "{} did not finish within {}s and was stopped. It runs before \
+                             anything else Shall does, so a wait here is a wait on every \
+                             command. Raise `command_idle_timeout_secs`, or set it to 0 to \
+                             remove the bound.",
+                            what,
+                            limit.as_secs()
+                        ),
+                    ));
+                }
+                None => std::thread::sleep(std::time::Duration::from_millis(25)),
+            }
+        };
+        Ok(std::process::Output {
+            status,
+            stdout: out_thread.join().unwrap_or_default(),
+            stderr: err_thread.join().unwrap_or_default(),
+        })
+    })
+}
+
 /// The same, for a command whose streams are inherited and whose answer is its exit status.
 pub fn command_status(
     command: &mut std::process::Command,
@@ -81,6 +181,82 @@ pub fn command_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A script that never finishes is stopped, and the stop says so.**
+    ///
+    /// The two doors that run user-authored code — an external `vars.<ext>` provider and
+    /// `sh()` in the Rhai stdlib — both sit before any package manager is asked, so an
+    /// unbounded wait there is an unbounded wait on `check`, `list`, `plan` and every
+    /// scheduled `sync`.
+    #[test]
+    fn a_command_that_never_finishes_is_stopped_and_named() {
+        let mut cmd = if cfg!(windows) {
+            let mut c = std::process::Command::new("cmd");
+            c.args(["/c", "ping -n 30 127.0.0.1 > NUL"]);
+            c
+        } else {
+            let mut c = std::process::Command::new("sh");
+            c.args(["-c", "sleep 30"]);
+            c
+        };
+        let started = std::time::Instant::now();
+        let err = command_output_within(
+            &mut cmd,
+            "the wedged provider",
+            Some(std::time::Duration::from_millis(300)),
+        )
+        .expect_err("a command that outlives its bound is not a result");
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+        assert!(
+            err.to_string().contains("the wedged provider"),
+            "the message must name what hung: {err}"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "the bound did not bound anything"
+        );
+    }
+
+    /// The bound must not cost the ordinary case its output. A command inside the bound comes
+    /// back whole — both streams, and the exit status.
+    #[test]
+    fn a_command_inside_the_bound_returns_its_output() {
+        let mut cmd = if cfg!(windows) {
+            let mut c = std::process::Command::new("cmd");
+            c.args(["/c", "echo hello"]);
+            c
+        } else {
+            let mut c = std::process::Command::new("sh");
+            c.args(["-c", "echo hello"]);
+            c
+        };
+        let out = command_output_within(
+            &mut cmd,
+            "a probe",
+            Some(std::time::Duration::from_secs(30)),
+        )
+        .expect("a fast command");
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hello");
+    }
+
+    /// `0` means no bound, all the way down — the escape hatch users already know from
+    /// `command_idle_timeout_secs`.
+    #[test]
+    fn no_bound_still_runs_the_command() {
+        let mut cmd = if cfg!(windows) {
+            let mut c = std::process::Command::new("cmd");
+            c.args(["/c", "echo unbounded"]);
+            c
+        } else {
+            let mut c = std::process::Command::new("sh");
+            c.args(["-c", "echo unbounded"]);
+            c
+        };
+        let out =
+            command_output_within(&mut cmd, "a probe", None).expect("no bound refuses nothing");
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "unbounded");
+    }
 
     /// The no-runtime case: a plain call, not a panic. Every unit test in this repo is one.
     #[test]

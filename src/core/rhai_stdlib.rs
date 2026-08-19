@@ -61,8 +61,15 @@ fn register_stdlib(engine: &mut Engine) {
     engine.register_fn(
         "sh",
         |cmd: &str| -> std::result::Result<String, Box<EvalAltResult>> {
-            let out = crate::core::blocking::command_output(&mut shell_command(cmd))
-                .map_err(|e| rt_err(format!("sh: could not run `{}`: {}", cmd, e)))?;
+            // Bounded, for the reason `MAX_OPERATIONS` names and cannot reach: the operation
+            // cap counts Rhai operations, not seconds, so a `sh()` that waits for ten minutes
+            // costs one. `vars.shall` resolves before any manager is asked, so that wait is a
+            // wait on every command Shall has.
+            let out = crate::core::blocking::command_output_bounded(
+                &mut shell_command(cmd),
+                &format!("`sh(\"{}\")`", cmd),
+            )
+            .map_err(|e| rt_err(format!("sh: could not run `{}`: {}", cmd, e)))?;
             if !out.status.success() {
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 return Err(rt_err(format!(
@@ -78,9 +85,14 @@ fn register_stdlib(engine: &mut Engine) {
         },
     );
     engine.register_fn("sh_ok", |cmd: &str| {
-        crate::core::blocking::command_output(&mut shell_command(cmd))
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        // A timeout is not a "yes" — `unwrap_or(false)` is already the answer this shape gives
+        // to a command that could not be run, and a command that never finished is one of those.
+        crate::core::blocking::command_output_bounded(
+            &mut shell_command(cmd),
+            &format!("`sh_ok(\"{}\")`", cmd),
+        )
+        .map(|o| o.status.success())
+        .unwrap_or(false)
     });
 
     // --- read-only filesystem ---
@@ -157,6 +169,14 @@ fn shell_command(cmd: &str) -> std::process::Command {
 /// Blocking this thread is safe because both callers run behind `spawn_blocking`: this is never
 /// a runtime worker, so nothing is starved while the request is in flight.
 fn http_get(url: &str) -> std::result::Result<String, String> {
+    // **The seed URL is checked, not only the redirects.** The pooled client refuses a hop that
+    // leaves HTTPS, so the one URL its policy never sees is the one it was handed. What comes
+    // back here becomes a resolved variable, and a resolved variable decides which packages get
+    // declared — the same "the value crossing the network decides what runs on the machine"
+    // that `check_scheme` exists for. There is no `@allow_http` here to spell the exception
+    // with, and inventing a silent default is what that option exists to prevent.
+    crate::core::download::check_scheme(url, false, "an http_get from a script")
+        .map_err(|e| e.to_string())?;
     let client =
         crate::core::http::api("shall-vars", HTTP_TIMEOUT_SECS).map_err(|e| e.to_string())?;
     let url = url.to_string();
@@ -210,5 +230,30 @@ fn json_to_dynamic(v: &serde_json::Value) -> Dynamic {
             }
             map.into()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **The URL a script hands in is checked, not only the ones it is redirected to.**
+    ///
+    /// The pooled client refuses a hop that leaves HTTPS, so the seed URL was the one place its
+    /// policy never looked. What `http_get` returns becomes a resolved variable, and a resolved
+    /// variable decides which packages get declared — the value crossing the network decides
+    /// what runs on the machine, which is `check_scheme`'s whole argument.
+    #[test]
+    fn a_plain_http_seed_url_is_refused_before_the_request() {
+        let err = http_get("http://internal/config").expect_err("plain http is not a seed URL");
+        assert!(err.contains("plain HTTP"), "{err}");
+    }
+
+    /// The refusal is about the scheme and nothing else — an https URL gets past it and fails,
+    /// if it fails, on the network rather than on the check.
+    #[test]
+    fn an_https_url_is_not_refused_by_the_scheme_check() {
+        let err = http_get("https://host.invalid./nothing-here").unwrap_err();
+        assert!(!err.contains("plain HTTP"), "{err}");
     }
 }

@@ -118,7 +118,8 @@ fn a_name_no_backend_can_install_is_never_left_in_the_manifest() {
         // offline, still measures what it claims to.
         if out.contains("rate limit") || out.contains("rate limiting") {
             eprintln!(
-                "skipped: {backend} is rate limited by its registry, so the failure under test                  is transient rather than permanent and the line is kept ON PURPOSE:
+                "skipped: {backend} is rate limited by its registry, so the failure under test \
+                 is transient rather than permanent and the line is kept ON PURPOSE:
 {out}"
             );
             continue;

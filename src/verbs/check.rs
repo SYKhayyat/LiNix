@@ -1072,8 +1072,7 @@ pub async fn check_health(app: &App, out: Output) -> Result<()> {
             let managed: std::collections::HashSet<String> = {
                 let state = app.state.lock().await;
                 state
-                    .packages
-                    .iter()
+                    .managed()
                     .map(|p| format!("{}:{}", p.backend, p.name))
                     .collect()
             };

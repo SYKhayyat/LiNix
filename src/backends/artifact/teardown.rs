@@ -67,9 +67,13 @@ impl Deployed {
     }
 
     /// The last path segment of a URL, which is how `web:` and `appimage:` name their downloads.
+    ///
+    /// Through the same `url_filename` the install used, or the name looked for here is not the
+    /// name that was written. A URL this refuses is one no install accepted, so there is
+    /// nothing cached under it to forget.
     pub fn cached_url(self, url: &str) -> Self {
-        let basename = url.split('/').next_back().unwrap_or("");
-        self.cached(basename)
+        let basename = crate::utils::file::url_filename(url).unwrap_or_default();
+        self.cached(&basename)
     }
 }
 

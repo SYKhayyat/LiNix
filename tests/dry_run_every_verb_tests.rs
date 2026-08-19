@@ -169,7 +169,10 @@ const CASES: &[Case] = &[
 /// while `hooks install` writes into a manager's system hook directory, and `path` as
 /// "read-only" while `path --set` writes Shall's own settings file.
 const EXEMPT: &[(&str, &str)] = &[
-    ("sync", "covered by grader_extras_guard_tests and dry_run_tests; needs backends"),
+    (
+        "sync",
+        "covered by grader_extras_guard_tests and dry_run_tests; needs backends",
+    ),
     ("rebuild", "removes and reinstalls through a real manager"),
     ("watch", "runs until interrupted"),
     ("run", "runs a declared command; not a config mutation"),
@@ -178,10 +181,16 @@ const EXEMPT: &[(&str, &str)] = &[
         "clean-cache",
         "needs a backend holding a real download cache; a fixture has none to clear",
     ),
-    ("reset", "refuses without a terminal — asserted in grader_refusal_exit_code_tests"),
+    (
+        "reset",
+        "refuses without a terminal — asserted in grader_refusal_exit_code_tests",
+    ),
     ("check", "read-only — reports, never writes"),
     ("vars", "read-only — prints this host's resolved variables"),
-    ("purge-undeclared", "needs an adopted machine; refuses on the ratio check first"),
+    (
+        "purge-undeclared",
+        "needs an adopted machine; refuses on the ratio check first",
+    ),
     ("protected", "read-only — explains why a name is guarded"),
     (
         "adapters",
@@ -192,14 +201,18 @@ const EXEMPT: &[(&str, &str)] = &[
     // nothing would be a command with no output.
     (
         "plan",
-        "its file IS the preview — a `--dry-run plan` that wrote nothing would produce no          output at all (Q15, ruled 2026-07-30)",
+        "its file IS the preview — a `--dry-run plan` that wrote nothing would produce no \
+         output at all (Q15, ruled 2026-07-30)",
     ),
     ("apply", "applies a saved plan through a real manager"),
     (
         "unlock",
         "covered by lock: the same three ledgers, all written through `persist`",
     ),
-    ("teleport", "rewrites a line then syncs through a real manager"),
+    (
+        "teleport",
+        "rewrites a line then syncs through a real manager",
+    ),
     ("search", "read-only — queries the managers"),
     ("update", "refreshes manager indexes; touches no config"),
     ("upgrade", "needs a real manager"),
@@ -209,7 +222,8 @@ const EXEMPT: &[(&str, &str)] = &[
     ("uninstall", "covered by dry_run_tests"),
     (
         "unmanage",
-        "covered by dry_run_tests; measured — it needs the package in the state registry,          not merely declared, so it cannot be driven from a config fixture alone",
+        "covered by dry_run_tests; measured — it needs the package in the state registry, \
+         not merely declared, so it cannot be driven from a config fixture alone",
     ),
     ("repo", "needs a manager that manages repositories"),
     ("add", "covered by install: the same declare path"),
@@ -221,19 +235,32 @@ const EXEMPT: &[(&str, &str)] = &[
     ("try", "needs a container runtime"),
     ("eval", "read-only — resolves the model and prints it"),
     ("repl", "interactive — needs a terminal"),
-    ("schedule", "covered by dry_run_tests; provisions onto the OS scheduler"),
+    (
+        "schedule",
+        "covered by dry_run_tests; provisions onto the OS scheduler",
+    ),
     (
         "path",
         "`--set` writes Shall's own settings file, which lives outside any directory a fixture \
          controls — driven by a_preview_does_not_store_a_new_config_root below",
     ),
-    ("init", "creates the config dir itself, so there is no before-state to compare"),
-    ("sbom", "read-only — measured: it takes no output flag and prints to stdout"),
+    (
+        "init",
+        "creates the config dir itself, so there is no before-state to compare",
+    ),
+    (
+        "sbom",
+        "read-only — measured: it takes no output flag and prints to stdout",
+    ),
     (
         "export",
-        "driven by a_preview_does_not_write_native_manifests below, which can skip a host with          nothing to export; the table's control would read that as a broken fixture",
+        "driven by a_preview_does_not_write_native_manifests below, which can skip a host with \
+         nothing to export; the table's control would read that as a broken fixture",
     ),
-    ("restore", "reads a bundle and installs through real managers"),
+    (
+        "restore",
+        "reads a bundle and installs through real managers",
+    ),
     ("why", "read-only — explains a package's provenance"),
     ("service", "needs an init system"),
     ("bisect", "runs many syncs through real managers"),
@@ -501,7 +528,8 @@ fn a_preview_does_not_write_native_manifests() {
     let ctl_changed = diff(&ctl_before, &snapshot(&ctl));
     if ctl_changed.is_empty() {
         eprintln!(
-            "skipped: this host has nothing `export` can emit, so a preview writing nothing              would prove nothing. `export` said:
+            "skipped: this host has nothing `export` can emit, so a preview writing nothing \
+             would prove nothing. `export` said:
 {}",
             ctl_out.trim()
         );
@@ -531,7 +559,8 @@ fn a_preview_does_not_write_native_manifests() {
     );
     assert!(
         out.contains("[DRY-RUN]"),
-        "the preview wrote nothing and did not say so, which is the half of B-1 that was worse          than the writing:
+        "the preview wrote nothing and did not say so, which is the half of B-1 that was worse \
+         than the writing:
 {out}"
     );
 }

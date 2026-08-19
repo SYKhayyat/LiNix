@@ -172,6 +172,15 @@ impl SyncEngine {
 
         // Gathered into one block so a refusal can stop the snapshot it was overlapping. A
         // sync that is refused must not leave a half-taken restore point behind it.
+        //
+        // **What makes `abort()` below actually stop the child, since nothing here shows it.**
+        // Cancelling the task drops the future, and dropping a future does not kill the process
+        // it spawned — `executor.rs` even sets `kill_on_drop(false)` on Unix, which reads like
+        // the child is detached. It is not: the child is owned by `supervise::Stopping`, whose
+        // `Drop` sends SIGTERM on Unix, and `kill_on_drop` is off precisely so that SIGTERM
+        // happens instead of tokio's SIGKILL. On Windows, which has no gentler signal,
+        // `kill_on_drop(true)` does the same job. The promise holds on both, through a
+        // mechanism three files away.
         let events = self.events();
         // The block yields the guard's token rather than `()`, so the proof that the removal
         // set was cleared travels to the executor that acts on it instead of being discarded on
@@ -1267,7 +1276,8 @@ impl SyncEngine {
             // the guard over the survivors would be asking a question already answered.
             let heal_reaped = guard::Reaped::for_reason(
                 guard::GuardScope::Heal,
-                "each interrupted removal is enforced individually at sync/mod.rs:872 and                  refused ones never enter this graph",
+                "each interrupted removal is enforced individually in `heal_interrupted_removals` and \
+                 refused ones never enter this graph",
             );
             let mut tx = Transaction::with_config(
                 changes.graph.clone(),

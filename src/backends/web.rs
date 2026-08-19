@@ -81,28 +81,24 @@ impl WebBackendCore {
     /// The records as they stand, for reading. A copy: a caller holding a borrow would hold
     /// the lock across its whole install, and the download in the middle of that is the
     /// reason this backend is concurrent at all.
-    async fn load_state(&self) -> HashMap<String, WebState> {
+    async fn load_state(&self) -> Result<HashMap<String, WebState>> {
         let mut guard = self.state.lock().await;
-        Self::loaded(&mut guard, &self.state_file).await.clone()
+        Ok(Self::loaded(&mut guard, &self.state_file).await?.clone())
     }
 
     /// Read the file into the memo the first time, and hand back the map either way.
+    ///
+    /// Through `ledger::load_json_records`, which is where the absent-versus-unparseable rule
+    /// lives. Reading a corrupt file as an empty map is not a read failure that recovers — the
+    /// emptiness is merged and written back, and the record of every deployed artifact is gone.
     async fn loaded<'a>(
         guard: &'a mut Option<HashMap<String, WebState>>,
         state_file: &Path,
-    ) -> &'a mut HashMap<String, WebState> {
+    ) -> Result<&'a mut HashMap<String, WebState>> {
         if guard.is_none() {
-            let map = if tokio::fs::try_exists(state_file).await.unwrap_or(false) {
-                let data = tokio::fs::read_to_string(state_file)
-                    .await
-                    .unwrap_or_default();
-                serde_json::from_str(&data).unwrap_or_default()
-            } else {
-                HashMap::new()
-            };
-            *guard = Some(map);
+            *guard = Some(crate::core::ledger::load_json_records(state_file).await?);
         }
-        guard.as_mut().expect("just filled")
+        Ok(guard.as_mut().expect("just filled"))
     }
 
     /// Apply one task's changes to the shared records and write them, under one lock.
@@ -120,7 +116,7 @@ impl WebBackendCore {
         removed: Vec<String>,
     ) -> Result<()> {
         let mut guard = self.state.lock().await;
-        let map = Self::loaded(&mut guard, &self.state_file).await;
+        let map = Self::loaded(&mut guard, &self.state_file).await?;
         // **A preview changes the memo as little as it changes the disk.** The merge happens on
         // a copy, and the copy is only adopted for a run that acts. `persist` already refuses
         // the write under `--dry-run` and says "would write"; before this map existed, each
@@ -174,7 +170,7 @@ pub struct WebInstallable {
 #[async_trait]
 impl Installable for WebInstallable {
     async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
-        let mut state = self.core.load_state().await;
+        let mut state = self.core.load_state().await?;
         // What this call changed, kept apart from the copy it reads.
         let mut installed_records: Vec<(String, WebState)> = Vec::new();
 
@@ -208,14 +204,14 @@ impl Installable for WebInstallable {
             // Q37: the PATH name is derived from the URL and from nothing inside the file, so
             // the deploy refusal is answerable before the transfer rather than after it. The
             // `web:` twin of the `github:` ordering that spent 180s on a rejected artifact.
-            let url_name = spec.name.split('/').next_back().unwrap_or("resource");
+            let url_name = crate::utils::file::url_filename(&spec.name)?;
             let deploys = !crate::backends::artifact::ArtifactOptions::read(&spec.options)
                 .map(|o| o.download_only)
                 .unwrap_or(false);
             if deploys {
                 let bin_dest = crate::utils::bin_destination(
                     &self.core.bin_dir,
-                    crate::utils::strip_archive_suffixes(url_name),
+                    crate::utils::strip_archive_suffixes(&url_name),
                     self.core.confine_bin,
                 )?;
                 crate::utils::ensure_deployable(
@@ -224,6 +220,13 @@ impl Installable for WebInstallable {
                     state.get(&spec.name).and_then(|s| s.bin_link.as_deref()),
                 )
                 .await?;
+            }
+
+            // As in `appimage:`: the deploy refusal above is the half of this a preview can
+            // actually answer, and it is answered before this line.
+            if crate::core::dry_run::active() {
+                crate::would!("download and install {}", spec.name);
+                continue;
             }
 
             info!("Web: Downloading resource: {}", spec.name);
@@ -241,9 +244,8 @@ impl Installable for WebInstallable {
             // Hand it to its manager, which then owns it — record only which manager and the
             // name it listed the package under, and skip the unpack/PATH path entirely. On a
             // machine without the manager it falls through and is kept as a plain resource.
-            let url_filename = spec.name.split('/').next_back().unwrap_or("");
             let handoff =
-                Format::of_filename(url_filename).filter(|f| system_pkg::is_handoff_format(*f));
+                Format::of_filename(&url_name).filter(|f| system_pkg::is_handoff_format(*f));
             if let Some(format) = handoff {
                 let detect = system_pkg::detect_command(format).unwrap_or("");
                 if self.core.executor.command_exists(detect).await {
@@ -266,7 +268,7 @@ impl Installable for WebInstallable {
                     let irefs: Vec<&str> = iargs.iter().map(String::as_str).collect();
                     info!(
                         "Web: handing {} to {} — installs as `{}`",
-                        url_filename, installer, system_package
+                        url_name, installer, system_package
                     );
                     self.core.executor.run(iprog, &irefs, true).await?;
 
@@ -304,13 +306,13 @@ impl Installable for WebInstallable {
             }
             crate::utils::file::ensure_dir_async(&dest_dir).await?;
 
-            let filename = spec.name.split('/').next_back().unwrap_or("resource");
+            let filename = crate::utils::file::url_filename(&spec.name)?;
             // The vocabulary, not a fifth hand-written list. This one was matched with
             // `.contains()` rather than `ends_with`, so `notes.gz.txt` was an archive and
             // `report.tar.summary` was one too — and three of its six entries (`.tar`, `.gz`,
             // `.xz`, `.bz2` bare) named things `extract_archive` could not open, which meant a
             // silent `fs::copy` reported as a successful deploy.
-            let is_archive = crate::backends::artifact::format::Format::of_filename(filename)
+            let is_archive = crate::backends::artifact::format::Format::of_filename(&filename)
                 .is_some_and(|f| f.is_archive());
 
             if is_archive {
@@ -322,7 +324,7 @@ impl Installable for WebInstallable {
                 .await
                 .map_err(|e| Error::Other(e.to_string()))??;
             } else {
-                crate::utils::file::copy_over(&dl_path, &dest_dir.join(filename)).await?;
+                crate::utils::file::copy_over(&dl_path, &dest_dir.join(&filename)).await?;
             }
 
             // D3b: `@download_only` fetches the file and stops. And a bare `web:` line that
@@ -342,7 +344,7 @@ impl Installable for WebInstallable {
                 // Cut at the first `.` and `ripgrep-14.1.0-x86_64.tar.gz` installs a binary
                 // called `ripgrep-14`. Only a known archive/package suffix comes off, and
                 // repeatedly, so `.tar.gz` goes but a dotted version stays.
-                let bin_name = crate::utils::strip_archive_suffixes(filename);
+                let bin_name = crate::utils::strip_archive_suffixes(&filename);
 
                 let bin_dir = self.core.bin_dir.clone();
                 let bin_dest =
@@ -407,7 +409,7 @@ impl Installable for WebInstallable {
         _: bool,
         _reaped: crate::app::sync::guard::Reaped,
     ) -> Result<()> {
-        let mut state = self.core.load_state().await;
+        let mut state = self.core.load_state().await?;
         let mut failures = Vec::new();
         // What this call changed, committed rather than the whole map — see `commit_state`.
         let mut removed_urls: Vec<String> = Vec::new();
@@ -459,7 +461,7 @@ impl Queryable for WebQueryable {
     }
 
     async fn fetch_installed(&self) -> Result<Vec<Package>> {
-        let state = self.core.load_state().await;
+        let state = self.core.load_state().await?;
         Ok(state.keys().map(|u| Package::new(u, "web")).collect())
     }
 
@@ -472,18 +474,19 @@ impl Queryable for WebQueryable {
         Ok(all.iter().find(|p| p.name == name).cloned())
     }
 
-    async fn owned_system_packages(&self) -> Vec<(String, String)> {
+    async fn owned_system_packages(&self) -> Result<Vec<(String, String)>> {
         // D5: report the `.deb`/`.rpm` resources this backend handed to a system manager, so the
         // unmanaged crawl defers to it.
-        self.core
+        Ok(self
+            .core
             .load_state()
-            .await
+            .await?
             .values()
             .filter_map(|s| match (&s.installed_by, &s.system_package) {
                 (Some(installer), Some(pkg)) => Some((installer.clone(), pkg.clone())),
                 _ => None,
             })
-            .collect()
+            .collect())
     }
 }
 
@@ -574,7 +577,7 @@ mod tests {
         let a = {
             let core = core.clone();
             tokio::spawn(async move {
-                let _seen = core.load_state().await;
+                let _seen = core.load_state().await.unwrap();
                 tokio::time::sleep(std::time::Duration::from_millis(60)).await;
                 core.commit_state(
                     vec![(
@@ -590,7 +593,7 @@ mod tests {
         let b = {
             let core = core.clone();
             tokio::spawn(async move {
-                let _seen = core.load_state().await;
+                let _seen = core.load_state().await.unwrap();
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                 core.commit_state(
                     vec![(
@@ -606,7 +609,7 @@ mod tests {
         a.await.expect("A");
         b.await.expect("B");
 
-        let state = core.load_state().await;
+        let state = core.load_state().await.unwrap();
         assert!(
             state.contains_key("https://example.test/a"),
             "A's record was overwritten by B's whole-map write — the read-modify-write is back. \
@@ -683,7 +686,7 @@ mod tests {
         remover.await.expect("remover");
         installer.await.expect("installer");
 
-        let state = core.load_state().await;
+        let state = core.load_state().await.unwrap();
         assert!(
             state.contains_key("https://example.test/kept"),
             "an untouched record vanished"
@@ -761,7 +764,7 @@ mod tests {
             "removal named the file rather than the package dpkg lists it under: {calls:?}"
         );
         assert!(
-            !web.core.load_state().await.contains_key(url),
+            !web.core.load_state().await.unwrap().contains_key(url),
             "the record survived a successful removal"
         );
     }
@@ -812,7 +815,7 @@ mod tests {
             "the error does not say the resource is still installed: {err}"
         );
         assert!(
-            web.core.load_state().await.contains_key(url),
+            web.core.load_state().await.unwrap().contains_key(url),
             "the record was dropped for a resource that is still installed — the one state no \
              sync can detect"
         );
@@ -832,7 +835,7 @@ mod tests {
             .await
             .expect_err("an unknown installer must not read as a removal");
         assert!(err.to_string().contains("still on disk"), "{err}");
-        assert!(web.core.load_state().await.contains_key(url));
+        assert!(web.core.load_state().await.unwrap().contains_key(url));
     }
 
     /// A URL that is not in the state file at all is not an error: `remove` is called with what

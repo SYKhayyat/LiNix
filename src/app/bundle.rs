@@ -181,8 +181,7 @@ pub async fn create_bundle(
     let managed: Vec<(String, String, Option<String>)> = {
         let state = state.lock().await;
         state
-            .packages
-            .iter()
+            .managed()
             .map(|p| (p.backend.clone(), p.name.clone(), p.version.clone()))
             .collect()
     };

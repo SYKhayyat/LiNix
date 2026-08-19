@@ -158,7 +158,7 @@ fn a_security_refusal_fires_the_refusal_hook() {
     assert!(
         marker.exists(),
         "`on_guard_refusal` did not fire for a security refusal.\n\
-         src/main.rs:185 says it fires for every refusal in the program — a user who wired this \
+         `main.rs`'s `on_guard_refusal` wiring says it fires for every refusal in the program — a user who wired this \
          hook to be told when Shall refuses is told about a mass removal and not about a \
          refused plain-HTTP download.\n{out}"
     );
@@ -400,7 +400,7 @@ fn every_site_that_says_it_is_refusing_is_built_as_a_refusal() {
     assert!(
         offenders.is_empty(),
         "these say they are refusing but are not `Error::Refused`, so they exit 1 instead of 3 \
-         and the `on_guard_refusal` hook never fires for them — which src/main.rs:185 promises \
+         and the `on_guard_refusal` hook never fires for them — which `main.rs`'s `on_guard_refusal` wiring promises \
          it does for every refusal in the program:\n  {}",
         offenders.join("\n  ")
     );
@@ -517,7 +517,7 @@ fn the_refusal_scan_rejects_an_unwrapped_builder() {
     assert!(sites[0].2, "a wrap on the same line counts as wrapped");
     assert!(
         sites[1].2,
-        "a wrap three lines BELOW counts — sync/mod.rs:381 reads this way, and a window that \
+        "a wrap three lines BELOW counts — `sync/mod.rs` reads this way, and a window that \
          only looked up scored it as unwrapped"
     );
     assert!(

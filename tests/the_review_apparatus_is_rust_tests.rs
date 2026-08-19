@@ -875,7 +875,8 @@ fn the_matrix_scan_objects_to_the_shape_that_shipped() {
             target: x86_64-pc-windows-msvc
 ";
     let why = collapses_to_one_job(collapsed).expect(
-        "the scan cannot see the defect it exists for - this is the exact matrix that built one          target out of four for three consecutive runs",
+        "the scan cannot see the defect it exists for - this is the exact matrix that built one \
+         target out of four for three consecutive runs",
     );
     assert!(why.contains("base key"), "{why}");
 

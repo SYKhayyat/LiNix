@@ -85,8 +85,15 @@ fn citations(files: &[PathBuf], root: &Path) -> Vec<Citation> {
         };
         let lines: Vec<&str> = text.lines().collect();
         for (i, line) in lines.iter().enumerate() {
+            // **A string literal is scanned too, and that is not a widening of the subject.**
+            // A line number written into a refusal message or a test's justification rots the
+            // same way and reads the same way to whoever follows it — and fourteen of them
+            // lived in strings, invisible to a gate that only read `//`. Two were the same
+            // shape as the load-bearing pair above: `transaction.rs`'s rollback justification
+            // cited a line 500 short of the function it named.
             let trimmed = line.trim_start();
-            if !trimmed.starts_with("//") && !trimmed.starts_with('*') {
+            let is_comment = trimmed.starts_with("//") || trimmed.starts_with('*');
+            if !is_comment && !line.contains('"') {
                 continue;
             }
             for (start, _) in line.match_indices(".rs:") {
@@ -102,6 +109,14 @@ fn citations(files: &[PathBuf], root: &Path) -> Vec<Citation> {
                     continue;
                 }
                 let target = format!("{}.rs", &line[name_start..start]);
+                // A name this repository does not have is a fixture, not a citation:
+                // `output_is_sanitized_tests` plants `src/planted.rs:1` as the *expected
+                // output* of a scanner that prints `file:line`, and rewriting it would be
+                // rewriting the thing under test. A name that ought to exist is the sibling
+                // gate's subject.
+                if resolve(&target, files, root).is_none() {
+                    continue;
+                }
                 out.push(Citation {
                     from: f
                         .strip_prefix(root)

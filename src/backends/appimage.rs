@@ -80,28 +80,24 @@ impl AppImageBackendCore {
 
     /// The records as they stand, for reading. A copy: holding a borrow would hold the lock
     /// across the download, which is the whole reason this backend is concurrent.
-    async fn load_state(&self) -> HashMap<String, AppImageState> {
+    async fn load_state(&self) -> Result<HashMap<String, AppImageState>> {
         let mut guard = self.state.lock().await;
-        Self::loaded(&mut guard, &self.state_file).await.clone()
+        Ok(Self::loaded(&mut guard, &self.state_file).await?.clone())
     }
 
     /// Read the file into the memo the first time, and hand back the map either way.
+    ///
+    /// Through `ledger::load_json_records`, which is where the absent-versus-unparseable rule
+    /// lives. Reading a corrupt file as an empty map is not a read failure that recovers — the
+    /// emptiness is merged and written back, and the record of every deployed artifact is gone.
     async fn loaded<'a>(
         guard: &'a mut Option<HashMap<String, AppImageState>>,
         state_file: &Path,
-    ) -> &'a mut HashMap<String, AppImageState> {
+    ) -> Result<&'a mut HashMap<String, AppImageState>> {
         if guard.is_none() {
-            let map = if tokio::fs::try_exists(state_file).await.unwrap_or(false) {
-                let data = tokio::fs::read_to_string(state_file)
-                    .await
-                    .unwrap_or_default();
-                serde_json::from_str(&data).unwrap_or_default()
-            } else {
-                HashMap::new()
-            };
-            *guard = Some(map);
+            *guard = Some(crate::core::ledger::load_json_records(state_file).await?);
         }
-        guard.as_mut().expect("just filled")
+        Ok(guard.as_mut().expect("just filled"))
     }
 
     /// Apply one task's changes to the shared records and write them, under one lock.
@@ -117,7 +113,7 @@ impl AppImageBackendCore {
         removed: Vec<String>,
     ) -> Result<()> {
         let mut guard = self.state.lock().await;
-        let map = Self::loaded(&mut guard, &self.state_file).await;
+        let map = Self::loaded(&mut guard, &self.state_file).await?;
         // **A preview changes the memo as little as it changes the disk.** The merge happens on
         // a copy, and the copy is only adopted for a run that acts. `persist` already refuses
         // the write under `--dry-run` and says "would write"; before this map existed, each
@@ -170,7 +166,7 @@ pub struct AppImageInstallable {
 impl Installable for AppImageInstallable {
     async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
         let bin_dir = self.core.ensure_dirs().await?;
-        let mut state = self.core.load_state().await;
+        let mut state = self.core.load_state().await?;
         // What this call changed, kept apart from the copy it reads.
         let mut installed_records: Vec<(String, AppImageState)> = Vec::new();
 
@@ -183,8 +179,8 @@ impl Installable for AppImageInstallable {
             crate::core::download::check_scheme(url, allow_http, url)?;
             crate::core::download::check_checksum_declared(spec)?;
             let client = crate::core::download::client(allow_http, "shall-manager")?;
-            let filename = url.split('/').next_back().unwrap_or("app.AppImage");
-            let dest_path = self.core.install_dir.join(filename);
+            let filename = crate::utils::file::url_filename(url)?;
+            let dest_path = self.core.install_dir.join(&filename);
 
             // Q37: the PATH name comes from the URL, so the refusal below can be asked now —
             // before the network — instead of after a download that was always going to be
@@ -192,7 +188,7 @@ impl Installable for AppImageInstallable {
             let link_name = filename
                 .strip_suffix(".AppImage")
                 .or_else(|| filename.strip_suffix(".appimage"))
-                .unwrap_or(filename);
+                .unwrap_or(&filename);
             let download_only = crate::backends::artifact::ArtifactOptions::read(&spec.options)
                 .map(|o| o.download_only)
                 .unwrap_or(false);
@@ -210,6 +206,14 @@ impl Installable for AppImageInstallable {
                 Some(link_path)
             };
 
+            // Every refusal above is answered first, because that is what a preview is for:
+            // an `@bin=` that escapes and a destination Shall does not own are told about here,
+            // not after the transfer. Past this point there is only the transfer itself.
+            if crate::core::dry_run::active() {
+                crate::would!("download {} and install it as an AppImage", url);
+                continue;
+            }
+
             info!("AppImage: Downloading {}...", url);
             let response = client.get(url).send().await?;
             if !response.status().is_success() {
@@ -220,13 +224,24 @@ impl Installable for AppImageInstallable {
                 )));
             }
 
-            crate::core::download::write_capped(response, &dest_path, url).await?;
+            // **Nothing arrives at the artifact path until it is whole and verified.**
+            // Streaming onto `dest_path` meant a re-install whose connection dropped at 60%
+            // replaced a working binary with a truncated one — and the PATH symlink from the
+            // previous install already pointed there, so it followed. `web:` and `github:`
+            // both download to a temp path; this was the one that did not. A sibling of the
+            // destination rather than a system tempdir, so the rename is on one filesystem and
+            // cannot fall back to a copy.
+            let part_path = self
+                .core
+                .install_dir
+                .join(format!("{}.shall-part", filename));
+            crate::core::download::write_capped(response, &part_path, url).await?;
 
             // Before the chmod below, never after: an unverified file must never exist as an
             // executable, even briefly.
             if let Some(expected) = spec.options.one("sha256") {
-                if let Err(e) = crate::core::verify_checksum(&dest_path, expected).await {
-                    let _ = tokio::fs::remove_file(&dest_path).await;
+                if let Err(e) = crate::core::verify_checksum(&part_path, expected).await {
+                    let _ = tokio::fs::remove_file(&part_path).await;
                     return Err(e);
                 }
             }
@@ -234,10 +249,15 @@ impl Installable for AppImageInstallable {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let metadata = tokio::fs::metadata(&dest_path).await?;
+                let metadata = tokio::fs::metadata(&part_path).await?;
                 let mut perms = metadata.permissions();
                 perms.set_mode(0o755);
-                tokio::fs::set_permissions(&dest_path, perms).await?;
+                tokio::fs::set_permissions(&part_path, perms).await?;
+            }
+
+            if let Err(e) = tokio::fs::rename(&part_path, &dest_path).await {
+                let _ = tokio::fs::remove_file(&part_path).await;
+                return Err(Error::from(e));
             }
 
             // D3b: `@download_only` keeps the fetched AppImage on disk but never links it onto
@@ -288,7 +308,7 @@ impl Installable for AppImageInstallable {
         _: bool,
         _reaped: crate::app::sync::guard::Reaped,
     ) -> Result<()> {
-        let mut state = self.core.load_state().await;
+        let mut state = self.core.load_state().await?;
 
         let mut failures = Vec::new();
         // What this call changed, committed rather than the whole map.
@@ -347,7 +367,7 @@ impl Queryable for AppImageQueryable {
     /// on every run, for ever, and a removal could never find the row it was meant to delete.
     /// Same shape as `btrfs:`, fixed 2026-07-30, and `web:`, which never had it.
     async fn fetch_installed(&self) -> Result<Vec<Package>> {
-        let state = self.core.load_state().await;
+        let state = self.core.load_state().await?;
         Ok(state
             .keys()
             .map(|url| Package::new(url, "appimage"))
@@ -512,7 +532,7 @@ mod tests {
 
         assert!(!local.exists(), "the AppImage is still on disk");
         assert!(!link.exists(), "the PATH entry survived the removal");
-        assert!(!app.core.load_state().await.contains_key("fd"));
+        assert!(!app.core.load_state().await.unwrap().contains_key("fd"));
     }
 
     /// `@download_only` never linked anything, so `symlink_path` is empty — and an empty path is
@@ -538,7 +558,7 @@ mod tests {
             .await
             .expect("a download-only AppImage removes without a link");
         assert!(!local.exists());
-        assert!(app.core.load_state().await.is_empty());
+        assert!(app.core.load_state().await.unwrap().is_empty());
     }
 
     /// The twin of `web.rs`'s. A path the OS refuses leaves the AppImage installed, so the record
@@ -571,7 +591,7 @@ mod tests {
             "the error does not say the AppImage is still there: {err}"
         );
         assert!(
-            app.core.load_state().await.contains_key("wedged"),
+            app.core.load_state().await.unwrap().contains_key("wedged"),
             "the record was dropped for an AppImage that is still installed"
         );
     }

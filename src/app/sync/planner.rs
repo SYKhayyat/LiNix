@@ -752,7 +752,7 @@ impl<'a> ChangePlanner<'a> {
             }
 
             // Single pass over all managed packages to schedule removals
-            for pkg in &self.state.packages {
+            for pkg in self.state.managed() {
                 let key = format!("{}:{}", pkg.backend, pkg.name);
 
                 // **Every reason not to remove this is a value, not a `continue`.** Both of the
@@ -1244,9 +1244,7 @@ mod tests {
         let config = Config::default();
         let mut state = StateRegistry::new(PathBuf::from("test-state.json"));
         // A managed package that is NOT in the (empty) desired state == drift.
-        state
-            .packages
-            .push(managed("drift-pkg-xyz", "generic-test"));
+        state.set_managed([managed("drift-pkg-xyz", "generic-test")]);
 
         let desired: HashMap<String, Vec<PackageSpec>> = HashMap::new();
 
@@ -1604,9 +1602,7 @@ mod tests {
         let registry = registry_reporting("generic-test", &[]);
         let config = Config::default();
         let mut state = StateRegistry::new(PathBuf::from("test-state.json"));
-        state
-            .packages
-            .push(managed("drift-pkg-xyz", "generic-test"));
+        state.set_managed([managed("drift-pkg-xyz", "generic-test")]);
         let desired: HashMap<String, Vec<PackageSpec>> = HashMap::new();
 
         let changes = ChangePlanner::new(registry.clone(), &state, &config)
@@ -1631,7 +1627,7 @@ mod tests {
         let mut state = StateRegistry::new(PathBuf::from("test-state.json"));
         let mut imp = managed("my-imperative-tool", "generic-test");
         imp.source = "imperative".into();
-        state.packages.push(imp);
+        state.set_managed([imp]);
         let desired: HashMap<String, Vec<PackageSpec>> = HashMap::new();
 
         let changes = ChangePlanner::new(registry.clone(), &state, &config)

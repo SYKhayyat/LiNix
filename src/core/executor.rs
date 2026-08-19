@@ -828,10 +828,13 @@ impl MockExecutor {
 
   {}
 
-             Registered with `set_response_that_must_not_be_used`, which means the test's claim              is that this question is never asked.",
+             Registered with `set_response_that_must_not_be_used`, which means the test's \
+             claim is that this question is never asked.",
             ran_anyway.len(),
-            ran_anyway.join("
-  ")
+            ran_anyway.join(
+                "
+  "
+            )
         );
 
         if self
@@ -1942,7 +1945,8 @@ mod child_process_tests {
         );
         assert!(
             msg.contains("no output"),
-            "the failure must say the command produced nothing, so it cannot be              mistaken for an empty result: {msg}"
+            "the failure must say the command produced nothing, so it cannot be \
+             mistaken for an empty result: {msg}"
         );
     }
 
@@ -2012,7 +2016,8 @@ mod child_process_tests {
             .count();
         assert!(
             tries > 1,
-            "a transient read was asked exactly once — the classification bought nothing              (tried {tries}x)"
+            "a transient read was asked exactly once — the classification bought nothing \
+             (tried {tries}x)"
         );
     }
 

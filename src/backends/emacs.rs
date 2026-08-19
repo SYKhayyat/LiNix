@@ -131,7 +131,9 @@ impl Installable for EmacsInstallable {
         // ten of each, for an archive that had not changed between them. Verified against GNU
         // Emacs 29.3 in a container: one `--batch` with a `dolist` installs them all.
         let lisp = format!(
-            "(progn (require 'package) (package-initialize)              (unless package-archive-contents (package-refresh-contents))              (dolist (p '({})) (package-install p)))",
+            "(progn (require 'package) (package-initialize) \
+             (unless package-archive-contents (package-refresh-contents)) \
+             (dolist (p '({})) (package-install p)))",
             names.join(" ")
         );
         self.core
@@ -155,7 +157,9 @@ impl Installable for EmacsInstallable {
         }
         info!("Emacs: Removing {} package(s)...", names.len());
         let lisp = format!(
-            "(progn (require 'package) (package-initialize)              (dolist (n '({}))                (let ((p (cadr (assoc n package-alist)))) (if p (package-delete p)))))",
+            "(progn (require 'package) (package-initialize) \
+             (dolist (n '({})) \
+             (let ((p (cadr (assoc n package-alist)))) (if p (package-delete p)))))",
             names.join(" ")
         );
         self.core

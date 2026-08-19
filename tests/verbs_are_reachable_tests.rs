@@ -58,14 +58,14 @@ fn except_matches_a_bare_name_a_qualified_name_and_neither_more() {
 #[test]
 fn unverified_is_read_from_what_was_recorded_not_from_the_backend() {
     let mut state = StateRegistry::new(PathBuf::from("unused.json"));
-    state.packages = vec![
+    state.set_managed([
         managed("github", "fd", &[("unverified", "true")]),
         managed("apt", "jq", &[]),
         // The option present and false is not the option absent, and must not be listed.
         managed("brew", "rg", &[("unverified", "false")]),
         // A backend nothing has taught this function about, carrying the flag: still listed.
         managed("some-future-backend", "thing", &[("unverified", "true")]),
-    ];
+    ]);
 
     let flagged: Vec<(String, String)> = unverified_packages(&state);
     assert_eq!(

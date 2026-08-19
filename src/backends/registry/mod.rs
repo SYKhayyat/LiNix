@@ -443,7 +443,9 @@ mod tests {
         assert_eq!(
             opted_out,
             vec!["service"],
-            "a backend joined or left the set `adopt` does not take unasked. Joining it means              users must write those lines by hand, so it needs the same argument `service`              has: an init reports what is running and never who chose it."
+            "a backend joined or left the set `adopt` does not take unasked. Joining it means \
+             users must write those lines by hand, so it needs the same argument `service` \
+             has: an init reports what is running and never who chose it."
         );
     }
 
@@ -2075,7 +2077,9 @@ mod tests {
             });
             assert!(
                 with_manager_policy(core).executor.classifies_absent_names(),
-                "`{name}` has an entry in exit_policy::for_manager and did not carry it. A                  manager that cannot say \"no such package\" leaves the line in the manifest                  and every later command fails on it."
+                "`{name}` has an entry in exit_policy::for_manager and did not carry it. A \
+                 manager that cannot say \"no such package\" leaves the line in the manifest \
+                 and every later command fails on it."
             );
         }
     }

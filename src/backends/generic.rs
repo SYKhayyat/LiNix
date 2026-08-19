@@ -1664,7 +1664,8 @@ impl Searchable for GenericSearchable {
         // results" — the same distinction U2 draws for every other optional capability.
         if self.core.config.search_args.is_empty() {
             return Err(Error::Validation(format!(
-                "`{}` was not told how to search, so it cannot answer what it carries. Add                  `search_args` to its definition.",
+                "`{}` was not told how to search, so it cannot answer what it carries. Add \
+                 `search_args` to its definition.",
                 self.core.name
             )));
         }
@@ -1799,7 +1800,8 @@ impl Upgradable for GenericUpgradable {
                 return Ok(());
             }
             debug!(
-                "`{}` could not upgrade {} package(s) in one command; re-trying them                  individually so one bad package does not hold up the rest",
+                "`{}` could not upgrade {} package(s) in one command; re-trying them \
+                 individually so one bad package does not hold up the rest",
                 self.core.name,
                 specs.len()
             );

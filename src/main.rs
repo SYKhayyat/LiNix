@@ -1590,7 +1590,9 @@ mod log_level_tests {
                 .collect();
         assert_eq!(
             deferred, expected_deferred,
-            "the set of commands that take the lock at the write rather than for the run              changed. A command belongs here when its duration is decided by a person, a loop              or a program Shall does not own — never by the package work it performs."
+            "the set of commands that take the lock at the write rather than for the run \
+             changed. A command belongs here when its duration is decided by a person, a loop \
+             or a program Shall does not own — never by the package work it performs."
         );
 
         let expected: std::collections::BTreeSet<String> = [
@@ -1622,7 +1624,10 @@ mod log_level_tests {
 
         assert_eq!(
             readers, expected,
-            "the set of commands exempted from the data lock changed. Adding a WRITER is free;              adding a reader means claiming it never writes under `data/`, so it has to be              claimed here too. Not locking a writer costs an entry out of `registry.json`,              which is a removal."
+            "the set of commands exempted from the data lock changed. Adding a WRITER is free; \
+             adding a reader means claiming it never writes under `data/`, so it has to be \
+             claimed here too. Not locking a writer costs an entry out of `registry.json`, \
+             which is a removal."
         );
     }
 

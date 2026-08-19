@@ -35,8 +35,7 @@ pub async fn managed_pkgs(
     let recorded: Vec<Pkg> = {
         let state = state.lock().await;
         state
-            .packages
-            .iter()
+            .managed()
             .map(|p| (p.backend.clone(), p.name.clone(), p.version.clone()))
             .collect()
     };

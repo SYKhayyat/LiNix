@@ -690,8 +690,7 @@ pub async fn why(
     ) = {
         let state = state.lock().await;
         let matches = state
-            .packages
-            .iter()
+            .managed()
             .filter(|p| p.name == query || format!("{}:{}", p.backend, p.name) == query)
             .map(|p| {
                 (
@@ -704,8 +703,7 @@ pub async fn why(
             })
             .collect();
         let all = state
-            .packages
-            .iter()
+            .managed()
             .map(|p| (p.backend.clone(), p.name.clone()))
             .collect();
         (matches, all)

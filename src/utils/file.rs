@@ -1,7 +1,7 @@
 use crate::core::{Error, Result};
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use tempfile::NamedTempFile;
 
 /// Write a file Shall owns — `active`, `preferences.toml`, a manifest, a lock under `locks/`,
@@ -318,6 +318,89 @@ pub fn strip_archive_suffixes(filename: &str) -> &str {
     }
 }
 
+/// Why `name` is not a plain file name that stays inside a directory, or `None` if it is one.
+///
+/// **One `Component::Normal` and nothing else.** Spelling the refusals out one form at a time
+/// is what let `C:evil` through `@bin=`: it holds no separator, it is not `..`, and
+/// `is_absolute()` is false for a drive letter with no root — yet `join` discards the base
+/// directory for it exactly as it does for an absolute path. Whatever the platform counts as
+/// more than a bare file name, `components()` already knows.
+///
+/// Shared with [`url_filename`] because the two questions are one question: both take text
+/// from outside and turn it into a name to join onto a directory Shall owns.
+fn not_a_bare_file_name(name: &str) -> Option<&'static str> {
+    if name.is_empty() {
+        return Some("it is empty");
+    }
+    let mut parts = Path::new(name).components();
+    match (parts.next(), parts.next()) {
+        (Some(Component::Normal(_)), None) => {}
+        (Some(Component::Prefix(_)), _) => {
+            return Some("it names a drive, not a file inside the directory")
+        }
+        (Some(Component::RootDir), _) => return Some("it is an absolute path"),
+        (Some(Component::CurDir), _) | (Some(Component::ParentDir), _) => {
+            return Some("it is a directory, not a name")
+        }
+        (Some(_), Some(_)) => return Some("it contains a path separator"),
+        (None, _) => return Some("it is not a file name"),
+    }
+    // The write would go to a console or a printer port rather than to a file, and on Windows
+    // that holds however the name is spelled and whatever extension follows it.
+    #[cfg(windows)]
+    if is_reserved_device_name(name) {
+        return Some("it is a reserved device name, so the write reaches a device, not a file");
+    }
+    None
+}
+
+/// The file name a URL installs under: the last path segment, and nothing else.
+///
+/// **The last `/`-separated chunk of the raw URL is not a file name.** It carries the query
+/// string and the fragment, which CDN-signed and redirect-generated asset URLs routinely have:
+/// `https://host/tool.AppImage?token=abc` became a file called `tool.AppImage?token=abc`, which
+/// on Windows is an illegal name so `File::create` failed with an I/O error naming nothing, and
+/// on Unix succeeded and put the token in the name — and then in the `@bin` link name too. A
+/// URL ending in `/` gave `""`, so `join` returned the install directory itself.
+///
+/// Percent-encoding is deliberately left alone. Decoding is how a `%2F` becomes a separator,
+/// and a separator is the one thing this must not produce.
+pub fn url_filename(url: &str) -> Result<String> {
+    let refuse = |why: &str| {
+        Err(Error::Validation(format!(
+            "cannot tell what file `{}` names: {}. A download URL has to end in a file name \
+             — that name is what lands in the install directory and what goes on PATH.",
+            url, why
+        )))
+    };
+    let parsed = match reqwest::Url::parse(url) {
+        Ok(parsed) => parsed,
+        Err(e) => return refuse(&format!("it is not a URL ({})", e)),
+    };
+    let name = parsed
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .unwrap_or("")
+        .to_string();
+    match not_a_bare_file_name(&name) {
+        Some(why) => refuse(why),
+        None => Ok(name),
+    }
+}
+
+/// Windows reserves these names at every directory, with or without an extension: opening
+/// `NUL.exe` opens the null device. A confined `@bin=` must not resolve to one, or the deploy
+/// writes into a device and reports success having produced no file.
+#[cfg(windows)]
+fn is_reserved_device_name(name: &str) -> bool {
+    const RESERVED: [&str; 22] = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    let stem = name.split('.').next().unwrap_or(name).trim_end_matches(' ');
+    RESERVED.iter().any(|r| stem.eq_ignore_ascii_case(r))
+}
+
 pub fn bin_destination(bin_dir: &Path, name: &str, confined: bool) -> Result<PathBuf> {
     let refuse = |why: &str| {
         Err(Error::Validation(format!(
@@ -330,17 +413,8 @@ pub fn bin_destination(bin_dir: &Path, name: &str, confined: bool) -> Result<Pat
         )))
     };
     if confined {
-        if name.is_empty() {
-            return refuse("it is empty");
-        }
-        if name.contains('/') || name.contains('\\') {
-            return refuse("it contains a path separator");
-        }
-        if name == "." || name == ".." {
-            return refuse("it is a directory, not a name");
-        }
-        if Path::new(name).is_absolute() {
-            return refuse("it is an absolute path");
+        if let Some(why) = not_a_bare_file_name(name) {
+            return refuse(why);
         }
     }
 
@@ -378,6 +452,16 @@ pub async fn deploy_executable(
     recorded: Option<&str>,
 ) -> Result<()> {
     ensure_deployable(dest, owned_root, recorded).await?;
+
+    // **The check is where the write is, per `core::dry_run`.** The download backends reach
+    // their filesystem writes outside the `persist`/`ensure_dir` funnel that carries this rule
+    // for everything else, so the only thing keeping a preview from putting a file on PATH was
+    // each verb returning before `install()` — which is the per-verb habit that module exists
+    // to delete. A verb added tomorrow inherits the rule by calling this.
+    if crate::core::dry_run::active() {
+        crate::would!("put {} on PATH", dest.display());
+        return Ok(());
+    }
 
     if let Some(parent) = dest.parent() {
         tokio::fs::create_dir_all(parent)
@@ -493,13 +577,82 @@ mod bin_destination_tests {
             r"..\..\x",
             "sub/dir",
             "..",
+            ".",
             "",
+            "/etc/passwd",
         ] {
             assert!(
                 bin_destination(&dir(), bad, true).is_err(),
                 "`{}` must be refused",
                 bad
             );
+        }
+    }
+
+    /// **A drive-relative name is an escape, and `is_absolute()` calls it false.**
+    ///
+    /// `C:evil` resolves against the current directory on drive C. `join` drops the bin
+    /// directory for it exactly as it does for `C:\evil`, so the confinement that only asked
+    /// `is_absolute()` handed the write wherever the process happened to be.
+    #[cfg(windows)]
+    #[test]
+    fn a_drive_relative_bin_name_is_refused() {
+        for bad in [
+            "C:evil",
+            "x:evil",
+            "C:Windows",
+            r"C:\evil",
+            r"\\host\share\evil",
+        ] {
+            let out = bin_destination(&dir(), bad, true);
+            assert!(out.is_err(), "`{}` must be refused, got {:?}", bad, out);
+        }
+    }
+
+    /// **A reserved device name is a write that produces no file.**
+    #[cfg(windows)]
+    #[test]
+    fn a_reserved_device_name_is_refused() {
+        for bad in ["NUL", "nul", "CON", "com1", "LPT9", "NUL.txt", "aux.exe"] {
+            let out = bin_destination(&dir(), bad, true);
+            assert!(out.is_err(), "`{}` must be refused, got {:?}", bad, out);
+        }
+        // A name that merely starts with one is an ordinary file.
+        assert!(bin_destination(&dir(), "console", true).is_ok());
+        assert!(bin_destination(&dir(), "com10", true).is_ok());
+    }
+
+    /// **A URL tail is not a file name.** The query string and the fragment come with it, and
+    /// CDN-signed asset URLs carry one as a matter of course: on Windows `?` is illegal so the
+    /// create failed with an I/O error naming nothing, and on Unix it succeeded and put the
+    /// token in the file name and then in the PATH link name.
+    #[test]
+    fn a_url_names_its_last_path_segment_and_nothing_else() {
+        for (url, want) in [
+            ("https://host/tool.AppImage", "tool.AppImage"),
+            ("https://host/tool.AppImage?token=abc", "tool.AppImage"),
+            ("https://host/tool.AppImage#frag", "tool.AppImage"),
+            ("https://host/a/b/rg.tar.gz?x=1#y", "rg.tar.gz"),
+            ("https://host/p%2Fq", "p%2Fq"),
+        ] {
+            assert_eq!(url_filename(url).unwrap(), want, "{url}");
+        }
+    }
+
+    /// The shapes that produce no name at all. Each one used to reach `join`, and `join("")`
+    /// is the install directory itself.
+    #[test]
+    fn a_url_that_names_no_file_is_refused() {
+        for bad in [
+            "https://host/",
+            "https://host",
+            "https://host/a/",
+            "https://host/..",
+            "https://host/.",
+            "not a url at all",
+        ] {
+            let out = url_filename(bad);
+            assert!(out.is_err(), "`{}` names no file, got {:?}", bad, out);
         }
     }
 

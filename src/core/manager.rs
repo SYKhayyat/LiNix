@@ -353,8 +353,12 @@ pub trait Queryable: Send + Sync {
     /// here. The unmanaged crawl subtracts these so it neither reports the file twice nor lets
     /// `purge-undeclared` delete a package a download declaration is responsible for. Default:
     /// none, for every manager that never hands a file to a second one.
-    async fn owned_system_packages(&self) -> Vec<(String, String)> {
-        Vec::new()
+    /// Fallible because the answer is read from a record on disk: an implementor that cannot
+    /// read its own record does not own nothing, it does not know. Answering `Vec::new()` for
+    /// an unreadable file tells the unmanaged crawl these packages are undeclared drift, and
+    /// `purge-undeclared` deletes what a download declaration is responsible for.
+    async fn owned_system_packages(&self) -> Result<Vec<(String, String)>> {
+        Ok(Vec::new())
     }
 }
 

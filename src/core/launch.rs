@@ -127,19 +127,47 @@ fn windows_shim_wrap(cmd: &str, resolved: &Path, args: &[String]) -> Option<(Str
             // PowerShell tools like scoop emit *objects*, which only render when PowerShell
             // formats them. `-File`, `& 'path'`, and a trailing `; exit` all cause the
             // buffered table to be dropped when stdout is captured. The form that reliably
-            // yields text AND propagates the exit code: invoke by bare name (so the tool's
-            // own output formatting kicks in), pipe through Out-String into a variable,
-            // emit it, then exit with the tool's last exit code. Each argument is wrapped
-            // in a single-quoted literal (with `'` doubled), so a crafted package name
-            // cannot break out of the string — no command-injection surface.
+            // yields text AND propagates the exit code: invoke through the call operator (so
+            // the tool's own output formatting kicks in), pipe through Out-String into a
+            // variable, emit it, then exit with the tool's last exit code.
+            //
+            // **The program name is escaped the same way the arguments are.** The claim here
+            // used to be that a crafted package name could not break out of the string and so
+            // there was no command-injection surface. That was true of the arguments and not
+            // of `cmd`, which was concatenated in raw. Nothing user-authored reaches `cmd`
+            // today — manager names come from the compiled registry and `managers.toml` — so
+            // the invariant was held up by nobody having added a config key for a manager's
+            // binary name. That is B-1's shape exactly: a safety argument written for the
+            // whole program, true everywhere except this file.
             let esc = |s: &str| format!("'{}'", s.replace('\'', "''"));
-            let mut invocation = cmd.to_string();
+            // `&` because a single-quoted string is a string until the call operator makes it
+            // a command, and bare interpolation is what made escaping impossible here.
+            let mut invocation = format!("& {}", esc(cmd));
             for a in args {
                 invocation.push(' ');
                 invocation.push_str(&esc(a));
             }
+            // **`exit $LASTEXITCODE` alone reports a failure as a success.** That variable is
+            // set by a *native* process. A failure at the PowerShell level — the command not
+            // found, the `.ps1` missing, an exception thrown — leaves it `$null`, and `exit
+            // $null` exits 0. `ensure_status` reads 0 as success, so a `scoop install` that
+            // never ran was recorded as installed. That is the defect the `.cmd` arm was
+            // rejected for, one arm over: it was measured returning 0 for a failed install and
+            // this branch was chosen because it returns a real code — which it does, for
+            // native failures only.
+            //
+            // So the terminating failures are caught and the catch is the exit code, while
+            // `$LASTEXITCODE` still decides whenever the tool actually ran. **Deliberately no
+            // `$ErrorActionPreference = 'Stop'`:** it would make the tool's own non-terminating
+            // errors fatal, and scoop emits those on installs that succeed — a bound on the
+            // wrapper must not rewrite the callee's error semantics. Measured against the
+            // installed scoop: `scoop list` gives identical output and the same exit code as
+            // the old form, `scoop install <missing>` still exits 1, and a missing command or
+            // `.ps1` now exits 1 where it used to exit 0.
             let command = format!(
-                "$o = ({} | Out-String -Width 4096); Write-Output $o; exit $LASTEXITCODE",
+                "try {{ $o = ({} | Out-String -Width 4096); $native = $LASTEXITCODE; \
+                 Write-Output $o }} catch {{ Write-Output $_; exit 1 }}; \
+                 exit $(if ($null -ne $native) {{ $native }} else {{ 0 }})",
                 invocation
             );
             Some((
@@ -264,8 +292,48 @@ mod windows_shim_tests {
         assert_eq!(prog, "powershell");
         assert!(args.contains(&"-Command".to_string()));
         let command = args.last().unwrap();
-        assert!(command.starts_with("$o = (scoop 'search' 'ripgrep' | Out-String"));
-        assert!(command.contains("exit $LASTEXITCODE"));
+        assert!(command.contains("& 'scoop' 'search' 'ripgrep' | Out-String"));
+        assert!(command.contains("$native = $LASTEXITCODE"));
+    }
+
+    /// **A PowerShell-level failure must not exit 0.**
+    ///
+    /// `exit $LASTEXITCODE` propagates a *native* process's code and nothing else; the command
+    /// not being found, the `.ps1` being gone, an exception thrown all leave it `$null`, and
+    /// `exit $null` exits 0 — which `ensure_status` reads as a successful install. The catch is
+    /// what covers those, and `$LASTEXITCODE` still decides whenever the tool actually ran.
+    #[test]
+    fn a_powershell_level_failure_is_not_reported_as_success() {
+        let (_prog, args) =
+            windows_shim_wrap("scoop", Path::new(r"C:\s.ps1"), &["install".to_string()]).unwrap();
+        let command = args.last().unwrap();
+        assert!(command.contains("catch"), "no catch: {command}");
+        assert!(
+            command.contains("exit 1"),
+            "the catch must exit non-zero: {command}"
+        );
+        assert!(
+            !command.contains("exit $LASTEXITCODE"),
+            "the bare form is the defect: {command}"
+        );
+        // Not `Stop`: the tool's own non-terminating errors are the tool's business, and scoop
+        // emits them on installs that succeed.
+        assert!(!command.contains("ErrorActionPreference"), "{command}");
+    }
+
+    /// **The program name is escaped like every argument.** Nothing user-authored reaches
+    /// `cmd` today; what kept that true was that no config key names a manager's binary, which
+    /// is not an enforcement.
+    #[test]
+    fn the_program_name_is_quoted_and_invoked_through_the_call_operator() {
+        let hostile = "evil'; rm x; '";
+        let (_prog, args) =
+            windows_shim_wrap(hostile, Path::new(r"C:\s.ps1"), &["list".to_string()]).unwrap();
+        let command = args.last().unwrap();
+        assert!(
+            command.contains(&format!("& '{}'", hostile.replace('\'', "''"))),
+            "the program name must stay one literal: {command}"
+        );
     }
 
     #[test]

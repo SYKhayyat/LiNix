@@ -274,13 +274,12 @@ fn reads_as_a_mistake(cfg: &Config, managed: usize, to_remove: usize) -> bool {
 /// exactly what happened: 43 managed against 276 undeclared reads as 0.156 and cleared the
 /// bar, `purge-undeclared` proceeded, and the only thing that saved the machine was that all
 /// 276 removals happened to fail.
-fn managed_where_the_crawl_could_see(
-    packages: &[crate::core::state::ManagedPackage],
+fn managed_where_the_crawl_could_see<'a>(
+    packages: impl Iterator<Item = &'a crate::core::state::ManagedPackage>,
     answered: &[String],
 ) -> usize {
     let seen: std::collections::HashSet<&str> = answered.iter().map(String::as_str).collect();
     packages
-        .iter()
         .filter(|p| seen.contains(p.backend.as_str()))
         .count()
 }
@@ -317,7 +316,7 @@ pub async fn handle_purge_undeclared(app: &App, allow_mass_purge: bool) -> Resul
     }
 
     let managed =
-        managed_where_the_crawl_could_see(&app.state.lock().await.packages, &crawl.answered);
+        managed_where_the_crawl_could_see(app.state.lock().await.managed(), &crawl.answered);
     let removals: Vec<(String, String)> = undeclared
         .iter()
         .map(|p| (p.backend.clone(), p.name.clone()))
@@ -477,7 +476,7 @@ pub async fn handle_reset(
     state: &tokio::sync::Mutex<crate::core::StateRegistry>,
     force: bool,
 ) -> Result<()> {
-    let managed = state.lock().await.packages.len();
+    let managed = state.lock().await.managed_count();
 
     // K5: forgetting the registry while the declarations remain leaves Shall believing it
     // manages nothing and the files saying otherwise. Refuse unless the repo is gone, or the
@@ -589,8 +588,7 @@ pub async fn handle_unmanage(app: &App, packages: &[String], out: Output) -> Res
         {
             let mut state = app.state.lock().await;
             let managed: Vec<(String, String)> = state
-                .packages
-                .iter()
+                .managed()
                 .filter(|p| p.name == name)
                 .filter(|p| backend.as_deref().is_none_or(|b| b == p.backend))
                 .map(|p| (p.backend.clone(), p.name.clone()))
@@ -917,7 +915,7 @@ mod purge_tests {
     /// have.
     #[test]
     fn a_manager_the_crawl_never_asked_is_on_neither_side() {
-        let state = vec![
+        let state = [
             managed_pkg("brew", "ripgrep"),
             managed_pkg("brew", "fd"),
             managed_pkg("gem", "rails"),
@@ -926,7 +924,7 @@ mod purge_tests {
         // Only brew answered — `priority` does not name gem or npm, or they failed to list.
         let answered = vec!["brew".to_string()];
         assert_eq!(
-            managed_where_the_crawl_could_see(&state, &answered),
+            managed_where_the_crawl_could_see(state.iter(), &answered),
             2,
             "only the two brew packages are comparable with a brew-only deletion list"
         );
@@ -936,13 +934,16 @@ mod purge_tests {
     /// test above a measurement rather than an artefact of filtering.
     #[test]
     fn every_manager_that_answered_counts() {
-        let state = vec![
+        let state = [
             managed_pkg("brew", "ripgrep"),
             managed_pkg("gem", "rails"),
             managed_pkg("npm", "typescript"),
         ];
         let answered = vec!["brew".to_string(), "gem".to_string(), "npm".to_string()];
-        assert_eq!(managed_where_the_crawl_could_see(&state, &answered), 3);
+        assert_eq!(
+            managed_where_the_crawl_could_see(state.iter(), &answered),
+            3
+        );
     }
 
     /// The regression, end to end and in its own numbers.
@@ -1040,6 +1041,6 @@ mod purge_tests {
     fn managing_nothing_is_always_a_mistake() {
         assert!(reads_as_a_mistake(0, 1));
         assert!(reads_as_a_mistake(0, 576));
-        assert_eq!(managed_where_the_crawl_could_see(&[], &[]), 0);
+        assert_eq!(managed_where_the_crawl_could_see([].iter(), &[]), 0);
     }
 }

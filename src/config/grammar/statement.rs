@@ -1583,18 +1583,18 @@ fn validate_firewall(origin: &Origin, name: &str, options: &Options) -> Result<(
     let rule = crate::model::firewall::Rule::parse(name)
         .map_err(|e| GrammarError::new(origin.clone(), e))?;
     match rule {
-        crate::model::firewall::Rule::Default { .. } => {
-            match options.one("value").map(str::trim) {
-                Some("allow") | Some("deny") => Ok(()),
-                _ => Err(GrammarError::new(
-                    origin.clone(),
-                    format!("`firewall:{}` needs a policy", name),
-                )
-                .with_hint(
-                    "say which way it goes: `@value=deny` or `@value=allow`. A default policy                      with no value declares nothing, and it is the most consequential line in                      a firewall.",
-                )),
-            }
-        }
+        crate::model::firewall::Rule::Default { .. } => match options.one("value").map(str::trim) {
+            Some("allow") | Some("deny") => Ok(()),
+            _ => Err(GrammarError::new(
+                origin.clone(),
+                format!("`firewall:{}` needs a policy", name),
+            )
+            .with_hint(
+                "say which way it goes: `@value=deny` or `@value=allow`. A default policy \
+                     with no value declares nothing, and it is the most consequential line in \
+                     a firewall.",
+            )),
+        },
         // A port rule is its own declaration; `@value=` on one would be a second way to say
         // the same thing, and a confusing one (`firewall:22/tcp @value=deny` reads as both).
         crate::model::firewall::Rule::Port { .. } => match options.one("value") {
@@ -1604,7 +1604,8 @@ fn validate_firewall(origin: &Origin, name: &str, options: &Options) -> Result<(
                 format!("`firewall:{}` takes no `value`", name),
             )
             .with_hint(
-                "a declared port is open — that is what declaring it means. To close one,                  delete the line; `@value=` belongs on `default/incoming` only.",
+                "a declared port is open — that is what declaring it means. To close one, \
+                 delete the line; `@value=` belongs on `default/incoming` only.",
             )),
         },
     }
@@ -1863,6 +1864,33 @@ pub fn validate_backend_options(origin: &Origin, backend: Option<&str>, o: &Opti
         );
     }
 
+    // `Options::one` returns the *first* value, so a repeated hash meant the earlier one
+    // silently won. `@sha256=<old> @sha256=<new>` is the natural shape of a hand-edited hash
+    // bump: it verified against the stale hash and refused the correct file — or, written the
+    // other way round, verified against the one the author meant to replace. The argument for
+    // refusing a second `@channel` is that there is no fallback across two answers, and it
+    // applies with more force to the option that decides whether downloaded bytes become an
+    // executable on PATH.
+    // Same shape, same reason: `@bin` names where the executable lands, and two values means
+    // one of them decided it and neither was said out loud.
+    if o.all("bin").len() > 1 {
+        return Err(
+            GrammarError::new(origin.clone(), "`@bin` takes one name").with_hint(
+                "one name for the file that goes on PATH. Two would put it under one of them \
+                 and quietly discard the other.",
+            ),
+        );
+    }
+    if o.all("sha256").len() > 1 {
+        return Err(
+            GrammarError::new(origin.clone(), "`@sha256` takes one hash").with_hint(
+                "there is no fallback across hashes — one of the two would win silently, and \
+             which one is not a thing to leave to the order they were typed in. Name the hash \
+             of the file you want.",
+            ),
+        );
+    }
+
     // `@download_only` (D3b) means "fetch but do not install" — a distinction only a backend
     // that downloads a file can draw. Every other backend hands the whole job to a package
     // manager, so there is no fetch-without-install to ask for.
@@ -1979,7 +2007,9 @@ pub fn validate_backend_options(origin: &Origin, backend: Option<&str>, o: &Opti
                 format!("`@system` is not an option on `{}`", backend),
             )
             .with_hint(format!(
-                "it says this line may install into an environment the operating system owns,                  which is only a decision where the OS claims one: {}. Everywhere else there is                  nothing to override.",
+                "it says this line may install into an environment the operating system owns, \
+                 which is only a decision where the OS claims one: {}. Everywhere else there is \
+                 nothing to override.",
                 capability::system_backends()
             )));
         }
@@ -3131,6 +3161,23 @@ mod artifact_option_tests {
             options_of("github:sharkdp/fd@asset=*musl*").one("asset"),
             Some("*musl*")
         );
+    }
+
+    #[test]
+    fn a_repeated_single_value_option_is_refused_rather_than_resolved_by_order() {
+        // `one()` returns `first()`, so a second value used to lose in silence. The hand-edited
+        // hash bump is the shape that matters: `@sha256=<old>,sha256=<new>` verified against the
+        // stale hash. `@channel` and `@asset` already refused this; these two did not.
+        let err = p("appimage:https://example.com/t.AppImage@sha256=aaa,sha256=bbb").unwrap_err();
+        assert!(
+            err.to_string().contains("`@sha256` takes one hash"),
+            "{err}"
+        );
+        let err = p("github:sharkdp/fd@bin=a,bin=b").unwrap_err();
+        assert!(err.to_string().contains("`@bin` takes one name"), "{err}");
+        // One is still one.
+        assert!(p("appimage:https://example.com/t.AppImage@sha256=aaa").is_ok());
+        assert!(p("github:sharkdp/fd@bin=fd,formats=deb").is_ok());
     }
 
     #[test]

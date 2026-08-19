@@ -63,6 +63,7 @@ mod a_silenced_advisory_says_why_tests;
 mod a_skip_does_not_erase_the_rest_of_the_drift_tests;
 mod a_skipped_install_is_not_an_undeclared_leftover_tests;
 mod a_spawned_child_has_an_owner_tests;
+mod a_string_carries_no_source_indentation_tests;
 mod a_version_pin_is_honoured_or_explained_tests;
 mod a_writer_that_reaches_the_disk_goes_through_one_tests;
 mod absent_marker_coverage_tests;

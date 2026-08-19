@@ -190,7 +190,8 @@ mod tests {
         const V4: &str = include_str!("../../tests/fixtures/helm/plugin-install-help-v4.txt");
         assert!(
             !help_documents_verification(V3),
-            "helm 3 does not verify plugins; `--kube-insecure-skip-tls-verify` is not a              verification flag for the plugin being installed"
+            "helm 3 does not verify plugins; `--kube-insecure-skip-tls-verify` is not a \
+             verification flag for the plugin being installed"
         );
         assert!(
             help_documents_verification(V4),

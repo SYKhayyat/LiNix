@@ -74,7 +74,10 @@ impl Dependents<'_> {
                     ) == crate::model::scope::Scope::System
                     {
                         return Err(Error::Validation(format!(
-                            "{}: `shim:{}` asks for scope=system, and Shall deploys shims only                              into this account's `~/.local/bin`. A per-user shim under a line                              that says every account would be the wrong answer quietly, so                              this is refused. Drop `@scope=system`.",
+                            "{}: `shim:{}` asks for scope=system, and Shall deploys shims only \
+                             into this account's `~/.local/bin`. A per-user shim under a line \
+                             that says every account would be the wrong answer quietly, so \
+                             this is refused. Drop `@scope=system`.",
                             origin, name
                         )));
                     }

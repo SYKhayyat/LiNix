@@ -198,7 +198,8 @@ impl GitManager {
         // permanent artifact in the user's config directory rather than a changed file.
         if crate::core::dry_run::active() {
             crate::would_warn!(
-                "would initialise manifest version control at {} and commit the                  config as it stands.",
+                "would initialise manifest version control at {} and commit the \
+                 config as it stands.",
                 self.root.display()
             );
             return Ok(());

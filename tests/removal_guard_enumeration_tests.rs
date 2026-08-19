@@ -40,11 +40,11 @@ struct Accounted {
 const LEDGER: &[Accounted] = &[
     Accounted {
         file: "src/app/leases.rs",
-        guarded_by: "guard::enforce at leases.rs:51, GuardScope::ExpirySweep",
+        guarded_by: "guard::enforce in `sweep_expired`, GuardScope::ExpirySweep",
     },
     Accounted {
         file: "src/app/apply/extras.rs",
-        guarded_by: "guard::enforce_extras at extras.rs:65, over the whole drift set before \
+        guarded_by: "guard::enforce_extras over the whole drift set before \
                      any kind is dispatched (W21) — including the shim a package line asks \
                      for with `@shim`/`@sandbox`, which resolves to a `shim:` extra (G-1)",
     },
@@ -62,10 +62,10 @@ const LEDGER: &[Accounted] = &[
     // the graph at all, which is what the entry below records.
     Accounted {
         file: "src/core/transaction.rs",
-        guarded_by: "the purge/remove pair at :500-502 executes a plan enforced at \
-                     sync/mod.rs:141 — or, for a recovery, per entry at sync/mod.rs:798 \
+        guarded_by: "the purge/remove pair executes a plan enforced in `sync`'s preflight \
+                     — or, for a recovery, per entry in `heal_interrupted_removals` \
                      (GuardScope::Heal) before that entry becomes a node; the rollback \
-                     removal at :714 is enforced at :688",
+                     removal is enforced where the rollback is built",
     },
     // `src/verbs/cleanup.rs` was here, and its absence is `LX-5` landing: `remove-orphans` and
     // `purge-undeclared` each kept a private removal loop, and both now build a graph and hand it
@@ -73,30 +73,52 @@ const LEDGER: &[Accounted] = &[
     // surface — the guard covering it is the engine's, counted under `core/transaction.rs`.
     Accounted {
         file: "src/verbs/declare.rs",
-        guarded_by: "guard::enforce_extras at declare.rs:36, GuardScope::Remove (W21) — the \
+        guarded_by: "guard::enforce_extras in `declare`, GuardScope::Remove (W21) — the \
                      imperative twin of the `repo:` teardown",
     },
     Accounted {
         file: "src/verbs/packages.rs",
-        guarded_by: "guard::enforce at packages.rs:612, GuardScope::Remove — and the token it                      returns is what `inst.remove` at :638 takes, so the comment above that                      call is now the compiler's to keep",
+        guarded_by: "guard::enforce in `uninstall`, GuardScope::Remove — and the token it \
+                     returns is what `inst.remove` takes, so the comment above that call \
+                     is now the compiler's to keep",
     },
     // The three new entries below are the `Reaped` change itself, and none of them is a
     // removal *site*: they are where the type is declared and where it travels.
     Accounted {
         file: "src/app/sync/guard.rs",
-        guarded_by: "the guard itself: `Reaped` is declared here and minted by `enforce`,                      `enforce_extras` and `enforce_deliberate`",
+        guarded_by: "the guard itself: `Reaped` is declared here and minted by `enforce`, \
+         `enforce_extras` and `enforce_deliberate`",
     },
     Accounted {
         file: "src/app/sync/mod.rs",
-        guarded_by: "guard::enforce at mod.rs:193 (the sync plan) and :872 (per interrupted                      entry, GuardScope::Heal). The engine carries the token to the executor                      rather than dropping it on the line that produced it",
+        guarded_by: "guard::enforce over the sync plan, and again per interrupted entry in \
+                     `heal_interrupted_removals` (GuardScope::Heal). The engine carries the \
+                     token to the executor rather than dropping it on the line that \
+                     produced it",
     },
     Accounted {
         file: "src/app/apply/firewall.rs",
-        guarded_by: "**THE FINDING.** `guard::enforce_extras` over `to_close`, before the                      first `deny_command` runs. Until 2026-08-07 the word `guard` appeared                      nowhere in this file — not an import, not a call, not a comment — while                      it closed every open port no `firewall:` line declared. `max_removals`                      did not count them, `protected` could not name them, and                      `--allow-mass-removal` was not consulted. Three bespoke refusals were                      written here instead of calling the one guard two hundred lines away",
+        guarded_by: "**THE FINDING.** `guard::enforce_extras` over `to_close`, before the \
+         first `deny_command` runs. Until 2026-08-07 the word `guard` appeared \
+         nowhere in this file — not an import, not a call, not a comment — while \
+         it closed every open port no `firewall:` line declared. `max_removals` \
+         did not count them, `protected` could not name them, and \
+         `--allow-mass-removal` was not consulted. Three bespoke refusals were \
+         written here instead of calling the one guard two hundred lines away",
     },
     Accounted {
         file: "src/app/apply/nixos.rs",
-        guarded_by: "`guard::enforce_ports` over the ports leaving                      `allowedTCPPorts`/`allowedUDPPorts` and `guard::enforce_extras` over the                      services leaving `services.<name>.enable`, both before the module is                      written and the rebuild runs. **The same perimeter one OS over, so it                      takes the same three protections**: the SSH lockout check                      (`would_close_session`) runs first, then the two budgets, then                      `enforce_additions` for what is being opened. A port dropped from a                      NixOS attribute closes on rebuild exactly as `ufw delete` closes it, on                      a machine that takes minutes to rebuild back — and this file was written                      by copying the shape of `apply/firewall.rs` above precisely so the entry                      beside it would not be the finding twice",
+        guarded_by: "`guard::enforce_ports` over the ports leaving \
+         `allowedTCPPorts`/`allowedUDPPorts` and `guard::enforce_extras` over the \
+         services leaving `services.<name>.enable`, both before the module is \
+         written and the rebuild runs. **The same perimeter one OS over, so it \
+         takes the same three protections**: the SSH lockout check \
+         (`would_close_session`) runs first, then the two budgets, then \
+         `enforce_additions` for what is being opened. A port dropped from a \
+         NixOS attribute closes on rebuild exactly as `ufw delete` closes it, on \
+         a machine that takes minutes to rebuild back — and this file was written \
+         by copying the shape of `apply/firewall.rs` above precisely so the entry \
+         beside it would not be the finding twice",
     },
 ];
 

@@ -366,7 +366,8 @@ async fn every_subcommand_shall_invokes_still_exists_upstream() {
                         Some(said) => flag_drift.push(format!("`{shown}` — the tool says: {said}")),
                         None => {
                             skipped.insert(format!(
-                                "{shown} (undocumented in its own help, but the tool still                                  accepts it)"
+                                "{shown} (undocumented in its own help, but the tool still \
+                                 accepts it)"
                             ));
                             checked.insert(shown);
                         }
@@ -423,10 +424,13 @@ async fn every_subcommand_shall_invokes_still_exists_upstream() {
 
     assert!(
         unreadable.is_empty(),
-        "these managers are installed here and this gate could not ask them anything, so every          subcommand Shall runs on them is unverified:
+        "these managers are installed here and this gate could not ask them anything, so every \
+         subcommand Shall runs on them is unverified:
   {}",
-        unreadable.join("
-  ")
+        unreadable.join(
+            "
+  "
+        )
     );
     assert!(
         drifted.is_empty(),

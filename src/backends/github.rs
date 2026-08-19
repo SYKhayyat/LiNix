@@ -282,28 +282,24 @@ impl GithubBackendCore {
     /// The records as they stand, for reading. A copy, deliberately: a caller that held a
     /// borrow would hold the lock across its whole install, and the download in the middle of
     /// that is the reason this backend is concurrent at all.
-    async fn load_state_internal(&self) -> HashMap<String, GithubState> {
+    async fn load_state_internal(&self) -> Result<HashMap<String, GithubState>> {
         let mut guard = self.state.lock().await;
-        Self::loaded(&mut guard, &self.state_file).await.clone()
+        Ok(Self::loaded(&mut guard, &self.state_file).await?.clone())
     }
 
     /// Read the file into the memo the first time, and hand back the map either way.
+    ///
+    /// Through `ledger::load_json_records`, which is where the absent-versus-unparseable rule
+    /// lives. Reading a corrupt file as an empty map is not a read failure that recovers — the
+    /// emptiness is merged and written back, and the record of every deployed artifact is gone.
     async fn loaded<'a>(
         guard: &'a mut Option<HashMap<String, GithubState>>,
         state_file: &Path,
-    ) -> &'a mut HashMap<String, GithubState> {
+    ) -> Result<&'a mut HashMap<String, GithubState>> {
         if guard.is_none() {
-            let map = if tokio::fs::try_exists(state_file).await.unwrap_or(false) {
-                let data = tokio::fs::read_to_string(state_file)
-                    .await
-                    .unwrap_or_default();
-                serde_json::from_str(&data).unwrap_or_default()
-            } else {
-                HashMap::new()
-            };
-            *guard = Some(map);
+            *guard = Some(crate::core::ledger::load_json_records(state_file).await?);
         }
-        guard.as_mut().expect("just filled")
+        Ok(guard.as_mut().expect("just filled"))
     }
 
     /// Apply one task's changes to the shared records and the artifact ledger, and write both.
@@ -325,7 +321,7 @@ impl GithubBackendCore {
         forgotten: Vec<String>,
     ) -> Result<()> {
         let mut guard = self.state.lock().await;
-        let map = Self::loaded(&mut guard, &self.state_file).await;
+        let map = Self::loaded(&mut guard, &self.state_file).await?;
         // **A preview changes the memo as little as it changes the disk.** The merge happens on
         // a copy, and the copy is only adopted for a run that acts. `persist` already refuses
         // the write under `--dry-run` and says "would write"; before this map existed, each
@@ -559,7 +555,7 @@ impl Installable for GithubInstallable {
     }
 
     async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
-        let mut state = self.core.load_state_internal().await;
+        let mut state = self.core.load_state_internal().await?;
         let mut ledger = ArtifactLedger::load(&self.core.locks_file)?;
         // What this call changed, kept apart from the copies it reads. Only the changes are
         // committed, so a concurrent install of another package is merged rather than
@@ -710,6 +706,19 @@ impl Installable for GithubInstallable {
             // Everything is downloaded and hashed before anything is unpacked or put on PATH:
             // with several artifacts under one declaration, a supply-chain objection to the
             // third must not arrive with the first two already deployed.
+            // The release was resolved, the assets were picked and the deploy destinations
+            // were refused or accepted above — all of which a preview should say. The transfer
+            // is the part it must not do.
+            if crate::core::dry_run::active() {
+                crate::would!(
+                    "download {} ({}), {} artifact(s), and install them",
+                    spec.name,
+                    release.version,
+                    selection.picks.len()
+                );
+                continue;
+            }
+
             info!(
                 "Downloading GitHub release: {} ({}), {} artifact(s)",
                 spec.name,
@@ -1063,7 +1072,7 @@ impl Installable for GithubInstallable {
         _: bool,
         _reaped: crate::app::sync::guard::Reaped,
     ) -> Result<()> {
-        let mut state = self.core.load_state_internal().await;
+        let mut state = self.core.load_state_internal().await?;
         let mut failures = Vec::new();
         // As in `install`: what this call changed, committed rather than the whole map.
         let mut removed_names: Vec<String> = Vec::new();
@@ -1123,7 +1132,7 @@ impl Queryable for GithubQueryable {
     }
 
     async fn fetch_installed(&self) -> Result<Vec<Package>> {
-        let state = self.core.load_state_internal().await;
+        let state = self.core.load_state_internal().await?;
         Ok(state
             .into_iter()
             .map(|(n, s)| Package::with_version(&n, &s.version, "github"))
@@ -1139,12 +1148,10 @@ impl Queryable for GithubQueryable {
         Ok(all.iter().find(|p| p.name == name).cloned())
     }
 
-    async fn owned_system_packages(&self) -> Vec<(String, String)> {
+    async fn owned_system_packages(&self) -> Result<Vec<(String, String)>> {
         // D5: read the ledger Shall wrote, not the network — a `.deb` this backend handed to
         // dpkg is recorded there as `installed_by`/`system_package`.
-        ArtifactLedger::load(&self.core.locks_file)
-            .map(|l| l.system_packages())
-            .unwrap_or_default()
+        Ok(ArtifactLedger::load(&self.core.locks_file)?.system_packages())
     }
 }
 

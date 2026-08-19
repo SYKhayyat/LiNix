@@ -64,6 +64,14 @@ pub async fn write_capped(
     dest: &std::path::Path,
     what: &str,
 ) -> Result<u64> {
+    // **The check is where the write is** (`core::dry_run`). Every verb that can reach a
+    // download backend's `install()` returns before it under `--dry-run` today, so this closes
+    // nothing that is open — it moves the rule from five verbs remembering it to the one
+    // function that creates the file, which is the argument that module makes for itself.
+    if crate::core::dry_run::active() {
+        crate::would!("download {}", what);
+        return Ok(0);
+    }
     write_capped_to(response, dest, what, max_download_bytes()).await
 }
 
@@ -77,14 +85,51 @@ async fn write_capped_to(
     what: &str,
     cap: Option<u64>,
 ) -> Result<u64> {
-    use futures::StreamExt;
-    use tokio::io::AsyncWriteExt;
-
-    if let (Some(cap), Some(declared)) = (cap, response.content_length()) {
+    // Read from the header rather than `content_length()`: that method answers from the body's
+    // size hint, which a streamed response does not have, so it reports `None` for exactly the
+    // transfers the check below exists for. Shall's client enables no response decompression, so
+    // the declared length is the length of what arrives.
+    let declared = response
+        .headers()
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        .or_else(|| response.content_length());
+    if let (Some(cap), Some(declared)) = (cap, declared) {
         if declared > cap {
             return Err(refused_size(what, declared, cap));
         }
     }
+
+    // **One cleanup for every way out, not one for the way that was thought of.** A partial
+    // artifact left on disk is one a later run can find and treat as complete, and the checksum
+    // that would have caught that is the one `@unverified` is allowed to turn off. The cap
+    // refusal removed it; the dropped connection, the full disk and the failed flush did not,
+    // and `appimage:` streams straight onto the live artifact path — so a transfer that died at
+    // 60% replaced a working binary on PATH with a truncated one. Wrapping the whole stream is
+    // what stops a fifth exit inheriting the bug.
+    match stream_capped(response, dest, what, cap, declared).await {
+        Ok(written) => Ok(written),
+        Err(e) => {
+            let _ = tokio::fs::remove_file(dest).await;
+            Err(e)
+        }
+    }
+}
+
+/// The streaming half of [`write_capped_to`], with no cleanup of its own.
+///
+/// Every exit here is an error exit its caller cleans up after, which is the only reason it can
+/// be written straight through.
+async fn stream_capped(
+    response: reqwest::Response,
+    dest: &std::path::Path,
+    what: &str,
+    cap: Option<u64>,
+    declared: Option<u64>,
+) -> Result<u64> {
+    use futures::StreamExt;
+    use tokio::io::AsyncWriteExt;
 
     let mut file = tokio::fs::File::create(dest).await.map_err(Error::from)?;
     let mut written: u64 = 0;
@@ -94,17 +139,27 @@ async fn write_capped_to(
         written += chunk.len() as u64;
         if let Some(cap) = cap {
             if written > cap {
-                // Take the partial file with it. A half-downloaded artifact left on disk is one
-                // a later run can find and treat as complete, and the checksum that would have
-                // caught that is the one `@unverified` is allowed to turn off.
-                drop(file);
-                let _ = tokio::fs::remove_file(dest).await;
                 return Err(refused_size(what, written, cap));
             }
         }
         file.write_all(&chunk).await.map_err(Error::from)?;
     }
     file.flush().await.map_err(Error::from)?;
+    // **A body that stops early is not a body that ended.** Nothing else notices: the stream
+    // reports no error, and the hash that would have caught it is the one `@unverified` turns
+    // off and the one VIII.2 exempts every `github:` line from. When the server said how many
+    // bytes were coming, the count is the check.
+    if let Some(declared) = declared {
+        if written != declared {
+            return Err(Error::command_failed(format!(
+                "{} ended after {} of the {} the server said it would send — the transfer was \
+                 cut short, and what arrived is not the file.",
+                what,
+                human_bytes(written),
+                human_bytes(declared)
+            )));
+        }
+    }
     Ok(written)
 }
 
@@ -305,6 +360,73 @@ mod tests {
             write_capped_to(undeclared("0123456789"), &dest, "an artifact", None)
                 .await
                 .expect("no ceiling refuses nothing"),
+            10
+        );
+    }
+
+    /// A body that fails partway, with no `Content-Length` — the dropped-connection exit.
+    fn breaks_after(prefix: &'static str) -> reqwest::Response {
+        use futures::StreamExt;
+        let stream = futures::stream::once(
+            async move { Ok::<_, std::io::Error>(prefix.as_bytes()) },
+        )
+        .chain(futures::stream::once(async {
+            Err::<&[u8], _>(std::io::Error::other("the connection went away"))
+        }));
+        reqwest::Response::from(
+            http::Response::builder()
+                .body(reqwest::Body::wrap_stream(stream))
+                .expect("a response with a streamed body"),
+        )
+    }
+
+    /// A body that declares more than it sends — the truncated-but-clean exit.
+    fn declares(len: u64, body: &'static str) -> reqwest::Response {
+        let stream = futures::stream::once(async move { Ok::<_, std::io::Error>(body.as_bytes()) });
+        reqwest::Response::from(
+            http::Response::builder()
+                .header(http::header::CONTENT_LENGTH, len)
+                .body(reqwest::Body::wrap_stream(stream))
+                .expect("a response with a streamed body"),
+        )
+    }
+
+    /// **Every error exit takes the partial file with it, not just the one that was thought of.**
+    ///
+    /// The cap refusal cleaned up and said why; the dropped connection, the failed write and the
+    /// failed flush did not. `appimage:` streamed straight onto the live artifact path, so the
+    /// leftover was a truncated binary under the PATH symlink of the last good install.
+    #[tokio::test]
+    async fn a_failed_transfer_leaves_nothing_behind() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let dropped = dir.path().join("dropped");
+        write_capped_to(breaks_after("012345"), &dropped, "an artifact", None)
+            .await
+            .expect_err("a connection that goes away is not a download");
+        assert!(
+            !dropped.exists(),
+            "a partial file survived a dropped connection"
+        );
+
+        let short = dir.path().join("short");
+        let err = write_capped_to(declares(10, "012345"), &short, "an artifact", None)
+            .await
+            .expect_err("six bytes of a declared ten is not the file");
+        assert!(err.to_string().contains("cut short"), "{err}");
+        assert!(!short.exists(), "a truncated file survived a short body");
+    }
+
+    /// A declared length that is met is not a failure — the check must not refuse the ordinary
+    /// case it was added to bound.
+    #[tokio::test]
+    async fn a_body_that_matches_its_declared_length_is_accepted() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("artifact");
+        assert_eq!(
+            write_capped_to(declares(10, "0123456789"), &dest, "an artifact", Some(1024))
+                .await
+                .expect("a complete body"),
             10
         );
     }

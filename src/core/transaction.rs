@@ -1247,7 +1247,12 @@ impl Transaction {
                     let sudo = backend_cap.sudo_for_write();
                     let Some(reaped) = reaped else {
                         return Err(crate::core::Error::Refused(format!(
-                            "a plan containing removals reached the executor without passing                              the removal guard — refusing to remove {}. This is a defect in                              whichever command built the plan, not in the config: the guard                              runs once over a whole plan (`max_removals` is a ceiling over a                              plan, not over one command), and the engine hands the executor                              the proof it ran.",
+                            "a plan containing removals reached the executor without passing \
+                             the removal guard — refusing to remove {}. This is a defect in \
+                             whichever command built the plan, not in the config: the guard \
+                             runs once over a whole plan (`max_removals` is a ceiling over a \
+                             plan, not over one command), and the engine hands the executor \
+                             the proof it ran.",
                             names.join(", ")
                         )));
                     };
@@ -1498,7 +1503,9 @@ impl Transaction {
                             // to remove is the opposite.
                             if self.plan_intends_present(&spec.backend, &spec.name) == Some(true) {
                                 info!(
-                                    "rollback is leaving {}:{} installed — it succeeded and the                                      manifest still declares it, so removing it would only give                                      the next sync the same work to do again.",
+                                    "rollback is leaving {}:{} installed — it succeeded and the \
+                                     manifest still declares it, so removing it would only give \
+                                     the next sync the same work to do again.",
                                     spec.backend, spec.name
                                 );
                                 continue;
@@ -1533,7 +1540,8 @@ impl Transaction {
                             // so it is one of the two named cases that do not re-ask.
                             let reaped = crate::app::sync::guard::Reaped::for_reason(
                                 crate::app::sync::guard::GuardScope::Sync,
-                                "rollback checks `protection_of` itself at transaction.rs:993,                                  and compensates only work this run performed",
+                                "rollback checks `protection_of` itself, \
+                                 and compensates only work this run performed",
                             );
                             if let Err(e) = h
                                 .remove(

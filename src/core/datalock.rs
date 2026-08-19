@@ -49,8 +49,9 @@ const GENERATION_FILE: &str = "shall.gen";
 /// rather than several. See [`crate::core::stable`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Generation {
-    /// Bumped once by every writer that finishes.
-    count: u64,
+    /// Bumped once by every writer that finishes. `None` when the file could not be read or
+    /// did not parse — see [`observe`].
+    count: Option<u64>,
     /// Whether somebody held the lock as this was taken. A reader that saw a writer cannot
     /// conclude anything from two equal counts: the writer may not have released yet.
     writer_active: bool,
@@ -59,10 +60,16 @@ pub struct Generation {
 /// Read the writer generation. Two small reads of tiny files, and no lock of any kind — a
 /// reader must never wait on a writer, which is the whole reason this exists.
 pub fn observe(data_dir: &Path) -> Generation {
-    let count = std::fs::read_to_string(data_dir.join(GENERATION_FILE))
-        .ok()
-        .and_then(|s| s.trim().parse::<u64>().ok())
-        .unwrap_or(0);
+    // **An unreadable counter is `None`, not `0`.** `0` is a *lower* number than any real
+    // generation, so two observations straddling a crashed writer compared equal and
+    // `spans_one_moment` said yes to a read that spanned two. A file that has never been
+    // written is a genuine `0` — nothing has committed yet — and that case is kept apart from
+    // the torn one on purpose.
+    let count = match std::fs::read_to_string(data_dir.join(GENERATION_FILE)) {
+        Ok(s) => s.trim().parse::<u64>().ok(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(0),
+        Err(_) => None,
+    };
     Generation {
         count,
         writer_active: data_dir.join("shall.lock.owner").exists(),
@@ -72,7 +79,9 @@ pub fn observe(data_dir: &Path) -> Generation {
 impl Generation {
     /// Whether a read that spanned these two observations saw one moment.
     pub fn spans_one_moment(self, later: Self) -> bool {
-        self == later && !self.writer_active
+        // `None == None` is true for `Option`, and it must not be an answer here: two
+        // unreadable counters are two things unknown, not one moment observed twice.
+        self.count.is_some() && self == later && !self.writer_active
     }
 }
 
@@ -251,8 +260,21 @@ impl Drop for DataLock {
         // preview leaving a file behind, which is the defect the whole dry-run rule exists to
         // prevent — `a_preview_leaves_the_config_byte_identical` caught exactly that here.
         if !crate::core::dry_run::active() {
-            let next = observe(&self.data_dir).count.wrapping_add(1);
-            let _ = std::fs::write(self.data_dir.join(GENERATION_FILE), next.to_string());
+            // Atomically, through the writer this repo requires everywhere else. The one raw
+            // `fs::write` in the tree was this one, and a crash inside it left a torn file —
+            // which is the whole of why the read above has to distinguish torn from absent.
+            //
+            // From an unreadable counter there is no right number, only a number unlikely to
+            // equal one a reader has already seen — and the whole point of the bump is that the
+            // value *moves*. `u64::MAX` is that; guessing `1` is a value a young data directory
+            // really has.
+            let next = observe(&self.data_dir)
+                .count
+                .map_or(u64::MAX, |c| c.wrapping_add(1));
+            let _ = crate::utils::file::persist(
+                &self.data_dir.join(GENERATION_FILE),
+                &next.to_string(),
+            );
         }
         HELD.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
         let _ = std::fs::remove_file(&self.owner_path);
@@ -426,6 +448,31 @@ mod tests {
     /// The counter that lets a reader detect a writer without waiting for one. It moves when a
     /// writer *finishes*, so an unchanged count with no holder means the reader is strictly
     /// after that writer rather than inside it.
+    /// **A torn generation file is unknown, not zero.**
+    ///
+    /// It was read with `.ok().unwrap_or(0)`, and `0` is *lower* than any real generation
+    /// rather than an error — so two observations straddling a crashed writer compared equal
+    /// and `spans_one_moment` said a multi-file read saw one moment when it had not. A file
+    /// that has never been written is still a real `0`: nothing has committed yet.
+    #[test]
+    fn a_torn_generation_is_unknown_and_a_missing_one_is_zero() {
+        let dir = tmp("generation-torn");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(
+            observe(&dir).count,
+            Some(0),
+            "a data directory nothing has written to is at generation zero"
+        );
+
+        std::fs::write(dir.join(GENERATION_FILE), "not a number").unwrap();
+        let torn = observe(&dir);
+        assert_eq!(torn.count, None);
+        assert!(
+            !torn.spans_one_moment(observe(&dir)),
+            "two unreadable counters are two unknowns, not one moment seen twice"
+        );
+    }
+
     #[test]
     fn a_writer_that_finishes_moves_the_generation() {
         let dir = tmp("generation");
@@ -449,7 +496,7 @@ mod tests {
         }
 
         let after = observe(&dir);
-        assert_eq!(after.count, before.count.wrapping_add(1));
+        assert_eq!(after.count, before.count.map(|c| c.wrapping_add(1)));
         assert!(!after.writer_active);
         assert!(
             !before.spans_one_moment(after),

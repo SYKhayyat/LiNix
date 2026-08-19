@@ -27,6 +27,27 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::path::Path;
 
+/// Read a backend's JSON record of what it deployed: absent is empty, unparseable is an error.
+///
+/// **This is [`LockFile::load`]'s rule, one file format over**, and it is here rather than in
+/// each backend for the reason this module exists at all. The three download backends each
+/// read their record with `read_to_string(..).unwrap_or_default()` followed by
+/// `from_str(..).unwrap_or_default()`, so a truncated or hand-edited file arrived as an empty
+/// map with no error and no log line. The read was not the damage: `commit_state` merges the
+/// run's delta into that empty map and persists it, so the next run makes the loss permanent —
+/// every recorded artifact forgotten, its `bin_link` no longer known, and the files still on
+/// disk and on PATH with nothing owning them.
+pub async fn load_json_records<T: DeserializeOwned>(
+    path: &Path,
+) -> Result<std::collections::HashMap<String, T>> {
+    match tokio::fs::read_to_string(path).await {
+        Ok(s) => serde_json::from_str(&s)
+            .map_err(|e| Error::Json(format!("reading {}: {}", path.display(), e))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(std::collections::HashMap::new()),
+        Err(e) => Err(Error::Io(format!("reading {}: {}", path.display(), e))),
+    }
+}
+
 /// A record that is one TOML file under `locks/`.
 ///
 /// Implementors supply the record and its name; the reading, the writing, the missing-file
@@ -160,6 +181,28 @@ mod tests {
         assert!(
             matches!(err, Error::Toml(_)),
             "a corrupt ledger must not read as empty; got {err:?}"
+        );
+    }
+
+    /// **The same rule for the JSON records, because the same bug lived in three of them.**
+    ///
+    /// A truncated `web`/`github`/`appimage` state file read as an empty map, and the map was
+    /// then merged into and written back — so the second run made the loss permanent. Absent
+    /// is still the correct starting state; unparseable is not.
+    #[tokio::test]
+    async fn a_corrupt_json_record_is_an_error_and_a_missing_one_is_empty() {
+        let tmp = TempDir::new().unwrap();
+        let missing = tmp.path().join("never-written.json");
+        let empty: std::collections::HashMap<String, String> =
+            load_json_records(&missing).await.unwrap();
+        assert!(empty.is_empty(), "a missing record starts empty");
+
+        let corrupt = tmp.path().join("torn.json");
+        std::fs::write(&corrupt, "{\"fd\": {\"version\"").unwrap();
+        let err = load_json_records::<String>(&corrupt).await.unwrap_err();
+        assert!(
+            matches!(err, Error::Json(_)),
+            "a corrupt record must not read as empty; got {err:?}"
         );
     }
 }

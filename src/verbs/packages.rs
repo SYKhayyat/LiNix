@@ -732,6 +732,12 @@ async fn unmanaged_targets(
 ) -> Result<Vec<(String, String)>> {
     let state = state.lock().await;
     let mut out: Vec<(String, String)> = Vec::new();
+    // Probed once for the whole call, and still only when a bare name asks for it. It sat
+    // inside the loop, so `shall uninstall a b c d` ran the whole `priority()` fan-out four
+    // times for a value that cannot change between iterations. Lazily rather than hoisted
+    // outright: `usable()` is fallible, and an unresolvable `priority` must not start refusing
+    // `shall uninstall apt:jq`, which never needs the answer.
+    let mut usable_once: Option<Vec<Arc<crate::core::BackendCapabilities>>> = None;
     for pkg in packages {
         let (scoped, name) =
             crate::config::parser::split_removal_target(pkg, |b| registry.get(b).is_some());
@@ -750,7 +756,10 @@ async fn unmanaged_targets(
                 // What Shall uses, both times — and asked once rather than twice, which the
                 // two calls here were not: the same fan-out ran to decide whether to widen and
                 // again to widen, and after W4 each of those is a PATH walk per manager.
-                let usable = backends.usable()?;
+                let usable = match &usable_once {
+                    Some(usable) => usable,
+                    None => usable_once.insert(backends.usable()?),
+                };
                 if !usable.iter().any(|b| state.is_managed(b.name(), &name)) {
                     let mut widened: Vec<String> =
                         usable.iter().map(|b| b.name().to_string()).collect();
@@ -1119,8 +1128,7 @@ pub async fn handle_search(
         let managed: std::collections::HashSet<(String, String)> = {
             let state = state.lock().await;
             state
-                .packages
-                .iter()
+                .managed()
                 .map(|p| (p.backend.clone(), p.name.clone()))
                 .collect()
         };

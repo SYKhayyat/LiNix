@@ -1171,7 +1171,9 @@ pub(crate) fn build_capabilities(
         }
         (Some(_), None) => {
             warn!(
-                "backend `{}`: `machine_list_args` needs `machine_list_parser` beside it — a                  machine-readable listing is a different shape from the text one, and reading                  it with the text parser reports an empty machine. Using `list_args`.",
+                "backend `{}`: `machine_list_args` needs `machine_list_parser` beside it — a \
+                 machine-readable listing is a different shape from the text one, and reading \
+                 it with the text parser reports an empty machine. Using `list_args`.",
                 def.name
             );
             None

@@ -39,11 +39,7 @@ async fn test_lease_expiration_pruning_logic() {
         "test",
         false,
     );
-    if let Some(pkg) = state
-        .packages
-        .iter_mut()
-        .find(|p| p.name == "expired-binary")
-    {
+    if let Some(pkg) = state.managed_mut("brew", "expired-binary") {
         pkg.expires_at = Some(now - 60);
     }
 
@@ -56,11 +52,7 @@ async fn test_lease_expiration_pruning_logic() {
         "test",
         false,
     );
-    if let Some(pkg) = state
-        .packages
-        .iter_mut()
-        .find(|p| p.name == "active-binary")
-    {
+    if let Some(pkg) = state.managed_mut("brew", "active-binary") {
         pkg.expires_at = Some(now + 7200);
     }
 
@@ -119,11 +111,7 @@ async fn test_lease_manifest_override_logic() {
         "test",
         false,
     );
-    if let Some(pkg) = state
-        .packages
-        .iter_mut()
-        .find(|p| p.name == "manifest-protected")
-    {
+    if let Some(pkg) = state.managed_mut("brew", "manifest-protected") {
         pkg.expires_at = Some(now - 1000);
     }
 

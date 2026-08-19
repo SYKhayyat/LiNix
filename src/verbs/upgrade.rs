@@ -121,8 +121,7 @@ pub async fn upgrade_targeted(
     let managed: Vec<(String, String)> = {
         let state = app.state.lock().await;
         state
-            .packages
-            .iter()
+            .managed()
             .map(|p| (p.backend.clone(), p.name.clone()))
             .collect()
     };

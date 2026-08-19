@@ -177,7 +177,8 @@ impl ForeignSets {
                 }
                 Ok(None) => {}
                 Err(e) => tracing::debug!(
-                    "`{owner}` could not say which packages its repositories did not supply, so                      it speaks for all of them: {e}"
+                    "`{owner}` could not say which packages its repositories did not supply, so \
+                     it speaks for all of them: {e}"
                 ),
             }
         }

@@ -181,7 +181,7 @@ fn every_setting_the_config_declares_is_read_somewhere() {
          A setting that does nothing is worse than a missing one: the user who sets it has \
          taken the documented step and believes the matter is closed. `require_bwrap` promises \
          to fail when `bwrap` is absent, and its Windows twin `windows_require_sandbox` keeps \
-         that promise at `sandbox.rs:303`.",
+         that promise in `sandbox.rs`.",
         dead.len(),
         dead
     );

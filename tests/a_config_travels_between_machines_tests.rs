@@ -124,7 +124,7 @@ async fn a_managed_package_whose_manager_is_gone_is_not_reaped() {
     let kernel = kernel_with("brew:neovim\n").await;
     {
         let mut state = kernel.state.lock().await;
-        state.packages.push(ManagedPackage {
+        state.manage(ManagedPackage {
             name: "jq".into(),
             backend: NOT_HERE.into(),
             version: None,

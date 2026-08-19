@@ -140,8 +140,15 @@ pub fn run_external_with_origins(path: &Path, facts: &HostFacts) -> Result<(Vars
     // An external provider runs on every resolution, before any manager is asked — so a slow
     // one looks like Shall being slow to start until the breakdown names it.
     let timing = crate::core::timing::begin();
-    // Blocking, and it runs on every resolution before any manager is asked.
-    let output = crate::core::blocking::command_output(&mut cmd);
+    // Blocking, and it runs on every resolution before any manager is asked — which is why it
+    // is the bounded door and not the plain one. Unbounded, a provider reading from a network
+    // mount that went away hung `check`, `list`, `plan` and a scheduled `sync` for ever, with
+    // no output and nobody at the terminal to interrupt it. The measurement above was already
+    // here; nothing acted on it.
+    let output = crate::core::blocking::command_output_bounded(
+        &mut cmd,
+        &format!("the `{}` provider", name),
+    );
     crate::core::timing::end(timing, "vars provider", std::slice::from_ref(&name));
 
     let output = output.map_err(|e| {
