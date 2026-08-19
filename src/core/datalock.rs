@@ -23,10 +23,64 @@ use std::time::{Duration, Instant};
 /// that someone else is writing, not a longer silence (S27).
 pub const WAIT_SECS: u64 = 120;
 
+/// How many `DataLock`s this process is holding.
+///
+/// **`flock` is per open file description, not per process**, so a second handle opened in a
+/// process that already holds the lock does not re-enter — it waits for itself, for ever. Every
+/// door that takes the lock counts here, and every door that might take it asks here first.
+static HELD: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Whether this process is inside the lock right now.
+///
+/// The question is dynamic and has to be: `LockScope::Deferred` takes the lock at each mutating
+/// action and releases it in between, so no value carried around by the type system can say
+/// whether it is held at the moment somebody writes.
+pub fn held() -> bool {
+    HELD.load(std::sync::atomic::Ordering::Acquire) > 0
+}
+
+/// The file that counts writers, so a reader can tell whether one moved underneath it.
+const GENERATION_FILE: &str = "shall.gen";
+
+/// What a reader saw of the writers, at one instant.
+///
+/// Two observations that compare equal, with no writer holding the lock at either, mean no
+/// writer committed anything in between — which is what makes a multi-file read one moment
+/// rather than several. See [`crate::core::stable`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Generation {
+    /// Bumped once by every writer that finishes.
+    count: u64,
+    /// Whether somebody held the lock as this was taken. A reader that saw a writer cannot
+    /// conclude anything from two equal counts: the writer may not have released yet.
+    writer_active: bool,
+}
+
+/// Read the writer generation. Two small reads of tiny files, and no lock of any kind — a
+/// reader must never wait on a writer, which is the whole reason this exists.
+pub fn observe(data_dir: &Path) -> Generation {
+    let count = std::fs::read_to_string(data_dir.join(GENERATION_FILE))
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+    Generation {
+        count,
+        writer_active: data_dir.join("shall.lock.owner").exists(),
+    }
+}
+
+impl Generation {
+    /// Whether a read that spanned these two observations saw one moment.
+    pub fn spans_one_moment(self, later: Self) -> bool {
+        self == later && !self.writer_active
+    }
+}
+
 /// Held for the mutating part of a command. Dropping it releases the lock.
 pub struct DataLock {
     file: File,
     owner_path: PathBuf,
+    data_dir: PathBuf,
 }
 
 impl DataLock {
@@ -54,7 +108,7 @@ impl DataLock {
         if file.try_lock_exclusive().is_err() {
             return Ok(None);
         }
-        Ok(Some(Self::stamped(file, owner_path, command)))
+        Ok(Some(Self::stamped(file, owner_path, data_dir, command)))
     }
 
     /// Open the lock file and name its owner stamp. Shared so the waiting and non-waiting
@@ -75,10 +129,37 @@ impl DataLock {
 
     /// Record who holds it. Written after the lock is taken, so the stamp cannot name a
     /// process that failed to get it.
-    fn stamped(file: File, owner_path: PathBuf, command: &str) -> Self {
+    fn stamped(file: File, owner_path: PathBuf, data_dir: &Path, command: &str) -> Self {
         let stamp = format!("shall {} (pid {})", command, std::process::id());
         let _ = std::fs::write(&owner_path, stamp);
-        Self { file, owner_path }
+        HELD.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        Self {
+            file,
+            owner_path,
+            data_dir: data_dir.to_path_buf(),
+        }
+    }
+
+    /// Take the lock for one write, unless this process is already inside it.
+    ///
+    /// **The door for code that cannot know whether its caller holds the lock** — a ledger
+    /// save reached from `sync` is covered by the run's own lock, and the same save reached
+    /// from `check` is covered by nothing. Asking the caller to pass a token down twenty call
+    /// sites answers this at compile time, which is the wrong time: `Deferred` releases the
+    /// lock between actions, so the answer changes during a run.
+    ///
+    /// `Ok(None)` means the lock is already this process's and the caller writes as it is;
+    /// re-taking it would be `flock` waiting for the same process's other handle, for ever.
+    pub fn for_this_write(what: &str) -> Result<Option<Self>> {
+        if held() {
+            return Ok(None);
+        }
+        Self::acquire(
+            &crate::utils::safe_data_dir(),
+            what,
+            Duration::from_secs(WAIT_SECS),
+        )
+        .map(Some)
     }
 
     /// Take the lock, waiting up to `timeout` for whoever holds it.
@@ -121,7 +202,7 @@ impl DataLock {
             }
         }
 
-        Ok(Self::stamped(file, owner_path, command))
+        Ok(Self::stamped(file, owner_path, data_dir, command))
     }
 
     /// Take the lock for one mutating step of a command that does not hold it for its run.
@@ -161,6 +242,19 @@ impl DataLock {
 
 impl Drop for DataLock {
     fn drop(&mut self) {
+        // Bumped before the stamp goes and before the lock is released, so a reader that sees
+        // no writer and an unchanged count is reading after this one's writes, never during.
+        //
+        // **A preview does not bump it**, and that is not an exemption from S25 but the rule
+        // itself: this counter says "a writer committed something", and a run that wrote
+        // nothing has nothing for a reader to detect. Writing it anyway would also be a
+        // preview leaving a file behind, which is the defect the whole dry-run rule exists to
+        // prevent — `a_preview_leaves_the_config_byte_identical` caught exactly that here.
+        if !crate::core::dry_run::active() {
+            let next = observe(&self.data_dir).count.wrapping_add(1);
+            let _ = std::fs::write(self.data_dir.join(GENERATION_FILE), next.to_string());
+        }
+        HELD.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
         let _ = std::fs::remove_file(&self.owner_path);
         // The lock file itself stays. Deleting it races the next process, which may already
         // have opened this inode and be about to lock a file no longer at that name.
@@ -327,5 +421,66 @@ mod tests {
             err.to_string().contains("holder"),
             "the timeout does not name the holder: {err}"
         );
+    }
+
+    /// The counter that lets a reader detect a writer without waiting for one. It moves when a
+    /// writer *finishes*, so an unchanged count with no holder means the reader is strictly
+    /// after that writer rather than inside it.
+    #[test]
+    fn a_writer_that_finishes_moves_the_generation() {
+        let dir = tmp("generation");
+        let before = observe(&dir);
+
+        {
+            let _held = DataLock::acquire(&dir, "writer", Duration::from_secs(1)).unwrap();
+            let during = observe(&dir);
+            assert_eq!(
+                during.count, before.count,
+                "the count must not move while the writer is still going"
+            );
+            assert!(
+                during.writer_active,
+                "and the reader must be able to see it"
+            );
+            assert!(
+                !before.spans_one_moment(during),
+                "a read that started before this writer and ended inside it saw two moments"
+            );
+        }
+
+        let after = observe(&dir);
+        assert_eq!(after.count, before.count.wrapping_add(1));
+        assert!(!after.writer_active);
+        assert!(
+            !before.spans_one_moment(after),
+            "a writer committed in between, so the reader must read again"
+        );
+        assert!(
+            after.spans_one_moment(observe(&dir)),
+            "and a quiet moment compares equal to itself"
+        );
+    }
+
+    /// The re-entrancy that stops the process waiting for itself.
+    ///
+    /// `flock` is per open file description: a second handle opened by a process that already
+    /// holds the lock blocks until the first is released, which is never, because the code that
+    /// would release it is waiting.
+    #[test]
+    fn a_process_inside_the_lock_does_not_take_it_again() {
+        let dir = tmp("reentrant");
+        // `HELD` is process-wide and this suite runs its tests in parallel, so the only honest
+        // assertions here are about what this test's own lock does — not about the count being
+        // zero, which a sibling test holding a lock of its own would make false.
+        let outer = DataLock::acquire(&dir, "outer", Duration::from_secs(1)).unwrap();
+        assert!(held(), "this process is inside a lock it took");
+
+        let inner = DataLock::for_this_write("a ledger").unwrap();
+        assert!(
+            inner.is_none(),
+            "taking it a second time in one process is how this deadlocks"
+        );
+
+        drop(outer);
     }
 }

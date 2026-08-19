@@ -331,7 +331,7 @@ impl<'a> Resolver<'a> {
             .and_then(|s| s.to_str())
             .unwrap_or_default();
         let id = vars_id(filename);
-        let locks = self.layout.config_root().join("locks");
+        let locks = self.layout.locks_dir();
         let ledger = HookLedger::load(&HookLedger::path_in(&locks))
             .map_err(|e| GrammarError::new(origin.clone(), e.to_string()))?;
         let verdict = ledger.verdict(&id, &hash_script(&body));

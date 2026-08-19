@@ -1152,7 +1152,7 @@ package under two spellings. Such a backend declares `qualified_names`, and then
 
 **The lock freezes which manager answered, not how it spells the name.** The backend is a choice
 between managers and belongs in `locks/bare.HOST.toml`; the atom is not a choice, so a locked
-name is still asked of its one manager for the spelling. See **V.192**.
+name is still asked of its one manager for the spelling. See **V.193**.
 
 **A manager that could not answer has not said no** (owner ruling, 2026-07-22). Asking a
 candidate has three outcomes, not two: it has the name, it does not, or **it could not be
@@ -1330,14 +1330,57 @@ filter configured before its flag is parsed is a flag that silently does nothing
 recording transient packages in the registry** — which is what lets a session's leftovers
 look like managed drift later.
 
-**One writer at a time (V.61).** Every command that mutates state takes an exclusive lock on the
-data directory for its whole run, and a second one waits or says who holds it — Shall is not the
-only thing that starts Shall. The package-manager hooks (`DPkg::Post-Invoke` and its siblings)
-mean an ordinary `apt install`, typed by someone who has never heard of this tool, spawns a
-process that rewrites `registry.json` while a `sync` or a `watch` tick may be part-way through
-its own. The registry is written whole; two whole writes are last-one-wins, and the entry that
-loses is a managed package nothing declares any more, which is the definition of drift and the
-input to a removal.
+**One writer at a time (V.61).** State under `data/` is written under an exclusive lock on that
+directory, and a second run waits or says who holds it — Shall is not the only thing that starts
+Shall. The package-manager hooks (`DPkg::Post-Invoke` and its siblings) mean an ordinary `apt
+install`, typed by someone who has never heard of this tool, spawns a process that rewrites
+`registry.json` while a `sync` or a `watch` tick may be part-way through its own. The registry is
+written whole; two whole writes are last-one-wins, and the entry that loses is a managed package
+nothing declares any more, which is the definition of drift and the input to a removal.
+
+**How long a command holds it is one of three answers, and the command says which (V.194).** The
+enum is `LockScope` and `Commands::lock_scope()` is an exhaustive match on the subcommand, so a
+new one does not compile until it has chosen:
+
+| scope | holds the lock | who |
+|---|---|---|
+| `Writer` | for the whole run | `sync`, `install`, `remove`, `adopt`, `rollback`, the hooks — everything that converges a machine |
+| `Deferred` | at each mutating action, and releases it in between | `watch`, `shell`, `run`, `history` |
+| `Reader` | never | `list`, `check`, `plan`, `why`, `search`, `diff`, `info`, `config`, `edit`, `path` |
+
+**`Deferred` is not a weaker `Writer`; it is the answer for a command that is mostly waiting.**
+`watch` is an unbounded loop meant to be left running, and `history` opens a browser a person
+reads at their own pace. Held for the run, either of them disables `install`, `sync` and the
+`hook-reconcile` that a hand-typed `apt install` fires, for as long as the process is up — so the
+user who followed the documented deployment bricked their own CLI. The waiting is over the write
+and not over the reading, the typing or the sleep. What that costs is stated rather than hidden:
+a `Deferred` command's *sequence* of actions is not atomic, only each action is.
+
+**`Reader` takes nothing, and that is a decision about latency, not an oversight (V.195).** A
+`sync` holds the lock for as long as the managers take, which is minutes; a `list` that queued
+behind it would be a program that stops answering questions whenever it is busy. So a reader
+never waits — it detects instead. See *"A reader sees one moment"* below.
+
+**A reader sees one moment (V.195).** Each state file is written whole by atomic rename, so no
+reader sees half of one; the exposure is *between* them, because `registry.json`, `journal.jsonl`
+and the `locks/` ledgers are separate reads and a writer updates them one after another. A reader
+that spans more than one file goes through `core::stable`: it notes the writer generation, reads,
+and notes it again, and reads again if a writer committed in between. The generation is bumped by
+a writer **on release**, so an unchanged count with no holder at either end means the read is
+strictly after that writer rather than during it. Nothing waits, and on a machine with no writer
+running — nearly every run — the whole mechanism is two reads of two tiny files. After
+`stable::ATTEMPTS` tries it returns the last answer rather than an error: advisory output that
+refuses to print is worse than output a moment behind.
+
+**A `locks/` ledger is read and written as one step (V.196).** `LockFile::update` holds one data
+lock across the load, the change and the save, and a caller states its change as a delta against
+what is on disk rather than handing back a copy it read minutes ago. A lock around the save alone
+would close nothing — the copy being written was read before it was taken — and a whole-file copy
+carries another process's entries as absences, which is how they are lost. **The ledgers stay in
+the config root**: they are generated, in git, and yours, and they travel with the config to every
+machine that shares it. Whether the lock is already held is asked at runtime, because `Deferred`
+takes and releases it repeatedly and a token proving otherwise would be stale by the time it was
+read.
 
 **`bundle` writes and `restore` reads, and they are one feature (V.59).** `bundle` already
 packs the config root, `locks/`, the resolved package list, the git history as `config.bundle`,
@@ -2704,11 +2747,13 @@ slack that was lowered and never re-pinned is as red as growth.
 
 ## II.24 A command says whether it writes; a list beside the enum does not (`S50`, V.155)
 
-**Whether a run takes the exclusive lock on `data/` is answered by `Commands::writes()`, an
+**How a run takes the exclusive lock on `data/` is answered by `Commands::lock_scope()`, an
 exhaustive match on the enum itself.** Not by a list of names sitting near it. A new subcommand
-does not compile until it says which it is, which is the strongest form of "locked by default"
-available — a runtime default that treats an unrecognised name as a writer is a guess, and it is
-a guess nobody is ever prompted to revisit.
+does not compile until it says which of the three it is, which is the strongest form of "locked
+by default" available — a runtime default that treats an unrecognised name as a writer is a
+guess, and it is a guess nobody is ever prompted to revisit. `Commands::writes()` is the
+one-bit question `main` asks before dispatch, and it is *derived* from the scope rather than
+declared beside it: two exhaustive matches over the same enum are two places to forget.
 
 **The lock is over the DATA directory, and that is the whole of the question.** `path --set`,
 `config init` and `edit` write into the CONFIG repo through `utils::file::persist`, which is

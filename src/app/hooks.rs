@@ -75,7 +75,7 @@ impl LuaHooks {
         Ok(Self {
             rhai_engine: Arc::new(crate::core::rhai_stdlib::engine("hook")),
             hooks: config.hooks.clone(),
-            locks_dir: config.config_root().join("locks"),
+            locks_dir: config.layout().locks_dir(),
         })
     }
 
@@ -113,14 +113,14 @@ impl LuaHooks {
     /// so approval stays a deliberate act.
     pub fn approve_all_hooks(&self) -> Result<usize> {
         let path = HookLedger::path_in(&self.locks_dir);
-        let mut ledger = HookLedger::load(&path)?;
-        let mut count = 0;
-        for (id, script) in self.each_hook() {
-            ledger.approve(&id, &hash_script(&script));
-            count += 1;
-        }
-        ledger.save(&path)?;
-        Ok(count)
+        HookLedger::update(&path, |ledger| {
+            let mut count = 0;
+            for (id, script) in self.each_hook() {
+                ledger.approve(&id, &hash_script(&script));
+                count += 1;
+            }
+            Ok(count)
+        })
     }
 
     /// Every hook as `(hook_id, script)`. One place builds the identity so enforcement and

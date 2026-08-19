@@ -1321,13 +1321,31 @@ Prefer `except` to listing eight of the nine kinds: a tenth kind added later is 
 lockfile as a record without it being an install argument — `check` still reports drift against
 it, and `sync --locked` still reproduces from it exactly.
 
+### How often the log is forced to disk
+
+Shall keeps a write-ahead log so that a run killed part-way through can be finished rather than
+guessed at. Opening an entry always reaches the disk before the package manager is invoked —
+recovery cannot replay work it has no record of starting. Closing one is the half you can tune:
+
+```toml
+[journal]
+flush_every = 32           # completed packages held before the log is forced to disk
+```
+
+The trade is small in both directions. A crash in the window between a package being installed
+and its completion reaching the disk leaves an entry that says in-progress, so the next run
+re-installs a package that is already there — which every manager Shall drives will take. The
+cost of closing that window is a physical disk flush per package, in the middle of a wave, which
+on a large config is the slowest thing in the run. Set `flush_every = 1` to flush every
+completion if you would rather pay it.
+
 ## Configuration
 
 `shall config init` writes a commented `preferences.toml` into your repo; `shall edit
 preferences.toml` opens it and re-checks that it still parses when you save. Every key is
 optional. Settings cover timeouts, concurrency (`max_parallel`), snapshot retention,
-notification channels, the `[lock]` table described above, and the `[guard]` block that holds the
-removal rules described above.
+notification channels, the `[lock]` and `[journal]` tables described above, and the `[guard]`
+block that holds the removal rules described above.
 
 **Where your repo lives is not a key in it.** `preferences.toml` sits *inside* the repo, so a
 key there could only be read from the directory it was trying to move away from. That one

@@ -846,7 +846,10 @@ nothing declares — which is drift, and converging drift is what `sync` does.
 
 The lock is on the data directory rather than the file because the registry is not the only
 thing a run writes; the journal and the `locks/` ledgers move with it, and a lock that covers one
-of a set that must agree is the same as no lock. It is taken for the whole run and names its
+of a set that must agree is the same as no lock. **The `locks/` half of that sentence described
+an intention rather than the code for months** — the ledgers live in the config root, which the
+data-directory lock does not reach. See V.196 for what closed it and why moving them was not the
+answer. It is taken for the whole run and names its
 holder when it is contended, because "waiting" with no reason given is indistinguishable from
 hanging.
 
@@ -6911,7 +6914,7 @@ provision schedules. That is the same unproven row the NixOS rebuild sits in, an
 here rather than implied.
 
 
-**V.192 — Why a bare name on Portage resolves to an atom, and why more than one is a refusal.**
+**V.193 — Why a bare name on Portage resolves to an atom, and why more than one is a refusal.**
 
 `Searchable::lookup` is the whole of *"does this manager have `jq`"*, and its rule was
 `search(name).find(|p| p.name == name)` — the string the user typed against the string the
@@ -6954,3 +6957,90 @@ because that is a choice between managers that would otherwise change under an u
 atom is not a choice — it is how the winning manager spells what the user typed, and it has to
 agree with what that manager's listing reports back today. So a locked name is still asked of its
 one backend for the spelling, and only of a backend that says its names are qualified.
+
+**V.194 — Why a command says how long it holds the lock, and not merely whether.** *(L4 answered
+2026-08-18, owner ruling: the docs match the code. The rule is in II.8 and II.24.)* Part II said
+every mutating command holds the data-directory lock **for its whole run**, and the code stopped
+doing that some time ago for a reason nobody wrote down here. `watch` is an unbounded loop meant
+to be left running; `history` opens a browser somebody reads at their own pace; `shell` and `run`
+provision an environment and then hand over. Held for the run, each of them disables `install`,
+`sync` and the `hook-reconcile` that a hand-typed `apt install` fires — for as long as the
+process is up. **The user who followed the documented deployment bricked their own CLI.**
+
+So there are three answers and the subcommand gives one: `Writer` holds it for the run,
+`Deferred` takes it at each mutating action and releases it in between, `Reader` never takes it.
+`Commands::lock_scope()` is an exhaustive match on the enum, so a new subcommand does not compile
+until it has chosen, and `Commands::writes()` is *derived* from it rather than declared beside it
+— two exhaustive matches over one enum are two places to forget.
+
+**What this costs is stated rather than hidden.** A `Deferred` command's sequence of actions is
+not atomic; only each action is. That is the correct trade for a loop that spends almost all of
+its life asleep, and the wrong one for `sync`, which is why `sync` is not `Deferred`.
+
+**Why the spec being wrong here mattered more than bookkeeping.** Part II was *more* protective
+than the code, and that is the direction that hides findings rather than raising false ones. Read
+II.8 alone and everything a mutating command touches is covered for the duration — which is
+exactly the belief that makes V.195 and V.196 look like non-issues. Both were live.
+
+**V.195 — Why a reader detects a writer instead of waiting for one.** *(L3 answered 2026-08-18,
+owner ruling. The rule is in II.8.)* Every state file is written whole by atomic rename, so no
+reader sees half of one. The exposure is between them: `registry.json`, `journal.jsonl` and the
+`locks/` ledgers are separate reads, and a writer updates them one after another. A reader can
+therefore hold the registry from before a `hook-reconcile` and the journal from after it, and
+report a combination of facts that never held at the same time.
+
+**The obvious fix is the wrong one.** The argument that a *directory* lock is necessary for
+writers is the same argument for readers — but a `sync` holds that lock for as long as the
+package managers take, which is minutes. A `list` that queued behind it would be a program that
+stops answering questions exactly when there is most to ask about, which is V.194's mistake a
+second time. A millisecond-wide inconsistency in advisory output is a smaller harm than an
+unbounded wait in every reader.
+
+So a reader notes what the writers were doing, reads, and notes again: an unchanged generation
+counter with no writer holding the lock at either end means the read spanned one moment. **The
+counter is bumped by the writer on release, not on acquire**, so a reader that sees no writer and
+no change is reading strictly after that writer's writes rather than during them. On a quiet
+machine — no writer at all, which is nearly every run — this is two reads of two tiny files and
+no waiting of any kind.
+
+**It is a detector and not a proof, and after three attempts it returns what it has.** A machine
+where a writer commits during every attempt is a machine where the answer is stale by the time it
+reaches the terminal whatever anyone does; an advisory listing that refuses to print is worse
+than one that is a moment behind.
+
+**V.196 — Why a `locks/` ledger is read and written as one step.** *(L2 answered 2026-08-18,
+owner ruling: fix it in the most robust way. The rule is in II.8.)* V.61 gives the reason the
+lock covers a directory: *"the journal and the `locks/` ledgers move with it, and a lock that
+covers one of a set that must agree is the same as no lock."* **The ledgers are not in that
+directory.** They are `config_root/locks/`, and the lock is over `safe_data_dir()` — two disjoint
+trees, asserted as disjoint by a test. The spec had described the protection for months and the
+code had never had it.
+
+**And moving them is not available**, which is what makes this rule rather than a path change:
+`locks/` is generated, in git, and yours. It travels with the config to every machine that shares
+it, which is why `bare.HOST.toml` is per host in the first place. Relocating it into the data
+directory would take a committed, shareable record and make it machine-local bookkeeping — a
+feature removed to close a race.
+
+What protected them until now was two unrelated accidents: `may_record_locks` keeps most
+resolutions from recording at all, and the verbs that do write ledgers happen to be `Writer`s and
+so exclude each other incidentally. **The regex lock is what that looks like when half of it is
+missing** — it had no `may_record_locks` gate, so `shall check`, a `Reader`, wrote
+`locks/regex.toml` for real under no lock at all.
+
+**The unit that has to be protected is the read *and* the write, not the write.** Every ledger is
+written whole, so two processes that each load it, each change their own copy and each save it
+back leave one of the two changes gone — and taking a lock around only the save closes nothing,
+because the copy being written was read before the lock was taken. So `LockFile::update` is the
+door: it holds one lock across the load, the change and the save, and the caller states its
+change as a *delta* against whatever is on disk now rather than handing over a copy it read
+minutes ago. A whole-file copy carries the other process's entries as absences, and writing it
+back is how they are lost.
+
+**Whether the lock is held has to be asked at runtime, and a token passed down the call stack
+could not answer it.** `Deferred` takes the lock and releases it repeatedly, so a value proving
+"the lock is held" would be true when it was created and false when it was used. The process
+counts its own holds instead, and `update` takes the lock only when nothing already has it —
+which is also what stops it deadlocking against itself, since `flock` is per open file
+description and a second handle in a process that already holds the lock waits for that process
+for ever.

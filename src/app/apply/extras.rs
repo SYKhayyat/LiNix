@@ -98,7 +98,7 @@ impl Extras<'_> {
 
         let trees = self.tree_links(state)?;
         let declared = declared_extras(state.extras.iter().chain(trees.iter()));
-        let path = ExtrasLedger::path_in(&self.config.config_root().join("locks"));
+        let path = ExtrasLedger::path_in(&self.config.layout().locks_dir());
         let ledger = ExtrasLedger::load(&path)?;
 
         let mut changes = ResourceChanges {
@@ -157,7 +157,7 @@ impl Extras<'_> {
         let trees = self.tree_links(state)?;
         let declared = declared_extras(state.extras.iter().chain(trees.iter()));
 
-        let path = ExtrasLedger::path_in(&self.config.config_root().join("locks"));
+        let path = ExtrasLedger::path_in(&self.config.layout().locks_dir());
         let ledger = ExtrasLedger::load(&path)?;
         let drift = ledger.drift(&declared);
 

@@ -59,6 +59,12 @@ pub trait LockFile: Default + Serialize + DeserializeOwned + Sized {
     /// not leave an approval or a pin behind.** `shall --dry-run lock` used to write
     /// `locks/versions.json` and `locks/hooks.toml` for real, which is a preview that changes
     /// what the next real run will do.
+    /// **The caller is answerable for the lock.** Every production `save` outside
+    /// [`update`](Self::update) is reached from a `Writer` verb, which holds the data lock for
+    /// its whole run — and `a_ledger_is_read_and_written_as_one_step_tests` is what keeps that
+    /// list closed. Taking the lock here instead would be a leaf function reaching for a
+    /// process-wide lock it cannot know the scope of, and would serialise every test that
+    /// writes a ledger behind one file in the developer's real data directory.
     fn save(&self, path: &Path) -> Result<()> {
         if !crate::core::dry_run::active() {
             if let Some(dir) = path.parent() {
@@ -68,6 +74,37 @@ pub trait LockFile: Default + Serialize + DeserializeOwned + Sized {
         let body = toml::to_string_pretty(self)
             .map_err(|e| Error::Toml(format!("serializing {}: {}", Self::WHAT, e)))?;
         crate::utils::file::persist(path, &body).map(|_| ())
+    }
+
+    /// Read, change and write as one indivisible step.
+    ///
+    /// **This is the door, and `load` followed later by `save` is the bug it replaces.** Every
+    /// one of these files is written whole, so two processes that each read it, each change
+    /// their own copy and each write it back leave one of the two changes gone — and the
+    /// changes are approvals, pins and resolutions, so the one that loses is a hook that has to
+    /// be approved again or a version that comes unpinned. The window is the whole of the work
+    /// between the read and the write, which for a `sync` is every package it installs.
+    ///
+    /// The caller states its change as a *delta* against whatever is on disk now, rather than
+    /// handing over a copy it read minutes ago. That is what makes the merge possible at all:
+    /// a whole-file copy carries the other process's entries as absences, and writing it back
+    /// is how they are lost.
+    /// A change that fails writes nothing: half of a set of approvals is worse than none of
+    /// them, because the half that landed looks deliberate. The error type is the caller's, so
+    /// a verb that speaks `anyhow` keeps speaking it.
+    fn update<T, E>(
+        path: &Path,
+        change: impl FnOnce(&mut Self) -> std::result::Result<T, E>,
+    ) -> std::result::Result<T, E>
+    where
+        E: From<Error>,
+    {
+        let _guard =
+            crate::core::datalock::DataLock::for_this_write(Self::WHAT).map_err(E::from)?;
+        let mut current = Self::load(path).map_err(E::from)?;
+        let outcome = change(&mut current)?;
+        current.save(path).map_err(E::from)?;
+        Ok(outcome)
     }
 }
 

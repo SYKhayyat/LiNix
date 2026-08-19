@@ -381,7 +381,7 @@ impl Transaction {
         // two ways a run can strand an entry are one bug.
         let open_before = self.open_before_this_run().await;
 
-        match tokio::time::timeout(total_timeout, self.execute_internal()).await {
+        let outcome = match tokio::time::timeout(total_timeout, self.execute_internal()).await {
             Ok(Ok(results)) => {
                 debug!("DAG closure reached in {:?}", start_time.elapsed());
                 Ok(results)
@@ -406,7 +406,15 @@ impl Transaction {
                 self.close_stranded(&open_before, &e).await;
                 Err(e)
             }
-        }
+        };
+
+        // The run is over, so there is no next wave whose opening would carry the last wave's
+        // completions down with it. Every arm above reaches here, including the two that
+        // closed stranded entries, because an entry closed and not written still reads as a
+        // crash to the run after this one.
+        let _ = self.journal.lock().await.flush();
+
+        outcome
     }
 
     pub async fn execute(&mut self) -> Result<()> {

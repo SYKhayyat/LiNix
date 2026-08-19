@@ -26,7 +26,7 @@ use crate::config::Config;
 /// never an error here: the caller wants advice or no advice, and "the file would not parse" is
 /// the same answer as "there is no pin" for that purpose.
 fn recorded(config: &Config) -> serde_json::Map<String, serde_json::Value> {
-    let path = config.config_root().join("locks").join("versions.json");
+    let path = config.layout().version_lock_file();
     std::fs::read_to_string(path)
         .ok()
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())

@@ -1474,6 +1474,9 @@ impl SyncEngine {
         }
         {
             let mut j = self.journal.lock().await;
+            // Recovery is a whole command, so its own completions go down before maintenance
+            // reasons about what the file holds.
+            let _ = j.flush();
             let _ = j.cleanup();
         }
 

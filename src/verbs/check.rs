@@ -1061,7 +1061,7 @@ pub async fn check_health(app: &App, out: Output) -> Result<()> {
 
     // ---- Lockfile integrity: does locks/versions.json still match the managed set? ----
     {
-        let lock_path = app.config.config_root().join("locks").join("versions.json");
+        let lock_path = app.config.layout().version_lock_file();
         if !lock_path.exists() {
             system.push((
                 "lockfile".into(),

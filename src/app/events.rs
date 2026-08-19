@@ -63,7 +63,7 @@ impl EventHooks {
         }
         EventHooks {
             hooks,
-            locks_dir: root.join("locks"),
+            locks_dir: config.layout().locks_dir(),
         }
     }
 
@@ -143,12 +143,12 @@ impl EventHooks {
             return Ok(0);
         }
         let path = HookLedger::path_in(&self.locks_dir);
-        let mut ledger = HookLedger::load(&path)?;
-        for hook in &self.hooks {
-            ledger.approve(&hook.id, &hash_script(&hook.script));
-        }
-        ledger.save(&path)?;
-        Ok(self.hooks.len())
+        HookLedger::update(&path, |ledger| {
+            for hook in &self.hooks {
+                ledger.approve(&hook.id, &hash_script(&hook.script));
+            }
+            Ok(self.hooks.len())
+        })
     }
 }
 

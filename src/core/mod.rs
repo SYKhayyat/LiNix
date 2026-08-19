@@ -33,6 +33,7 @@ pub mod rhai_stdlib;
 pub mod security;
 pub mod size;
 pub mod snapshot;
+pub mod stable;
 pub mod state;
 pub mod supervise;
 pub mod timing;
@@ -78,6 +79,7 @@ pub use exit::Exit;
 pub use extras_lock::{extra_key, ExtraKey, ExtrasLedger};
 pub use regex_lock::RegexLock;
 
+pub use stable::stable;
 pub use state::{save_off_the_runtime, ManagedPackage, StateRegistry};
 
 pub use validator::Validator;

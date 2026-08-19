@@ -146,6 +146,18 @@ pub struct JournalEntry {
 pub struct Journal {
     path: PathBuf,
     pub entries: HashMap<String, JournalEntry>,
+
+    /// Completions and failures that are true in memory and not yet on disk.
+    ///
+    /// An entry sits here only between the moment its work finished and the next flush. What
+    /// a crash in that window costs is one idempotent re-run of work that already succeeded,
+    /// which is what [`crate::app::sync`]'s recovery does anyway; what it buys is that a wave
+    /// of *k* packages does not pay *k* physical disk flushes on its critical path.
+    pending: Vec<JournalEntry>,
+
+    /// How many may sit in `pending` before the next one forces a flush. Never zero; the
+    /// clamp is in [`Journal::set_buffer_limit`].
+    buffer_limit: usize,
 }
 
 impl Journal {
@@ -176,6 +188,8 @@ impl Journal {
         let mut journal = Self {
             path,
             entries: HashMap::new(),
+            pending: Vec::new(),
+            buffer_limit: crate::config::JournalSettings::default().flush_every.max(1),
         };
 
         if journal.path.exists() {
@@ -265,13 +279,6 @@ impl Journal {
         Ok(())
     }
 
-    /// Record one entry's current state, durably, before the backend it describes is invoked.
-    ///
-    /// One line appended and synced — not a re-serialisation of every entry ever recorded.
-    fn append(&self, entry: &JournalEntry) -> Result<()> {
-        self.append_all(std::slice::from_ref(entry))
-    }
-
     /// The same, for several entries, at the cost of **one** flush rather than one each.
     ///
     /// Every line is on disk before this returns, so each entry keeps exactly the guarantee
@@ -301,7 +308,11 @@ impl Journal {
     ///
     /// Only `cleanup` needs this — removal is the one thing an append cannot express — and it
     /// runs once per invocation, not once per package.
-    fn compact(&self) -> Result<()> {
+    fn compact(&mut self) -> Result<()> {
+        // A rewrite is authored from `entries`, and a buffered transition is already in
+        // `entries` — so this writes it, and a later flush would append it a second time as a
+        // line the rewrite exists to have removed.
+        self.pending.clear();
         let mut data = String::new();
         for entry in self.entries.values() {
             data.push_str(
@@ -350,6 +361,10 @@ impl Journal {
             })
             .collect();
 
+        // The completions of the wave before this one go down first: the file is read forward,
+        // and a reader reconstructing what happened should not see this wave open before the
+        // last one closed.
+        self.flush()?;
         self.append_all(&entries)?;
 
         let mut ids = Vec::with_capacity(entries.len());
@@ -362,25 +377,71 @@ impl Journal {
     }
 
     pub fn record_success(&mut self, id: &str) -> Result<()> {
-        if let Some(entry) = self.entries.get_mut(id) {
-            entry.status = ActionStatus::Completed;
-            entry.finished_at_unix = Some(Utc::now().timestamp());
-            let entry = entry.clone();
-            self.append(&entry)?;
+        let closed = self.close(id, ActionStatus::Completed, None);
+        if closed {
             trace!("Operation {} marked as Completed.", id);
         } else {
             warn!("Attempted to mark unknown operation {} as successful.", id);
         }
+        self.flush_if_full()
+    }
+
+    /// Buffer one terminal transition. Returns whether the id was one this journal knows.
+    ///
+    /// The in-memory entry changes now and the disk line waits: `needs_recovery` and `heal`
+    /// read the map, so within this process the transition is immediate no matter what the
+    /// buffer is set to. Only a crash can observe the difference.
+    fn close(&mut self, id: &str, status: ActionStatus, err: Option<&str>) -> bool {
+        let Some(entry) = self.entries.get_mut(id) else {
+            return false;
+        };
+        entry.status = status;
+        entry.finished_at_unix = Some(Utc::now().timestamp());
+        entry.error = err.map(str::to_string);
+        let entry = entry.clone();
+        self.pending.push(entry);
+        true
+    }
+
+    /// Force every buffered transition to disk, in the order they happened.
+    ///
+    /// Costs one physical flush for the whole buffer, or nothing at all when it is empty —
+    /// which is why the callers that own the end of a unit of work may call it unconditionally
+    /// rather than asking first.
+    pub fn flush(&mut self) -> Result<()> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        self.append_all(&self.pending)?;
+        self.pending.clear();
         Ok(())
     }
 
+    fn flush_if_full(&mut self) -> Result<()> {
+        if self.pending.len() >= self.buffer_limit {
+            return self.flush();
+        }
+        Ok(())
+    }
+
+    /// How many completions this journal holds before forcing them to disk — the
+    /// `[journal] flush_every` setting, arriving from the config.
+    ///
+    /// **Zero reads as one.** That is the value a user reaches for meaning "never flush", and
+    /// it is the one answer the buffer must not be able to express: it would grow for the
+    /// whole run, and a crash would cost every completion in it rather than one batch's.
+    pub fn set_buffer_limit(&mut self, flush_every: usize) {
+        self.buffer_limit = flush_every.max(1);
+    }
+
+    /// Whether anything is waiting for a flush — the question a test asks, and the one
+    /// `Drop` asks before it complains.
+    pub fn unflushed(&self) -> usize {
+        self.pending.len()
+    }
+
     pub fn record_failure(&mut self, id: &str, err: &str) -> Result<()> {
-        if let Some(entry) = self.entries.get_mut(id) {
-            entry.status = ActionStatus::Failed;
-            entry.finished_at_unix = Some(Utc::now().timestamp());
-            entry.error = Some(err.to_string());
-            let entry = entry.clone();
-            self.append(&entry)?;
+        if self.close(id, ActionStatus::Failed, Some(err)) {
             // `debug!`, not `warn!`: the user is about to be told this failure once, in their
             // own words, by whoever is returning the error. Saying it again here — with a
             // 32-hex operation id and the word WAL in it — is the same sentence a third time
@@ -389,7 +450,7 @@ impl Journal {
         } else {
             warn!("Attempted to record failure for unknown operation {}.", id);
         }
-        Ok(())
+        self.flush_if_full()
     }
 
     /// Work that started, touched the system, and never reached an outcome — what `heal`
@@ -535,6 +596,22 @@ impl Journal {
     }
 }
 
+/// The buffer is a bet that a crash is rarer than a wave, not that a clean exit may lose work.
+///
+/// Every path that finishes a unit of work flushes it explicitly; this is what makes the ones
+/// nobody has written yet safe. A process that is killed still loses the buffer — that is the
+/// trade `[journal] flush_every` names — but a process that simply returns does not.
+impl Drop for Journal {
+    fn drop(&mut self) {
+        if self.pending.is_empty() {
+            return;
+        }
+        if let Err(e) = self.flush() {
+            warn!("the transaction journal could not record {} finished operation(s) on the way out: {e}. The next run will re-run them, which is what an unrecorded completion means.", self.pending.len().max(1));
+        }
+    }
+}
+
 /// Run a mutation with a write-ahead record around it, so being killed part-way through is
 /// something `heal` can finish.
 ///
@@ -563,14 +640,7 @@ pub async fn journalled<T, Fut>(
 where
     Fut: std::future::Future<Output = Result<T>>,
 {
-    let ids = {
-        let mut j = journal.lock().await;
-        let mut ids = Vec::with_capacity(actions.len());
-        for action in actions {
-            ids.push(j.record_start(action)?);
-        }
-        ids
-    };
+    let ids = journal.lock().await.record_starts(actions)?;
 
     let outcome = mutation.await;
 
@@ -589,6 +659,9 @@ where
                 }
             }
         }
+        // This wrapper is a whole command's worth of work, so the command is over when it
+        // returns and there is no later wave whose opening would carry these down.
+        let _ = j.flush();
     }
 
     outcome

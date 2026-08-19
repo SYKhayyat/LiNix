@@ -197,7 +197,7 @@ impl<'a> StateResolver<'a> {
     /// machine that has not run `shall lock`, never an error.
     pub async fn read_locks(config: &Config, locked: bool) -> Arc<HashMap<String, String>> {
         let mut locks = HashMap::new();
-        let lock_path = config.config_root().join("locks").join("versions.json");
+        let lock_path = config.layout().version_lock_file();
         if tokio::fs::try_exists(&lock_path).await.unwrap_or(false) {
             if let Ok(data) = fs::read_to_string(&lock_path).await {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {

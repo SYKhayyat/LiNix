@@ -109,9 +109,7 @@ impl Dotfiles<'_> {
         // deploy falls back to a copy (Windows, cross-drive), a file Shall placed itself is
         // not a symlink. Under `is_symlink` alone the next sync called its own copy a
         // destination Shall did not create and refused to touch the tree at all.
-        let placed = ExtrasLedger::load(&ExtrasLedger::path_in(
-            &self.config.config_root().join("locks"),
-        ))?;
+        let placed = ExtrasLedger::load(&ExtrasLedger::path_in(&self.config.layout().locks_dir()))?;
         let mut out = Vec::new();
         for (tree, opts, origin) in state.dotfile_trees() {
             // The same resolution `link:` uses. It was written twice, one copy resolved

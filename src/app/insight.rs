@@ -617,10 +617,7 @@ fn artifact_selection(config: &Config, backend: &str, name: &str) -> Option<(Str
     if !crate::backends::capability::selects_artifacts(backend) {
         return None;
     }
-    let path = config
-        .config_root()
-        .join("locks")
-        .join(format!("{}.toml", backend));
+    let path = config.layout().lock_file(backend);
     let ledger = crate::core::artifact_lock::ArtifactLedger::load(&path).ok()?;
     let lock = ledger.locked(name).first()?;
     let reason = lock.selected_by.clone()?;

@@ -108,33 +108,55 @@ impl App {
         //
         // The registry costs ~5ms now that no backend calibrates a clock in its constructor
         // (AU3) — which is why this is an ordering note and not a `spawn_blocking`.
-        let load_state = async {
-            match state_path {
-                Some(path) => tokio::task::spawn_blocking(move || StateRegistry::load_from(&path)),
-                None => tokio::task::spawn_blocking(StateRegistry::load_default),
-            }
-            .await
-            .map_err(|e| Error::Other(format!("Kernel Thread Panic during state load: {}", e)))?
-        };
-        let open_journal = {
-            let dir = journal_dir.clone();
+        //
+        // **The two of them are read as one moment, and this is the only place that has to be
+        // said.** They are Shall's two records of the same events, and a writer in another
+        // process rewrites them one after the other — so a reader that takes the registry from
+        // before a `hook-reconcile` and the WAL from after it holds a pair that never agreed.
+        // `stable` reads them again if a writer committed in between, and never waits for one.
+        let flush_every = config.journal.flush_every;
+        let read_records = || {
+            let state_path = state_path.clone();
+            let journal_dir = journal_dir.clone();
             async move {
-                tokio::task::spawn_blocking(move || match dir {
-                    Some(d) => Journal::at(d.join(Journal::FILE_NAME)),
-                    None => Journal::new(),
-                })
-                .await
-                .map_err(|e| Error::Other(format!("Kernel Thread Panic opening the WAL: {}", e)))?
+                let load_state = async {
+                    match state_path {
+                        Some(path) => {
+                            tokio::task::spawn_blocking(move || StateRegistry::load_from(&path))
+                        }
+                        None => tokio::task::spawn_blocking(StateRegistry::load_default),
+                    }
+                    .await
+                    .map_err(|e| {
+                        Error::Other(format!("Kernel Thread Panic during state load: {}", e))
+                    })?
+                };
+                let open_journal = async {
+                    tokio::task::spawn_blocking(move || {
+                        let mut journal = match journal_dir {
+                            Some(d) => Journal::at(d.join(Journal::FILE_NAME)),
+                            None => Journal::new(),
+                        }?;
+                        journal.set_buffer_limit(flush_every);
+                        Ok::<_, Error>(journal)
+                    })
+                    .await
+                    .map_err(|e| {
+                        Error::Other(format!("Kernel Thread Panic opening the WAL: {}", e))
+                    })?
+                };
+                tokio::try_join!(load_state, open_journal)
             }
         };
+        let load_records = crate::core::stable(read_records);
         let build_registry = async {
             Ok::<_, Error>(create_default_registry(executor.clone(), &config, hooks.clone()).await)
         };
         let probe_snapshots =
             async { Ok::<_, Error>(SnapshotManager::new(executor.clone(), &config).await) };
 
-        let (state_registry, journal, snapshot_manager, registry) =
-            tokio::try_join!(load_state, open_journal, probe_snapshots, build_registry)?;
+        let ((state_registry, journal), snapshot_manager, registry) =
+            tokio::try_join!(load_records, probe_snapshots, build_registry)?;
 
         let registry = Arc::new(registry);
         let progress = create_progress_reporter(config.show_progress);

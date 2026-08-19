@@ -200,6 +200,13 @@ impl Layout {
         self.locks_dir().join(format!("{}.toml", backend))
     }
 
+    /// The version pins. JSON rather than TOML, and so not a [`crate::core::LockFile`] — which
+    /// is why it needs naming here: four call sites had each spelled the join themselves, and a
+    /// path spelled four times is a path that can move in three places.
+    pub fn version_lock_file(&self) -> PathBuf {
+        self.locks_dir().join("versions.json")
+    }
+
     /// Refusals and behaviour. Nothing writes to it but you (II.6).
     pub fn preferences_file(&self) -> PathBuf {
         self.config_root.join(crate::config::PREFERENCES_FILE_NAME)

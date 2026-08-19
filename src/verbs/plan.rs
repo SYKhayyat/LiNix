@@ -548,7 +548,7 @@ pub async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Result<()> {
 /// Where the version pins live (II.6): in the `locks/` directory beside the hook and extras
 /// ledgers, never a stray `locks.json` beside that directory.
 pub fn version_lock_path(config: &Config) -> std::path::PathBuf {
-    config.config_root().join("locks").join("versions.json")
+    config.layout().version_lock_file()
 }
 
 /// The pins on disk. A missing or unreadable file is an empty set of pins — the ordinary state
@@ -1195,28 +1195,28 @@ pub fn approve_generate_commands(
     }
     let locks = layout.locks_dir();
     let ledger_path = HookLedger::path_in(&locks);
-    let mut ledger = HookLedger::load(&ledger_path)?;
-    let mut approved = 0usize;
-    for cmd in &commands {
-        let declared = std::path::Path::new(cmd);
-        let full = if declared.is_absolute() {
-            declared.to_path_buf()
-        } else {
-            config.config_root().join(declared)
-        };
-        let body = std::fs::read_to_string(&full).map_err(|e| {
-            anyhow::anyhow!(
-                "cannot read `generate:{}` at {} ({})",
-                cmd,
-                full.display(),
-                e
-            )
-        })?;
-        ledger.approve(&generate_id(cmd), &hash_script(&body));
-        approved += 1;
-    }
-    ledger.save(&ledger_path)?;
-    Ok(approved)
+    HookLedger::update(&ledger_path, |ledger| {
+        let mut approved = 0usize;
+        for cmd in &commands {
+            let declared = std::path::Path::new(cmd);
+            let full = if declared.is_absolute() {
+                declared.to_path_buf()
+            } else {
+                config.config_root().join(declared)
+            };
+            let body = std::fs::read_to_string(&full).map_err(|e| {
+                anyhow::anyhow!(
+                    "cannot read `generate:{}` at {} ({})",
+                    cmd,
+                    full.display(),
+                    e
+                )
+            })?;
+            ledger.approve(&generate_id(cmd), &hash_script(&body));
+            approved += 1;
+        }
+        Ok(approved)
+    })
 }
 
 /// The one resolution the approvers read. `exec:` scripts and `@health=` commands are two
@@ -1243,38 +1243,38 @@ pub async fn approve_exec_scripts(
     }
     let locks = config.layout().locks_dir();
     let path = HookLedger::path_in(&locks);
-    let mut ledger = HookLedger::load(&path)?;
-    let mut approved = 0usize;
-    for (script, _opts, origin) in state.execs() {
-        // A catalogued step (`H8`) has no file to hash and no approval to give: it is a row
-        // compiled into this binary, the same status `builtin_backends.toml` has, and
-        // `Execs::exec_plan` treats it as approved without asking. Reading it as a path sent
-        // this walk after `<config>/step/rustup`, which nobody wrote — so `shall lock` failed
-        // outright on any configuration that used the catalogue, taking every OTHER script's
-        // approval down with it.
-        if crate::model::step::named(script).is_some() {
-            continue;
+    HookLedger::update(&path, |ledger| {
+        let mut approved = 0usize;
+        for (script, _opts, origin) in state.execs() {
+            // A catalogued step (`H8`) has no file to hash and no approval to give: it is a row
+            // compiled into this binary, the same status `builtin_backends.toml` has, and
+            // `Execs::exec_plan` treats it as approved without asking. Reading it as a path sent
+            // this walk after `<config>/step/rustup`, which nobody wrote — so `shall lock` failed
+            // outright on any configuration that used the catalogue, taking every OTHER script's
+            // approval down with it.
+            if crate::model::step::named(script).is_some() {
+                continue;
+            }
+            let declared = std::path::Path::new(script);
+            let full = if declared.is_absolute() {
+                declared.to_path_buf()
+            } else {
+                config.config_root().join(declared)
+            };
+            let body = std::fs::read_to_string(&full).map_err(|e| {
+                anyhow::anyhow!(
+                    "{}: cannot read `exec:{}` at {} ({})",
+                    origin,
+                    script,
+                    full.display(),
+                    e
+                )
+            })?;
+            ledger.approve(&exec_id(script), &hash_script(&body));
+            approved += 1;
         }
-        let declared = std::path::Path::new(script);
-        let full = if declared.is_absolute() {
-            declared.to_path_buf()
-        } else {
-            config.config_root().join(declared)
-        };
-        let body = std::fs::read_to_string(&full).map_err(|e| {
-            anyhow::anyhow!(
-                "{}: cannot read `exec:{}` at {} ({})",
-                origin,
-                script,
-                full.display(),
-                e
-            )
-        })?;
-        ledger.approve(&exec_id(script), &hash_script(&body));
-        approved += 1;
-    }
-    ledger.save(&path)?;
-    Ok(approved)
+        Ok(approved)
+    })
 }
 
 /// Record every declared health-check *command* in the hook ledger (U31), returning how many
@@ -1306,14 +1306,14 @@ pub async fn approve_health_checks(
         return Ok(0);
     }
     let path = HookLedger::path_in(&config.layout().locks_dir());
-    let mut ledger = HookLedger::load(&path)?;
-    let mut approved = 0usize;
-    for cmd in commands {
-        ledger.approve(&health_id(&cmd), &hash_script(&cmd));
-        approved += 1;
-    }
-    ledger.save(&path)?;
-    Ok(approved)
+    HookLedger::update(&path, |ledger| {
+        let mut approved = 0usize;
+        for cmd in commands {
+            ledger.approve(&health_id(&cmd), &hash_script(&cmd));
+            approved += 1;
+        }
+        Ok(approved)
+    })
 }
 
 /// Record each `adapters/` file's hash in the hook ledger, returning the names approved.
@@ -1386,12 +1386,12 @@ pub fn approve_vars_provider(config: &Config) -> Result<Option<String>> {
         .unwrap_or_default()
         .to_string();
     let body = std::fs::read_to_string(&selected.path)?;
-    let locks = root.join("locks");
+    let locks = config.layout().locks_dir();
     let path = HookLedger::path_in(&locks);
-    let mut ledger = HookLedger::load(&path)?;
-    ledger.approve(&vars_id(&filename), &hash_script(&body));
-    ledger.save(&path)?;
-    Ok(Some(filename))
+    HookLedger::update(&path, |ledger| {
+        ledger.approve(&vars_id(&filename), &hash_script(&body));
+        Ok(Some(filename))
+    })
 }
 
 /// `shall unlock [AXIS] [NAME…]` — release a lock, so the next sync decides it again (Z2).

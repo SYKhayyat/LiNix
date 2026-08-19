@@ -349,6 +349,40 @@ impl Default for LockSettings {
     }
 }
 
+/// The `[journal]` table: how often the write-ahead log pays for a physical flush.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct JournalSettings {
+    /// How many finished packages the WAL may hold in memory before it forces them to disk.
+    ///
+    /// Opening an entry is never buffered: the record that a package is *about* to be touched
+    /// reaches the disk before the manager is invoked, because recovery cannot replay work it
+    /// has no record of starting. This is the closing half, and it is a different trade. A
+    /// crash in the window between "installed" and "recorded as installed" leaves an entry that
+    /// says in-progress, and recovery re-runs the install — which every manager Shall drives
+    /// can take, and which `heal` already relies on. So the cost of a lost completion is a
+    /// repeated install, and the cost of preventing it is a physical flush per package on the
+    /// critical path of a wave.
+    ///
+    /// `1` flushes every completion, which is the strictest setting and the slowest.
+    #[serde(default = "JournalSettings::default_flush_every")]
+    pub flush_every: usize,
+}
+
+impl JournalSettings {
+    fn default_flush_every() -> usize {
+        32
+    }
+}
+
+impl Default for JournalSettings {
+    fn default() -> Self {
+        Self {
+            flush_every: Self::default_flush_every(),
+        }
+    }
+}
+
 /// Feature 5: Configuration for background scheduled tasks.
 ///
 /// Everything past `command` is `Option`, and that is load-bearing rather than tidy: an option
@@ -653,6 +687,11 @@ pub struct Config {
     /// and whether an ordinary `sync` replays them. See [`LockSettings`].
     #[serde(default)]
     pub lock: LockSettings,
+
+    /// The `[journal]` table: how many finished packages the WAL buffers before it flushes.
+    /// See [`JournalSettings`].
+    #[serde(default)]
+    pub journal: JournalSettings,
 
     /// The `[nixos]` table (`J5`): where the system configuration lives and whether Shall may
     /// add the one line that imports its generated file. See [`NixosSettings`].
@@ -1006,6 +1045,7 @@ impl Default for Config {
             allow_mass_install: false,
             guard: GuardSettings::default(),
             lock: LockSettings::default(),
+            journal: JournalSettings::default(),
             nixos: NixosSettings::default(),
             remove: RemoveSettings::default(),
             purge_this_run: false,
@@ -1332,6 +1372,15 @@ mod tests {
         // And the same reached through `Config`, which is what every caller actually holds —
         // a `Default` on the table that the parent does not use is a default nothing reads.
         assert!(Config::default().lock.replay);
+    }
+
+    /// The clamp that keeps the buffer bounded lives on the journal, not here — this only
+    /// pins the shipped number, and that the parent actually carries it. A `Default` on a
+    /// table the parent does not use is a default nothing reads.
+    #[test]
+    fn the_journal_table_defaults_to_what_shipped_before_it() {
+        assert_eq!(JournalSettings::default().flush_every, 32);
+        assert_eq!(Config::default().journal.flush_every, 32);
     }
 
     /// `["*"]` is every manager; a named list is those managers and no others. Both directions,

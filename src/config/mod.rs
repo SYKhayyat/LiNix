@@ -5,7 +5,8 @@ pub mod parser;
 pub mod settings;
 
 pub use config::{
-    CliOverrides, Config, GuardSettings, ProtectionAnswer, VarsSettings, PREFERENCES_FILE_NAME,
+    CliOverrides, Config, GuardSettings, JournalSettings, ProtectionAnswer, VarsSettings,
+    PREFERENCES_FILE_NAME,
 };
 pub use settings::{resolve_root, ResolvedRoot, RootSource, Settings};
 
