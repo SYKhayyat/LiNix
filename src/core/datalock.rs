@@ -308,12 +308,16 @@ mod tests {
     /// Every test below that touches `HELD` takes this first. One that takes a lock without it
     /// can make a sibling's `!held()` false again, which is why they all hold it and not only
     /// the new ones.
-    static TEST_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// Async-aware because two of the doors below are `async`, and a `std` guard held across an
+    /// `await` on a multi-thread runtime is a deadlock waiting for a thread to move. `tokio`'s
+    /// mutex also does not poison, so a panicking test cannot fail its neighbours.
+    static TEST_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-    /// A poisoned gate is not a reason to fail an unrelated test: the panic that poisoned it has
-    /// already been reported by the test that panicked.
-    fn gate() -> std::sync::MutexGuard<'static, ()> {
-        TEST_GATE.lock().unwrap_or_else(|e| e.into_inner())
+    /// For the synchronous tests. `blocking_lock` refuses to run inside a runtime, which is the
+    /// right refusal: an async test that reached for this instead of `.lock().await` would be
+    /// the exact bug the type is here to prevent.
+    fn gate() -> tokio::sync::MutexGuard<'static, ()> {
+        TEST_GATE.blocking_lock()
     }
 
     #[test]
@@ -641,5 +645,104 @@ mod tests {
             None,
             "an unreadable counter read as generation zero, which is LOWER than any real one, so two observations straddling a writer compare equal and a torn read is called one moment"
         );
+    }
+
+    /// **Which directory the lock landed in**, which `held()` cannot answer. The three doors
+    /// below resolve the path themselves, so a door that locked the wrong directory would
+    /// still set the count and still hand back a guard — and a test that asked only `held()`
+    /// would pass while every caller locked somewhere nobody else looks.
+    fn lock_file_is_in(dir: &Path) -> bool {
+        dir.join("shall.lock").exists()
+    }
+
+    /// Point `safe_data_dir()` at a directory of this test's own, and put back whatever was
+    /// there. The three doors below resolve the data directory themselves — that is the whole
+    /// point of them — so testing them at all means redirecting it.
+    struct DataDir(Option<std::ffi::OsString>);
+
+    impl DataDir {
+        fn at(dir: &Path) -> Self {
+            std::fs::create_dir_all(dir).unwrap();
+            let previous = std::env::var_os("SHALL_DATA_DIR");
+            std::env::set_var("SHALL_DATA_DIR", dir);
+            Self(previous)
+        }
+    }
+
+    impl Drop for DataDir {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(v) => std::env::set_var("SHALL_DATA_DIR", v),
+                None => std::env::remove_var("SHALL_DATA_DIR"),
+            }
+        }
+    }
+
+    /// **The stand-down door, from a directory nobody holds.** `try_for_one_step` is
+    /// `try_acquire` with the data directory resolved for the caller, and it is reached only
+    /// from `main`'s `acquire_data_lock`: `Ok(None)` there is `LockedRun::StandDown`, so a
+    /// mutant returning it always makes every manager hook do nothing and exit zero. The hook
+    /// tests assert that hooks *stand down* under contention and cannot see it — standing down
+    /// is what they want. Nothing asserted a hook proceeds when the lock is free.
+    #[test]
+    fn a_hook_with_nobody_holding_the_lock_proceeds_rather_than_standing_down() {
+        let _g = gate();
+        let dir = tmp("try-for-one-step");
+        let _data_dir = DataDir::at(&dir);
+
+        let taken = DataLock::try_for_one_step("hook-record").unwrap();
+        assert!(
+            taken.is_some(),
+            "nobody holds this directory, so the hook had to take the lock and record; standing down here loses whatever the manager just did"
+        );
+        assert!(held());
+        assert!(
+            lock_file_is_in(&dir),
+            "the hook took a lock somewhere other than the data directory it was pointed at"
+        );
+        drop(taken);
+        assert!(!held());
+    }
+
+    /// The waiting sibling of the door above, and the one `LockScope::Deferred` uses. It differs
+    /// from `try_for_one_step` only in what it does when the lock is taken, so what has to be
+    /// pinned separately is that the free case still hands one out.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_deferred_step_takes_the_lock_when_it_is_free() {
+        let _g = TEST_GATE.lock().await;
+        let dir = tmp("for-one-step");
+        let _data_dir = DataDir::at(&dir);
+
+        let taken = DataLock::for_one_step("sync").await.unwrap();
+        assert!(held(), "the deferred step's lock was taken and not counted");
+        assert!(
+            lock_file_is_in(&dir),
+            "the deferred step locked a directory other than the one safe_data_dir names, so two runs would each hold a lock nobody else sees"
+        );
+        drop(taken);
+        assert!(!held());
+    }
+
+    /// The primitive both async doors are built on. It hands the blocking wait to a pool rather
+    /// than the runtime, so the assertion worth making is that it still comes back holding the
+    /// lock rather than merely coming back.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_off_runtime_wait_returns_holding_the_lock() {
+        let _g = TEST_GATE.lock().await;
+        let dir = tmp("acquire-async");
+
+        let taken = DataLock::acquire_async(&dir, "sync", Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert!(
+            held(),
+            "acquire_async returned without the lock it promised"
+        );
+        assert!(
+            lock_file_is_in(&dir),
+            "acquire_async locked a directory other than the one it was handed"
+        );
+        drop(taken);
+        assert!(!held());
     }
 }
