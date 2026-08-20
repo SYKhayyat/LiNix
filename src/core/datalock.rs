@@ -295,8 +295,30 @@ mod tests {
         d
     }
 
+    /// **Serialises every test that takes the lock or asks `held()`.**
+    ///
+    /// `HELD` is process-wide and this suite runs in parallel, so a test could assert what its
+    /// own lock did and nothing else — "not about the count being zero, which a sibling test
+    /// holding a lock of its own would make false". That left the *un-held* direction of every
+    /// door untested, and the nightly mutation run found the hole: `held() -> true`, `> 0` read
+    /// as `>= 0`, and both `try_acquire` and `for_this_write` returning `Ok(None)` always, each
+    /// survived the whole suite. A lock that is never taken and reports success is the exact
+    /// failure this module exists to prevent.
+    ///
+    /// Every test below that touches `HELD` takes this first. One that takes a lock without it
+    /// can make a sibling's `!held()` false again, which is why they all hold it and not only
+    /// the new ones.
+    static TEST_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A poisoned gate is not a reason to fail an unrelated test: the panic that poisoned it has
+    /// already been reported by the test that panicked.
+    fn gate() -> std::sync::MutexGuard<'static, ()> {
+        TEST_GATE.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn a_lock_is_taken_and_released_by_drop() {
+        let _g = gate();
         let dir = tmp("release");
         {
             let _held = DataLock::acquire(&dir, "sync", Duration::from_secs(1)).unwrap();
@@ -307,6 +329,7 @@ mod tests {
 
     #[test]
     fn the_lock_file_names_its_holder() {
+        let _g = gate();
         let dir = tmp("holder");
         let _held = DataLock::acquire(&dir, "sync", Duration::from_secs(1)).unwrap();
         let stamp = DataLock::holder(&dir.join("shall.lock.owner"));
@@ -331,6 +354,7 @@ mod tests {
     /// `trim()` would let through.
     #[test]
     fn an_owner_file_with_no_name_in_it_falls_back_rather_than_naming_nobody() {
+        let _g = gate();
         let dir = tmp("blank-owner");
         std::fs::create_dir_all(&dir).unwrap();
         let owner = dir.join("shall.lock.owner");
@@ -358,6 +382,7 @@ mod tests {
 
     #[test]
     fn a_second_holder_is_refused_with_who_holds_it_rather_than_hanging() {
+        let _g = gate();
         let dir = tmp("contended");
         let first = DataLock::acquire(&dir, "sync", Duration::from_secs(1)).unwrap();
 
@@ -387,6 +412,7 @@ mod tests {
     /// behind an ordinary `apt install` instead of failing under it — was unmeasured.
     #[test]
     fn a_contended_lock_is_waited_for_and_then_taken() {
+        let _g = gate();
         let dir = tmp("wait-succeeds");
         let held = DataLock::acquire(&dir, "holder", Duration::from_secs(5)).unwrap();
 
@@ -421,6 +447,7 @@ mod tests {
     /// and ignoring `timeout` entirely.
     #[test]
     fn a_wait_that_runs_out_first_spends_the_time_it_was_given() {
+        let _g = gate();
         let dir = tmp("wait-expires");
         let _held = DataLock::acquire(&dir, "holder", Duration::from_secs(5)).unwrap();
 
@@ -475,6 +502,7 @@ mod tests {
 
     #[test]
     fn a_writer_that_finishes_moves_the_generation() {
+        let _g = gate();
         let dir = tmp("generation");
         let before = observe(&dir);
 
@@ -515,10 +543,8 @@ mod tests {
     /// would release it is waiting.
     #[test]
     fn a_process_inside_the_lock_does_not_take_it_again() {
+        let _g = gate();
         let dir = tmp("reentrant");
-        // `HELD` is process-wide and this suite runs its tests in parallel, so the only honest
-        // assertions here are about what this test's own lock does — not about the count being
-        // zero, which a sibling test holding a lock of its own would make false.
         let outer = DataLock::acquire(&dir, "outer", Duration::from_secs(1)).unwrap();
         assert!(held(), "this process is inside a lock it took");
 
@@ -529,5 +555,91 @@ mod tests {
         );
 
         drop(outer);
+    }
+
+    /// **`held()` in both directions.** Every other test here asserts it is true inside a lock;
+    /// nothing asserted it is false outside one, so `held() -> true` and the same function with
+    /// its `> 0` read as `>= 0` — which is every unsigned count — both survived the suite.
+    #[test]
+    fn held_is_false_outside_the_lock_and_true_inside() {
+        let _g = gate();
+        let dir = tmp("held-both-ways");
+        assert!(
+            !held(),
+            "nothing in this process holds the lock, and `held()` says it does"
+        );
+        {
+            let _taken = DataLock::acquire(&dir, "writer", Duration::from_secs(1)).unwrap();
+            assert!(held(), "this process is inside a lock it just took");
+        }
+        assert!(
+            !held(),
+            "the lock was dropped and the count did not come back down, so every later `for_this_write` writes unlocked and reports success"
+        );
+    }
+
+    /// **The door that reports contention has to open when there is none.** `try_acquire`
+    /// returning `Ok(None)` unconditionally means a `hook-*` subcommand never records anything
+    /// and never says why — it reads exactly like the ordinary contended case it was built for.
+    #[test]
+    fn a_free_directory_hands_out_the_lock_rather_than_reporting_contention() {
+        let _g = gate();
+        let dir = tmp("try-acquire-free");
+        let taken = DataLock::try_acquire(&dir, "hook-install").unwrap();
+        assert!(
+            taken.is_some(),
+            "nobody holds this directory and `try_acquire` reported contention"
+        );
+        assert!(
+            held(),
+            "the lock was handed out and the count did not go up"
+        );
+        drop(taken);
+        assert!(!held());
+    }
+
+    /// **The reentrancy door, from outside.** Its sibling test proves `for_this_write` declines
+    /// when the caller already holds the lock. Nothing proved it *takes* one when the caller
+    /// does not, so `Ok(None)` always — every deferred write racing every other — survived.
+    #[test]
+    fn a_write_from_outside_the_lock_takes_one() {
+        let _g = gate();
+        let dir = tmp("for-this-write-outside");
+        std::fs::create_dir_all(&dir).unwrap();
+        let previous = std::env::var_os("SHALL_DATA_DIR");
+        std::env::set_var("SHALL_DATA_DIR", &dir);
+
+        assert!(
+            !held(),
+            "the gate above should have left this process unlocked"
+        );
+        let taken = DataLock::for_this_write("a ledger").unwrap();
+        assert!(
+            taken.is_some(),
+            "no lock was held, so this write had to take one and it did not"
+        );
+        assert!(held());
+        drop(taken);
+
+        match previous {
+            Some(v) => std::env::set_var("SHALL_DATA_DIR", v),
+            None => std::env::remove_var("SHALL_DATA_DIR"),
+        }
+    }
+
+    /// **A counter that cannot be read is unknown, and only a *missing* one is zero.** The
+    /// sibling test covers a file whose contents do not parse; both of its cases reach `observe`
+    /// through `Ok`, so nothing exercised the `NotFound` guard and reading it as `true` — every
+    /// IO error becoming generation zero — survived. A directory is not readable as a file on
+    /// any platform this ships to, and the error it raises is never `NotFound`.
+    #[test]
+    fn a_generation_file_that_cannot_be_read_is_unknown_not_zero() {
+        let dir = tmp("generation-unreadable");
+        std::fs::create_dir_all(dir.join(GENERATION_FILE)).unwrap();
+        assert_eq!(
+            observe(&dir).count,
+            None,
+            "an unreadable counter read as generation zero, which is LOWER than any real one, so two observations straddling a writer compare equal and a torn read is called one moment"
+        );
     }
 }
