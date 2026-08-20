@@ -61,6 +61,7 @@ LEDGER=/tmp/shall-it-ledger
 rm -rf "$LEDGER"; mkdir -p "$LEDGER"
 : > "$LEDGER/cmd-real"; : > "$LEDGER/cmd-help"
 : > "$LEDGER/be-life"; : > "$LEDGER/be-life-partial"; : > "$LEDGER/be-life-unmeasured"; : > "$LEDGER/be-smoke"
+: > "$LEDGER/be-life-nokernel"
 
 # Record which subcommand an invocation actually ran, so the audit can name what
 # nothing touched. Global flags are skipped; the two that take a value skip it too.
@@ -984,6 +985,12 @@ STORAGE_ZFS=""
 # device-mapper or without the out-of-tree ZFS module can never drive that backend no matter what
 # the image carries. `no_lifecycle_reason` reads these, so the coverage gate can tell "this
 # machine cannot" from "this run could not", and only the second one is a defect (Q17).
+#
+# The ratchet needs the same distinction and had no way to draw it. Its excuse channel,
+# `be-life-unmeasured`, means "measurable in principle, not today" — a rate-limit window, a held
+# lock — and its remedy is to run again. A kernel without the module is the opposite fact: no
+# retry on this host ever measures it. Both must keep the floor from falling, and they are
+# recorded apart because a run that excuses coverage has to say WHICH excuse it used.
 STORAGE_BTRFS_NO_KERNEL=""
 STORAGE_LVM_NO_KERNEL=""
 STORAGE_ZFS_NO_KERNEL=""
@@ -997,6 +1004,7 @@ setup_storage_devices() {
         soft "btrfs: no mkfs.btrfs in this image, so there is no filesystem to make a subvolume in"
     elif ! modprobe btrfs >/dev/null 2>&1 && ! grep -qw btrfs /proc/filesystems; then
         STORAGE_BTRFS_NO_KERNEL=1
+        echo btrfs >> "$LEDGER/be-life-nokernel"
         soft "btrfs: this kernel has no btrfs — a container borrows the HOST's kernel, so that is a fact about the machine and not about Shall"
     else
         rm -f /var/tmp/shall-btrfs.img
@@ -1015,6 +1023,7 @@ setup_storage_devices() {
         soft "lvm: no lvcreate in this image"
     elif ! modprobe dm_mod >/dev/null 2>&1 && [ ! -e /dev/mapper/control ]; then
         STORAGE_LVM_NO_KERNEL=1
+        echo lvm >> "$LEDGER/be-life-nokernel"
         soft "lvm: this kernel has no device-mapper — again a fact about the machine"
     else
         rm -f /var/tmp/shall-lvm.img
@@ -1061,6 +1070,7 @@ setup_storage_devices() {
         soft "zfs: no zpool in this image"
     elif ! modprobe zfs >/dev/null 2>&1; then
         STORAGE_ZFS_NO_KERNEL=1
+        echo zfs >> "$LEDGER/be-life-nokernel"
         soft "zfs: the host kernel has no ZFS module — it is out of tree, so a host either carries one or does not, and a container cannot supply it"
     else
         # The tools and the module are two builds of one project, and a version disagreement
@@ -3725,7 +3735,14 @@ LIFECYCLES=$(grep -c . "$LEDGER/be-life.u")
 # so a real collapse still fails this check.
 sort -u "$LEDGER/be-life-unmeasured" > "$LEDGER/be-life-unmeasured.u" 2>/dev/null || : > "$LEDGER/be-life-unmeasured.u"
 UNMEASURED=$(grep -c . "$LEDGER/be-life-unmeasured.u")
-MEASURABLE=$((LIFECYCLES + UNMEASURED))
+# Backends this HOST cannot measure at all, because the kernel has no module for them (13c).
+# Counted into MEASURABLE for the same reason as the line above and on a different ground: the
+# shortfall is a property of the machine, so lowering the floor would ratchet a platform's
+# coverage down over a fact about somebody's laptop. The floor is not lowered for these either
+# — a host that has the module measures them again.
+sort -u "$LEDGER/be-life-nokernel" > "$LEDGER/be-life-nokernel.u" 2>/dev/null || : > "$LEDGER/be-life-nokernel.u"
+NOKERNEL=$(grep -c . "$LEDGER/be-life-nokernel.u")
+MEASURABLE=$((LIFECYCLES + UNMEASURED + NOKERNEL))
 # A stable key. `uname -s` on git-bash is `MINGW64_NT-10.0-26200` — a Windows build number,
 # so keying on it would mint a fresh host class (and a free pass) at every OS update.
 case "$(uname -s 2>/dev/null)" in
@@ -3768,6 +3785,7 @@ elif [ -f "$FLOOR_FILE" ]; then
         echo "        Something stopped running. A plan-smoke satisfies the audit above, so this"
         echo "        is the only check that notices coverage collapsing rather than breaking."
         [ "$UNMEASURED" -gt 0 ] && echo "        ($UNMEASURED excused as unmeasurable, and it was still not enough.)"
+        [ "$NOKERNEL" -gt 0 ] && echo "        ($NOKERNEL excused for a missing kernel module, and it was still not enough.)"
         # A count is not a finding. The floor is one number, so this cannot name what the last
         # run did that this one did not — but it can name what ran and what the image is
         # missing, which is the same answer for the case that actually happens: a best-effort
@@ -3786,12 +3804,21 @@ elif [ -f "$FLOOR_FILE" ]; then
         # Short of the floor, and the shortfall is exactly the backends nothing could measure.
         # Reported at full volume and never silently: a run that excuses coverage has to say so,
         # or "silent truncation reads as covered everything when it did not".
-        soft "real-lifecycle ratchet: $LIFECYCLES of $FLOOR on $HOST_CLASS, and $UNMEASURED backend(s) could not be measured this run"
-        echo "        unmeasurable: $(tr '
+        soft "real-lifecycle ratchet: $LIFECYCLES of $FLOOR on $HOST_CLASS, and $((UNMEASURED + NOKERNEL)) backend(s) could not be measured this run"
+        if [ "$UNMEASURED" -gt 0 ]; then
+            echo "        unmeasurable: $(tr '
 ' ' ' < "$LEDGER/be-life-unmeasured.u")"
-        echo "        Each failed a real install for a reason Shall classed as passing, and did"
-        echo "        not clear on a retry — a rate-limit window, a held lock. The floor is NOT"
-        echo "        lowered for these: the next run on a clear window measures them again."
+            echo "        Each failed a real install for a reason Shall classed as passing, and did"
+            echo "        not clear on a retry — a rate-limit window, a held lock. The floor is NOT"
+            echo "        lowered for these: the next run on a clear window measures them again."
+        fi
+        if [ "$NOKERNEL" -gt 0 ]; then
+            echo "        no kernel module on this host: $(tr '
+' ' ' < "$LEDGER/be-life-nokernel.u")"
+            echo "        A container borrows the HOST's kernel, so this is a fact about the machine"
+            echo "        and not about Shall — no retry here ever measures them. The floor is NOT"
+            echo "        lowered for these: a host that carries the module measures them again."
+        fi
     else
         PASS=$((PASS + 1))
         echo "  PASS  real-lifecycle ratchet: $LIFECYCLES >= $FLOOR recorded for $HOST_CLASS"

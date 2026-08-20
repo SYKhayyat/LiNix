@@ -50,6 +50,7 @@ mod a_firewall_teardown_is_a_removal_tests;
 mod a_ledger_is_read_and_written_as_one_step_tests;
 mod a_lister_cannot_report_what_was_removed_tests;
 mod a_machine_converges_tests;
+mod a_missing_kernel_module_is_not_a_coverage_regression_tests;
 mod a_module_is_a_subject_not_a_pile_tests;
 mod a_parser_can_say_it_did_not_understand_tests;
 mod a_pinned_toolchain_would_replace_the_version_matrix_tests;

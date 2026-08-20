@@ -30,6 +30,15 @@
 # prints the exact edit when a run exceeds the record. Never lower a line to get green — that is
 # the one edit this file exists to make visible in a diff.
 #
+# TWO THINGS ARE EXCUSED, and neither lowers a line. A backend whose install failed for a reason
+# Shall classed as passing and did not clear on a retry — a rate-limit window, a held lock — is
+# counted toward the floor and named in the run, because the next run on a clear window measures
+# it. So is a backend whose KERNEL MODULE this host does not have: a container borrows the host's
+# kernel, so btrfs, device-mapper and the out-of-tree ZFS module are facts about the machine, and
+# no retry here ever measures them. The two are recorded apart because their remedies differ, and
+# a run that uses either says which. Before that second excuse existed, a correct run on a kernel
+# without ZFS measured 7 against this file's 8 and reported a collapse that had not happened.
+#
 # A host class with no line here is not failed — a gate that fails the first time it sees a new
 # platform is a gate that stops people adding platforms — but it is not PASSED either. It prints
 # the line to add and counts as neither, because a record that is not there compares nothing.
