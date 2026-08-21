@@ -1275,10 +1275,11 @@ fn decode_xml(bytes: &[u8]) -> String {
         return String::from_utf8_lossy(bytes).into_owned();
     }
     let body = bytes.strip_prefix(&[0xFF, 0xFE][..]).unwrap_or(bytes);
-    let units: Vec<u16> = body
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-        .collect();
+    // `as_chunks` rather than `chunks_exact(2)`: the pair arrives as `[u8; 2]`, so the two
+    // indexes that could panic stop existing. A trailing odd byte is a truncated code unit and
+    // is dropped either way.
+    let (pairs, _odd_trailing_byte) = body.as_chunks::<2>();
+    let units: Vec<u16> = pairs.iter().copied().map(u16::from_le_bytes).collect();
     String::from_utf16_lossy(&units)
 }
 
