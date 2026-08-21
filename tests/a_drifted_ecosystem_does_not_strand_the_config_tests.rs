@@ -340,3 +340,58 @@ async fn all_or_nothing_does_not_narrow_however_the_recovery_is_set() {
          all of them landed"
     );
 }
+
+/// **A batch of one has nothing to narrow, and a mutant found that nothing said so.**
+///
+/// `members > 1` became `members >= 1` and the whole suite passed. The cost is not correctness -
+/// re-asking a one-package command gets the same answer - it is that the commonest failure shape
+/// there is would pay for a second identical invocation. `--keep-going` produces batches of one
+/// by design (`G1`), so this is not a rare corner.
+#[test]
+fn a_batch_of_one_is_never_narrowed() {
+    let passing = shall::core::Error::CommandFailed {
+        message: "`apt` could not reach its index".into(),
+        retry: shall::core::Retryability::Transient,
+        absent_name: false,
+    };
+    assert!(
+        !BatchRecovery::Bisect.narrows(&passing, 1, ContinuePast::ClassifiedPassing),
+        "a single-member batch was narrowed: there is nothing to tell apart, so the only thing \
+         the second command can buy is the time it costs"
+    );
+    assert!(
+        BatchRecovery::Bisect.narrows(&passing, 2, ContinuePast::ClassifiedPassing),
+        "two members is the smallest batch worth splitting; if this is false the mode never fires"
+    );
+}
+
+/// **The bad member in the SECOND half, which is the only way to test the midpoint.**
+///
+/// `mid = lo + (hi - lo) / 2` became `lo + (hi + lo) / 2` and survived, because every other test
+/// here recurses into the LEFT half where `lo` is nought - and at nought the two expressions are
+/// the same number. Only a recursion with `lo > 0` tells them apart.
+///
+/// With `c` bad: the top split clears `a b`, the right half fails, and the recursion into `(2,4)`
+/// is where the arithmetic matters.
+#[tokio::test]
+async fn bisection_recurses_into_the_right_half_correctly() {
+    let kernel = TestKernel::new().await;
+    let backend = RecordingBackend::named(DRIFTED, &shared_log())
+        .always_flaky("c")
+        .build();
+
+    let calls = ask_the_quartet(&kernel, backend, BatchRecovery::Bisect).await;
+
+    assert_eq!(
+        calls,
+        vec![
+            "mock-drifted install a b c d".to_string(),
+            "mock-drifted install a b".to_string(),
+            "mock-drifted install c d".to_string(),
+            "mock-drifted install c".to_string(),
+            "mock-drifted install d".to_string(),
+        ],
+        "the recursion into the right half asked the wrong packages, which is what a midpoint \
+         computed as `lo + (hi + lo) / 2` does as soon as `lo` is not nought"
+    );
+}
