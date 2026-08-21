@@ -48,7 +48,7 @@ dashmap = "5.5" # Thread-safe LockMap implementation
 tokio-util = { version = "0.7", features = ["rt"] }
 
 # Graph Theory & Execution Planning
-petgraph = "0.6" # DAG support
+petgraph = "0.8" # DAG support
 
 # CLI & Configuration
 clap = { version = "4.4", features = ["derive"] }
