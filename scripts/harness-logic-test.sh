@@ -352,6 +352,7 @@ for _src in $SOURCES; do
         # a red CI leg over a rate-limit window that has since moved.
         LEDGER="$(mktemp -d)"; : > "$LEDGER/be-life-unmeasured"
         lx() { echo "the retry must not be reached"; return 1; }
+        lx() { echo "the retry must not be reached"; return 1; }
         lx_slow() { lx "$@"; }
 
         FAILC=0; SOFTC=0; PASS=0
@@ -370,6 +371,26 @@ for _src in $SOURCES; do
         classify_install be spec 1 "$_log" >/dev/null 2>&1
         [ "$CLASS" = exhausted ] || { echo "  BAD   a transient failure that did not clear is not exhausted (got '$CLASS')"; _bad=1; }
         [ "$FAILC" -eq 0 ] || { echo "  BAD   a transient failure that did not clear was scored a hard failure — this is the red macOS leg"; _bad=1; }
+        # **Which log the rest of the lifecycle reads.** A retry that cleared wrote its own
+        # output, and every assertion after this one asks an install log where the binary went -
+        # so a transient retry left them reading the attempt that failed. Measured on the guix
+        # nightly of 2026-08-21: the install worked and the PATH check reported that nothing said
+        # where it went, because it was looking at the wrong page.
+        FAILC=0; SOFTC=0
+        printf 'shall-failure-class: transient
+' > "$_log"
+        # BOTH names: the container harness retries through `lx_slow`, the Windows one through
+        # `lx`, and a stub for one of them tests one twin and lies about the other.
+        lx() { return 0; }
+        lx_slow() { return 0; }
+        classify_install be spec 1 "$_log" >/dev/null 2>&1
+        [ "$CLASS" = transient ] || { echo "  BAD   a retry that cleared is not transient (got '$CLASS')"; _bad=1; }
+        case "$LIFELOG" in
+            */life2.out|*/itw-retry.out) : ;;
+            *) echo "  BAD   after a cleared retry the lifecycle still reads '$LIFELOG', which is the attempt that failed"; _bad=1 ;;
+        esac
+        lx_slow() { lx "$@"; }
+
         grep -qx be "$LEDGER/be-life-unmeasured" || { echo "  BAD   an unmeasurable lifecycle was not recorded, so the ratchet cannot excuse it by name"; _bad=1; }
 
         # And a failure with no class at all is a defect, not a free pass: its absence means the

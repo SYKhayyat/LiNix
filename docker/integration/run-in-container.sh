@@ -363,6 +363,14 @@ gone_ok() { # gone_ok "desc" <tag> cmd... — cmd must FAIL now and have SUCCEED
 # $5 runs between the two attempts, to clear a declaration the failed attempt left behind.
 classify_install() { # be  install-spec  rc  logfile  [cleanup]
     _ci_be="$1"; _ci_spec="$2"; _ci_rc="$3"; _ci_log="$4"; _ci_clear="${5:-:}"
+    # **Which log the rest of the lifecycle may believe.** A retry that cleared writes its own
+    # output, and every assertion below reads an install log to learn where the binary went - so
+    # after a transient retry they were reading the attempt that FAILED. Measured 2026-08-21 on
+    # the guix nightly: the first `github:sharkdp/fd` install flaked, the retry installed it and
+    # said `/root/.local/bin`, and the PATH check read the first log, found no such sentence and
+    # reported `nothing said where it went`. The install worked; the harness was looking at the
+    # wrong page.
+    LIFELOG="$_ci_log"
     if [ "$_ci_rc" -eq 124 ]; then
         soft "$_ci_be: install of $_ci_spec hit the ${TO_LONG##* }s build limit — not a verdict on the backend"
         excerpt "$_ci_log" 4
@@ -389,6 +397,7 @@ classify_install() { # be  install-spec  rc  logfile  [cleanup]
     lx_slow -y install "$_ci_spec" >/tmp/life2.out 2>&1
     _ci_rc2=$?
     if [ "$_ci_rc2" -eq 0 ]; then
+        LIFELOG=/tmp/life2.out
         soft "$_ci_be: install of $_ci_spec failed once and succeeded on retry — transient"
         CLASS=transient; return 0
     fi
@@ -1693,7 +1702,7 @@ lifecycle() {
     else
         grep_ok "$be: list shows $ctok" "$ctok" lx list --backend "$be"
     fi
-    [ -n "$cbin" ] && assert_binary_reachable "$be" "$cbin" /tmp/life.out "$_prepath"
+    [ -n "$cbin" ] && assert_binary_reachable "$be" "$cbin" "$LIFELOG" "$_prepath"
 
     if [ "$cmode" = "unsupported" ]; then
         # A manager with no uninstall verb must say so. Reporting success would
@@ -1709,7 +1718,7 @@ lifecycle() {
     ok "$be: uninstall $cpkg" lx_slow -y uninstall "$be:$cpkg"
     [ -n "$_nolist" ] || nok "$be: $ctok is gone from list" sh -c \
         "$SHALL list --backend '$be' 2>/dev/null | grep -q '$ctok'"
-    [ -n "$cbin" ] && assert_binary_gone "$be" "$cbin" "$_prepath" /tmp/life.out
+    [ -n "$cbin" ] && assert_binary_gone "$be" "$cbin" "$_prepath" "$LIFELOG"
     # A successful uninstall already removed the line; this covers the run where it
     # reported success and did not, which is the whole point of asserting the rest.
     undeclare_canary "$be:$cpkg"

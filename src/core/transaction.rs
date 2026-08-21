@@ -1298,15 +1298,8 @@ impl Transaction {
                     Ok(()) => {
                         let _ = j.record_success(&ids[i]);
                     }
-                    Err(_) if cancelled => {
-                        let _ = j.record_failure(
-                            &ids[i],
-                            "cancelled before this batch ran: another operation in the same run \
-                             failed",
-                        );
-                    }
                     Err(e) => {
-                        let _ = j.record_failure(&ids[i], &format!("{}", e));
+                        let _ = j.record_failure(&ids[i], &wal_failure_reason(cancelled, e));
                     }
                 }
             }
@@ -1748,6 +1741,21 @@ pub(super) async fn wait_for_manager_lock(
         retry: Retryability::Exhausted,
         absent_name: false,
     })
+}
+
+/// The sentence a batch member's WAL entry carries when it did not succeed.
+///
+/// **Named so it can be asserted.** It was a match guard three lines into a journal loop, and
+/// the nightly mutation shard replaced that guard with `true` and with `false` - both survived
+/// the whole suite, because nothing anywhere read which of the two sentences got written. They
+/// are different facts to whoever reads the WAL afterwards: one says another operation in this
+/// run failed, the other says this one did.
+pub(super) fn wal_failure_reason(cancelled: bool, error: &Error) -> String {
+    if cancelled {
+        "cancelled before this batch ran: another operation in the same run failed".to_string()
+    } else {
+        format!("{}", error)
+    }
 }
 
 /// How many of `attempt` tries were retries: all but the first.
@@ -2206,6 +2214,30 @@ mod from_config_tests {
             "the flag outranks the key: a run told to keep going keeps going"
         );
 
+        // **`M3`'s key, which a nightly mutant found unasserted.** Deleting
+        // `batch_recovery: config.sync.batch_recovery` from this struct expression leaves the
+        // field at `patient()`'s `Off`, and every test still passed - so the key could have
+        // silently done nothing on every machine and nothing would have said.
+        assert_eq!(
+            TransactionConfig::from_config(&base()).batch_recovery,
+            BatchRecovery::Bisect,
+            "`[sync] batch_recovery` defaults to bisecting, so a failed batch is narrowed"
+        );
+        let mut no_narrowing = base();
+        no_narrowing.sync.batch_recovery = BatchRecovery::Off;
+        assert_eq!(
+            TransactionConfig::from_config(&no_narrowing).batch_recovery,
+            BatchRecovery::Off,
+            "turning the key off has to reach the transaction, or the key is decoration"
+        );
+        let mut every = base();
+        every.sync.batch_recovery = BatchRecovery::Every;
+        assert_eq!(
+            TransactionConfig::from_config(&every).batch_recovery,
+            BatchRecovery::Every,
+            "and the third setting reaches it too, or one of three values is unreachable"
+        );
+
         // A wait no default would produce, so the fallback cannot pass for the setting.
         let mut waiting = base();
         waiting.manager_lock_wait_secs = 4_321;
@@ -2213,6 +2245,38 @@ mod from_config_tests {
             TransactionConfig::from_config(&waiting).manager_lock_wait,
             Duration::from_secs(4_321),
             "manager_lock_wait_secs did not reach the transaction"
+        );
+    }
+}
+
+#[cfg(test)]
+mod wal_reason_tests {
+    use super::*;
+
+    /// **A mutant found this, not a person.** The choice was a match guard inside the journal
+    /// loop, and the nightly shard replaced it with `true` and with `false` - both survived. The
+    /// two sentences are different facts to whoever reads the WAL afterwards, so both are pinned.
+    #[test]
+    fn a_cancelled_batch_and_a_failed_one_leave_different_sentences() {
+        let e = Error::Transaction("`apt` failed (exit 100)".into());
+        let cancelled = wal_failure_reason(true, &e);
+        let failed = wal_failure_reason(false, &e);
+        assert!(
+            cancelled.contains("cancelled before this batch ran"),
+            "a cancelled batch must say so: {cancelled}"
+        );
+        assert!(
+            !cancelled.contains("exit 100"),
+            "a cancelled batch never ran, so quoting the error blames it for something it did \
+             not do: {cancelled}"
+        );
+        assert!(
+            failed.contains("exit 100"),
+            "a failure must carry the manager's own words: {failed}"
+        );
+        assert_ne!(
+            cancelled, failed,
+            "the guard decides nothing if both read the same"
         );
     }
 }
