@@ -44,7 +44,7 @@ tokio = { version = "1.35", features = [
 ] }
 async-trait = "0.1"
 futures = "0.3"
-dashmap = "5.5" # Thread-safe LockMap implementation
+dashmap = "6.2" # Thread-safe LockMap implementation
 tokio-util = { version = "0.7", features = ["rt"] }
 
 # Graph Theory & Execution Planning
