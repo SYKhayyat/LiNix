@@ -114,3 +114,39 @@ fn quiet_says_nothing_on_success_and_never_swallows_a_failure() {
         "`--quiet` printed nothing at all over a run in which every package failed"
     );
 }
+
+/// **A refusal carried past is still a refusal, and `U21` gives that its own exit code.**
+///
+/// `--keep-going` ends by raising one summary over everything it carried past, and a summary
+/// was a `CommandFailed` whatever its members were — so the same refused declaration exited
+/// **3** without the flag and **1** with it (`M4`). Exit 3 means Shall decided, and a decision
+/// is made the same way next time; exit 1 means something failed, which is the code a fleet
+/// script retries. A refusal reported as a failure is one such a script retries for ever, and
+/// `--keep-going` is named in `B1` as the flag fleet rollouts use.
+///
+/// The comparison is against the unflagged run rather than against the literal 3, for the same
+/// reason as the class test: the rule is that the flag does not change the answer.
+#[test]
+fn keeping_going_past_a_refusal_still_reports_a_refusal() {
+    let plain = fixture("m4_refusal_exit_plain");
+    let (plain_out, plain_code) = plain.run(&["-y", "sync"]);
+
+    let carrying = fixture("m4_refusal_exit_keep_going");
+    let (carried_out, carried_code) = carrying.run(&["-y", "sync", "--keep-going"]);
+
+    // **The instrument.** `CANNOT_INSTALL` is refused for being plain HTTP — if that ever stops
+    // being a refusal, this test is comparing two ordinary failures and proving nothing.
+    assert!(
+        plain_out.contains("refusing to download"),
+        "the probe was not refused, so this test no longer measures a refusal:\n{plain_out}"
+    );
+    assert_ne!(plain_code, 0, "the probe did not fail:\n{plain_out}");
+
+    assert_eq!(
+        plain_code, carried_code,
+        "the same refused declaration exited {plain_code} on its own and {carried_code} under \
+         `--keep-going`. The flag decides whether the run continues, never what the run turned \
+         out to be — and a script that retries the failure code must not be handed one for a \
+         refusal.\nplain:\n{plain_out}\n--- keep-going:\n{carried_out}"
+    );
+}

@@ -3740,3 +3740,25 @@ first: a program that answers `unknown` to everything cannot draw this line at a
 
 This does not touch `Y15`'s ruling beside it: a backend this host does not have is still not a
 failure at all (II.7c), and a package that genuinely fails still fails the command (`AU1`).
+
+## II.60 A summary carries what its members were (`VI.11`, `M4`, V.199)
+
+**A run that carried on past failures ends by raising one error about all of them, and that one
+error is the only thing downstream can read.** Two facts travel on it and both used to be dropped
+at that last step:
+
+- **The class.** `shall-failure-class:` is computed from the top-level error, so a summary built
+  unclassified answers `unknown` for a run whose every failure Shall named. A summary's class is
+  the **least optimistic** of its members' — `Permanent` > `Unknown` > `Exhausted` > `Transient`
+  — because the question it answers is *will running this again succeed?*, and one member that
+  cannot decides it for all of them.
+- **The refusal.** A run in which *every* member was refused is a refusal and keeps exit code 3
+  (`U21`): a refusal is a decision, and a script that retries the failure code must not be handed
+  one for it. A single genuine failure among them and the run did fail — 1 is then the honest
+  answer.
+
+**The same rule binds every aggregate**, not only `sync`'s: `heal` raises one over the operations
+it could not recover, and it goes through the same function. And **anything that wraps an error
+preserves its variant, not merely its text** — appending the pin advice used to rebuild a
+classified failure as `Transaction`, which is `Unknown`, so explaining an impossible version pin
+was what erased the `Permanent` verdict of the failures it fired on.

@@ -1063,6 +1063,12 @@ place files outside `$HOME` all return `3` — the same code as refusing to remo
 packages. A script can therefore tell "I refused" from "I broke" without reading the message, and
 the `on_guard_refusal` hook fires for all of them.
 
+**Including under `--keep-going`.** That flag carries the run past a refusal like any other
+failure, and the run then ends by raising one summary over everything it carried past — which
+used to report the whole run as an ordinary failure, so the same refused line exited `3` on its
+own and `1` with the flag. A run whose every failure was a refusal is a refusal and still exits
+`3`; one thing that genuinely failed and it is `1`, because something did fail.
+
 `2` is why `shall check` in CI tells you a machine has drifted without failing the job the way an
 error would, and `3` is distinct from `1` because "I will not do this" is not "this broke".
 

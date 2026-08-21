@@ -24,6 +24,31 @@ pub enum Retryability {
     Exhausted,
 }
 
+impl Retryability {
+    /// The verdict for a run that carried on past several failures.
+    ///
+    /// One question is being answered — *will running this same command again succeed?* — so
+    /// the least optimistic answer wins: `Permanent` > `Unknown` > `Exhausted` > `Transient`.
+    /// `Unknown` outranks `Exhausted` and `Transient` because a failure nobody classified may
+    /// yet be a permanent one, and calling the run retryable on the strength of the classified
+    /// half is a promise about the half nobody looked at.
+    pub fn and_also(self, other: Self) -> Self {
+        fn rank(r: Retryability) -> u8 {
+            match r {
+                Retryability::Transient => 0,
+                Retryability::Exhausted => 1,
+                Retryability::Unknown => 2,
+                Retryability::Permanent => 3,
+            }
+        }
+        if rank(other) > rank(self) {
+            other
+        } else {
+            self
+        }
+    }
+}
+
 /// Every variant carries a `String` rather than the source error so the enum stays
 /// `Clone + Send`: a parallel transaction fans one failure out to several waiting tasks.
 #[derive(Debug, Error, Clone)]
@@ -161,6 +186,90 @@ impl Error {
         Error::CommandFailed {
             message: message.into(),
             retry: Retryability::Unknown,
+            absent_name: false,
+        }
+    }
+
+    /// The same failure with something added to what it says.
+    ///
+    /// **Appending to an error must not re-classify it.** Written as
+    /// `Error::Transaction(format!("{e}{note}"))`, adding a sentence turns whatever the error
+    /// was into an `Unknown` one — so the pin advice, which exists to explain a version nothing
+    /// satisfies, was destroying the `Permanent` verdict of exactly the failures it fired on:
+    /// three backoff rounds against a pin that cannot be met, `shall-failure-class: unknown`,
+    /// and a user told nothing classified it.
+    ///
+    /// The variant is preserved, not just the class, because callers match on it — `Refused`
+    /// carries exit code 3 and `Differences` carries 2, and neither survives being rebuilt as
+    /// something else. Exhaustive on purpose: a variant added later cannot silently take the
+    /// wrong arm.
+    #[must_use]
+    pub fn with_note(self, note: impl AsRef<str>) -> Self {
+        let note = note.as_ref();
+        // Appended to the payload rather than to the rendered error, so a variant whose
+        // `#[error(…)]` adds a prefix keeps the note inside its own sentence.
+        macro_rules! plus {
+            ($v:expr, $s:expr) => {
+                $v(format!("{}{}", $s, note))
+            };
+        }
+        match self {
+            Error::Refused(s) => plus!(Error::Refused, s),
+            Error::Differences(s) => plus!(Error::Differences, s),
+            Error::BackendNotFound(s) => plus!(Error::BackendNotFound, s),
+            Error::Io(s) => plus!(Error::Io, s),
+            Error::Config(s) => plus!(Error::Config, s),
+            Error::Validation(s) => plus!(Error::Validation, s),
+            Error::Http(s) => plus!(Error::Http, s),
+            Error::Json(s) => plus!(Error::Json, s),
+            Error::Toml(s) => plus!(Error::Toml, s),
+            Error::Unreadable(s) => plus!(Error::Unreadable, s),
+            Error::Permission(s) => plus!(Error::Permission, s),
+            Error::RateLimit(s) => plus!(Error::RateLimit, s),
+            Error::LuaScript(s) => plus!(Error::LuaScript, s),
+            Error::Transaction(s) => plus!(Error::Transaction, s),
+            Error::UnsupportedPlatform(s) => plus!(Error::UnsupportedPlatform, s),
+            Error::Persist(s) => plus!(Error::Persist, s),
+            Error::Snapshot(s) => plus!(Error::Snapshot, s),
+            Error::Journal(s) => plus!(Error::Journal, s),
+            Error::Cron(s) => plus!(Error::Cron, s),
+            Error::Dialoguer(s) => plus!(Error::Dialoguer, s),
+            Error::Unsupported(s) => plus!(Error::Unsupported, s),
+            Error::Other(s) => plus!(Error::Other, s),
+            Error::CommandFailed {
+                message,
+                retry,
+                absent_name,
+            } => Error::CommandFailed {
+                message: format!("{message}{note}"),
+                retry,
+                absent_name,
+            },
+            Error::NoSuchPackage { name, message } => Error::NoSuchPackage {
+                name,
+                message: format!("{message}{note}"),
+            },
+            Error::Unresolvable { name, message } => Error::Unresolvable {
+                name,
+                message: format!("{message}{note}"),
+            },
+            // Nothing to append to, and nothing worth saying: advice about how to fix an
+            // operation nobody performed would be the only sentence a cancelled run printed.
+            Error::Cancelled => Error::Cancelled,
+        }
+    }
+
+    /// A command failure carrying a verdict somebody already reached about it.
+    ///
+    /// For the summary a run raises *after* carrying on past failures it classified one by one.
+    /// Built with [`Error::command_failed`] instead, that summary answers `unknown` to a run
+    /// whose every failure was named — and `unknown` is what both readers of the class act on:
+    /// the harness retries it as a possible defect, and the user is told nothing classified a
+    /// failure Shall classified twice.
+    pub fn command_failed_classified(message: impl Into<String>, retry: Retryability) -> Self {
+        Error::CommandFailed {
+            message: message.into(),
+            retry,
             absent_name: false,
         }
     }
@@ -353,5 +462,57 @@ impl From<String> for Error {
 impl From<crate::parsers::Unrecognised> for Error {
     fn from(u: crate::parsers::Unrecognised) -> Self {
         Error::Unreadable(u.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **The rule is a total order, and every pair must obey it.** A summary that took the
+    /// *first* verdict, or the *last*, reads the same on a one-failure run and disagrees with
+    /// itself the moment two failures arrive in a different order.
+    #[test]
+    fn the_least_optimistic_verdict_wins_whichever_order_they_arrive_in() {
+        use Retryability::*;
+        // Least to most dominant. Every later entry must beat every earlier one, both ways
+        // round, and each must be a fixed point against itself.
+        let ranked = [Transient, Exhausted, Unknown, Permanent];
+        for (i, &lo) in ranked.iter().enumerate() {
+            assert_eq!(lo.and_also(lo), lo, "{lo:?} disagreed with itself");
+            for &hi in &ranked[i + 1..] {
+                assert_eq!(lo.and_also(hi), hi, "{lo:?}.and_also({hi:?})");
+                assert_eq!(hi.and_also(lo), hi, "{hi:?}.and_also({lo:?})");
+            }
+        }
+    }
+
+    /// A run of failures that were *all* passing ones is itself a passing failure — the whole
+    /// reason the class is carried at all. If folding could only ever make things worse, the
+    /// summary would answer `permanent` to every partial run and the class would carry no
+    /// information.
+    #[test]
+    fn a_run_of_passing_failures_stays_passing() {
+        let all_transient = [Retryability::Transient; 3]
+            .into_iter()
+            .fold(Retryability::Transient, Retryability::and_also);
+        assert_eq!(all_transient, Retryability::Transient);
+    }
+
+    /// The constructor exists to stop `unknown` being the only answer a summary can give.
+    #[test]
+    fn a_classified_command_failure_reports_the_class_it_was_given() {
+        for class in [
+            Retryability::Transient,
+            Retryability::Permanent,
+            Retryability::Exhausted,
+            Retryability::Unknown,
+        ] {
+            let e = Error::command_failed_classified("2 operation(s) failed", class);
+            assert_eq!(e.retryability(), class);
+            // A summary is about operations, not about a name. Reporting it as an absent name
+            // would withdraw a declaration over a rate limit.
+            assert!(!e.says_a_name_is_absent(), "{class:?}");
+        }
     }
 }

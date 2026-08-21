@@ -1281,7 +1281,7 @@ impl Transaction {
                         &members[keep[p]].2,
                         &text,
                     ) {
-                        Some(advice) => Err(Error::Transaction(format!("{}{}", e, advice))),
+                        Some(advice) => Err(e.with_note(advice)),
                         None => Err(e),
                     }
                 }

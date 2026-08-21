@@ -165,3 +165,103 @@ fn a_refusal_is_not_given_a_failure_class() {
          harnesses branch on it before they ever look for a class:\n{out}"
     );
 }
+
+/// **The class a failure is given must survive the run carrying on past it.**
+///
+/// Both readers of this line see only the *top-level* error: the container harness, which
+/// retries an `unknown` once and scores a second identical failure a defect in Shall, and
+/// `why_kept`, which tells the user "nothing classified the failure above". Neither can see the
+/// member errors inside a run.
+///
+/// So when carrying on past a failure became the default, the summary raised at the end of a
+/// partial run became the error they read — and it was built with `Error::command_failed`,
+/// whose whole meaning is *nobody looked*. Measured: a `github:` install hit an API rate limit,
+/// which Shall classifies `Transient` at the point of failure, and reported `unknown` at the
+/// exit. The harness retried it, met the same rate limit, and failed a job over it.
+///
+/// **The assertion is a comparison, not a constant.** Whatever class this probe's failure has,
+/// carrying on past it must not change the answer. A literal would need rewriting every time
+/// the probe's own classification improves, and would pass just as well against a build that
+/// answered `unknown` in both columns.
+#[test]
+fn carrying_on_past_a_failure_does_not_erase_its_classification() {
+    fn class_of(out: &str) -> Option<&str> {
+        out.lines()
+            .rev()
+            .find_map(|l| l.trim().strip_prefix("shall-failure-class: "))
+    }
+
+    // The same crate that does not exist, for the same reason `a_failing_command_names_its
+    // _failure_class` uses it: cargo says so, and the policy calls it `permanent`. A probe
+    // Shall refuses instead — a plain-HTTP URL — would exit `Exit::Refused` before the class
+    // is printed at all, and print nothing to compare.
+    const CLASSIFIED_FAILURE: &str = "cargo:shall-no-such-crate-zzz\n";
+
+    let stopped_dir = fixture("class-survives-all-or-nothing");
+    std::fs::write(stopped_dir.join("config").join("priority"), "cargo\n").unwrap();
+    std::fs::write(
+        stopped_dir
+            .join("config")
+            .join("modules")
+            .join("starter.txt"),
+        CLASSIFIED_FAILURE,
+    )
+    .unwrap();
+    std::fs::write(
+        stopped_dir.join("config").join("preferences.toml"),
+        "[sync]\ncontinue_past_transient = false\n",
+    )
+    .unwrap();
+    let (stopped_out, stopped_code) = run(&stopped_dir, &["-y", "sync"]);
+
+    let carrying_dir = fixture("class-survives-carrying-on");
+    std::fs::write(carrying_dir.join("config").join("priority"), "cargo\n").unwrap();
+    std::fs::write(
+        carrying_dir
+            .join("config")
+            .join("modules")
+            .join("starter.txt"),
+        CLASSIFIED_FAILURE,
+    )
+    .unwrap();
+    let (carried_out, carried_code) = run(&carrying_dir, &["-y", "sync", "--keep-going"]);
+
+    assert_ne!(
+        stopped_code, 0,
+        "the all-or-nothing probe succeeded, so nothing was classified:\n{stopped_out}"
+    );
+    assert_ne!(
+        carried_code, 0,
+        "the carrying-on probe succeeded, so nothing was classified:\n{carried_out}"
+    );
+
+    let stopped = class_of(&stopped_out);
+    let carried = class_of(&carried_out);
+
+    // **The instrument, before it is trusted, and it takes two checks rather than one.** Two
+    // runs printing nothing would satisfy the comparison below — but so would a probe whose own
+    // failure is `unknown`, because this bug turns a *classified* failure into an unclassified
+    // one and has nothing to do to a failure that was never classified. A probe that cannot
+    // discriminate is a test that passes against the broken build.
+    assert!(
+        stopped.is_some() && carried.is_some(),
+        "no `shall-failure-class:` line was printed, so the comparison below is vacuous.\n\
+         all-or-nothing:\n{stopped_out}\n--- carrying on:\n{carried_out}"
+    );
+    assert_ne!(
+        stopped,
+        Some("unknown"),
+        "the probe's own failure is unclassified, so the comparison below cannot tell a build \
+         that carries the class from one that drops it. An absent verdict cannot be erased.\
+         \n{stopped_out}"
+    );
+
+    assert_eq!(
+        stopped, carried,
+        "the same failure was called {stopped:?} when it stopped the run and {carried:?} when \
+         the run carried on past it. The summary a partial run raises must carry the verdict \
+         its members were given: the class is all the harness and `why_kept` can see, and \
+         neither reaches the member errors.\n\
+         all-or-nothing:\n{stopped_out}\n--- carrying on:\n{carried_out}"
+    );
+}

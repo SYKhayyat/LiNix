@@ -7183,3 +7183,46 @@ Bisection keeps it, because every question it asks is still a batch, and it stop
 halves both fail: one bad member can only be in one half, so two failing halves is the manager
 rather than a member. The case this whole round is named after — a rotated signing key, every
 package failing equally — therefore costs two extra commands instead of thirty.
+
+**V.199 — Why a summary is not allowed to forget what it is summarising.** *(`VI.11` and `M4`,
+answered 2026-08-21, built the same day.)*
+
+`M2` made `sync` carry on past a passing failure, which meant that for the first time the error a
+run *exits* with is usually not the error that *happened*. It is a summary, written by the code
+that decides to keep going — and that code built it with `Error::command_failed`, whose whole
+documented meaning is that nobody classified this.
+
+Nothing about the classification was wrong. `Error::RateLimit` is `Transient` and has been since
+`R-3`; the `github` backend raised exactly that, the retry loop read it correctly, and the journal
+recorded it. It was discarded one line before the process exited, by the newest code in the file.
+
+**The cost is not theoretical and it is not local.** `shall-failure-class:` exists (`R-3`,
+`II.58`) because a harness that cannot read a verdict tests transience by retrying, and an
+immediate retry is exactly wrong for a rate-limit window. On 2026-08-21 the storage integration
+job did precisely that: `unknown` → retry → the same 526-second window → `defect`, and the
+real-lifecycle ratchet fell 8 → 7 behind it. That is the second time this ratchet has gone red for
+this reason; the first is why the class line was added at all.
+
+**Two aggregates and a wrapper had the same defect, and only one had been noticed.** `heal`'s
+"could not be recovered" summary was an `Error::Other`. The pin advice was appended as
+`Error::Transaction(format!("{e}{advice}"))`, which converted `Permanent` to `Unknown` for
+precisely the failures that advice fires on — a version pin nothing satisfies — and so bought them
+three rounds of backoff against a pin that cannot be met. A fix to the reported line alone would
+have left both live, which is what `Fix the whole family` is about.
+
+**Why the refusal half (`M4`) came with it.** `U21` gives exit 3 its own meaning: Shall decided,
+and it will decide the same way next time. Rebuilding a refusal as a `CommandFailed` summary meant
+the same declaration exited 3 without `--keep-going` and 1 with it, so a fleet script retrying the
+failure code would retry a refusal for ever — and `B1` names `--keep-going` as the flag fleet
+rollouts use. **The README already promised this and was wrong**: "`3` covers every refusal, not
+only the guard's" has been written down through the whole of the flag's life, so the fix restores
+a documented promise rather than choosing a new behaviour — which is most of why it was a
+delegable call and not a design question. The rule is *every* member, not any: one thing that genuinely failed makes the run a
+failure, and saying otherwise would hide it behind the refusal.
+
+**What makes this checkable rather than asserted.** Both tests are comparisons, not constants:
+the class of a failure must not depend on whether the run carried on past it, and neither must its
+exit code. A literal would need rewriting every time a probe's own classification improves, and
+would pass just as well against a build that answered `unknown` in both columns — which two
+earlier drafts of the class test did, and which is why every version of it was run against the
+deliberately broken build before it was trusted.

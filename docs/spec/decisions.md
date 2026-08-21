@@ -1,4 +1,4 @@
-# The decision register — 226 entries, none open
+# The decision register — 227 entries, none open
 **One file, six features, four questions waiting on the owner.** Every decision this design forces
 lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -24,7 +24,7 @@ HALF RULED had no rows, the five that remained summed to 206 against 210, and
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **221** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **222** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 | **DEFERRED** | Asked, and the owner chose to answer it later. | A ruling, when the owner returns to it. | **1** |
 | **HALF RULED** | Part of the question was answered and part was not. | A ruling on the remaining half. | **2** |
@@ -111,8 +111,8 @@ whether a bare `shall lock` still freezes all three axes is not. `Q29`'s computa
 other one. The `G` round ran the opposite way round — `docs/GRADE-2026-08-12.md`'s work order was
 implemented in one pass and the nine changes in it that a user would notice shipped ahead of any
 ruling — and all twelve were confirmed by the owner on 2026-08-14, which is why nothing from it
-is waiting now. All 226 are accounted
-for: **221 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN** — and this line
+is waiting now. All 227 are accounted
+for: **222 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -479,13 +479,14 @@ deliberately no longer has.*
 | **L3** | Do reader commands accept a torn cross-file view? **ANSWERED 2026-08-18: fix it, and the obvious fix is the wrong one.** A reader never waits on a writer; it detects one. `core::stable` reads the writer generation either side of a multi-file read and reads again if a writer committed in between. | Built the same day. |
 | **L4** | Should Part II's II.8 gain the three-scope lock model - `Writer`, `Deferred`, `Reader`? **ANSWERED 2026-08-18: the docs match the code.** II.8 and II.24 rewritten, V.194 added, and V.61's claim that the lock covers the `locks/` ledgers corrected - it never did. | Built the same day. |
 
-### M — the ecosystem-drift round of 2026-08-21 — 3
+### M — the ecosystem-drift round of 2026-08-21 — 4
 
 | | question | answered |
 |---|---|---|
 | **M1** | An upstream ecosystem broke and the nightly called it a Shall defect. Whose problem is drift, and what absorbs it? — RULED 2026-08-21: Shall's, and an excuse that has to be written down. | 2026-08-21 |
 | **M2** | The same drift, on a user's machine: one `cabal:` line whose registry rotated a key stopped `sync` converging the two hundred declarations beside it. — RULED 2026-08-21: carry on past a failure Shall classed as passing, `[sync] continue_past_transient`, on by default. | 2026-08-21 |
 | **M3** | `M2` documented a cost instead of fixing it: a batch fails as a unit, so one bad member still took the twenty-nine beside it down for that run. — RULED 2026-08-21: narrow the failed batch, `[sync] batch_recovery`, bisecting by default. | 2026-08-21 |
+| **M4** | `--keep-going` raises a summary over what it carried past, and a summary was a `CommandFailed` — so the same refused declaration exited **3** without the flag and **1** with it, and a script that retries exit 1 retries a refusal. Found while fixing `VI.11`. — RULED 2026-08-21 (delegated): a run whose every member was refused is a refusal, and keeps exit 3. | 2026-08-21 |
 
 ---
 
@@ -9514,3 +9515,48 @@ firing `before_install` twice — a narrowing is a retry with a shorter command 
 never did either. The journal writes, the `after_install` hooks and the `TaskResult`s were three
 copies of the same block on three exits from that function; they are one block over one vector
 of per-member verdicts now, which is what made per-member answers expressible at all.
+
+## M4
+
+**Status: ANSWERED — 2026-08-21, owner delegated the call, built in the same commit.**
+
+**M4 — `--keep-going` over a refusal reports it as a failure, not as a refusal. Should it?**
+
+`U21` gave this program an exit vocabulary so a script can tell the three apart: 1 is a failure,
+2 is "there are differences", **3 is "Shall refused"**. A script that retries on 1 must not retry
+a 3, because a refusal is a decision and it will be made again.
+
+`--keep-going` carries a run past any failure, refusals included — that part is what the flag is
+for and is not in question. What is in question is the exit code afterwards. The run ends by
+raising a *summary* of what it carried past, and a summary is a `CommandFailed`, so:
+
+| the same refused declaration | exit |
+|---|---|
+| `shall sync` | **3** (`Error::Refused`) |
+| `shall sync --keep-going` | **1** (the summary) |
+
+**Measured**, not argued: a `web:` line over plain HTTP under `--keep-going` printed
+`shall-failure-class: permanent`, and printing that line at all is the proof — `print_failure_class`
+sits on the arm *after* the refusal arm has returned, so a run reaching it was not treated as a
+refusal.
+
+**This is the same shape as `VI.11`** — an aggregate that loses a property of its members — and it
+was found by fixing that one. It is recorded rather than fixed because it changes an exit code,
+which is behaviour a user notices, and this repo's rule is that such a change is the owner's.
+
+**RULED (owner delegated, 2026-08-21): fix it, on the "every member" test.** When *every*
+operation a run carried past was refused, the summary is `Error::Refused` and the exit stays 3.
+One member that genuinely failed and it stays 1 — something did fail, and reporting that run as a
+refusal would hide it behind the refusal. The rule is `II.60` and its reason is `V.199`, both of
+which it shares with `VI.11`: this is the same defect one field over, an aggregate dropping a
+property of its members, and it is now one function (`summarise`) that `sync` and `heal` both go
+through.
+
+**The frequency is small and the effect is total.** A fleet script that retries exit 1 will retry
+a refusal for ever, and `B1` names `--keep-going` as the flag fleet rollouts use.
+
+**Pinned as a comparison, not a constant** — `keeping_going_past_a_refusal_still_reports_a_refusal`
+asserts the flagged and unflagged runs exit the same, and self-checks that the probe is still
+being refused at all, since a probe that stopped being a refusal would leave the test comparing
+two ordinary failures.
+

@@ -585,3 +585,82 @@ only in the sentences citing it cannot resolve against them.
 names, TOML keys, `debug_assert`, clap attributes. A gate at that precision is one somebody
 switches off. The escape-hatch reasons are 32 sites citing 2 identifiers and zero false
 positives, and every one of them is a promise about where a removal is guarded.
+
+## VI.11 A failure Shall classified, and the summary that threw the verdict away
+
+`shall-failure-class:` is the one line this program writes for a machine to read. Two things act
+on it: the container harness retries an `unknown` once and scores an identical second failure a
+**defect in Shall**, and `kept_line_advice` tells the user "Nothing classified the failure above."
+Both read the class off the **top-level** error, because neither can see the member errors inside
+a run.
+
+**M2 made carrying on the default, and the summary a partial run raises became that top-level
+error.** It was built with `Error::command_failed`, whose whole purpose is to mean *nobody
+looked*. So a run whose every failure was classified reported `unknown` — the classification was
+computed, used for the retry decision, recorded in the journal, and then discarded at the last
+step, by the code added to make partial runs work.
+
+Measured, on `Integration (storage)` at `9998c79`:
+
+```
+- [github:sharkdp/fd]: API rate limit: api.github.com is rate limiting this machine and
+  does not reset for 526s, past the 30s ceiling.
+shall-failure-class: unknown
+```
+
+`Error::RateLimit` is `Transient` and has been since classification existed. The harness read
+`unknown`, retried, met the same rate limit, and failed the job over a defect that was not one —
+and the coverage ratchet fell 8 → 7 behind it.
+
+**FIXED**: `execute_transaction` returns each carried-past operation with the verdict its own
+failure carried, and the summary folds them with `Retryability::and_also` — least optimistic
+wins, `Permanent` > `Unknown` > `Exhausted` > `Transient`. The test is a comparison and not a
+constant: **the class of a failure must not depend on whether the run carried on past it**, which
+is checked by running the same failing config twice, once with `continue_past_transient = false`.
+A literal would need rewriting every time a probe's own classification improves, and would pass
+just as well against a build answering `unknown` in both columns.
+
+**Two probes that proved nothing, before one that did.** The test was written three times and
+the first two were green against the deliberately-broken build:
+
+- a `web:` URL over plain HTTP is **refused**, and `print_failure_class` sits on the arm *after*
+  the refusal arm returns — so the all-or-nothing column printed no class at all and there was
+  nothing to compare. (`a_refusal_is_not_given_a_failure_class` pins that on purpose.)
+- adding `@allow_http` to get past the refusal produced a line the grammar rejects, so the
+  declaration was dropped and `sync` had nothing to do.
+
+The probe that works is the one `a_failing_command_names_its_failure_class` already uses — a
+crate that does not exist — and it lives in that file rather than the flag matrix, because the
+flag matrix's fixture redirects `HOME` and a cargo probe under a cold `CARGO_HOME` is a
+different test with a much longer runtime. **Every version of this test was run against the
+broken build before it was trusted**, which is the only reason the first two were caught being
+useless.
+
+**Two siblings, same shape, both live and neither reported.**
+
+*Appending a sentence re-classified the error.* `Error::Transaction(format!("{}{}", e, advice))`
+is how the pin advice was attached — so explaining a version pin nothing satisfies converted the
+`Permanent` verdict of exactly the failures it fires on into `Unknown`, which then bought them
+three rounds of backoff against a pin that cannot be met. `Error::with_note` preserves the
+variant, not merely the class: `Refused` carries exit code 3 and `Differences` carries 2, and a
+rebuild as something else loses those too. It is exhaustive so a variant added later cannot take
+a wrong arm silently.
+
+*`heal` had the identical aggregate.* Its "N interrupted operation(s) could not be recovered"
+was an `Error::Other` — `Unknown` — over a set of failures each classified when it happened. It
+now folds the same way, with an `unreachable` entry counted `Permanent`: its manager is not set
+up on this machine, so the next `heal` fails identically until that changes, which is what the
+advice above it already says in words.
+
+**Checked and not affected**: `search.rs` tags a backend error into a per-backend report rather
+than raising it, and nothing retries a search; the `map_err` wraps in `context.rs`, `hooks.rs`,
+`run.rs` and `shell/mod.rs` wrap join and serialisation errors, which never carried a class; and
+the all-or-nothing path was already correct — it returns the member error itself, which is what
+made the comparison test possible.
+
+**The other half was not Shall's.** api.github.com rate limits by IP at 60/hour unauthenticated,
+and an Actions runner shares its IP with the pool, so the `github:` lifecycle was running on an
+allowance a single busy hour exhausts. Shall's own error says what to do about it — "set
+`GITHUB_TOKEN` for a far larger allowance" — and no harness container was given one. All four now
+are, scoped `contents: read`, because a container running third-party package managers is a
+container those managers can read a token out of.

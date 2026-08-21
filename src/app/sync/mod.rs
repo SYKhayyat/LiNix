@@ -21,6 +21,44 @@ pub mod saved_plan;
 
 pub use self::planner::{ChangePlanner, HostBackends, PlanScope, Scope, SyncChanges};
 
+/// One operation a run carried on past, and what its failure was called at the time.
+struct CarriedPast {
+    name: String,
+    retry: Retryability,
+    /// Shall said no to this one, rather than trying it and failing.
+    ///
+    /// Kept apart from `retry` because it answers a different question. A refusal is
+    /// `Permanent`, but so is a name that does not exist, and only one of them owns exit
+    /// code 3.
+    refused: bool,
+}
+
+/// The one error a partial run raises about everything it carried past.
+///
+/// **The summary keeps what its members were.** Both facts it carries are read by something
+/// that cannot see the member errors: the class by the container harness and by `why_kept`, the
+/// exit code by whatever script invoked Shall.
+///
+/// - The class is the least optimistic of the members' (`Retryability::and_also`). Built
+///   unclassified, it answered `unknown` for a run whose every failure was named — `VI.11`.
+/// - A run in which **every** member was refused is itself a refusal, and `U21` gives that exit
+///   code 3: a decision, which will be made again, and which a script retrying exit 1 must not
+///   retry. Rebuilt as a `CommandFailed` it exited 3 without `--keep-going` and 1 with it
+///   (`M4`). One genuine failure among them and the run did fail, so 1 is the honest answer.
+fn summarise(carried: &[CarriedPast], message: String) -> Error {
+    // `is_empty` first: `all` over nothing is true, and a run that carried past nothing must
+    // not report a refusal it never met.
+    if !carried.is_empty() && carried.iter().all(|c| c.refused) {
+        return Error::Refused(message);
+    }
+    Error::command_failed_classified(
+        message,
+        carried
+            .iter()
+            .fold(Retryability::Transient, |acc, c| acc.and_also(c.retry)),
+    )
+}
+
 /// K15: a rebuild's two transactions run through this engine like any other sync, so the
 /// summary has to be told which run it is narrating or it reports a rebuild's removals as
 /// removals.
@@ -370,12 +408,19 @@ impl SyncEngine {
         // than merely failed.
         let kept_going: Result<()> = match result.as_deref() {
             Ok([]) | Err(_) => Ok(()),
-            Ok(failed) => Err(Error::command_failed(format!(
-                "{} operation(s) failed and the run carried on past them: {}. What \
-                 succeeded is on the machine and recorded; nothing was rolled back.",
-                failed.len(),
-                failed.join(", ")
-            ))),
+            Ok(failed) => Err(summarise(
+                failed,
+                format!(
+                    "{} operation(s) failed and the run carried on past them: {}. What \
+                     succeeded is on the machine and recorded; nothing was rolled back.",
+                    failed.len(),
+                    failed
+                        .iter()
+                        .map(|f| f.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            )),
         };
 
         // The transaction's own failure comes first: it is the more fundamental one, and a
@@ -661,11 +706,15 @@ impl SyncEngine {
 
     /// Run the plan, record what happened, and **return what did not**.
     ///
+    /// Each name arrives with the verdict its own failure carried, because the summary raised
+    /// from them is the error whose class both the harness and the user read.
+    ///
     /// The returned names are the operations the engine reported an outright failure for. They
-    /// are empty on every run without `--keep-going`, because a failure there aborts the
-    /// transaction and this returns `Err` — but with it, the run continues and the caller is
-    /// the only thing left that can notice. It did not, and `shall sync --keep-going` exited 0
-    /// with `Status: SUCCESS` over a run that installed nothing (B1).
+    /// are empty only when the transaction was configured to carry on past nothing, because a
+    /// failure there aborts and this returns `Err`; wherever it carries on, the run continues
+    /// and the caller is the only thing left that can notice. It did not, and `shall sync
+    /// --keep-going` exited 0 with `Status: SUCCESS` over a run that installed nothing (B1) —
+    /// back when the flag was the only way to reach this path, and M2 made it the default.
     ///
     /// Returned rather than raised here, because the successful half of a partial run is real:
     /// the caller has to persist the registry and print the summary before it fails.
@@ -674,7 +723,7 @@ impl SyncEngine {
         changes: &SyncChanges,
         state: &mut StateRegistry,
         reaped: guard::Reaped,
-    ) -> Result<Vec<String>> {
+    ) -> Result<Vec<CarriedPast>> {
         let tx_config = TransactionConfig::from_config(&self.config);
 
         // The engine gets the configuration because its rollback removes, and a removal is
@@ -739,11 +788,15 @@ impl SyncEngine {
         // record for a package that did install, which is the bug this whole change is about.
         let mut failed_nodes: std::collections::HashSet<petgraph::graph::NodeIndex> =
             std::collections::HashSet::new();
-        let mut failed_names: Vec<String> = Vec::new();
+        let mut failed: Vec<CarriedPast> = Vec::new();
         for res in results {
-            if res.result.is_err() {
+            if let Err(e) = &res.result {
                 failed_nodes.insert(res.node_index);
-                failed_names.push(format!("{}:{}", res.backend_name, res.package_name));
+                failed.push(CarriedPast {
+                    name: format!("{}:{}", res.backend_name, res.package_name),
+                    retry: e.retryability(),
+                    refused: matches!(e, Error::Refused(_)),
+                });
             }
             self.metrics
                 .record_operation(crate::app::metrics::Recorded {
@@ -796,7 +849,7 @@ impl SyncEngine {
 
         self.metrics.record_install(installed);
         self.metrics.record_remove(removed);
-        Ok(failed_names)
+        Ok(failed)
     }
 
     /// Collapse the journal's unresolved entries to one recovery per operation, carrying every
@@ -1148,7 +1201,7 @@ impl SyncEngine {
             interrupted.len()
         );
         let mut recovered: Vec<String> = Vec::new();
-        let mut failed: Vec<String> = Vec::new();
+        let mut failed: Vec<CarriedPast> = Vec::new();
         // Packages whose interrupted removal the guard refused: kept, not removed (owner
         // decision), and the entry resolved so heal completes rather than sticking.
         let mut kept: Vec<String> = Vec::new();
@@ -1461,7 +1514,13 @@ impl SyncEngine {
                                     .to_string()),
                             what_to_do_about(e.as_ref(), &key),
                         );
-                        failed.push(key);
+                        failed.push(CarriedPast {
+                            retry: e
+                                .as_ref()
+                                .map_or(Retryability::Unknown, Error::retryability),
+                            refused: matches!(e, Some(Error::Refused(_))),
+                            name: key,
+                        });
                     }
                 }
             }
@@ -1528,9 +1587,21 @@ impl SyncEngine {
         // produced no error to print, so before they were collected the only evidence that
         // anything had been skipped was a number in the journal nobody was reading.
         if !failed.is_empty() || !unreachable.is_empty() {
-            let mut named: Vec<String> = Vec::new();
-            named.extend(failed.iter().cloned());
-            named.extend(unreachable.iter().cloned());
+            // **`unreachable` joins the list rather than being counted beside it.** It
+            // produced no error to classify, but it is not unexamined: its manager is not set
+            // up on this machine, so the next `heal` fails identically until that changes,
+            // which is what `Permanent` means and what the advice below already says in words.
+            // Folded in here so one summary reads one list — counting it separately is how the
+            // class and the exit code came to be computed over different sets.
+            let carried: Vec<CarriedPast> = failed
+                .into_iter()
+                .chain(unreachable.iter().map(|name| CarriedPast {
+                    name: name.clone(),
+                    retry: Retryability::Permanent,
+                    refused: false,
+                }))
+                .collect();
+            let named: Vec<String> = carried.iter().map(|c| c.name.clone()).collect();
             let advice = if unreachable.is_empty() {
                 "Each is still recorded as interrupted, so `heal` will try again — read the \
                  error above for the one that says what to change."
@@ -1539,12 +1610,20 @@ impl SyncEngine {
                  whose manager is not set up here cannot complete until that manager is — \
                  `shall check health` says which are."
             };
-            return Err(Error::Other(format!(
-                "{} interrupted operation(s) could not be recovered: {}. {}",
-                named.len(),
-                named.join(", "),
-                advice
-            )));
+            // **`heal`'s summary is the same aggregate as `sync`'s, so it is the same
+            // function.** Built as `Error::Other` it reported `unknown` over a set of failures
+            // each classified when it happened — a `heal` blocked by a wedged manager and one
+            // blocked by a name that no longer exists printed the identical class, and both
+            // told the reader nobody had looked.
+            return Err(summarise(
+                &carried,
+                format!(
+                    "{} interrupted operation(s) could not be recovered: {}. {}",
+                    named.len(),
+                    named.join(", "),
+                    advice
+                ),
+            ));
         }
         Ok(())
     }

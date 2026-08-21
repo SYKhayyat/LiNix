@@ -67,8 +67,18 @@ Read the classification Shall printed. It is on the line above, and it is the wh
   registry rate-limited, a mirror dropped, a signing key rotated. **Nothing to fix in Shall.**
 * **`shall-failure-class: permanent`** — the request is wrong. A name that does not exist, an
   unsignable source.
-* **`shall-failure-class: unknown`** — *nobody looked*. This is the interesting one: it means
-  that manager has no exit policy for what it just said. See "adding a marker" below.
+* **`shall-failure-class: unknown`** — *nobody looked*. This is the interesting one, and it has
+  **two** causes. Read the error text before assuming which:
+  * The error says nothing recognisable about what went wrong — that manager has no exit policy
+    for what it just said. See "adding a marker" below.
+  * **The error plainly names a cause** — "API rate limit", "no matching version" — and the class
+    still says `unknown`. Then Shall *did* classify it and something between the failure and the
+    exit threw the verdict away. That was `VI.11`: the summary a partial run raises, `heal`'s
+    recovery summary, and the pin advice appending itself to an error all rebuilt a classified
+    error as an unclassified one. Grep for `Error::Transaction(format!` and
+    `Error::Other(format!` taking an existing `Error`, and for any aggregate built with
+    `Error::command_failed` rather than `summarise`. **Adding a marker here fixes nothing** —
+    the marker is already there.
 
 ### "coverage: N real lifecycle(s), below the recorded M"
 
