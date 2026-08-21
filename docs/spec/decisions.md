@@ -483,7 +483,7 @@ deliberately no longer has.*
 
 | | question | answered |
 |---|---|---|
-| **M1** | An upstream ecosystem broke and the nightly called it a Shall defect. Whose problem is drift, and what absorbs it? — RULED 2026-08-21: Shall's, and a dated excuse that expires. | 2026-08-21 |
+| **M1** | An upstream ecosystem broke and the nightly called it a Shall defect. Whose problem is drift, and what absorbs it? — RULED 2026-08-21: Shall's, and an excuse that has to be written down. | 2026-08-21 |
 | **M2** | The same drift, on a user's machine: one `cabal:` line whose registry rotated a key stopped `sync` converging the two hundred declarations beside it. — RULED 2026-08-21: carry on past a failure Shall classed as passing, `[sync] continue_past_transient`, on by default. | 2026-08-21 |
 | **M3** | `M2` documented a cost instead of fixing it: a batch fails as a unit, so one bad member still took the twenty-nine beside it down for that run. — RULED 2026-08-21: narrow the failed batch, `[sync] batch_recovery`, bisecting by default. | 2026-08-21 |
 

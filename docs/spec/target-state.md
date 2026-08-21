@@ -3702,8 +3702,8 @@ reported as broken by an upstream key rotation.
   the two cases. A backend with no marker is a **named** entry in
   `tests/absent_marker_coverage_tests.rs`, not an unremarked default.
 - **The harnesses excuse an unmeasurable lifecycle only against a dated line.**
-  `drift <host-class> <backend> <YYYY-MM-DD>` in `scripts/lifecycle-floor.txt`, good for
-  `DRIFT_WINDOW_DAYS`. Unregistered or expired, the backend does not count toward the floor and
+  `drift <host-class> <backend> <YYYY-MM-DD>` in `scripts/lifecycle-floor.txt`.
+  Unregistered, the backend does not count toward the floor and
   the run prints the line to add. An excuse nothing ages is `|| true` with better manners.
 - **An image asserts the setup steps its managers cannot work without.** An index fetch behind
   `|| true` does not degrade to a soft skip; it degrades to a backend the nightly calls broken,

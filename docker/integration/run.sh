@@ -5,6 +5,7 @@
 #   ./docker/integration/run.sh                # all distros, package "jq"
 #   ./docker/integration/run.sh htop           # override the test package
 #   DISTROS="ubuntu arch" ./docker/integration/run.sh   # subset
+#   BUILD_ONLY=1 ./docker/integration/run.sh            # build the images, run nothing
 #
 # NOTE: the default canary is `jq`, not `tree` — busybox (Alpine) ships a `tree` applet,
 # so removing the tree package still leaves /usr/bin/tree on PATH. See run-in-container.sh.
@@ -125,6 +126,16 @@ for d in $DISTROS; do
     echo "############### BUILD $d ($be) ###############"
     if ! docker build -f "docker/integration/Dockerfile.$d" -t "shall-it-$d" . ; then
         summary="${summary}\n  ${d} (${be}): BUILD-FAIL"; overall=1; continue
+    fi
+    # **`BUILD_ONLY=1` stops here, and exists so nothing else has to know how to build these.**
+    # `scripts/docker-restore.sh` rebuilds the images on a machine whose Docker was emptied, and
+    # a second copy of this loop living there would be the two-of-everything this repository
+    # keeps paying for: the `-f Dockerfile.$d -t shall-it-$d .` triple is the thing that has to
+    # stay true, and it should be true in one place.
+    if [ -n "${BUILD_ONLY:-}" ]; then
+        summary="${summary}
+  ${d} (${be}): built"
+        continue
     fi
     echo "############### RUN $d ($be) ###############"
     # Mount the current test script so edits to it don't require an image rebuild.

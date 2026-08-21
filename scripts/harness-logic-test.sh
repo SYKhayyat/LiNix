@@ -414,12 +414,12 @@ done
 # The drift register, in both harnesses. `classify_install` above degrades an ecosystem failure
 # to `exhausted`, which the real-lifecycle ratchet then counts as coverage merely unmeasured —
 # right for a rate-limit window, wrong for Hackage rotating its TUF root past what the image's
-# cabal trusts, which no later run clears on its own. An excuse nothing ages is `|| true` with
-# better manners, so the excuse now needs a dated line and expires.
+# cabal trusts, which no later run clears on its own. An excuse nobody can see is `|| true` with
+# better manners, so the excuse needs a dated line and every run says how old it is.
 #
 # Both halves are arithmetic on dates, which is exactly the shape that is wrong on a leap year
 # and right on every day somebody tests it by hand.
-echo "== an ecosystem excuse is dated, and expires"
+echo "== an ecosystem excuse is dated, and says how long it has stood"
 for _src in $SOURCES; do
     TOTAL=$((TOTAL + 1))
     _de="$(lift days_since_epoch "$_src")"
@@ -462,11 +462,15 @@ for _src in $SOURCES; do
 
         _v="$(drift_verdict container-linux-tools-ci cabal "$_reg" "$_today")"
         [ "${_v%% *}" = ok ] || { echo "  BAD   a register line dated today does not excuse (got '$1')"; _bad=1; }
-        _v="$(drift_verdict container-linux-tools-ci cabal "$_reg" $((_today + 14)))"
-        [ "${_v%% *}" = ok ] || { echo "  BAD   the last day of the window does not excuse (got '$1')"; _bad=1; }
-        _v="$(drift_verdict container-linux-tools-ci cabal "$_reg" $((_today + 15)))"
-        [ "${_v%% *}" = expired ] || { echo "  BAD   an excuse older than the window still excuses (got '$1')"; _bad=1; }
+        _v="$(drift_verdict container-linux-tools-ci cabal "$_reg" $((_today + 5000)))"
+        [ "${_v%% *}" = ok ] || { echo "  BAD   an old excuse stopped excusing (got '$_v')"; _bad=1; }
+        [ "${_v#* }" = 5000 ] || { echo "  BAD   the run does not report how long the excuse has stood (got '$_v')"; _bad=1; }
 
+        # **The expiry was removed on 2026-08-21, by owner ruling, and this is where it would
+        # come back.** Fourteen days was right for a repository somebody reads daily and wrong
+        # for one that is not: an expiry turns one upstream rotation into a board that goes red
+        # and stays red, and a board that stays red is one nobody reads. The age is reported on
+        # every run instead - nobody has to act, nobody can say they were not told.
         # The three ways to have no excuse, which must never be the same as having one: another
         # backend, another host class, and a register that is not there at all. The host-class
         # case is the one that matters — a drift line for the tools image must not excuse the
@@ -490,7 +494,7 @@ for _src in $SOURCES; do
         exit "$_bad"
     )
     if [ $? -eq 0 ]; then
-        echo "  ok    $(basename "$_src") dates an ecosystem excuse and expires it"
+        echo "  ok    $(basename "$_src") dates an ecosystem excuse and reports its age"
     else
         BAD=$((BAD + 1))
     fi

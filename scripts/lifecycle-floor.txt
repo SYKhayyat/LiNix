@@ -34,19 +34,26 @@
 #
 #     drift <host-class> <backend> <YYYY-MM-DD>   # and what broke, in the tool's own words
 #
-# It expires after fourteen days (`DRIFT_WINDOW_DAYS`, in both harnesses). A backend with no line
-# — or with an expired one — is NOT counted toward the floor, so the shortfall is reported rather
-# than absorbed, and the run prints the line to add with today's date on it.
+# A backend with no line is NOT counted toward the floor, so the shortfall is reported rather
+# than absorbed, and the run prints the line to add with today's date on it. **The line does not
+# expire.** Every run says how many days it has stood instead, which is the same information
+# without a deadline attached to it.
 #
 # **Why an excuse needs a date at all.** The case it was built for clears by itself: a GitHub
 # rate-limit window has twenty minutes left on it and the next nightly measures the backend
 # again. The case that turned up on 2026-08-21 does not. Hackage rotated its TUF root past the
 # trust anchors compiled into the cabal-install Ubuntu ships, so every `cabal` install in the
 # `tools` image failed, and no later run would have cleared it — only an image change would.
-# Excused and never aged, that is `|| true` with better manners: the coverage leaves, the log
-# says so at full volume, and every run stays green. Fourteen days is long enough to land the
-# repair and short enough that nobody forgets it; the expiry is a FAIL naming the backend and
-# how long it has been excused, not a note.
+# Excused and never recorded, that is `|| true` with better manners: the coverage leaves, the
+# log says so at full volume, and every run stays green. A dated line is what makes the debt
+# visible in a diff instead.
+#
+# **It expired at fourteen days until 2026-08-21, and the owner ruled that out.** The reasoning
+# for an expiry is sound for a repository somebody reads daily: an excuse nothing ages rots. It
+# inverts for one that is not attended, because an expiry turns a single upstream rotation into a
+# board that goes red and STAYS red — and a permanently red board is one nobody reads, which is
+# the failure this whole mechanism exists to prevent, arriving by the other road. The age is
+# printed on every run instead: nobody has to act, and nobody can say they were not told.
 #
 # In THIS file and not one of its own, deliberately. `scripts/` is excluded from the Docker build
 # context, so a gate that lives there reaches a container only by being mounted — and a gate that
@@ -69,7 +76,7 @@
 #
 # TWO THINGS ARE EXCUSED, and neither lowers a line. A backend whose install failed for a reason
 # Shall classed as passing and did not clear on a retry — a rate-limit window, a held lock — is
-# counted toward the floor and named in the run, PROVIDED an unexpired `drift` line below says
+# counted toward the floor and named in the run, PROVIDED a `drift` line below says
 # it may be. So is a backend whose KERNEL MODULE this host does not have: a container borrows the host's
 # kernel, so btrfs, device-mapper and the out-of-tree ZFS module are facts about the machine, and
 # no retry here ever measures them. The two are recorded apart because their remedies differ, and

@@ -7076,7 +7076,7 @@ real-lifecycle ratchet counts toward the floor — built for a GitHub rate-limit
 minutes left on it, where the next nightly measures the backend again. A rotated root key never
 clears on its own. Left as it was, the correct fix to the classification would have turned a hard
 failure into a permanent soft one: coverage gone, log loud, every run green. So an excuse is now
-a dated line in `lifecycle-floor.txt` and expires in fourteen days, and a backend with no line
+a dated line in `lifecycle-floor.txt`, and a backend with no line
 does not count toward the floor. The register lives in that file and not one of its own because
 `scripts/` is outside the Docker build context: a gate there reaches a container only by being
 mounted, and this repository has already shipped a ratchet that was mounted nowhere and green

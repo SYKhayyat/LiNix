@@ -478,28 +478,36 @@ classify_install() { # be  install-spec  rc  logfile  [cleanup]
 
 
 # ---------------------------------------------------------------------------------------------
-# An excuse with an expiry date.
+# An excuse that has to be written down.
 #
-# `classify_install` above degrades an ecosystem failure to `exhausted` — soft, and recorded in
-# `be-life-unmeasured` so the real-lifecycle ratchet counts it as measurABLE rather than as
-# coverage lost. That is right for the case it was built for, a rate-limit window with twenty
-# minutes left on it. It is wrong for the case that actually turned up: on 2026-08-21 Hackage
-# rotated its TUF root past what Ubuntu's cabal-install trusts, which is not a window that moves
-# on its own and which no later run clears until somebody changes the image.
+# `classify_install` above degrades an ecosystem failure to `exhausted` - soft, and recorded
+# in `be-life-unmeasured` so the real-lifecycle ratchet counts it as measurABLE rather than
+# as coverage lost. That is right for the case it was built for, a rate-limit window with
+# twenty minutes left on it. It is wrong for the case that turned up on 2026-08-21: Hackage
+# rotated its TUF root past what Ubuntu's cabal-install trusts, which is not a window that
+# moves on its own and which no later run clears until somebody changes the image.
 #
-# An excuse nothing ages is `|| true` with better manners. So a backend may be excused only
-# while a dated line in `lifecycle-floor.txt` says it is, and only for `DRIFT_WINDOW_DAYS`:
+# An excuse nobody can see is `|| true` with better manners. So a backend is excused only
+# while a dated line in `lifecycle-floor.txt` says so:
 #
 #     drift <host-class> <backend> <YYYY-MM-DD>   # what broke, in the tool's own words
 #
-# An unexcused backend does not count toward the floor, so the ratchet fails on the shortfall
-# and names it. The line to add is printed, with today's date, by the run that needed it.
+# An unregistered backend does not count toward the floor, so the ratchet fails on the
+# shortfall and names it, and the run prints the line to add with today's date. That is the
+# whole gate: a human sees it once, and writes down what they decided.
 #
-# In `lifecycle-floor.txt` and not a file of its own, deliberately: `scripts/` is excluded from
-# the build context, so every gate that lives there reaches a container only by being mounted,
-# and a gate that is not mounted is a gate not in force — which this repository has already
-# paid for once, with the ratchet absent from five legs and every one of them green.
-DRIFT_WINDOW_DAYS=14
+# **The line does not expire, and the age is printed instead.** It did expire, at fourteen
+# days, on the reasoning that an excuse nothing ages rots. The owner ruled it out on
+# 2026-08-21 for a repository that is not attended daily: an expiry turns one upstream
+# rotation into a board that goes red and STAYS red, and a permanently red board is one
+# nobody reads - which is the failure this whole mechanism exists to prevent, arriving by
+# the other road. So every run says how long each excuse has stood. Nobody has to act;
+# nobody can say they were not told.
+#
+# In `lifecycle-floor.txt` and not a file of its own, deliberately: `scripts/` is excluded
+# from the build context, so every gate that lives there reaches a container only by being
+# mounted, and a gate that is not mounted is a gate not in force - which this repository has
+# already paid for once, with the ratchet absent from five legs and every one of them green.
 
 # Days since 1970-01-01 for a YYYY-MM-DD, by arithmetic and not by `date -d`.
 #
@@ -543,7 +551,7 @@ days_since_epoch() { # YYYY-MM-DD
 
 # Whether this host class may still excuse this backend, and what to say if not.
 #
-# Echoes one of `ok <days-left>`, `expired <days-old>`, `unrecorded`. Never fails the caller:
+# Echoes `ok <days-the-line-has-stood>` or `unrecorded`. Never fails the caller:
 # a register line nobody can parse is `unrecorded`, which is the direction that reports rather
 # than the direction that excuses.
 drift_verdict() { # host-class  backend  register-file  today-in-days
@@ -560,16 +568,12 @@ drift_verdict() { # host-class  backend  register-file  today-in-days
         return 0
     fi
     _dv_age=$((_dv_today - _dv_from))
-    # A line dated in the future is somebody's typo, not fourteen days of credit.
+    # A line dated in the future is somebody's typo, not an excuse.
     if [ "$_dv_age" -lt 0 ]; then
         echo unrecorded
         return 0
     fi
-    if [ "$_dv_age" -gt "$DRIFT_WINDOW_DAYS" ]; then
-        echo "expired $_dv_age"
-    else
-        echo "ok $((DRIFT_WINDOW_DAYS - _dv_age))"
-    fi
+    echo "ok $_dv_age"
 }
 
 
@@ -2389,31 +2393,20 @@ FLOOR_FILE="$(dirname "$0")/lifecycle-floor.txt"
 # `drift_verdict` above for why an excuse needs a date on it at all.
 EXCUSED=0
 : > "$LEDGER/be-life-drift-unrecorded"
-: > "$LEDGER/be-life-drift-expired"
 DRIFT_TODAY="$(days_since_epoch "$(date -u +%Y-%m-%d)")"
 while read -r _drift_be; do
     [ -n "$_drift_be" ] || continue
     _drift_v="$(drift_verdict "$HOST_CLASS" "$_drift_be" "$FLOOR_FILE" "$DRIFT_TODAY")"
     case "${_drift_v%% *}" in
         ok)      EXCUSED=$((EXCUSED + 1)) ;;
-        expired) echo "$_drift_be ${_drift_v#* }" >> "$LEDGER/be-life-drift-expired" ;;
         *)       echo "$_drift_be" >> "$LEDGER/be-life-drift-unrecorded" ;;
     esac
 done < "$LEDGER/be-life-unmeasured.u"
-while read -r _drift_be _drift_age; do
-    [ -n "$_drift_be" ] || continue
-    FAILC=$((FAILC + 1))
-    FAILED_NAMES="$FAILED_NAMES
-    - ecosystem drift: $_drift_be has been unmeasurable on $HOST_CLASS for $_drift_age days"
-    echo "  FAIL  ecosystem drift: $_drift_be excused on $HOST_CLASS for $_drift_age days, and the"
-    echo "        window is $DRIFT_WINDOW_DAYS. An ecosystem that has not come back on its own is not a"
-    echo "        window that moves — repair the image, or say in the register why it stays."
-done < "$LEDGER/be-life-drift-expired"
 while read -r _drift_be; do
     [ -n "$_drift_be" ] || continue
     soft "ecosystem drift: $_drift_be could not be measured on $HOST_CLASS and no register line excuses it"
     echo "        It does NOT count toward the floor below, so the shortfall is reported rather"
-    echo "        than absorbed. To buy $DRIFT_WINDOW_DAYS days while the repair lands, add to $FLOOR_FILE:"
+    echo "        than absorbed. Write down what you decided by adding to $FLOOR_FILE:"
     echo "            drift $HOST_CLASS $_drift_be $(date -u +%Y-%m-%d)"
 done < "$LEDGER/be-life-drift-unrecorded"
 MEASURABLE=$((LIFECYCLES + EXCUSED))
@@ -2442,9 +2435,9 @@ if [ -f "$FLOOR_FILE" ]; then
         echo "        unmeasurable: $(tr '
 ' ' ' < "$LEDGER/be-life-unmeasured.u")"
         echo "        Each failed a real install for a reason Shall classed as passing, did not"
-        echo "        clear on a retry, and carries an unexpired \`drift\` line in $FLOOR_FILE. The"
+        echo "        clear on a retry, and carries a \`drift\` line in $FLOOR_FILE. The"
         echo "        floor is NOT lowered for these: the next clear run measures them again, and"
-        echo "        the register line expires in $DRIFT_WINDOW_DAYS days if it does not."
+        echo "        register line says for how long, and every run repeats it."
     else
         PASS=$((PASS + 1))
         echo "  PASS  real-lifecycle ratchet: $LIFECYCLES >= $FLOOR recorded for $HOST_CLASS"
