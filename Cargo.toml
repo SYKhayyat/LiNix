@@ -67,7 +67,7 @@ thiserror = "2.0"
 # Scripting & Templating
 mlua = { version = "0.12", features = ["lua54", "vendored", "async"] }
 rhai = { version = "1.15", features = ["sync"] }
-tera = "1.19" 
+tera = "2.1" 
 
 # Networking & API Integration
 # rustls (not native-tls) so we don't drag in OpenSSL — that made static musl/Alpine
