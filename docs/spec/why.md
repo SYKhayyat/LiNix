@@ -7102,6 +7102,30 @@ can separate those two cases, and the summary became an absent marker on that ev
 an index that is fine, a version that is not. No warning above it for any guard to catch. One
 sentence for three facts, and the marker came straight back out.
 
+**And the same question found a marker that had already shipped wrong, which is the strongest
+argument for asking it.** `pipx` carried `no matching distribution found for` from `N-1`. pip
+says that about a VERSION as readily as about a name:
+
+    absent name  ->  No matching distribution found for <name>
+                     ... above it: (from versions: none)
+    bad version  ->  No matching distribution found for black==99.99.99
+                     ... above it: (from versions: 18.3a0, 18.3a1, ... 26.5.1)
+
+So `shall install pipx:black@version=99.99.99` withdrew the declaration for `black` — a real
+package, on a machine that has it — over a pin the user could have corrected. The line that
+separates the two is the one listing what pip *did* find, and `none` is the whole discriminator.
+The fixture in the coverage test was a one-line capture that stopped just above it, which is how
+a wrong marker passed the test written to catch exactly this: **a fixture trimmed to the line you
+are asserting on cannot fail for the reason the marker is wrong.**
+
+**A second scoping error, worth writing down because it is the same disease.** The first sweep
+took its list of backends from `builtin_backends.toml` and reported the result as the whole
+board. That file is the *declarative* backends — one table of two — so every backend implemented
+in Rust was invisible to it, including six sitting in the image already built. Coverage went 12
+→ 20 on the first pass and 12 → 25 once the list came from the registry instead, which is where
+`absent_marker_coverage_tests` had been reading it all along. An instrument scoped to a file
+rather than to the thing the file describes measures the file.
+
 **The lesson is about the shape of the question, not about luarocks.** The parked note named the
 axis it wanted measured and the measurement answered it correctly; the marker was still wrong,
 because a name and an index are two of the three things an install resolves and nobody had
@@ -7144,18 +7168,18 @@ rather than its own name: a round carries on only when every failure in it was p
 everybody, turned on by default, which is precisely the destructive default the paragraph above
 refuses. It has its own test for that reason.
 
-**And the batch stayed whole, which is a trade and not a free win.** `G1` cut the batch to one
-package per command under `--keep-going`, because a name no repository carries is a fact about
-ONE member and the batch must come apart before the good members can be told from it. The
-headline failures this mode carries on past are the other shape — a rotated key, an index that
-will not verify — which are facts about the MANAGER, true of every member equally, so splitting
-to rediscover that six more times buys nothing.
+**And the batch did not stay whole for long.** `G1` cut the batch to one package per command
+under `--keep-going`, because a name no repository carries is a fact about ONE member and the
+batch must come apart before the good members can be told from it. `M2` shipped without that,
+reasoning that the failures it carries past are facts about the MANAGER and true of every member
+equally — and the first test written for it disproved half of that by failing: two packages on
+one mock manager, one command line, the good one down with the doomed one. It was pinned as a
+documented cost and lasted about an hour before `M3` fixed it.
 
-The first test written for this asserted the wrong thing and said so: both packages sat on one
-mock manager, shared a command line under II.19, and the good one went down with the doomed one.
-That is real, and it is the cost. **One transient download failure inside a batch of thirty takes
-the other twenty-nine out of that run** — they install on the next. What carrying on rescues is
-every OTHER manager's packages, which is the case `M2` is about and the case `Y15` argued from;
-splitting every batch by default would undo II.19 on every sync on every machine to buy the
-narrow one. The limit has its own test rather than a sentence, because a bounded claim has to
-state its bound.
+**What `M3` got right that a flat split would not.** The measured numbers are on
+`execute_batch_with_retry`: eight packages as one `apt install` is 3,161 ms and the same eight
+one at a time are 31,901 ms — ten times, and superlinear. Splitting flat throws that away.
+Bisection keeps it, because every question it asks is still a batch, and it stops the moment two
+halves both fail: one bad member can only be in one half, so two failing halves is the manager
+rather than a member. The case this whole round is named after — a rotated signing key, every
+package failing equally — therefore costs two extra commands instead of thirty.

@@ -18,7 +18,9 @@
 
 use petgraph::stable_graph::StableDiGraph;
 use shall::backends::BackendRegistry;
-use shall::core::{ContinuePast, GraphAction, PackageSpec, Transaction, TransactionConfig};
+use shall::core::{
+    BatchRecovery, ContinuePast, GraphAction, PackageSpec, Transaction, TransactionConfig,
+};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -162,80 +164,179 @@ async fn a_permanent_failure_still_ends_the_run_under_the_same_key() {
     );
 }
 
-/// **The limit of what this buys, measured rather than assumed - and it is not small.**
-///
-/// Packages heading for one manager in one wave share a command line (II.19), so a batch fails as
-/// a unit. Carrying on past that failure rescues every OTHER manager's packages and none of the
-/// batch's own: the twenty-nine that would have installed fine are not installed this run, and
-/// wait for the next one.
-///
-/// `--keep-going` does not have this limit, because `G1` cuts its batch to one package per
-/// command - deliberately, since a name no repository carries is a fact about one member. That is
-/// not free, and making it the default would undo II.19 for every sync on every machine.
-///
-/// Written down as a test because a bounded claim has to state its bound. This is the shape of
-/// run where the mode does less than the sentence describing it suggests, and a reader should
-/// meet it here rather than on a machine.
-#[tokio::test]
-async fn a_batch_still_fails_as_one_and_that_is_the_documented_cost() {
-    let kernel = TestKernel::new().await;
-    let log = shared_log();
-    let doomed = flaky(&log);
+// ---------------------------------------------------------------------------------------------
+// `M3`: what a batch does after its command fails for a passing reason.
+// ---------------------------------------------------------------------------------------------
 
+/// Four packages on one manager, so `batches` puts them on one command line (II.19).
+fn quartet(recovery: BatchRecovery) -> TransactionConfig {
+    TransactionConfig {
+        batch_recovery: recovery,
+        ..config(ContinuePast::ClassifiedPassing)
+    }
+}
+
+async fn ask_the_quartet(
+    kernel: &TestKernel,
+    backend: Arc<RecordingBackend>,
+    recovery: BatchRecovery,
+) -> Vec<String> {
     let mut registry = BackendRegistry::new();
-    registry.register(capabilities(&doomed));
+    registry.register(capabilities(&backend));
     let mut graph = StableDiGraph::new();
-    graph.add_node(install("pkg-doomed", DRIFTED));
-    graph.add_node(install("pkg-beside-it", DRIFTED));
-
+    for name in ["a", "b", "c", "d"] {
+        graph.add_node(install(name, DRIFTED));
+    }
     let mut tx = Transaction::with_config(
         graph,
         Arc::new(registry),
         kernel.app.journal.clone(),
         kernel.app.diagnostics.clone(),
         kernel.app.config.clone(),
-        config(ContinuePast::ClassifiedPassing),
+        quartet(recovery),
     );
-    tx.execute_with_telemetry()
-        .await
-        .expect("the run still carries on: it is the batch that failed, not the transaction");
+    let _ = tx.execute_with_telemetry().await;
+    backend.calls()
+}
+
+/// The point of `M3`, as a command log.
+///
+/// `b` is the only bad member. The first command carries all four and fails, because a manager
+/// fails a command line as a unit. Bisection then finds `b` in three more commands and leaves
+/// `a`, `c` and `d` installed - three packages that the old behaviour lost for that run over a
+/// name that was never theirs.
+#[tokio::test]
+async fn bisection_finds_the_one_bad_member_and_installs_the_rest() {
+    let kernel = TestKernel::new().await;
+    let backend = RecordingBackend::named(DRIFTED, &shared_log())
+        .always_flaky("b")
+        .build();
+
+    let calls = ask_the_quartet(&kernel, backend, BatchRecovery::Bisect).await;
 
     assert_eq!(
-        doomed.calls(),
-        vec!["mock-drifted install pkg-doomed pkg-beside-it".to_string()],
-        "one command for the pair is II.19 working as designed. If this ever becomes two \
-         commands the batch has been split and the cost documented above is gone - which would \
-         be an improvement, and this assertion is where somebody has to say so on purpose"
+        calls,
+        vec![
+            "mock-drifted install a b c d".to_string(),
+            "mock-drifted install a b".to_string(),
+            "mock-drifted install c d".to_string(),
+            "mock-drifted install a".to_string(),
+            "mock-drifted install b".to_string(),
+        ],
+        "the halves are asked in order and only a FAILING half is opened further: `c d` \
+         succeeded and was never split, and `b` was not asked twice"
     );
 }
 
-/// The rule as a table, lifted out of `core::transaction` when that file reached the 3,000-line
-/// gate. It belongs here anyway: the three tests above drive the same rule through the engine,
-/// and this is the same rule asked directly.
+/// **The stopping rule, which is what makes this affordable on the case it is named after.**
 ///
-/// Six cells - three modes against two answers to "was every failure in this round one Shall
-/// classed as passing" - and the interesting one is `ClassifiedPassing` with something else in
-/// the round, which STOPS. Without that cell the mode is `--keep-going` under a longer name.
-#[test]
-fn carrying_on_reads_the_classification_and_not_merely_the_mode() {
-    for every_passing in [true, false] {
-        assert!(
-            ContinuePast::AnyFailure.carries_on(every_passing),
-            "`--keep-going` carries on past anything, which is what it is for"
-        );
-        assert!(
-            !ContinuePast::Nothing.carries_on(every_passing),
-            "all-or-nothing stops at the first failure, whatever it was"
-        );
+/// Every package fails, as they do when a registry rotates a signing key. One bad member can
+/// only be in one half, so two failing halves is the manager - and the answer to every further
+/// question is already in hand. Three commands, not five, and on thirty packages it is three
+/// rather than sixty.
+#[tokio::test]
+async fn two_failing_halves_is_the_manager_and_narrowing_stops_dead() {
+    let kernel = TestKernel::new().await;
+    let mut b = RecordingBackend::named(DRIFTED, &shared_log());
+    for name in ["a", "b", "c", "d"] {
+        b = b.always_flaky(name);
     }
-    assert!(
-        ContinuePast::ClassifiedPassing.carries_on(true),
-        "a round of failures Shall classed as passing is not a reason to strand the rest of \
-         the plan"
+
+    let calls = ask_the_quartet(&kernel, b.build(), BatchRecovery::Bisect).await;
+
+    assert_eq!(
+        calls,
+        vec![
+            "mock-drifted install a b c d".to_string(),
+            "mock-drifted install a b".to_string(),
+            "mock-drifted install c d".to_string(),
+        ],
+        "both halves failed, so narrowing learned everything it was going to and stopped. If \
+         this list ever grows, the manager-wide case is paying the full split to be told what \
+         its first command already said"
     );
-    assert!(
-        !ContinuePast::ClassifiedPassing.carries_on(false),
-        "a Permanent or an unclassified failure says the plan itself is wrong, and the rest of \
-         the plan is built on it - this is the cell that keeps the mode honest"
+}
+
+/// `off` is the behaviour every run had before `M3`, kept as a setting for anyone who measures
+/// the narrowing costing them more than it returns.
+#[tokio::test]
+async fn off_asks_once_and_the_batch_fails_as_a_unit() {
+    let kernel = TestKernel::new().await;
+    let backend = RecordingBackend::named(DRIFTED, &shared_log())
+        .always_flaky("b")
+        .build();
+
+    let calls = ask_the_quartet(&kernel, backend, BatchRecovery::Off).await;
+
+    assert_eq!(
+        calls,
+        vec!["mock-drifted install a b c d".to_string()],
+        "`off` means one command, and `a`, `c` and `d` wait for the next run"
+    );
+}
+
+/// `every` is the thorough answer and the expensive one: it asks about each member whatever the
+/// halves would have said. Five commands here against bisection's five - and on a manager-wide
+/// failure it is thirty-one against three, which is the trade the setting exists to let somebody
+/// make deliberately.
+#[tokio::test]
+async fn every_asks_once_per_member_whatever_the_halves_would_have_said() {
+    let kernel = TestKernel::new().await;
+    let backend = RecordingBackend::named(DRIFTED, &shared_log())
+        .always_flaky("b")
+        .build();
+
+    let calls = ask_the_quartet(&kernel, backend, BatchRecovery::Every).await;
+
+    assert_eq!(
+        calls,
+        vec![
+            "mock-drifted install a b c d".to_string(),
+            "mock-drifted install a".to_string(),
+            "mock-drifted install b".to_string(),
+            "mock-drifted install c".to_string(),
+            "mock-drifted install d".to_string(),
+        ],
+        "`every` is one command per member, in order, with no halves"
+    );
+}
+
+/// **Narrowing is not free and must not fire where it cannot pay.**
+///
+/// A run configured all-or-nothing means it. Narrowing there would install the good members of a
+/// batch on a machine whose owner asked for a plan that either lands or does not - and it would
+/// spend the commands to do it on a transaction that is about to end anyway.
+#[tokio::test]
+async fn all_or_nothing_does_not_narrow_however_the_recovery_is_set() {
+    let kernel = TestKernel::new().await;
+    let backend = RecordingBackend::named(DRIFTED, &shared_log())
+        .always_flaky("b")
+        .build();
+
+    let mut registry = BackendRegistry::new();
+    registry.register(capabilities(&backend));
+    let mut graph = StableDiGraph::new();
+    for name in ["a", "b", "c", "d"] {
+        graph.add_node(install(name, DRIFTED));
+    }
+    let mut tx = Transaction::with_config(
+        graph,
+        Arc::new(registry),
+        kernel.app.journal.clone(),
+        kernel.app.diagnostics.clone(),
+        kernel.app.config.clone(),
+        TransactionConfig {
+            batch_recovery: BatchRecovery::Bisect,
+            ..config(ContinuePast::Nothing)
+        },
+    );
+    let _ = tx.execute_with_telemetry().await;
+
+    assert_eq!(
+        backend.calls(),
+        vec!["mock-drifted install a b c d".to_string()],
+        "the run was going to end at this failure, so narrowing it would spend commands filling \
+         in a report nobody reaches - and install packages the owner asked not to have unless \
+         all of them landed"
     );
 }

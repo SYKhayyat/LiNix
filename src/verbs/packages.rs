@@ -330,6 +330,17 @@ enum WhyKept {
     /// error above already says how long the window is — so this is the one branch that may
     /// promise a later attempt will work, because something did look.
     Transient,
+    /// Shall classified it `Permanent`, and the name is not what is wrong - a name that was
+    /// would have been withdrawn already, or would be reaching `NameAbsentElsewhere` above. So
+    /// what is left is the environment or the shape of the request: no session bus to activate a
+    /// NixOS generation, a plugin source that cannot carry a signature, a manager that cannot
+    /// install at all.
+    ///
+    /// **Its own branch since 2026-08-21, for exactly the reason `Transient` got one before it.**
+    /// Both used to fall through to `Unclassified`, whose sentence opens "Nothing classified the
+    /// failure above" - about a failure this program classified three lines earlier. Found on a
+    /// real NixOS box, where `nixos-rebuild switch` builds the system and cannot activate it.
+    Permanent,
     /// Nothing classified it. Another attempt is worth suggesting, and the honest reason is
     /// that nobody looked rather than that it will work.
     Unclassified,
@@ -355,7 +366,12 @@ fn why_kept(e: &anyhow::Error) -> WhyKept {
     if err.says_a_name_is_absent() {
         return WhyKept::NameAbsentElsewhere;
     }
-    WhyKept::Unclassified
+    // Permanent and Unknown reach here together and must not leave together: one of them was
+    // classified and the other was not, and `Unclassified`'s sentence says nobody looked.
+    match err.retryability() {
+        crate::core::Retryability::Permanent => WhyKept::Permanent,
+        _ => WhyKept::Unclassified,
+    }
 }
 
 /// What to tell a user about a line that stayed.
@@ -398,6 +414,12 @@ fn kept_line_advice(why: WhyKept, line: &str, file: &std::path::Path) -> String 
              not the line. That is why it is kept: the next `sync` is expected to succeed \
              without you changing anything. Read the error above for how long it lasts, or \
              run `shall unmanage {}` if you did not mean the line at all.",
+            where_it_is, line
+        ),
+        WhyKept::Permanent => format!(
+            "{}, and the failure above is permanent - Shall classified it, so `sync` will fail \
+             the same way until its cause is fixed. The name is not the problem: read the error \
+             above, or run `shall unmanage {}` if you no longer want the line.",
             where_it_is, line
         ),
         WhyKept::Unclassified => format!(
@@ -1550,6 +1572,64 @@ mod tests {
         );
     }
 
+    /// The same finding as the two tests above, arriving a third time and on real hardware.
+    ///
+    /// On a NixOS-WSL box `nixos-rebuild switch` builds the system perfectly and then cannot
+    /// activate it - `Unable to autolaunch a dbus-daemon without a $DISPLAY` - and there is no
+    /// session bus on any NixOS-WSL install or in any container, so it is the one failure that
+    /// machine reliably produces. Shall classes it `Permanent` and used to tell the user
+    /// "Nothing classified the failure above" about it.
+    const NEWLINE: &str = "
+";
+
+    #[test]
+    fn a_permanent_failure_is_not_reported_as_unclassified() {
+        let e = boxed(Error::CommandFailed {
+            message: "`nixos-rebuild` failed (exit 4): Unable to autolaunch a dbus-daemon without \
+                      a $DISPLAY for X11"
+                .to_string(),
+            retry: Retryability::Permanent,
+            absent_name: false,
+        });
+        assert_eq!(
+            e.downcast_ref::<Error>().map(|x| x.retryability()),
+            Some(Retryability::Permanent),
+            "this fixture is not permanent, so it does not test the distinction"
+        );
+        assert_eq!(
+            why_kept(&e),
+            WhyKept::Permanent,
+            "a failure `Error::retryability()` calls Permanent is routed to the one branch whose \
+             text says nothing classified it"
+        );
+    }
+
+    /// The sentence, because the branch is only half the harm.
+    #[test]
+    fn a_permanent_failure_is_not_advised_as_if_nobody_had_looked() {
+        let e = boxed(Error::CommandFailed {
+            message: "`nixos-rebuild` failed (exit 4): Unable to autolaunch a dbus-daemon"
+                .to_string(),
+            retry: Retryability::Permanent,
+            absent_name: false,
+        });
+        let advice = kept_line_advice(
+            why_kept(&e),
+            "nixos:hello",
+            std::path::Path::new("modules/imperative.txt"),
+        );
+        assert!(
+            !advice.contains("Nothing classified the failure above"),
+            "the advice for a Permanent failure is the Unclassified sentence:{}{advice}",
+            NEWLINE
+        );
+        assert!(
+            advice.contains("permanent"),
+            "the advice never says what Shall decided about it:{}{advice}",
+            NEWLINE
+        );
+    }
+
     /// **The distinction N-1 was about.** A command failure can be permanent and be about a
     /// name that plainly exists. Reading permanence as absence withdrew declarations for
     /// packages that were installed; reading it as the *only* road to absence left every
@@ -1794,15 +1874,20 @@ mod tests {
                 }),
                 WhyKept::Transient,
             ),
-            // And the one that keeps the new branch honest: `Permanent` is not `Transient`, so
-            // widening the classifier cannot have swallowed the case above it.
+            // The one that keeps both new branches honest: `Permanent` is neither `Transient`
+            // nor `Unclassified`, so neither widening can have swallowed the other. This case
+            // expected `Unclassified` until 2026-08-21, and that expectation was the same defect
+            // one variant along - helm classified this three lines away and the user was told
+            // nobody had looked. A name that IS absent still reaches `NameAbsentElsewhere`
+            // first, which is why the helm fixture is a source that cannot be signed rather
+            // than a plugin that does not exist.
             (
                 boxed(Error::CommandFailed {
                     message: "`helm` failed: plugin source does not support verification".into(),
                     retry: Retryability::Permanent,
                     absent_name: false,
                 }),
-                WhyKept::Unclassified,
+                WhyKept::Permanent,
             ),
         ];
         for (e, expected) in cases {

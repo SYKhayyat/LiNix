@@ -1,7 +1,8 @@
 # profiles/Work.txt — a named set of modules you turn on and off live.
 #
-# Profiles are Capitalized; modules are lowercase. Several profiles can be active at
-# once and their sets are unioned, so `shall activate -a oncall` adds without
+# Profiles are Capitalized; modules are lowercase. A profile's NAME is its filename,
+# extension and all -- `active` holds `Work.txt`, not `Work`. Several profiles can be active at
+# once and their sets are unioned, so `shall activate -a Oncall.txt` adds without
 # disturbing what is already on.
 
 use base

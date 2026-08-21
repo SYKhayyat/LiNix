@@ -1361,6 +1361,13 @@ non-zero. It does *not* carry on past a package that does not exist, a refusal, 
 it could not classify: those say the plan itself is wrong, and the run ends there. Set it to
 `false` if you would rather a plan were all-or-nothing.
 
+Its neighbour `[sync] batch_recovery` decides what happens to the *other* packages on a failed
+command line. Shall sends packages bound for the same manager in one command, because that is
+much faster — and a manager fails a command as a unit, so one bad member would otherwise cost
+the rest of the batch that run. The default, `bisect`, asks again about each half and opens only
+a half that failed; it stops as soon as both halves fail, because one bad member can only be in
+one half, so two failing halves means the manager itself is down.
+
 **Where your repo lives is not a key in it.** `preferences.toml` sits *inside* the repo, so a
 key there could only be read from the directory it was trying to move away from. That one
 setting lives in Shall's own settings file, beside the repo rather than in it — set it with

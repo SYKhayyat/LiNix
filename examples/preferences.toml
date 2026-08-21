@@ -91,6 +91,23 @@ verbose = false
 # Off makes a plan all-or-nothing again: the first failure of any kind ends the run.
 continue_past_transient = true
 
+# What happens to the OTHER packages on a failed command line. Shall puts packages heading for
+# the same manager into one command (it is far faster: eight in one `apt install` is 3.2s here,
+# the same eight one at a time is 31.9s), and a manager fails a command as a unit — so one bad
+# member used to cost the twenty-nine beside it that run.
+#
+#   bisect  (default) ask again about each half, and only open a half that failed. Stops as
+#           soon as BOTH halves fail, because one bad member can only be in one half — so two
+#           failing halves means the manager is down and asking thirty more times will say so
+#           thirty more times.
+#   off     ask once. The batch fails as a unit and the rest wait for the next run.
+#   every   ask once per member, whatever the halves would have said. Thorough, and on a
+#           manager that is simply down it pays the full ten times to hear the same answer.
+#
+# Only ever used after a failure Shall classed as passing, and never when the run is
+# all-or-nothing — see the key above.
+batch_recovery = "bisect"
+
 # The [lock] table: what `shall lock` freezes, and whether a sync replays it.
 # Every value below is the default, so deleting the whole table changes nothing.
 [lock]

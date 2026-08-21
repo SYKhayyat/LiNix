@@ -1,3 +1,4 @@
+use super::batch::{narrow_batch, run_one_command, BatchRecovery, CommandOutcome};
 use crate::app::diagnostics::FailureDiagnosticEngine;
 use crate::app::LuaHooks;
 use crate::backends::BackendRegistry;
@@ -83,6 +84,8 @@ pub struct TransactionConfig {
     pub auto_rollback: bool,
     /// How far this transaction carries on past a node that failed.
     pub continue_past: ContinuePast,
+    /// What a batch does after its command fails for a passing reason.
+    pub batch_recovery: BatchRecovery,
     /// Remove also destroys configuration (`[remove] purge`, or `uninstall --purge`). A
     /// backend that draws no such distinction removes as usual — the decision cannot be
     /// per-package because a removal happens after the line that carried it is gone.
@@ -113,6 +116,7 @@ impl TransactionConfig {
             max_backoff: Duration::from_secs(30),
             auto_rollback: true,
             continue_past: ContinuePast::Nothing,
+            batch_recovery: BatchRecovery::Off,
             purge: false,
             manager_lock_wait: Duration::from_secs(
                 crate::config::config::default_manager_lock_wait_secs(),
@@ -140,6 +144,7 @@ impl TransactionConfig {
             } else {
                 ContinuePast::Nothing
             },
+            batch_recovery: config.sync.batch_recovery,
             manager_lock_wait: Duration::from_secs(config.manager_lock_wait_secs),
             ..Self::patient()
         }
@@ -563,21 +568,13 @@ impl Transaction {
             // One package per command under `--keep-going`, so a name no repository carries
             // cannot take the installable packages beside it down with it.
             //
-            // **`ClassifiedPassing` keeps the batch, and this is a trade rather than a free
-            // win.** `G1`'s argument for splitting is about a bad NAME, a fact about one
-            // member, so the batch must come apart before the good members can be told from
-            // it. The headline failures this mode carries on past are the other shape - a
-            // rotated key, an index that will not verify - and those are facts about the
-            // MANAGER, true of every member equally, so splitting to rediscover that six
-            // more times buys nothing.
-            //
-            // What it costs is the case in between: one transient download failure inside a
-            // batch of thirty takes the other twenty-nine out of THIS run, and they install
-            // on the next one. Carrying on still rescues every other manager's packages,
-            // which is the case `M2` is about, and splitting every batch by default would
-            // undo II.19 for every sync on every machine to buy the narrow one. Pinned by
-            // `a_batch_still_fails_as_one_and_that_is_the_documented_cost`, so the limit is
-            // measured rather than assumed.
+            // **`ClassifiedPassing` keeps the batch here, and `BatchRecovery` is what comes
+            // back for its members afterwards.** `G1`'s argument for one-package-per-command
+            // is about a bad NAME, a fact about one member, so the batch must come apart
+            // before the good members can be told from it - but paying that on EVERY command
+            // to be ready for the failures is what makes `--keep-going` expensive. Splitting
+            // after a failure costs the same commands only when something actually failed,
+            // and `M3` bisects rather than splitting flat, so it costs far fewer of them.
             let max_batch = match self.config.continue_past {
                 ContinuePast::AnyFailure => 1,
                 ContinuePast::Nothing | ContinuePast::ClassifiedPassing => Self::MAX_BATCH,
@@ -1218,238 +1215,131 @@ impl Transaction {
             specs
         };
 
-        let mut attempt = 0;
-        let mut last_error = None;
-        let mut lock_budget = LockBudget::of(config.manager_lock_wait);
+        // **One command, and then narrowing.** The retry loop below used to live here inline;
+        // it is `run_one_command` now so that a failed batch can be asked again over half of
+        // itself WITHOUT re-opening a WAL entry or firing `before_install` a second time. A
+        // narrowing is a retry with a shorter command line, and a retry has never done either.
+        let outcome = run_one_command(
+            &specs,
+            &names,
+            &backend_cap,
+            &b_name,
+            is_install,
+            &config,
+            reaped,
+            &cancel_token,
+        )
+        .await;
+        let attempt = outcome.attempt();
 
-        // **A range, not a counter the body increments.** `while attempt <= max_retries` with
-        // `attempt += 1` at the top is the same loop until the increment is wrong, and then it
-        // is not a loop at all: read as `*=`, the counter stays at nought and a batch whose
-        // command fails retries for ever. The mutation sweep reported that as a *timeout* —
-        // neither caught nor survived, a shard red for two hours while naming no defect — and
-        // no test could convert it, because the hang is in whichever test happens to fail an
-        // install, not in the one written for the retry. A `for` over `1..=n` cannot run more
-        // times than the config allows however the body behaves.
-        //
-        // The tries are `max_retries + 1`: the first attempt is not a retry, which is the same
-        // arithmetic `retries_behind` reads back out.
-        for this_attempt in 1..=config.max_retries.saturating_add(1) {
-            attempt = this_attempt;
-            if cancel_token.is_cancelled() {
-                // **A cancelled batch closes its entries, exactly as a failed one does.** This
-                // return sits between `record_start` and the `record_success`/`record_failure`
-                // below it and took neither, so a batch that noticed the cancellation here left
-                // its entries `InProgress` — the state that means a process died holding them.
-                //
-                // `close_stranded` is the backstop for the batches that are killed outright and
-                // never reach any code at all; this is the one that gets to say something more
-                // accurate than "abandoned", because the batch is still alive to say it.
-                //
-                // `keep`, not `ids`: a package whose `before_install` hook failed was closed
-                // above, and this is the same set the two closing paths below use.
+        // One verdict per member, in `keep` order. `Done` and an un-narrowed failure are the
+        // shape this function always had - a single answer shared by everything on the command
+        // line - and `BatchRecovery` is what lets the answers differ.
+        let mut cancelled = false;
+        let per_member: Vec<std::result::Result<(), Error>> = match outcome {
+            CommandOutcome::Done { .. } => vec![Ok(()); keep.len()],
+            CommandOutcome::Cancelled { .. } => {
+                cancelled = true;
+                vec![Err(Error::Cancelled); keep.len()]
+            }
+            CommandOutcome::Failed { error, .. } => {
+                if config
+                    .batch_recovery
+                    .narrows(&error, keep.len(), config.continue_past)
                 {
-                    let mut j = journal.lock().await;
-                    for &i in &keep {
+                    narrow_batch(
+                        &specs,
+                        &names,
+                        &backend_cap,
+                        &b_name,
+                        is_install,
+                        &config,
+                        reaped,
+                        &cancel_token,
+                    )
+                    .await
+                } else {
+                    vec![Err(error); keep.len()]
+                }
+            }
+        };
+
+        // **A version the user never typed must not fail in the user's face unexplained.** The
+        // command named one manager and up to `batch_size` packages, and the manager's complaint
+        // quotes whichever of them it choked on - so each member is asked, and only the one whose
+        // recorded pin appears in the text answers. Narrowing makes this MORE accurate, not less:
+        // a member that failed on its own carries an error about itself.
+        let per_member: Vec<std::result::Result<(), Error>> = per_member
+            .into_iter()
+            .enumerate()
+            .map(|(p, r)| match r {
+                Err(e) => {
+                    let text = e.to_string();
+                    match crate::app::sync::pin_advice::on_install_failure(
+                        &app_config,
+                        &b_name,
+                        &members[keep[p]].2,
+                        &text,
+                    ) {
+                        Some(advice) => Err(Error::Transaction(format!("{}{}", e, advice))),
+                        None => Err(e),
+                    }
+                }
+                ok => ok,
+            })
+            .collect();
+
+        // The journal, once, from the verdicts. Every path used to write its own copy of this
+        // block; there is one now, which is the other half of what narrowing bought.
+        {
+            let mut j = journal.lock().await;
+            for (p, &i) in keep.iter().enumerate() {
+                match &per_member[p] {
+                    Ok(()) => {
+                        let _ = j.record_success(&ids[i]);
+                    }
+                    Err(_) if cancelled => {
                         let _ = j.record_failure(
                             &ids[i],
                             "cancelled before this batch ran: another operation in the same run \
                              failed",
                         );
                     }
-                }
-                refused.extend(keep.iter().map(|&i| {
-                    let (idx, _, name) = &members[i];
-                    TaskResult {
-                        node_index: *idx,
-                        backend_name: b_name.clone(),
-                        package_name: name.clone(),
-                        retries: retries_behind(attempt),
-                        duration: start_instant.elapsed(),
-                        bytes_downloaded: 0,
-                        start_time: start_time_utc,
-                        prior: priors[i].clone(),
-                        batch_size,
-                        result: Err(Error::Cancelled),
+                    Err(e) => {
+                        let _ = j.record_failure(&ids[i], &format!("{}", e));
                     }
-                }));
-                return refused;
+                }
             }
+        }
 
-            if attempt > 1 {
-                // **Another package manager is not a failure to back off from — it is one to
-                // wait for.** A backoff is for a flake; this is a second program holding a lock
-                // it will hand back when its own transaction finishes, and three doublings of
-                // half a second do not outlast an `apt upgrade`. Only ever entered against a
-                // holder proved to be alive: a lock left behind by a killed run is reported at
-                // once, because waiting on it would never end.
-                let budget = lock_budget.remaining();
-                match lock_wait_verdict(&last_error, &b_name, budget, &|b| {
-                    crate::app::stale_lock::held_for_on_this_machine(b)
-                }) {
-                    LockWait::Wait(who) => {
-                        match wait_for_manager_lock(&b_name, &who, budget, &cancel_token).await {
-                            Ok(spent) => lock_budget.spend(spent),
-                            Err(err) => {
-                                last_error = Some(err);
-                                break;
+        // `after_install` fires once a package is physically installed, and only for the ones
+        // that were. Fanned out for the same reason as `before_install`: each is about one
+        // package, and a failure here is logged rather than acted on.
+        if is_install {
+            if let Some(h) = &hooks {
+                use futures::stream::StreamExt;
+                let asked: Vec<String> = keep
+                    .iter()
+                    .enumerate()
+                    .filter(|(p, _)| per_member[*p].is_ok())
+                    .map(|(_, &i)| members[i].2.clone())
+                    .collect();
+                futures::stream::iter(asked)
+                    .map(|name| {
+                        let h = h.clone();
+                        async move {
+                            if let Err(e) = h.run_hook("after_install", &name).await {
+                                warn!("after_install hook for '{}' failed: {}", name, e);
                             }
                         }
-                    }
-                    LockWait::Hopeless(err) => {
-                        last_error = Some(err);
-                        break;
-                    }
-                    LockWait::Backoff => {
-                        let backoff =
-                            backoff_for(attempt, config.initial_backoff, config.max_backoff);
-                        tokio::time::sleep(backoff).await;
-                    }
-                }
-            }
-
-            // One node's timeout, scaled by how many packages the command carries: eight
-            // packages in one `apt install` legitimately take longer than one, and a bound
-            // sized for one would turn the batching win into a timeout.
-            let deadline = config
-                .node_timeout
-                .saturating_mul(batch_size.min(16) as u32);
-            let result = tokio::time::timeout(deadline, async {
-                let Some(handler) = backend_cap.as_installable() else {
-                    return Err(Error::Transaction(format!(
-                        "Backend '{}' is not {}.",
-                        b_name,
-                        if is_install {
-                            "installable"
-                        } else {
-                            "removable"
-                        }
-                    )));
-                };
-                if is_install {
-                    handler.install(&specs, backend_cap.sudo_for_write()).await
-                } else {
-                    let sudo = backend_cap.sudo_for_write();
-                    let Some(reaped) = reaped else {
-                        return Err(crate::core::Error::Refused(format!(
-                            "a plan containing removals reached the executor without passing \
-                             the removal guard — refusing to remove {}. This is a defect in \
-                             whichever command built the plan, not in the config: the guard \
-                             runs once over a whole plan (`max_removals` is a ceiling over a \
-                             plan, not over one command), and the engine hands the executor \
-                             the proof it ran.",
-                            names.join(", ")
-                        )));
-                    };
-                    if config.purge && handler.supports_purge() {
-                        handler.purge(&names, sudo, reaped).await
-                    } else {
-                        handler.remove(&names, sudo, reaped).await
-                    }
-                }
-            })
-            .await;
-
-            match result {
-                Ok(Ok(())) => {
-                    {
-                        let mut j = journal.lock().await;
-                        for &i in &keep {
-                            let _ = j.record_success(&ids[i]);
-                        }
-                    }
-                    // Fire `after_install` once each package is physically installed. A
-                    // post-hook failure is logged but does not undo a successful install
-                    // (rolling back a healthy package over a cosmetic hook error would be
-                    // more surprising than the failure itself).
-                    if is_install {
-                        if let Some(h) = &hooks {
-                            // Fanned out for the same reason as `before_install`: each is
-                            // about one package, and a failure here is logged rather than
-                            // acted on, so nothing downstream depends on the order they
-                            // finish in.
-                            use futures::stream::StreamExt;
-                            let asked: Vec<String> =
-                                keep.iter().map(|&i| members[i].2.clone()).collect();
-                            futures::stream::iter(asked)
-                                .map(|name| {
-                                    let h = h.clone();
-                                    async move {
-                                        if let Err(e) = h.run_hook("after_install", &name).await {
-                                            warn!(
-                                                "after_install hook for '{}' failed: {}",
-                                                name, e
-                                            );
-                                        }
-                                    }
-                                })
-                                .buffer_unordered(config.max_concurrent.max(1))
-                                .collect::<Vec<()>>()
-                                .await;
-                        }
-                    }
-                    refused.extend(keep.iter().map(|&i| {
-                        let (idx, _, name) = &members[i];
-                        TaskResult {
-                            node_index: *idx,
-                            backend_name: b_name.clone(),
-                            package_name: name.clone(),
-                            retries: retries_behind(attempt),
-                            duration: start_instant.elapsed(),
-                            bytes_downloaded: 0,
-                            start_time: start_time_utc,
-                            prior: priors[i].clone(),
-                            batch_size,
-                            result: Ok(()),
-                        }
-                    }));
-                    return refused;
-                }
-                Ok(Err(e)) => {
-                    // A name no repository carries is not found by waiting; three rounds of
-                    // backoff only delay the report and hold the manager's lock while they
-                    // do it. `Unknown` still retries — that is what every failure did before
-                    // this distinction existed, and only a classified verdict overrides it.
-                    let give_up = e.retryability() == Retryability::Permanent;
-                    last_error = Some(e);
-                    if give_up {
-                        break;
-                    }
-                }
-                Err(_) => {
-                    last_error = Some(Error::Transaction(format!(
-                        "`{}` did not finish {} package(s) within {:?}.",
-                        b_name, batch_size, deadline
-                    )));
-                }
+                    })
+                    .buffer_unordered(config.max_concurrent.max(1))
+                    .collect::<Vec<()>>()
+                    .await;
             }
         }
 
-        let mut final_err = falsify_transience(
-            last_error.unwrap_or(Error::Transaction("Unknown error".into())),
-            attempt,
-        );
-        // **A version the user never typed must not fail in the user's face unexplained.** The
-        // batch names one manager and up to `batch_size` packages, and the manager's complaint
-        // quotes whichever of them it choked on — so each member is asked, and only the one
-        // whose recorded pin appears in the text answers.
-        if let Some(advice) = keep.iter().find_map(|&i| {
-            crate::app::sync::pin_advice::on_install_failure(
-                &app_config,
-                &b_name,
-                &members[i].2,
-                &final_err.to_string(),
-            )
-        }) {
-            final_err = Error::Transaction(format!("{}{}", final_err, advice));
-        }
-        {
-            let mut j = journal.lock().await;
-            for &i in &keep {
-                let _ = j.record_failure(&ids[i], &format!("{}", final_err));
-            }
-        }
-
-        refused.extend(keep.iter().map(|&i| {
+        refused.extend(keep.iter().enumerate().map(|(p, &i)| {
             let (idx, _, name) = &members[i];
             TaskResult {
                 node_index: *idx,
@@ -1461,7 +1351,7 @@ impl Transaction {
                 start_time: start_time_utc,
                 prior: priors[i].clone(),
                 batch_size,
-                result: Err(final_err.clone()),
+                result: per_member[p].clone(),
             }
         }));
         refused
@@ -1715,7 +1605,7 @@ impl Transaction {
 
 /// What to do about a failed attempt whose manager said its lock was taken.
 #[derive(Debug)]
-enum LockWait {
+pub(super) enum LockWait {
     /// A live holder, named. Wait for it.
     Wait(String),
     /// Waiting would never end. Fail now, with the sentence that says why.
@@ -1733,13 +1623,13 @@ enum LockWait {
 /// another, and neither arithmetic could be reached without a second package manager to hold a
 /// real lock. Here they are two named operations with a test each.
 #[derive(Debug, Clone, Copy)]
-struct LockBudget {
+pub(super) struct LockBudget {
     total: Duration,
     spent: Duration,
 }
 
 impl LockBudget {
-    fn of(total: Duration) -> Self {
+    pub(super) fn of(total: Duration) -> Self {
         Self {
             total,
             spent: Duration::ZERO,
@@ -1749,12 +1639,12 @@ impl LockBudget {
     /// What is left to wait with. Saturating, because a wait that overran its share leaves
     /// nothing rather than a negative bound — and zero is the value `lock_wait_verdict` reads as
     /// "do not wait", which is the right answer once the budget is gone.
-    fn remaining(&self) -> Duration {
+    pub(super) fn remaining(&self) -> Duration {
         self.total.saturating_sub(self.spent)
     }
 
     /// Charge a wait that has already happened.
-    fn spend(&mut self, waited: Duration) {
+    pub(super) fn spend(&mut self, waited: Duration) {
         self.spent += waited;
     }
 }
@@ -1767,7 +1657,7 @@ impl LockBudget {
 /// `look` is how the machine is asked, so the three verdicts can be exercised without a second
 /// package manager to kill. It is called only *after* the manager's own words have matched, which
 /// is what keeps a successful install from ever reading `/proc`.
-fn lock_wait_verdict(
+pub(super) fn lock_wait_verdict(
     last_error: &Option<Error>,
     backend: &str,
     wait: Duration,
@@ -1816,7 +1706,7 @@ fn lock_wait_verdict(
 /// **A wait with no reason given is indistinguishable from a hang**, and a hang is what people
 /// kill — which is how a machine ends up with the interrupted transaction this whole module is
 /// about. It announces once, up front, the way the data-directory lock does.
-async fn wait_for_manager_lock(
+pub(super) async fn wait_for_manager_lock(
     backend: &str,
     who: &str,
     wait: Duration,
@@ -1877,7 +1767,7 @@ fn retries_behind(attempt: u32) -> u32 {
 /// more to answer for: a shift inside a multiplication inside a `min` inside a match arm is
 /// three separate numbers, and all three survived — `<<` read as `>>`, and `attempt - 2` read
 /// as both `attempt + 2` and `attempt / 2`, without failing anything.
-fn backoff_for(attempt: u32, initial: Duration, max: Duration) -> Duration {
+pub(super) fn backoff_for(attempt: u32, initial: Duration, max: Duration) -> Duration {
     std::cmp::min(initial * (1 << (attempt - 2)), max)
 }
 
@@ -1898,7 +1788,7 @@ fn backoff_for(attempt: u32, initial: Duration, max: Duration) -> Duration {
 /// wget on the PATH could be fixed tomorrow. Withdrawing a declaration is not this function's
 /// to trigger either way: that reads `Error::says_a_name_is_absent`, and no amount of repeating
 /// turns "the download failed" into "the rock does not exist".
-fn falsify_transience(err: Error, attempts: u32) -> Error {
+pub(super) fn falsify_transience(err: Error, attempts: u32) -> Error {
     if attempts < 2 {
         return err; // never retried, so nothing was tested
     }

@@ -27,6 +27,7 @@
 /// The shared test doubles. Declared once here, which is the whole point: nineteen files said
 /// `mod mock_providers;` and each got its own copy.
 mod a_drifted_ecosystem_does_not_strand_the_config_tests;
+mod an_escape_hatch_names_something_that_exists_tests;
 mod mock_providers;
 
 /// The `Fixture` sixteen files wrote out by hand, three of them differently — see the module's

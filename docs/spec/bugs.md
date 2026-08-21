@@ -537,3 +537,51 @@ ask it. Wiring slackware into that matrix arms it. Every remaining `GETOPT` row 
 manager with an image (asked nightly) or to one with no image at all — `emerge`, `guix`, `port`,
 `pkgin`, `pkg`, `pkg_add`, `pkg_delete`, `eopkg`, `pamac` — which is the same list as the
 unproven-lifecycle table, and for the same reason.
+
+## VI.10 A marker that read a version as a missing name, and a name that pointed at nothing
+
+Two found on 2026-08-21, by two different instruments, and worth keeping together because
+neither was found by reading.
+
+**`pipx` withdrew declarations for packages that exist.** Its absent marker was `no matching
+distribution found for`, added by `N-1`. pip says that about a VERSION as readily as about a
+name:
+
+```
+absent name  ->  No matching distribution found for <name>
+                 ... and above it: (from versions: none)
+bad version  ->  No matching distribution found for black==99.99.99
+                 ... and above it: (from versions: 18.3a0, 18.3a1, ... 26.5.1)
+```
+
+So `shall install pipx:black@version=99.99.99` took the declaration for `black` back out of
+`modules/imperative.txt` — a real package, on a machine that has it — over a pin the user could
+have corrected. **FIXED**: the marker is `(from versions: none)`, which is the line that says
+pip found nothing rather than found something else, and `pip` gained the same policy.
+
+**What let it through is the shape of the fixture.** `absent_marker_coverage_tests` had a
+one-line capture of pipx's output, trimmed to the summary being asserted on — so the test could
+not fail for the reason the marker was wrong, because the line that discriminates was not in it.
+A fixture cut down to the assertion is a fixture that agrees with it. The captures are now the
+manager's real output, and every marker is measured on three axes: a name that does not exist,
+the same name with the network removed, and a package that DOES exist at an impossible version.
+
+**`heal_interrupted_removals` did not exist.** `Reaped::for_reason` is the removal guard's
+escape hatch, and `heal`'s call site justified itself with "each interrupted removal is enforced
+individually in `heal_interrupted_removals`"; two ledger entries in
+`removal_guard_enumeration_tests` cited the same name. Grep found it in exactly those three
+strings and nowhere else. **Nothing was unsafe** — the mechanism was real, inline in `heal`'s own
+loop, and a refused removal never reached the graph. Only the pointer was fiction.
+
+That matters more than it sounds, because `Reaped::for_reason` tells a reviewer that grepping
+for it "is exactly the list a reviewer wants", and `_why` is `#[allow(dead_code)]` prose that
+nothing checked. **FIXED**: the block is `refuse_a_protected_heal_removal` and the three
+pointers name it. `an_escape_hatch_names_something_that_exists_tests` now checks that every
+mechanism an escape hatch names exists as CODE, with string literals stripped so a name living
+only in the sentences citing it cannot resolve against them.
+
+**The gate is deliberately narrow, and the wide version was measured first.** Every backticked
+`snake_case` word in the tree is 765 identifiers, 90 of which resolve to nothing — test file
+names, TOML keys, `debug_assert`, clap attributes. A gate at that precision is one somebody
+switches off. The escape-hatch reasons are 32 sites citing 2 identifiers and zero false
+positives, and every one of them is a promise about where a removal is guarded.

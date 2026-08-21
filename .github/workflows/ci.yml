@@ -1118,6 +1118,11 @@ jobs:
           - { what: the transaction 2/4, file: src/core/transaction.rs, slug: transaction-2, shard: 1/4 }
           - { what: the transaction 3/4, file: src/core/transaction.rs, slug: transaction-3, shard: 2/4 }
           - { what: the transaction 4/4, file: src/core/transaction.rs, slug: transaction-4, shard: 3/4 }
+          # **`M3` split `src/core/batch.rs` out of the file above, and a shard follows the code.
+          # Without this row the narrowing, the retry loop and the manager-lock wait would have
+          # left mutation coverage on the day they moved - four shards still green over a file
+          # that no longer holds them.
+          - { what: the batch narrowing, file: src/core/batch.rs, slug: batch, shard: 0/1 }
     steps:
     - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@master

@@ -63,9 +63,21 @@ const LEDGER: &[Accounted] = &[
     Accounted {
         file: "src/core/transaction.rs",
         guarded_by: "the purge/remove pair executes a plan enforced in `sync`'s preflight \
-                     — or, for a recovery, per entry in `heal_interrupted_removals` \
+                     — or, for a recovery, per entry in `refuse_a_protected_heal_removal` \
                      (GuardScope::Heal) before that entry becomes a node; the rollback \
                      removal is enforced where the rollback is built",
+    },
+    // **`M3` split the command runner out of `transaction.rs`, and the removal went with
+    // it.** This entry exists because the gate refused the split until it did: the file
+    // reaches `handler.remove` and `handler.purge`, so it is a removal surface however
+    // short its life as one has been. The guard did not move - `run_one_command` refuses
+    // outright without a `Reaped`, in the same words `transaction.rs` used.
+    Accounted {
+        file: "src/core/batch.rs",
+        guarded_by: "`run_one_command` refuses a removal with no `Reaped` token at all; \
+                     the token comes from the plan `sync` enforced in its preflight, or \
+                     per entry from `refuse_a_protected_heal_removal` (GuardScope::Heal)\
+                     for a recovery",
     },
     // `src/verbs/cleanup.rs` was here, and its absence is `LX-5` landing: `remove-orphans` and
     // `purge-undeclared` each kept a private removal loop, and both now build a graph and hand it
@@ -92,7 +104,7 @@ const LEDGER: &[Accounted] = &[
     Accounted {
         file: "src/app/sync/mod.rs",
         guarded_by: "guard::enforce over the sync plan, and again per interrupted entry in \
-                     `heal_interrupted_removals` (GuardScope::Heal). The engine carries the \
+                     `refuse_a_protected_heal_removal` (GuardScope::Heal). The engine carries the \
                      token to the executor rather than dropping it on the line that \
                      produced it",
     },

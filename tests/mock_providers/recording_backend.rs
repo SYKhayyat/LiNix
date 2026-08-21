@@ -39,6 +39,9 @@ struct Machine {
     installed: BTreeMap<String, Option<String>>,
     /// Names whose install fails, permanently, until [`RecordingBackend::let_it_succeed`].
     failing: BTreeSet<String>,
+    /// Names whose install fails transiently EVERY time - a manager whose index is down for
+    /// this name and no other. What a bisecting narrower has to be able to find.
+    always_flaky: BTreeSet<String>,
     /// Names whose install fails **once**, transiently, and succeeds on the retry. The manager
     /// that is briefly unreachable, which is the only state in which the retry loop's backoff
     /// runs at all.
@@ -128,6 +131,13 @@ impl RecordingBackendBuilder {
         self
     }
 
+    /// Installing this name fails transiently EVERY time, and every other name on the same
+    /// command line fails with it - which is what makes a batch worth narrowing.
+    pub fn always_flaky(mut self, name: &str) -> Self {
+        self.machine.always_flaky.insert(name.to_string());
+        self
+    }
+
     /// Installing this name fails **once**, transiently, and works on the next attempt — the
     /// only state in which the engine's backoff runs.
     pub fn flaky_once(mut self, name: &str) -> Self {
@@ -187,6 +197,18 @@ impl Installable for RecordingBackend {
                 // Permanent, so one attempt is the whole story and no test waits out a backoff
                 // it is not asserting on.
                 retry: Retryability::Permanent,
+                absent_name: false,
+            });
+        }
+        // A name whose ecosystem is down: transient, and it stays that way. Every package on the
+        // command line fails with it, exactly as a real manager fails a whole `apt install`.
+        if let Some(bad) = specs
+            .iter()
+            .find(|s| machine.always_flaky.contains(&s.name))
+        {
+            return Err(Error::CommandFailed {
+                message: format!("`{}` could not reach its index for {}", self.name, bad.name),
+                retry: Retryability::Transient,
                 absent_name: false,
             });
         }

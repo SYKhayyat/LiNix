@@ -496,6 +496,173 @@ pub fn spack() -> ExitPolicy {
     }
 }
 
+/// Python, the slow one, and the fix for a marker that had been wrong since `N-1`.
+///
+/// **`pipx`'s absent marker used to be `no matching distribution found for`, and pip says that
+/// about a VERSION as readily as about a name.** Measured on the `tools` image, 2026-08-21:
+///
+///   absent name  -> `No matching distribution found for <name>`,  above it `(from versions: none)`
+///   absent versn -> `No matching distribution found for black==99.99.99`,
+///                   above it `(from versions: 18.3a0, 18.3a1, ... 26.5.1)`
+///
+/// Identical summaries. So `shall install pipx:black@version=99.99.99` withdrew the declaration
+/// for `black` — a real package, on a machine that has it — over a version pin the user could
+/// have corrected. The line that tells the two apart is the one listing what pip DID find, and
+/// `none` is the whole discriminator.
+///
+/// The old fixture in `absent_marker_coverage_tests.rs` was a one-line capture that stopped just
+/// above the line carrying the answer, which is how a wrong marker passed a test written to catch
+/// exactly this.
+pub fn pipx() -> ExitPolicy {
+    ExitPolicy {
+        absent_markers: vec!["(from versions: none)"],
+        transient_markers: vec![
+            "temporary failure in name resolution",
+            "read timed out",
+            "connection reset",
+            "could not resolve host",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
+/// Python, bare. Same engine as `pipx` above and the same discriminator, measured the same day:
+/// `pip install <absent>` answers `(from versions: none)` and a bad pin answers with the list of
+/// versions it does have.
+pub fn pip() -> ExitPolicy {
+    ExitPolicy {
+        absent_markers: vec!["(from versions: none)"],
+        transient_markers: vec![
+            "temporary failure in name resolution",
+            "read timed out",
+            "connection reset",
+            "could not resolve host",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
+/// JavaScript, the fast one. Measured on the `tools` image, 2026-08-21: `bun add -g <absent>`
+/// answers `error: GET https://registry.npmjs.org/<name> - 404`.
+///
+/// The marker is the bare `- 404` because bun puts the package name between the two halves that
+/// would identify the sentence — the same shape that leaves `yarn` uncovered. It is safe here
+/// only because the version axis was asked too, and bun answers that one in words of its own:
+/// `No version matching "99.99.99" found for specifier "left-pad" (but package exists)`. That
+/// sentence is `Permanent` and deliberately not absent, for `nimble`'s reason — the line carries
+/// a `@version=` to correct, and deleting it throws away the thing the user has to edit.
+pub fn bun() -> ExitPolicy {
+    ExitPolicy {
+        absent_markers: vec!["- 404"],
+        permanent_markers: vec!["but package exists", "no version matching"],
+        transient_markers: vec![
+            "temporary failure in name resolution",
+            "connection refused",
+            "could not resolve host",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
+/// .NET tools. Measured on the `tools` image, 2026-08-21, and the marker is odd on purpose.
+///
+/// `dotnet tool install --global <name>` answers
+/// `<name>::[*, ) is not found in NuGet feeds https://api.nuget.org/v3/index.json`, and a real
+/// tool at an impossible version answers `dotnetsay::99.99.99 is not found in NuGet feeds`. **One
+/// sentence, two facts** - so the sentence cannot be the marker.
+///
+/// `::[*, )` is NuGet rendering an unbounded version range, which is what a request with no
+/// version pin looks like. A pinned request renders the pin instead, so this marker cannot fire
+/// on one by construction - and if NuGet ever changes that rendering the marker stops matching,
+/// the failure classifies `Unknown`, and the declaration is kept. It fails in the safe direction.
+pub fn dotnet() -> ExitPolicy {
+    ExitPolicy {
+        absent_markers: vec!["::[*, ) is not found in nuget feeds"],
+        transient_markers: vec![
+            "temporary failure in name resolution",
+            "no such host is known",
+            "connection refused",
+            "the ssl connection could not be established",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
+/// The dev-tool version manager. Measured on the `tools` image, 2026-08-21:
+/// `mise use -g <absent>` answers `<name> not found in mise tool registry`, and `mise use -g
+/// jq@99.99.99` - a real tool, an impossible version - answers with a 404 from the GitHub
+/// release API instead. Two facts, two sentences, so the marker is safe.
+pub fn mise() -> ExitPolicy {
+    ExitPolicy {
+        absent_markers: vec!["not found in mise tool registry"],
+        transient_markers: vec![
+            "temporary failure in name resolution",
+            "connection refused",
+            "could not resolve host",
+            "429 too many requests",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
+/// Nix profiles. Measured on the `tools` image, 2026-08-21: `nix profile install nixpkgs#<absent>`
+/// answers `error: flake 'flake:nixpkgs' does not provide attribute ...`.
+///
+/// **No version axis to check, and that is a fact about nix rather than about the probe.** `nix`
+/// is on `capability::CANNOT_PIN_VERSION` - a nix package is identified by its flake reference and
+/// there is no flag that asks for another version of one - so the one-sentence-two-facts trap
+/// that took the marker back off `luarocks`, `conda` and `dotnet` cannot arise here.
+///
+/// This is the `nix:` prefix and not `nixos:`. `nixos:` never asks nix whether an attribute
+/// exists: it writes the name into the generated module and lets `nixos-rebuild` be the judge,
+/// which is a better error than Shall could synthesise and arrives one step later.
+pub fn nix() -> ExitPolicy {
+    ExitPolicy {
+        absent_markers: vec!["does not provide attribute"],
+        transient_markers: vec![
+            "temporary failure in name resolution",
+            "unable to download",
+            "connection refused",
+            "couldn't connect",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
+/// The NixOS system configuration. Measured on a real NixOS-WSL box, 2026-08-21.
+///
+/// **No absent markers, and that is the design rather than a gap.** `nixos:` never asks nix
+/// whether an attribute exists: it writes the name into the generated `shall-packages.nix` and
+/// lets `nixos-rebuild` be the judge, which is a better error than Shall could synthesise and
+/// arrives one step later. Its `CANNOT_REPORT_A_MISSING_NAME` entry says so.
+///
+/// What it needed was the OTHER half. A `nixos-rebuild switch` builds the system perfectly and
+/// then cannot activate it, because a NixOS-WSL box has no session bus and neither does a
+/// container. It exits 4 saying `Unable to autolaunch a dbus-daemon without a $DISPLAY for
+/// X11`, and Shall answered `shall-failure-class: unknown` to it. Nobody had looked, on the one
+/// failure that machine reliably produces.
+///
+/// `Permanent`, because it is a fact about the environment: the next `sync` on the same box
+/// fails identically, and no retry, mirror or window changes it. Shall's own rollback already
+/// handles the consequence correctly - it put `shall-packages.nix` and `configuration.nix` back
+/// as they were, verified byte-identical, and the machine rebuilt to the same store path as the
+/// control taken before any of this ran.
+pub fn nixos() -> ExitPolicy {
+    ExitPolicy {
+        permanent_markers: vec![
+            "unable to autolaunch a dbus-daemon",
+            "failed to open dbus connection",
+        ],
+        transient_markers: vec![
+            "temporary failure in name resolution",
+            "unable to download",
+            "connection refused",
+            "couldn't connect",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
 /// Python, the fast one. Measured on the `tools` image, 2026-08-21: `uv tool install <absent>`
 /// answers `Because <name> was not found in the package registry`.
 pub fn uv() -> ExitPolicy {
@@ -770,25 +937,6 @@ pub fn gem() -> ExitPolicy {
     }
 }
 
-/// pipx and pip. Measured 2026-07-29: pipx relays pip's own summary,
-/// `ERROR: No matching distribution found for <name>`, and exits 1.
-///
-/// `could not find a version that satisfies` is deliberately absent from both lists: pip
-/// prints it for a name that does not exist *and* for a version pin nothing satisfies, and
-/// only the first is a reason to withdraw a line.
-pub fn pipx() -> ExitPolicy {
-    ExitPolicy {
-        absent_markers: vec!["no matching distribution found"],
-        transient_markers: vec![
-            "read timed out",
-            "temporary failure in name resolution",
-            "connection broken",
-            "retrying",
-        ],
-        ..ExitPolicy::default()
-    }
-}
-
 /// Go modules. Measured 2026-07-29: `go install github.com/<absent>@latest` reports
 /// `remote: Repository not found` and `fatal: repository … not found` through git.
 ///
@@ -852,7 +1000,8 @@ pub fn pixi() -> ExitPolicy {
 pub const MANAGERS_WITH_A_POLICY: &[&str] = &[
     "apt", "dnf", "yum", "pacman", "apk", "brew", "choco", "winget", "cargo", "scoop", "nimble",
     "luarocks", "helm", "npm", "gem", "pipx", "go", "pixi", "cabal", "composer", "opam", "spack",
-    "uv", "krew", "pub", "mix", "stack", "slackpkg",
+    "uv", "krew", "pub", "mix", "stack", "slackpkg", "pip", "bun", "dotnet", "mise", "nix",
+    "nixos",
 ];
 
 pub fn for_manager(name: &str) -> ExitPolicy {
@@ -879,6 +1028,12 @@ pub fn for_manager(name: &str) -> ExitPolicy {
         "mix" => mix(),
         "stack" => stack(),
         "slackpkg" => slackpkg(),
+        "pip" => pip(),
+        "bun" => bun(),
+        "dotnet" => dotnet(),
+        "mise" => mise(),
+        "nix" => nix(),
+        "nixos" => nixos(),
         "helm" => helm(),
         "npm" => npm(),
         "gem" => gem(),

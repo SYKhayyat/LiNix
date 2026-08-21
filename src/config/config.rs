@@ -240,12 +240,29 @@ pub struct SyncSettings {
     /// all-or-nothing.
     #[serde(default = "default_continue_past_transient")]
     pub continue_past_transient: bool,
+
+    /// What a batch does after its command fails for a reason Shall classed as passing.
+    ///
+    /// Packages heading for one manager in one wave share a command line (II.19), and a failed
+    /// command fails every package on it - so one bad member costs the twenty-nine beside it
+    /// that run. `bisect` (the default) halves the batch and asks again, recursing only into a
+    /// half that failed, and stops the moment BOTH halves fail: one bad member can only be in
+    /// one half, so two failing halves is the manager rather than a member, and asking thirty
+    /// more times gets the same answer thirty more times.
+    ///
+    /// `off` never asks twice. `every` asks once per member whatever the halves said - thorough
+    /// and, on Ubuntu, ten times the wall-clock of the batch it replaces.
+    ///
+    /// See [`BatchRecovery`](crate::core::BatchRecovery) for the measurements.
+    #[serde(default)]
+    pub batch_recovery: crate::core::BatchRecovery,
 }
 
 impl Default for SyncSettings {
     fn default() -> Self {
         Self {
             continue_past_transient: default_continue_past_transient(),
+            batch_recovery: crate::core::BatchRecovery::default(),
         }
     }
 }

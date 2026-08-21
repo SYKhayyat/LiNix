@@ -39,34 +39,46 @@ use std::sync::Arc;
 /// see the dated captures in `src/core/exit_policy.rs`. Never a guess: a wrong marker deletes
 /// a declaration whose package is real.
 ///
-/// **Nine names left on 2026-08-21, and the instrument is the point. THREE QUESTIONS PER
-/// MANAGER, not one.** An install resolves a name, an index and a version, and a marker is only
-/// safe once all three have been asked — so each phrasing came from running that manager's own
-/// install argv three ways: against a name that does not exist, against the same name with
-/// `--network none`, and against a package that DOES exist at an impossible version.
+/// **Twelve to twenty-five on 2026-08-21, and the method matters more than the number. THREE
+/// QUESTIONS PER MANAGER, not one.** An install resolves a name, an index and a version, and a
+/// marker is safe only once all three have been asked - so each phrasing came from running that
+/// manager's own install argv three ways: against a name that does not exist, against the same
+/// name with `--network none`, and against a package that DOES exist at an impossible version.
+/// A backend on `capability::CANNOT_PIN_VERSION` has no third axis by construction, which is
+/// how `nix`, `krew` and `slackpkg` are safe without one.
 ///
-/// Each pass caught something the others could not. Offline: `mix` answers from a stale cache
-/// when Hex is unreachable, in the same words it uses for a name that never existed, and only
-/// `Failed to fetch record` above it says which happened. Name shape: `dart pub` refuses a
-/// hyphenated name before it asks pub.dev at all, so the first capture taken for it described
-/// the string rather than the registry. And version: `luarocks` was given a marker on the
-/// strength of the offline pass and had it taken back out by this one — see below.
+/// **The third question found a marker that had already shipped wrong.** `pipx` carried
+/// `no matching distribution found for`, and pip says that about a VERSION as readily as about
+/// a name - so a bad `@version=` on a real package withdrew its declaration. The fixture below
+/// used to be a one-line capture that stopped just above the line carrying the answer, which is
+/// how a wrong marker passed the test written to catch it. `(from versions: none)` is the
+/// discriminator, and `pip` inherits both the bug and the fix.
 ///
-/// What is left here is what no machine to hand could ask. `guix`, `emerge`, `eopkg` and
-/// `slackpkg` have images, and nightly ones — their captures want that leg, not a guess. `yarn`
-/// is a different shape of gap and worth writing down: it answers
+/// The other two passes earn their keep too: `mix` answers from a stale cache when Hex is
+/// unreachable in the same words it uses for a name that never existed, and `dart pub` refuses
+/// a hyphenated name before it asks pub.dev at all.
+///
+/// **The first sweep was scoped to `builtin_backends.toml` and reported as if it were the whole
+/// board.** It was one table of two: every Rust-implemented backend was invisible to it, and
+/// eight of those were sitting in the `tools` image already built. `bun`, `conda`, `dotnet`,
+/// `mise`, `nix` and `pip` came from the second pass. Whatever asks this question next should
+/// take its list from the registry, which is what the test below already does.
+///
+/// What is left here is what no machine to hand could ask. `guix`, `emerge` and `eopkg` have
+/// nightly images and want that leg. `yarn` is a different shape of gap: it answers
 /// `https://registry.yarnpkg.com/<name>: Not found`, which puts the package name BETWEEN the
-/// two halves that would identify the sentence, so no contiguous marker matches it and a bare
-/// `: not found` would match half the internet. `pnpm` and `asdf` never reach a lookup at all
-/// on the install path Shall drives.
+/// two halves that would identify the sentence, so no contiguous marker matches it. `pnpm` and
+/// `asdf` never reach a lookup on the install path Shall drives.
 const CANNOT_REPORT_A_MISSING_NAME: &[&str] = &[
     // Registered and measured on this host.
     "appimage",
     "asdf",
     "btrfs",
-    "bun",
+    // NOT a gap - measured 2026-08-21 and left alone. `conda install <absent>` and
+    // `conda install six=99.99.99` both answer `PackagesNotFoundInChannelsError: The following
+    // packages are not available from current channels`. One sentence, two facts, and no line
+    // above it separates them - the same shape that keeps `luarocks` here.
     "conda",
-    "dotnet",
     "emacs",
     "flatpak",
     // helm's failures are all about names that exist — an already-installed plugin, an
@@ -81,14 +93,11 @@ const CANNOT_REPORT_A_MISSING_NAME: &[&str] = &[
     // pin. See `exit_policy::luarocks`.
     "luarocks",
     "lvm",
-    "mise",
-    "nix",
     // `nixos:` never asks nix whether an attribute exists — it writes the name into a generated
     // module and lets `nixos-rebuild` be the judge. A typo is caught at rebuild time, by nix,
     // with nix's own message about the attribute: a better error than Shall could synthesise,
     // arriving one step later than this table would prefer.
     "nixos",
-    "pip",
     "pkg",
     "pkg_add",
     "pkgin",
@@ -244,7 +253,12 @@ fn a_covered_manager_recognises_its_own_words_for_a_missing_name() {
     let cases = [
         ("npm", "npm error 404 Not Found - GET https://registry.npmjs.org/shall-no-such-pkg-zzz-9 - Not found"),
         ("gem", "ERROR:  Could not find a valid gem 'shall-no-such-gem-zzz' (>= 0) in any repository"),
-        ("pipx", "ERROR: No matching distribution found for shall-no-such-pkg-zzz"),
+        ("pipx", "ERROR: Could not find a version that satisfies the requirement shall-no-such-pkg-zzz (from versions: none)\nERROR: No matching distribution found for shall-no-such-pkg-zzz"),
+        ("pip", "ERROR: Could not find a version that satisfies the requirement shall-no-such-pkg-zzz (from versions: none)\nERROR: No matching distribution found for shall-no-such-pkg-zzz"),
+        ("bun", "error: GET https://registry.npmjs.org/shall-no-such-pkg-zzz - 404"),
+        ("dotnet", "NuGetPackageNotFoundException: shall-no-such-pkg-zzz::[*, ) is not found in NuGet feeds https://api.nuget.org/v3/index.json\"."),
+        ("mise", "mise ERROR Failed to install shall-no-such-pkg-zzz@latest: shall-no-such-pkg-zzz not found in mise tool registry"),
+        ("nix", "error: flake 'flake:nixpkgs' does not provide attribute 'legacyPackages.x86_64-linux.shall-no-such-pkg-zzz' or 'shall-no-such-pkg-zzz'"),
         ("go", "go: module github.com/shall-zzz-nope/nope: git ls-remote failed: remote: Repository not found."),
         ("pixi", "  \u{2570}\u{2500}\u{25b6} Cannot solve the request because of: No candidates were found for shall-no-such-pkg-zzz *."),
         ("cargo", "error: could not find `shall-no-such-crate-zzz` in registry `crates-io` with version `*`"),
@@ -302,6 +316,22 @@ fn a_failure_about_a_name_that_exists_is_not_read_as_absent() {
         // Hex unreachable: mix answers from a STALE CACHE in the same words it uses for a
         // name that never existed, and only the line above it says which happened.
         ("mix", "Failed to fetch record for real_pkg from registry (using cache instead)\n** (Mix) No package with name real_pkg (from: mix.exs) in registry"),
+        // **The bug this method was built to find, and it was already shipped.** `pipx` carried
+        // `no matching distribution found for` as its absent marker, and pip says that about a
+        // VERSION as readily as about a name - so a bad `@version=` on a real package withdrew
+        // the declaration for it. The line above the summary is the whole discriminator: `none`
+        // means pip found nothing, a list means it found the package and not that version.
+        ("pipx", "ERROR: Could not find a version that satisfies the requirement black==99.99.99 (from versions: 18.3a0, 24.1.0, 26.5.1)\nERROR: No matching distribution found for black==99.99.99"),
+        ("pip", "ERROR: Could not find a version that satisfies the requirement six==99.99.99 (from versions: 1.16.0, 1.17.0)\nERROR: No matching distribution found for six==99.99.99"),
+        // NuGet writes one sentence for a name it does not have and for a version it does not
+        // have. `::[*, )` is an unbounded range, which is what a request with no pin looks like,
+        // so a pinned request cannot match the marker.
+        ("dotnet", "NuGetPackageNotFoundException: dotnetsay::99.99.99 is not found in NuGet feeds https://api.nuget.org/v3/index.json\"."),
+        // bun says the package exists in so many words, which is `Permanent` and not absent -
+        // the line carries a version to correct.
+        ("bun", "error: No version matching \"99.99.99\" found for specifier \"left-pad\" (but package exists)"),
+        // mise answers a bad version from the release API, not from its registry.
+        ("mise", "mise ERROR Failed to install aqua:jqlang/jq@99.99.99: HTTP status client error (404 Not Found) for url (https://api.github.com/repos/jqlang/jq/releases/tags/jq-99.99.99)"),
         // A dart name with a hyphen is refused before pub.dev is asked at all.
         ("pub", "Not a valid package name: \"shall-no-such-pkg-zzz\""),
         // slackpkg with no mirror never reaches its pattern at all, and says so about the

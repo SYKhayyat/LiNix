@@ -3731,5 +3731,12 @@ first: a program that answers `unknown` to everything cannot draw this line at a
   and every hand-built transaction start from, and only `from_config` reads the key — a default
   that drifted here would make every plan built on it quietly best-effort.
 
+- **A batch that fails for a passing reason is narrowed, not written off** (`M3`). Packages
+  heading for one manager share a command line, and a manager fails one as a unit, so the
+  members are asked again in halves. `[sync] batch_recovery` — `bisect` by default, `off` and
+  `every` beside it. Narrowing stops when BOTH halves fail, because one bad member can only be
+  in one half and two failing halves is the manager. It does not fire on a `Permanent` failure,
+  on an all-or-nothing run, or under `--keep-going`, which already batches at one.
+
 This does not touch `Y15`'s ruling beside it: a backend this host does not have is still not a
 failure at all (II.7c), and a package that genuinely fails still fails the command (`AU1`).

@@ -1,4 +1,4 @@
-# The decision register — 225 entries, none open
+# The decision register — 226 entries, none open
 **One file, six features, four questions waiting on the owner.** Every decision this design forces
 lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -24,7 +24,7 @@ HALF RULED had no rows, the five that remained summed to 206 against 210, and
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **220** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **221** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 | **DEFERRED** | Asked, and the owner chose to answer it later. | A ruling, when the owner returns to it. | **1** |
 | **HALF RULED** | Part of the question was answered and part was not. | A ruling on the remaining half. | **2** |
@@ -111,8 +111,8 @@ whether a bare `shall lock` still freezes all three axes is not. `Q29`'s computa
 other one. The `G` round ran the opposite way round — `docs/GRADE-2026-08-12.md`'s work order was
 implemented in one pass and the nine changes in it that a user would notice shipped ahead of any
 ruling — and all twelve were confirmed by the owner on 2026-08-14, which is why nothing from it
-is waiting now. All 225 are accounted
-for: **220 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN** — and this line
+is waiting now. All 226 are accounted
+for: **221 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -479,12 +479,13 @@ deliberately no longer has.*
 | **L3** | Do reader commands accept a torn cross-file view? **ANSWERED 2026-08-18: fix it, and the obvious fix is the wrong one.** A reader never waits on a writer; it detects one. `core::stable` reads the writer generation either side of a multi-file read and reads again if a writer committed in between. | Built the same day. |
 | **L4** | Should Part II's II.8 gain the three-scope lock model - `Writer`, `Deferred`, `Reader`? **ANSWERED 2026-08-18: the docs match the code.** II.8 and II.24 rewritten, V.194 added, and V.61's claim that the lock covers the `locks/` ledgers corrected - it never did. | Built the same day. |
 
-### M — the ecosystem-drift round of 2026-08-21 — 2
+### M — the ecosystem-drift round of 2026-08-21 — 3
 
 | | question | answered |
 |---|---|---|
 | **M1** | An upstream ecosystem broke and the nightly called it a Shall defect. Whose problem is drift, and what absorbs it? — RULED 2026-08-21: Shall's, and a dated excuse that expires. | 2026-08-21 |
 | **M2** | The same drift, on a user's machine: one `cabal:` line whose registry rotated a key stopped `sync` converging the two hundred declarations beside it. — RULED 2026-08-21: carry on past a failure Shall classed as passing, `[sync] continue_past_transient`, on by default. | 2026-08-21 |
+| **M3** | `M2` documented a cost instead of fixing it: a batch fails as a unit, so one bad member still took the twenty-nine beside it down for that run. — RULED 2026-08-21: narrow the failed batch, `[sync] batch_recovery`, bisecting by default. | 2026-08-21 |
 
 ---
 
@@ -9388,6 +9389,27 @@ out, because a real rock at an impossible version prints the same summary with n
 it. The register now records the general form: **a name, an index and a version are three things
 an install resolves, and a marker is only safe once all three have been asked.**
 
+**Addendum, later the same day: the sweep was scoped to the wrong thing, and finishing it found
+a shipped bug.** The probe list came from `builtin_backends.toml` — the *declarative* backends,
+one table of two — so every Rust-implemented backend was invisible to it, six of them sitting in
+the image already built. Completing it from the registry instead took absent-name coverage from
+12 to **25 of 49**: `pip`, `bun`, `dotnet`, `mise` and `nix` joined, and `conda` earned a written
+reason to stay out — one sentence for two facts, like `luarocks`.
+
+And it found that **`pipx`'s marker had been wrong since `N-1`**. `no matching distribution found
+for` is what pip says about a bad VERSION as well as a bad name, so `pipx:black@version=99.99.99`
+withdrew the declaration for a real package. `(from versions: none)` is the discriminator, and
+`pip` inherits both the bug and the fix. The fixture that should have caught it was a one-line
+capture trimmed to the line being asserted on.
+
+A last one came off real hardware rather than a container. On a NixOS-WSL box a
+`nixos-rebuild switch` builds the system and then cannot activate it — no session bus, which is
+true of every NixOS-WSL install and every container — and Shall answered `unknown` to the one
+failure that machine reliably produces. `nixos` now classes it `Permanent`, because it is a fact
+about the environment and no retry changes it. The same run confirmed the rollback path on a
+real machine: `shall-packages.nix` and `configuration.nix` went back byte-identical, and the
+system rebuilt to the same store path as the control taken before any of it ran.
+
 **And the image, which is still repaired, for a different reason than the one first given.** Not
 *not our bug* — a test rig whose cabal cannot reach Hackage measures nothing. It seeds Hackage's
 current root as the local trust anchor before `cabal update`, fetched per build so the next
@@ -9444,3 +9466,51 @@ argument for one-package-per-command is about a bad NAME, which is a fact about 
 batch, while the failures this mode carries on past are facts about the MANAGER and true of every
 member equally. And `TransactionConfig::patient()` — the library default that recovery and every
 hand-built transaction start from — stays all-or-nothing; only `from_config` reads the key.
+
+---
+
+## M3
+
+**Status: ANSWERED — 2026-08-21, owner ruling, built in the same commit.**
+
+**M3 — `M2` wrote its own limitation down. Should the limitation stand?** Packages heading for
+one manager in one wave share a command line (II.19), and a manager fails a command line as a
+unit — so `M2` rescued every OTHER manager's packages and none of the failed batch's own. The
+first test written for `M2` proved it by failing: two packages on one mock manager, one command
+line, and the good one went down with the doomed one. It was pinned as a documented cost.
+
+**RULED (owner, 2026-08-21): fix it, configurable, modular, sane default.** `[sync]
+batch_recovery`, a kind rather than a switch because the strategies differ in cost by an order
+of magnitude:
+
+- **`bisect` (default)** — halve the failed batch, ask about each half, recurse only into a half
+  that failed.
+- **`off`** — one command, as before.
+- **`every`** — one command per member, whatever the halves would have said.
+
+**The number that chose bisection over splitting flat** is on `execute_batch_with_retry` and was
+measured on Ubuntu: `apt install <8 packages>` as one command is **3,161 ms**, and those same
+eight one at a time are **31,901 ms**. Ten times, and superlinear — each invocation re-reads the
+cache, re-takes the dpkg lock and re-resolves a graph the batch resolves once. Splitting flat
+throws that amortisation away; bisection keeps it, because every question it asks is still a
+batch.
+
+**The stopping rule is the part worth reading.** One bad member can only be in ONE half, so two
+halves that both fail is not a member — it is the manager, its index or its lock, and every
+further question gets the same answer. Narrowing stops dead there. That is the case `M2` is
+named after: a rotated signing key fails every package equally, and it now costs **two** extra
+commands rather than thirty. Measured as a command log in
+`two_failing_halves_is_the_manager_and_narrowing_stops_dead`.
+
+**Where it does not fire, and why each is deliberate.** Not on a `Permanent` failure — the
+transaction is ending over it, so the pieces would be asked and thrown away. Not when the run is
+configured all-or-nothing — that owner asked for a plan that either lands or does not, and
+narrowing would install the good members anyway. And not under `--keep-going`, which `G1`
+already caps at one package per command, so there is never a batch to narrow.
+
+**What it cost to build.** The retry loop moved out of `execute_batch_with_retry` into
+`run_one_command`, so a narrowing can re-ask the manager without re-opening a WAL entry or
+firing `before_install` twice — a narrowing is a retry with a shorter command line, and a retry
+never did either. The journal writes, the `after_install` hooks and the `TaskResult`s were three
+copies of the same block on three exits from that function; they are one block over one vector
+of per-member verdicts now, which is what made per-member answers expressible at all.

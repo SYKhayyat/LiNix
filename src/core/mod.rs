@@ -2,6 +2,7 @@ pub mod adapter;
 pub mod argv;
 pub mod artifact_lock;
 pub mod bare_lock;
+pub mod batch;
 pub mod blocking;
 pub mod capture;
 pub mod datalock;
@@ -50,6 +51,7 @@ pub use exit_policy::ExitPolicy;
 
 pub use git::{GitCommit, GitManager};
 
+pub use batch::BatchRecovery;
 pub use executor::{CommandExecutor, ExecutionLayer, RawExecutor};
 pub use transaction::{ContinuePast, GraphAction, Transaction, TransactionConfig};
 

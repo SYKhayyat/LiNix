@@ -57,10 +57,22 @@ const LEDGER: &[Accounted] = &[
     // arrives here, and `record_start` runs before the manager is invoked.
     Accounted {
         file: "src/core/transaction.rs",
-        calls: 5,
+        calls: 2,
         recovery: Recovery::Transaction,
         how: "record_start per node before the batch runs; a WAL write that fails makes the \
               batch stillborn rather than letting it run unrecorded",
+    },
+    // `M3` moved the manager call itself into `batch.rs`, so the engine's five mutation sites
+    // are now two there and three here. `record_start` still runs in `transaction.rs`, BEFORE
+    // either file invokes anything - which is the property this ledger is about, and the one
+    // thing the split was careful not to move.
+    Accounted {
+        file: "src/core/batch.rs",
+        calls: 3,
+        recovery: Recovery::Transaction,
+        how: "the manager call itself, reached only after `execute_batch_with_retry` has \
+              written the WAL entries for every member; a narrowing re-asks the manager and \
+              deliberately does NOT re-open an entry, because a retry never did either",
     },
     // ---- Package mutations outside the engine. Each one is a command that reaches a manager
     // without a plan behind it, so it carries its own record.

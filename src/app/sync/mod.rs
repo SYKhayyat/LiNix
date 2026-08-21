@@ -1036,6 +1036,57 @@ impl SyncEngine {
     /// It has to be resolved by the caller: resolution reads the config and this runs inside a
     /// sync that has already done it, and resolving twice per sync to save threading one
     /// argument would be the more expensive half of the trade.
+    /// The removal guard, on ONE interrupted removal, at [`guard::GuardScope::Heal`].
+    ///
+    /// Answers `true` when the removal was refused. The caller then KEEPS the package and treats
+    /// the entry as resolved, which is what stops `heal` getting stuck for ever retrying a
+    /// removal it will always refuse: recovery completes, and protection holds.
+    ///
+    /// **This existed as a name before it existed as a function, which is the reason it is one.**
+    /// `Reaped::for_reason`'s escape hatch is justified here by the sentence "each interrupted
+    /// removal is enforced individually in `heal_interrupted_removals`", and two ledger entries in
+    /// `tests/removal_guard_enumeration_tests.rs` cited the same name. Grep found it in exactly
+    /// those three strings and nowhere else. The mechanism was real and correct — inline in the
+    /// loop above — so only the pointer was fiction, but `Reaped::for_reason` tells a reviewer
+    /// that grepping for it "is exactly the list a reviewer wants", and a reviewer who followed
+    /// it arrived nowhere. `S24`'s lesson as a NAME rather than as a branch, and harder to catch,
+    /// because `guarded_by` is `#[allow(dead_code)]` prose no test can check.
+    async fn refuse_a_protected_heal_removal(
+        &self,
+        backend: &str,
+        package: &str,
+        key: &str,
+        ids: &[String],
+    ) -> bool {
+        let removal = [(backend.to_string(), package.to_string())];
+        let Err(objection) = guard::enforce(
+            &self.config,
+            &self.registry,
+            &removal,
+            &self.reaping,
+            guard::GuardScope::Heal,
+        )
+        .await
+        else {
+            return false;
+        };
+        let reason = objection
+            .to_string()
+            .lines()
+            .find(|l| l.trim_start().starts_with("- "))
+            .map(|l| l.trim().trim_start_matches("- ").to_string())
+            .unwrap_or_else(|| "protected".to_string());
+        info!(
+            "keeping {} — its interrupted removal is refused ({}).",
+            key, reason
+        );
+        let mut j = self.journal.lock().await;
+        for id in ids {
+            let _ = j.record_success(id);
+        }
+        true
+    }
+
     pub async fn heal(&self, declared: &[PackageSpec]) -> Result<()> {
         // Before the interrupted entries, and NOT gated on there being any. The packages this
         // repairs have nothing interrupted about them — they are installed and declared and
@@ -1171,38 +1222,16 @@ impl SyncEngine {
             }
 
             // Completing an interrupted *removal* routes through the guard, so a protected
-            // package is never removed even during recovery. On refusal we KEEP the package and
-            // treat the entry as resolved — recovery completes, protection holds, and heal never
-            // gets stuck retrying a removal it will always refuse.
-            if !is_install {
-                let removal = [(backend.clone(), package.clone())];
-                if let Err(objection) = guard::enforce(
-                    &self.config,
-                    &self.registry,
-                    &removal,
-                    &self.reaping,
-                    guard::GuardScope::Heal,
-                )
-                .await
-                {
-                    let reason = objection
-                        .to_string()
-                        .lines()
-                        .find(|l| l.trim_start().starts_with("- "))
-                        .map(|l| l.trim().trim_start_matches("- ").to_string())
-                        .unwrap_or_else(|| "protected".to_string());
-                    info!(
-                        "keeping {} — its interrupted removal is refused ({}).",
-                        key, reason
-                    );
-                    let mut j = self.journal.lock().await;
-                    for id in &ids {
-                        let _ = j.record_success(id);
-                    }
-                    kept.push(key.clone());
-                    continue;
-                }
+            // package is never removed even during recovery.
+            if !is_install
+                && self
+                    .refuse_a_protected_heal_removal(&backend, &package, &key, &ids)
+                    .await
+            {
+                kept.push(key.clone());
+                continue;
             }
+
             runnable.push((action, ids));
         }
 
@@ -1276,7 +1305,7 @@ impl SyncEngine {
             // the guard over the survivors would be asking a question already answered.
             let heal_reaped = guard::Reaped::for_reason(
                 guard::GuardScope::Heal,
-                "each interrupted removal is enforced individually in `heal_interrupted_removals` and \
+                "each interrupted removal is enforced individually in `refuse_a_protected_heal_removal` and \
                  refused ones never enter this graph",
             );
             let mut tx = Transaction::with_config(
