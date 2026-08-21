@@ -77,7 +77,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 # measured 200ms, once, on whichever thread got there first — a fifth of a second on `shall path`
 # for a GitHub API budget it never spends. `MonotonicClock` (std `Instant`) resolves to
 # nanoseconds, and the fastest quota here is 80 requests per MINUTE.
-governor = { version = "0.6", default-features = false, features = ["std", "jitter"] }
+governor = { version = "0.10", default-features = false, features = ["std", "jitter"] }
 
 # System Utilities & Persistence
 walkdir = "2.4"
