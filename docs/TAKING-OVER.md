@@ -120,14 +120,31 @@ waiting for a nightly:
 
 ```sh
 ./scripts/docker-restore.sh --check      # what images exist
-./scripts/docker-restore.sh              # rebuild the missing ones (slow: hours for all)
+./scripts/docker-restore.sh              # rebuild the missing ones
 
 # run one image's harness against the current scripts
 docker run --rm \
   -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
   -v "$PWD/scripts/lifecycle-floor.txt:/src/scripts/lifecycle-floor.txt:ro" \
+  -e GITHUB_TOKEN \
   -e SHALL_IT_IMAGE=tools shall-it-tools apt jq
 ```
+
+`-e GITHUB_TOKEN` because api.github.com allows 60 requests an hour unauthenticated, by IP, and
+the `github:` lifecycle spends them fast. Absent is not an error; it just means that one backend
+may lose its round trip to a rate limit, which the harness now correctly calls `transient`
+rather than a defect.
+
+**Rebuilding is expensive, and the reason is not the distro.** Every image compiles `shall` in
+release *inside itself* — that is what makes the harness test the tree rather than a binary
+copied in — and that compile alone was measured at **32m 14s for alpine, the smallest image**.
+The floor is therefore ~35 minutes each whatever the distro, and eleven of them is most of a
+working day.
+
+**Which is why "Docker is full" is usually not about the images.** On this machine the build
+cache was 93 GB against a 7 GB working set. `docker builder prune` reclaims that without
+touching a single image and without any rebuild — do that before deleting anything you would
+have to wait half a day to get back.
 
 Docker lives **inside WSL** on this machine — there is no Docker Desktop, and `docker` missing
 from the Windows PATH means nothing. `scripts/docker-restore.sh` re-execs itself into the distro

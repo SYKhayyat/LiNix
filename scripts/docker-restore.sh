@@ -12,8 +12,11 @@
 # cause in four minutes when reasoning could not, and it proved a one-line harness fix in ninety
 # seconds against a forty-minute nightly on a broken `main`.
 #
-# So the images are cache, not capability. They cost ~135 GB and rebuild from these Dockerfiles
-# on demand, which is what makes emptying Docker a safe thing to do and this script the way back.
+# So the images are cache, not capability: they cost ~135 GB and rebuild from these Dockerfiles
+# on demand, and this script is the way back. **Cache, not free** - see the timing below before
+# emptying anything. Reclaiming space is usually not a choice between keeping the images and
+# losing them: `docker builder prune` took 93 GB of build cache down to its 7 GB working set on
+# this machine without touching a single image, which is most of what "Docker is full" means.
 #
 # **It does not contain a build.** `docker/integration/run.sh BUILD_ONLY=1` is the one place that
 # knows `-f Dockerfile.$d -t shall-it-$d .`, and a second copy here would be exactly the
@@ -104,12 +107,19 @@ fi
 
 # ---- 3. Build, through the one builder ------------------------------------------------------
 #
-# Hours, not minutes: `tools` alone compiles Rust, OCaml, Haskell, Nim and HPC packages from
-# source and is ~11 GB. That is the price of having emptied it, and it is worth knowing before
-# starting rather than after.
+# Hours, not minutes, and NOT because of `tools`. **Every image compiles `shall` in release
+# inside itself** - that is what makes the harness test the tree rather than a binary copied in -
+# and that compile alone was measured at 32m 14s for alpine, the smallest image here. So the
+# floor is ~35 minutes per image whatever the distro, and `tools` adds its own OCaml, Haskell,
+# Nim and HPC builds on top of that. Eleven images is most of a working day.
+#
+# This paragraph used to say "`tools` is 25-40 minutes on its own", which reads as though the
+# others are quick. They are not. Measured on 2026-08-21 by deleting alpine and running this
+# script to put it back.
 say ""
 say "building:${missing}"
-say "this is slow - \`tools\` is 25-40 minutes on its own. Nothing here needs supervising."
+say "this is slow: ~35 minutes MINIMUM per image - every one of them compiles shall in"
+say "release inside itself - and \`tools\` is longer again. Nothing here needs supervising."
 DISTROS="${missing# }" BUILD_ONLY=1 ./docker/integration/run.sh
 rc=$?
 say ""
