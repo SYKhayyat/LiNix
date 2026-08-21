@@ -64,7 +64,7 @@ is the most common way to get a scary-looking result that is entirely your own f
 ```sh
 cargo build --all-targets
 cargo test --no-fail-fast
-cargo clippy --all-targets
+cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo fmt -- --check
 scripts/unix-check.sh
 ```

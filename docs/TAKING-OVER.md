@@ -149,7 +149,9 @@ The full chain, in order. Each step is cheap except the third:
 cargo build --all-targets
 cargo test --no-fail-fast      # ~15 min. --no-fail-fast always: without it one failing
                                # target abandons the rest and you learn about one defect
-cargo clippy --all-targets     # must be zero; CI treats warnings as fatal
+cargo clippy --all-targets --all-features --locked -- -D warnings
+                               # CI treats warnings as fatal, so this is spelled the
+                               # way ci.yml spells it. The short form misses --all-features.
 cargo fmt -- --check           # the one gate a change with no logic in it can break
 sh scripts/unix-check.sh       # compiles the 45 cfg(unix) blocks Windows cannot see
 ```

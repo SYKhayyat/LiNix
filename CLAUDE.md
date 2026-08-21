@@ -107,9 +107,20 @@ Two corollaries, both learned the hard way here:
 
 ## Verify
 
-`cargo build --all-targets` → `cargo test --no-fail-fast` → `cargo clippy --all-targets` →
-`cargo fmt -- --check` → `scripts/unix-check.sh`. Report honestly: unverified is not done, and a
-skipped step is a said-so, not a done.
+`cargo build --all-targets` → `cargo test --no-fail-fast` →
+`cargo clippy --all-targets --all-features --locked -- -D warnings` → `cargo fmt -- --check` →
+`scripts/unix-check.sh`. Report honestly: unverified is not done, and a skipped step is a
+said-so, not a done.
+
+**Clippy is spelled the way `ci.yml` spells it, for the same reason `cargo fmt` is.** This line
+used to read `cargo clippy --all-targets`, which is *weaker* than the gate — no `--all-features`,
+and warnings that are merely warnings locally are fatal on the board. A local gate stricter than
+CI refuses work CI would take; a local gate looser than CI passes work CI will refuse, which is
+worse, because it is discovered after the push. `--all-features` matters most on exactly the
+change that has no source in it at all: a dependency bump, where the new version's lints arrive
+without a line of yours moving. **Both release scripts have always had this right** — the gap was
+only ever in the per-change chain, which is the same shape as the `cargo fmt` story above and the
+same reason: a gate that runs at release finds it after the board is already red.
 
 **This chain runs on Windows, so four of its five steps verify one platform of two — and nothing
 used to say so.** `scripts/unix-check.sh` is the fifth step and the only one that compiles the
