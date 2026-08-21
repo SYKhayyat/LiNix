@@ -54,6 +54,14 @@ Two things that waste an hour if nobody tells you:
   finished. The jobs endpoint answers while it is still going.
 * **`head_sha` needs the full forty characters.** A short sha silently returns an empty list,
   which reads exactly like "no runs" rather than "you asked wrong".
+* **Authenticate anything that loops, and the trap is that you do not have to.** These endpoints
+  answer a public repo without a token, so a quick poll works and the habit sticks — until
+  api.github.com's anonymous budget of **60 requests an hour, by IP** runs out. A watcher asking
+  for the runs and then that run's jobs is two calls a poll: at one poll every 45 seconds it
+  spends the whole hour's budget in **twenty-two minutes** and then dies on
+  `HTTP 403: rate limit exceeded`. Measured on 2026-08-21, by me, while watching the CI run that
+  verifies the fix for that exact failure in Shall. Authenticated the budget is 5,000/hour;
+  a poll every two minutes over two runs is about sixty an hour, which is comfortable.
 
 ---
 
