@@ -1682,6 +1682,12 @@ lifecycle() {
 
     lx_slow -y install "$be:$cpkg$copts" >/tmp/life.out 2>&1
     lrc=$?
+    # **Set here and not only inside `classify_install`, which runs ONLY when the install
+    # failed.** Every assertion below reads this to learn where the binary went, and under
+    # `set -u` an unset one is not a wrong answer, it is the whole harness dying on the
+    # common path - measured, twelve integration jobs red in one nightly. `classify_install`
+    # re-points it at the retry's log when a retry is what answered.
+    LIFELOG=/tmp/life.out
     if [ "$lrc" -ne 0 ]; then
         _canary_clear() { undeclare_canary "$be:$cpkg"; }
         classify_install "$be" "$be:$cpkg$copts" "$lrc" /tmp/life.out _canary_clear

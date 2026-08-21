@@ -1346,6 +1346,12 @@ lifecycle() {
 
     lx -y install "$be:$cpkg$copts" >/tmp/itw-life.out 2>&1
     lrc=$?
+    # **Set here and not only inside `classify_install`, which runs ONLY when the install
+    # failed.** Every assertion below reads this to learn where the binary went, and under
+    # `set -u` an unset one is not a wrong answer, it is the whole harness dying on the
+    # common path - measured, twelve integration jobs red in one nightly. `classify_install`
+    # re-points it at the retry's log when a retry is what answered.
+    LIFELOG=/tmp/itw-life.out
     if [ "$lrc" -ne 0 ]; then
         # One classifier, shared with section 5. Two copies of this decision is how section 5
         # kept the catch-all for a month after section 12 lost it.
