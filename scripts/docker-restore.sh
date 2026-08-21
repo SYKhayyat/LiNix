@@ -44,7 +44,7 @@ if ! command -v docker >/dev/null 2>&1; then
         # Windows form wslpath is expecting. Measured - the first version of this line failed
         # exactly that way.
         win="$(pwd -W 2>/dev/null || pwd)"
-        here="$(wsl -- wslpath -a "$win" 2>/dev/null | tr -d "")"
+        here="$(wsl -- wslpath -a "$win" 2>/dev/null | tr -d "\r")"
         if [ -n "$here" ]; then
             say "no docker on this PATH; re-running inside WSL, where it lives"
             exec wsl -- sh -c "cd '$here' && ./scripts/docker-restore.sh $*"
