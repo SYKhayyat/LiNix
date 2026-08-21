@@ -62,6 +62,10 @@ of](#teaching-shall-a-package-manager-it-has-never-heard-of)
 > **Working on Shall itself?** [Your first hour, in order](#your-first-hour-in-order) is the
 > reading path — six documents, and which one to open first.
 
+> **Inherited it, and something is red?** [`docs/TAKING-OVER.md`](docs/TAKING-OVER.md) is the
+> one to open — how to read the board, what each kind of failure means, and which ones are
+> not yours to fix.
+
 ---
 
 ## Install
@@ -1405,7 +1409,11 @@ cargo build --all-targets && cargo test --no-fail-fast
    change a target-state rule without reading its `why` entry first.**
 5. **[`docs/spec/decisions.md`](docs/spec/decisions.md)** — before you answer any question in code.
    A question with an ID in that register is the owner's, not yours.
-6. **[`docs/BUILDER.md`](docs/BUILDER.md)** — *last, and only when you are picking up work.* It is
+6. **[`docs/TAKING-OVER.md`](docs/TAKING-OVER.md)** — *if you have inherited this rather
+   than joined it.* Written for somebody who would rather not read Rust: how to read CI without
+   `gh`, which failures are the ecosystem's rather than the code's, and the one-line edit that
+   answers most red nightlies.
+7. **[`docs/BUILDER.md`](docs/BUILDER.md)** — *last, and only when you are picking up work.* It is
    a standing work order (`B1`, `B2`, …), not an introduction: it opens mid-argument and assumes
    all five documents above. The newest `docs/GRADE-*.md` and `docs/HANDOFF-*.md` are its running
    commentary — the grade says what was found, the handoff says where the last session stopped.
@@ -1420,6 +1428,7 @@ The short version of the same thing:
 | know *why* a rule exists before changing it | `docs/spec/why.md` — every rule has an entry |
 | find out whether a question is yours to answer | `docs/spec/decisions.md` |
 | pick up outstanding work | [`docs/BUILDER.md`](docs/BUILDER.md), then the newest `docs/HANDOFF-*.md` |
+| work out whether a red board is your problem | [`docs/TAKING-OVER.md`](docs/TAKING-OVER.md) |
 | see what everything in `docs/` is for | [`docs/README.md`](docs/README.md) |
 
 ## Licence

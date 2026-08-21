@@ -9,6 +9,7 @@ is and whether you need it.
 |---|---|
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | How the code is arranged, and how a `sync` flows through it. **Read this first.** |
 | [`DEVELOPMENT.md`](DEVELOPMENT.md) | Build, run without wrecking your own machine, test, debug. |
+| [`TAKING-OVER.md`](TAKING-OVER.md) | For an inheritor rather than a contributor: read the CI board, tell an ecosystem failure from a code one, and know which reds are not yours. |
 | [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | The working agreement: conventions, verification, what review asks. |
 | [`../README.md`](../README.md) | The user-facing manual. |
 | [`../examples/`](../examples/) | Working config files — a module, a resources module, a profile, a commented `preferences.toml`. Parsed by the test suite with the real grammar, so they cannot rot. |

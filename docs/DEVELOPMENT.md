@@ -138,6 +138,28 @@ the_suite` fails when the two disagree — that gate is the only reason this arr
 The suite is slow (tens of minutes on a loaded box) because a lot of it spawns the real binary.
 Background it and keep working rather than watching it.
 
+### If you change a harness, run a harness
+
+`docker/integration/run-in-container.sh` and `scripts/integration-windows.sh` are **not covered
+by the Rust suite**. `harness-logic-test.sh` lifts individual predicates out of them and tests
+those in isolation, which is valuable and is not the same thing: on 2026-08-21 a one-line change
+set a variable inside `classify_install` — which runs only when an install FAILS — and read it on
+every path. Under `set -u` that is not a wrong answer, it is the harness aborting. **Twelve
+integration jobs, every image.** `shellcheck` passed it (the variable *is* assigned, somewhere)
+and `harness-logic-test.sh` passed it (it tests the function where the variable always exists).
+
+One image answers it in ninety seconds:
+
+```sh
+docker run --rm \
+  -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
+  -v "$PWD/scripts/lifecycle-floor.txt:/src/scripts/lifecycle-floor.txt:ro" \
+  -e SHALL_IT_IMAGE=tools shall-it-tools apt jq
+```
+
+If the images are gone, [`scripts/docker-restore.sh`](../scripts/docker-restore.sh) rebuilds
+them — `--check` first, to see what is missing without changing anything.
+
 ### Two harnesses, and what only the second one can prove
 
 The Rust suite is **hermetic**: it drives mock providers through `MockExecutor`, so it proves
