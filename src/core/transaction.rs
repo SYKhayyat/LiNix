@@ -14,6 +14,64 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
+/// How far a transaction carries on past a node that failed.
+///
+/// **Three values and not two booleans**, because they are ordered and exactly one holds: a run
+/// that carries on past everything is not also a run that carries on past some of it, and a pair
+/// of flags can express that contradiction. II.29 - a kind is a type, and every dispatch over it
+/// is exhaustive.
+///
+/// A node whose *dependency* failed is never attempted under any of the three; it is reported as
+/// skipped, naming the one that stopped it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContinuePast {
+    /// Nothing. The first failed node ends the transaction and the rest is never attempted.
+    ///
+    /// Still the right answer for a failure that says the plan itself is wrong: a plan is one
+    /// change to one machine, so a member that cannot work makes the whole plan suspect and the
+    /// rest of it must not be half-applied.
+    Nothing,
+    /// A failure Shall itself classified as passing - `Transient`, or the `Exhausted` that a
+    /// transient becomes once the retry loop has falsified it.
+    ///
+    /// **The category `Y15` did not have.** That ruling drew its line between a backend this
+    /// machine does not have (skipped - the config is portable, not broken) and a package that
+    /// failed (fail the run), because in August every failure of this third kind arrived as
+    /// `Retryability::Unknown` and there was nothing to key on. There is now: a rotated registry
+    /// key or an index that will not verify is neither the config's fault nor fixable by editing
+    /// the line, and one such line must not strand the two hundred beside it any more than one
+    /// `apt:` line may strand twenty `winget:` ones.
+    ///
+    /// Continuing is still not succeeding (`G1`): the run finishes what it can, reports what it
+    /// did not, and exits non-zero.
+    ClassifiedPassing,
+    /// Any failure at all - `--keep-going`, and recovery.
+    ///
+    /// Recovery is the shape this was built for: each entry is a separate piece of interrupted
+    /// work left by a run that already died, and one that cannot be finished is not a reason to
+    /// leave the others unfinished.
+    AnyFailure,
+}
+
+impl ContinuePast {
+    /// Whether a round of failures may be carried past.
+    ///
+    /// Named rather than inlined so it can be asserted. The decision is three lines inside a
+    /// two-hundred-line scheduler loop, and a test that had to build a DAG and time a wave to
+    /// reach it would be measuring the scheduler instead of the rule.
+    ///
+    /// `every_failure_passing` is about the whole round and not one node: a batch that failed
+    /// with one `Permanent` among the transients is stopped by the `Permanent`, because that is
+    /// the one saying the plan is wrong.
+    pub fn carries_on(self, every_failure_passing: bool) -> bool {
+        match self {
+            Self::AnyFailure => true,
+            Self::ClassifiedPassing => every_failure_passing,
+            Self::Nothing => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TransactionConfig {
     pub max_concurrent: usize,
@@ -23,15 +81,8 @@ pub struct TransactionConfig {
     pub initial_backoff: Duration,
     pub max_backoff: Duration,
     pub auto_rollback: bool,
-    /// Finish every node that still can, instead of stopping at the first failure.
-    ///
-    /// Off for `sync`, and it must stay off: a plan is one change to one machine, so a member
-    /// that fails makes the whole plan wrong and the rest of it must not be half-applied.
-    /// Recovery is the opposite shape — each entry is a separate piece of interrupted work
-    /// left by a run that already died, and one that cannot be finished is not a reason to
-    /// leave the others unfinished. A node whose *dependency* failed is still never attempted;
-    /// it is reported as skipped, naming the one that stopped it.
-    pub continue_on_error: bool,
+    /// How far this transaction carries on past a node that failed.
+    pub continue_past: ContinuePast,
     /// Remove also destroys configuration (`[remove] purge`, or `uninstall --purge`). A
     /// backend that draws no such distinction removes as usual — the decision cannot be
     /// per-package because a removal happens after the line that carried it is gone.
@@ -61,7 +112,7 @@ impl TransactionConfig {
             initial_backoff: Duration::from_millis(500),
             max_backoff: Duration::from_secs(30),
             auto_rollback: true,
-            continue_on_error: false,
+            continue_past: ContinuePast::Nothing,
             purge: false,
             manager_lock_wait: Duration::from_secs(
                 crate::config::config::default_manager_lock_wait_secs(),
@@ -79,7 +130,16 @@ impl TransactionConfig {
         Self {
             max_concurrent: config.max_parallel.max(1),
             purge: config.remove.purge || config.purge_this_run,
-            continue_on_error: config.keep_going_this_run,
+            // `--keep-going` outranks the file key rather than combining with it: the flag is
+            // a per-run instruction from somebody at a keyboard, and the key is what the
+            // machine does when nobody said.
+            continue_past: if config.keep_going_this_run {
+                ContinuePast::AnyFailure
+            } else if config.sync.continue_past_transient {
+                ContinuePast::ClassifiedPassing
+            } else {
+                ContinuePast::Nothing
+            },
             manager_lock_wait: Duration::from_secs(config.manager_lock_wait_secs),
             ..Self::patient()
         }
@@ -343,7 +403,7 @@ impl Transaction {
     /// says so.
     ///
     /// Measured: the macOS nightly of 2026-08-14 ran an unrefused `purge-undeclared` over 276
-    /// removals, `gem:logger` failed, `continue_on_error` was off, and the rollback aborted
+    /// removals, `gem:logger` failed, `continue_past` was `Nothing`, and the rollback aborted
     /// every other manager's batch mid-command. The harness reported *"22 operation(s) are
     /// still open in the write-ahead log and nothing crashed"*.
     async fn close_stranded(&self, open_before: &std::collections::HashSet<String>, why: &Error) {
@@ -502,9 +562,25 @@ impl Transaction {
 
             // One package per command under `--keep-going`, so a name no repository carries
             // cannot take the installable packages beside it down with it.
-            let max_batch = match self.config.continue_on_error {
-                true => 1,
-                false => Self::MAX_BATCH,
+            //
+            // **`ClassifiedPassing` keeps the batch, and this is a trade rather than a free
+            // win.** `G1`'s argument for splitting is about a bad NAME, a fact about one
+            // member, so the batch must come apart before the good members can be told from
+            // it. The headline failures this mode carries on past are the other shape - a
+            // rotated key, an index that will not verify - and those are facts about the
+            // MANAGER, true of every member equally, so splitting to rediscover that six
+            // more times buys nothing.
+            //
+            // What it costs is the case in between: one transient download failure inside a
+            // batch of thirty takes the other twenty-nine out of THIS run, and they install
+            // on the next one. Carrying on still rescues every other manager's packages,
+            // which is the case `M2` is about, and splitting every batch by default would
+            // undo II.19 for every sync on every machine to buy the narrow one. Pinned by
+            // `a_batch_still_fails_as_one_and_that_is_the_documented_cost`, so the limit is
+            // measured rather than assumed.
+            let max_batch = match self.config.continue_past {
+                ContinuePast::AnyFailure => 1,
+                ContinuePast::Nothing | ContinuePast::ClassifiedPassing => Self::MAX_BATCH,
             };
             // **A wave is work handed out after the engine went quiet — not every pass that
             // dispatched something.** Counting passes looks equivalent and is not: two
@@ -572,6 +648,10 @@ impl Transaction {
                 // summary say one package did not install when six did not.
                 let mut first_failure: Option<Error> = None;
                 let mut failed_now: Vec<(NodeIndex, String)> = Vec::new();
+                // Whether every failure joined this round is one Shall classified as passing.
+                // Asked here, where the error is still in scope, and not re-derived later from
+                // the message: `retryability` is structured and a text match is a guess.
+                let mut every_failure_passing = true;
                 for task_data in results {
                     if task_data.result.is_ok() {
                         trace!(
@@ -638,6 +718,10 @@ impl Transaction {
                                 origin.as_deref(),
                             ));
                     }
+                    every_failure_passing &= matches!(
+                        task_data.result.as_ref().err().map(Error::retryability),
+                        Some(Retryability::Transient) | Some(Retryability::Exhausted)
+                    );
                     failed_now.push((
                         task_data.node_index,
                         format!("{}:{}", task_data.backend_name, task_data.package_name),
@@ -645,7 +729,7 @@ impl Transaction {
                     telemetry_results.push(task_data);
                 }
 
-                if self.config.continue_on_error {
+                if self.config.continue_past.carries_on(every_failure_passing) {
                     // A failed node is terminal: it will not be retried and nothing waiting on
                     // it can run, so both it and everything downstream come off the board here
                     // — otherwise the loop below never reaches `total_nodes` and reports a
@@ -2202,8 +2286,35 @@ mod from_config_tests {
 
         let mut keep_going = base();
         keep_going.keep_going_this_run = true;
-        assert!(TransactionConfig::from_config(&keep_going).continue_on_error);
-        assert!(!TransactionConfig::from_config(&base()).continue_on_error);
+        assert_eq!(
+            TransactionConfig::from_config(&keep_going).continue_past,
+            ContinuePast::AnyFailure,
+            "`--keep-going` has to reach the transaction, or the flag is decoration"
+        );
+
+        // All three states of `M2`'s wiring. The flag OUTRANKS the key rather than combining
+        // with it: somebody at a keyboard said `--keep-going`, and the key is only what the
+        // machine does when nobody said anything.
+        assert_eq!(
+            TransactionConfig::from_config(&base()).continue_past,
+            ContinuePast::ClassifiedPassing,
+            "`[sync] continue_past_transient` defaults on, so a stock machine finishes what \
+             it can past a failure Shall classed as passing"
+        );
+        let mut all_or_nothing = base();
+        all_or_nothing.sync.continue_past_transient = false;
+        assert_eq!(
+            TransactionConfig::from_config(&all_or_nothing).continue_past,
+            ContinuePast::Nothing,
+            "turning the key off has to reach the transaction, or the key is decoration"
+        );
+        let mut both = all_or_nothing.clone();
+        both.keep_going_this_run = true;
+        assert_eq!(
+            TransactionConfig::from_config(&both).continue_past,
+            ContinuePast::AnyFailure,
+            "the flag outranks the key: a run told to keep going keeps going"
+        );
 
         // A wait no default would produce, so the fallback cannot pass for the setting.
         let mut waiting = base();
@@ -2437,7 +2548,7 @@ mod batching_tests {
 
     /// The macOS nightly's own shape: one manager fails while another is mid-command.
     ///
-    /// This is the path that actually stranded 22 operations. `continue_on_error` is off, so
+    /// This is the path that actually stranded 22 operations. `continue_past` is `Nothing`, so
     /// the first failure ends the run — and every batch still inside a manager's command is
     /// killed where it stands, having opened its WAL entries and closed none.
     #[tokio::test]

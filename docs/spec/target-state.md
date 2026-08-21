@@ -3708,3 +3708,28 @@ reported as broken by an upstream key rotation.
 - **An image asserts the setup steps its managers cannot work without.** An index fetch behind
   `|| true` does not degrade to a soft skip; it degrades to a backend the nightly calls broken,
   under the wrong name, forty minutes later.
+
+## II.59 A drifted ecosystem is not a broken plan (`M2`, V.198)
+
+**`sync` stops at a failure that says the plan is wrong, and carries on past one that does not.**
+The distinction is Shall's own classification and nothing else — which is why II.58 had to come
+first: a program that answers `unknown` to everything cannot draw this line at all.
+
+- **`Transient` and `Exhausted` carry on.** A held lock, a rate-limit window, a registry that
+  rotated a signing key. The rest of the plan is attempted, what failed is named, and the
+  command still exits non-zero — continuing is not succeeding (`G1`). The key is
+  `[sync] continue_past_transient`, and it is **on**: converging the machine is what `sync` is
+  for, and a flag the user must already know about is that job half done.
+- **`Permanent`, `Refused` and anything unclassified end the run.** `Permanent` says the request
+  itself is wrong and the rest of the plan is built on it. `Unknown` means nobody looked, which
+  is not a licence to continue.
+- **A round carries on only if every failure in it was classified passing.** One `Permanent`
+  among the transients stops the transaction; without that the mode is `--keep-going` renamed.
+- **`--keep-going` outranks the key rather than combining with it.** The flag is a per-run
+  instruction from somebody at a keyboard; the key is what the machine does when nobody said.
+- **The library default stays all-or-nothing.** `TransactionConfig::patient()` is what recovery
+  and every hand-built transaction start from, and only `from_config` reads the key — a default
+  that drifted here would make every plan built on it quietly best-effort.
+
+This does not touch `Y15`'s ruling beside it: a backend this host does not have is still not a
+failure at all (II.7c), and a package that genuinely fails still fails the command (`AU1`).

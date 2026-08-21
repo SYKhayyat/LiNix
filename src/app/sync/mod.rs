@@ -356,7 +356,7 @@ impl SyncEngine {
             let _ = j.cleanup();
         }
 
-        // **`--keep-going` continues past a failure. It does not turn one into a success.**
+        // **Carrying on past a failure is not turning it into a success.**
         //
         // Its own help calls it "the per-run opt-in for a fleet rollout that would rather take
         // what it can get" — and a fleet rollout is precisely the context where the exit code
@@ -371,7 +371,7 @@ impl SyncEngine {
         let kept_going: Result<()> = match result.as_deref() {
             Ok([]) | Err(_) => Ok(()),
             Ok(failed) => Err(Error::command_failed(format!(
-                "{} operation(s) failed and `--keep-going` carried on past them: {}. What \
+                "{} operation(s) failed and the run carried on past them: {}. What \
                  succeeded is on the machine and recorded; nothing was rolled back.",
                 failed.len(),
                 failed.join(", ")
@@ -1288,7 +1288,7 @@ impl SyncEngine {
                 TransactionConfig {
                     max_concurrent: self.config.max_parallel.max(1),
                     auto_rollback: false,
-                    continue_on_error: true,
+                    continue_past: crate::core::ContinuePast::AnyFailure,
                     ..TransactionConfig::patient()
                 },
             )

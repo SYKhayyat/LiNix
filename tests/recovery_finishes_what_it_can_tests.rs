@@ -1,7 +1,8 @@
 //! One piece of unfinishable work must not leave every other piece unfinished.
 //!
-//! `sync` stops at the first failure and rolls back, and must keep doing so: a plan is one
-//! change to one machine, so a member that fails makes the whole plan wrong. Recovery is the
+//! `sync` stops at a failure that says the plan itself is wrong, and must keep doing so: a
+//! plan is one change to one machine. (Since `M2` it carries on past a failure Shall
+//! classified as passing, which is a different claim and has its own file.) Recovery is the
 //! opposite shape — each entry is a separate piece of work a run that already died left behind.
 //! `heal` used to get that property from a hand-rolled serial loop beside the transaction
 //! engine, which cost it every other property the engine has: measured on one host in one
@@ -50,7 +51,7 @@ fn graph_with_one_doomed_node() -> (
 fn recovery_config() -> TransactionConfig {
     TransactionConfig {
         auto_rollback: false,
-        continue_on_error: true,
+        continue_past: shall::core::ContinuePast::AnyFailure,
         max_retries: 0,
         ..TransactionConfig::patient()
     }
@@ -128,11 +129,13 @@ async fn a_sync_still_stops_at_the_first_failure() {
     );
     assert!(
         tx.execute_with_telemetry().await.is_err(),
-        "the default is still all-or-nothing; `continue_on_error` is opt-in and recovery is \
-         the only thing that opts in"
+        "a failure nothing classified as passing still ends the transaction; recovery is the \
+         one caller that opts past everything"
     );
-    assert!(
-        !TransactionConfig::patient().continue_on_error,
-        "the default must be the sync's, or every plan quietly becomes best-effort"
+    assert_eq!(
+        TransactionConfig::patient().continue_past,
+        shall::core::ContinuePast::Nothing,
+        "the library default must stay all-or-nothing, or every plan built on it quietly \
+         becomes best-effort"
     );
 }

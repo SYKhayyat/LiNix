@@ -51,7 +51,7 @@ pub use exit_policy::ExitPolicy;
 pub use git::{GitCommit, GitManager};
 
 pub use executor::{CommandExecutor, ExecutionLayer, RawExecutor};
-pub use transaction::{GraphAction, Transaction, TransactionConfig};
+pub use transaction::{ContinuePast, GraphAction, Transaction, TransactionConfig};
 
 pub use journal::{journalled, ActionStatus, Journal, JournalAction, JournalEntry};
 pub use snapshot::{Snapshot, SnapshotManager, SnapshotProvider};

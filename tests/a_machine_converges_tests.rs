@@ -279,7 +279,7 @@ async fn a_failed_plan_does_not_undo_the_part_that_worked_and_is_still_declared(
     assert!(
         outcome.is_err(),
         "a plan with a failing member is a failed plan — half-applying it silently is the \
-         thing `continue_on_error: false` exists to prevent"
+         thing `ContinuePast::Nothing` exists to prevent"
     );
 
     // **The assertion this act exists for.** `fd` installed, and `fd` is still declared. It is

@@ -199,21 +199,37 @@ async fn a_package_that_fails_still_fails_the_command() {
 }
 
 #[tokio::test]
-async fn keep_going_turns_a_failure_into_a_warning_and_nothing_else_does() {
+async fn only_the_flag_carries_on_past_a_failure_about_the_config() {
+    use shall::core::{ContinuePast, TransactionConfig};
     let kernel = TestKernel::new().await;
-    assert!(
-        !shall::core::TransactionConfig::default().continue_on_error,
-        "all-or-nothing stays the default; --keep-going is the opt-in"
+    assert_eq!(
+        TransactionConfig::default().continue_past,
+        ContinuePast::Nothing,
+        "the library default stays all-or-nothing; what a real run does is `from_config`'s to \
+         say, and recovery builds its own"
     );
 
+    // **`M2` moved this line and did not erase it.** A stock machine now carries on past a
+    // failure Shall itself classified as passing — a rotated key, a held lock — because that
+    // is not a fact about the config. It still stops at everything else, which is the half
+    // `Y15` ruled on and the half `AU1` is about: a package that fails still fails the command.
     let mut config = (*kernel.app.config).clone();
+    assert_eq!(
+        TransactionConfig::from_config(&config).continue_past,
+        ContinuePast::ClassifiedPassing,
+        "the default is to finish what it can past a passing failure"
+    );
     assert!(
-        !shall::core::TransactionConfig::from_config(&config).continue_on_error,
-        "the flag is the only thing that turns it on"
+        !TransactionConfig::from_config(&config)
+            .continue_past
+            .carries_on(false),
+        "and NOT past a failure nothing classified — otherwise the key is `--keep-going` for \
+         everybody, which is exactly what nobody typed"
     );
     config.keep_going_this_run = true;
-    assert!(
-        shall::core::TransactionConfig::from_config(&config).continue_on_error,
+    assert_eq!(
+        TransactionConfig::from_config(&config).continue_past,
+        ContinuePast::AnyFailure,
         "`--keep-going` has to reach the transaction, or the flag is decoration"
     );
 }

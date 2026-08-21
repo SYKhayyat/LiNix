@@ -217,6 +217,44 @@ impl GuardSettings {
     }
 }
 
+/// The `[sync]` table: what a `sync` does when one member of the plan cannot be applied.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SyncSettings {
+    /// Carry on past a failure Shall itself classified as passing, instead of ending the run
+    /// at it. On by default.
+    ///
+    /// **This is not `--keep-going` with a file form, and the difference is the reason it may
+    /// have one.** The flag's own doc a few lines below says a machine-wide setting that
+    /// silently downgrades every future failure to a warning is the destructive default nobody
+    /// typed, and that is still true. This downgrades nothing: the run exits non-zero either
+    /// way, names what it could not do, and the only thing that changes is whether the two
+    /// hundred declarations behind the failed one get attempted before it does.
+    ///
+    /// It also cannot fire on a failure that is about the config. Only `Transient` and
+    /// `Exhausted` qualify - a window, a lock, a registry that rotated a signing key - and a
+    /// classification Shall did not make is not one of them, so `Unknown` still stops the run.
+    ///
+    /// On by default because converging the machine IS what `sync` is for, and a flag the user
+    /// has to already know about is that job half done. Turn it off for a plan that must be
+    /// all-or-nothing.
+    #[serde(default = "default_continue_past_transient")]
+    pub continue_past_transient: bool,
+}
+
+impl Default for SyncSettings {
+    fn default() -> Self {
+        Self {
+            continue_past_transient: default_continue_past_transient(),
+        }
+    }
+}
+
+/// On. See [`SyncSettings::continue_past_transient`].
+fn default_continue_past_transient() -> bool {
+    true
+}
+
 /// The `[remove]` table (II.11c): what a removal means.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct RemoveSettings {
@@ -706,6 +744,10 @@ pub struct Config {
     #[serde(default)]
     pub remove: RemoveSettings,
 
+    /// The `[sync]` table (`M2`).
+    #[serde(default)]
+    pub sync: SyncSettings,
+
     /// A `uninstall --purge` for this run only. Never serialized — the file form is
     /// `[remove] purge`, and this is its per-invocation sibling.
     #[serde(skip)]
@@ -1048,6 +1090,7 @@ impl Default for Config {
             journal: JournalSettings::default(),
             nixos: NixosSettings::default(),
             remove: RemoveSettings::default(),
+            sync: SyncSettings::default(),
             purge_this_run: false,
             keep_going_this_run: false,
             btrfs_path: default_btrfs_path(),

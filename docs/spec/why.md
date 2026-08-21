@@ -7109,3 +7109,53 @@ written down the third. `nimble` had the answer all along, from the other side: 
 found` is PERMANENT and deliberately not absent, *because the line carries a `@version=` to
 correct*. A manager that does not give you that sentence cannot have an absent marker, however
 cleanly it separates the other two cases.
+
+**V.198 — Why one drifted ecosystem stops stranding the rest of the machine.** *(`M2`, answered
+2026-08-21, built the same day.)*
+
+`M1` fixed the half of the Hackage rotation that lives in CI. The half that lives on a user's
+machine was worse and took another question to find: `TransactionConfig::patient()` set
+`continue_on_error: false`, so the first failed node ended the transaction and everything the
+planner had not yet dispatched was never attempted. One `cabal:` line among two hundred
+declarations, a key rotated in a registry the user does not control, and the machine stops
+converging — for everything, not just for Haskell. The way out was `--keep-going`, a flag you
+have to already know exists.
+
+**`Y15` is this ruling's own argument, one category short.** In August, `spec_is_missing` raised
+`BackendNotFound` inside the planner's fan-out and one `apt:` line dropped the twenty `winget:`
+lines beside it. `Y15` ruled that a portable config is not a broken one: skip it, report it,
+succeed. Then it drew the line — *a package that genuinely fails still fails* — with two
+categories available, because every failure of the third kind was arriving as
+`Retryability::Unknown` and there was nothing to key on. The whole of V.197 is what created the
+third. A rotated signing key is neither the config's fault nor fixable by editing the line, and
+one such line must not strand the two hundred beside it any more than one `apt:` line may strand
+twenty `winget:` ones.
+
+**Why this earns a file key where `--keep-going` was refused one.** That flag's doc says a
+machine-wide setting which silently downgrades every future failure to a warning is the
+destructive default nobody typed, and that is still true — it is just not what this is. Nothing
+is downgraded: the exit code is unchanged, the summary names what failed, and `G1` already
+settled that continuing is not succeeding. The only thing decided here is whether the
+declarations *behind* the failed one are attempted before the run fails.
+
+**The cell that keeps it from being a rename.** `ClassifiedPassing` reads the classification
+rather than its own name: a round carries on only when every failure in it was passing, so one
+`Permanent` stops the transaction. Delete that condition and the mode becomes `--keep-going` for
+everybody, turned on by default, which is precisely the destructive default the paragraph above
+refuses. It has its own test for that reason.
+
+**And the batch stayed whole, which is a trade and not a free win.** `G1` cut the batch to one
+package per command under `--keep-going`, because a name no repository carries is a fact about
+ONE member and the batch must come apart before the good members can be told from it. The
+headline failures this mode carries on past are the other shape — a rotated key, an index that
+will not verify — which are facts about the MANAGER, true of every member equally, so splitting
+to rediscover that six more times buys nothing.
+
+The first test written for this asserted the wrong thing and said so: both packages sat on one
+mock manager, shared a command line under II.19, and the good one went down with the doomed one.
+That is real, and it is the cost. **One transient download failure inside a batch of thirty takes
+the other twenty-nine out of that run** — they install on the next. What carrying on rescues is
+every OTHER manager's packages, which is the case `M2` is about and the case `Y15` argued from;
+splitting every batch by default would undo II.19 on every sync on every machine to buy the
+narrow one. The limit has its own test rather than a sentence, because a bounded claim has to
+state its bound.

@@ -1,4 +1,4 @@
-# The decision register — 224 entries, none open
+# The decision register — 225 entries, none open
 **One file, six features, four questions waiting on the owner.** Every decision this design forces
 lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -24,7 +24,7 @@ HALF RULED had no rows, the five that remained summed to 206 against 210, and
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **219** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **220** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 | **DEFERRED** | Asked, and the owner chose to answer it later. | A ruling, when the owner returns to it. | **1** |
 | **HALF RULED** | Part of the question was answered and part was not. | A ruling on the remaining half. | **2** |
@@ -111,8 +111,8 @@ whether a bare `shall lock` still freezes all three axes is not. `Q29`'s computa
 other one. The `G` round ran the opposite way round — `docs/GRADE-2026-08-12.md`'s work order was
 implemented in one pass and the nine changes in it that a user would notice shipped ahead of any
 ruling — and all twelve were confirmed by the owner on 2026-08-14, which is why nothing from it
-is waiting now. All 224 are accounted
-for: **219 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN** — and this line
+is waiting now. All 225 are accounted
+for: **220 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -479,11 +479,12 @@ deliberately no longer has.*
 | **L3** | Do reader commands accept a torn cross-file view? **ANSWERED 2026-08-18: fix it, and the obvious fix is the wrong one.** A reader never waits on a writer; it detects one. `core::stable` reads the writer generation either side of a multi-file read and reads again if a writer committed in between. | Built the same day. |
 | **L4** | Should Part II's II.8 gain the three-scope lock model - `Writer`, `Deferred`, `Reader`? **ANSWERED 2026-08-18: the docs match the code.** II.8 and II.24 rewritten, V.194 added, and V.61's claim that the lock covers the `locks/` ledgers corrected - it never did. | Built the same day. |
 
-### M — the ecosystem-drift round of 2026-08-21 — 1
+### M — the ecosystem-drift round of 2026-08-21 — 2
 
 | | question | answered |
 |---|---|---|
 | **M1** | An upstream ecosystem broke and the nightly called it a Shall defect. Whose problem is drift, and what absorbs it? — RULED 2026-08-21: Shall's, and a dated excuse that expires. | 2026-08-21 |
+| **M2** | The same drift, on a user's machine: one `cabal:` line whose registry rotated a key stopped `sync` converging the two hundred declarations beside it. — RULED 2026-08-21: carry on past a failure Shall classed as passing, `[sync] continue_past_transient`, on by default. | 2026-08-21 |
 
 ---
 
@@ -9392,3 +9393,54 @@ an install resolves, and a marker is only safe once all three have been asked.**
 current root as the local trust anchor before `cabal update`, fetched per build so the next
 rotation is a no-op, and the three index steps that were `|| true` no longer are. That silence
 is what let an image ship broken and report it as a backend defect forty minutes later.
+
+---
+
+## M2
+
+**Status: ANSWERED — 2026-08-21, owner ruling, built in the same commit.**
+
+**M2 — A drifted ecosystem stopped the whole sync. Should it?** `M1` fixed the half of this that
+lives in CI. The half that lives on a user's machine is worse: `TransactionConfig::patient()` set
+`continue_on_error: false`, so the first failed node ended the transaction and everything the
+planner had not yet dispatched was never attempted. One `cabal:` line among two hundred
+declarations, a signing key rotated in a registry the user does not control, and the machine
+stops converging — for everything, not just for Haskell. The way out was `--keep-going`, a flag
+you have to already know exists.
+
+**`Y15` is this ruling's own argument, one category short.** That entry (2026-08-06) came from
+`spec_is_missing` raising `BackendNotFound` inside the planner's fan-out, so one `apt:` line
+dropped the twenty `winget:` lines beside it. It ruled: *that is a portable config, not a broken
+one* — skipped, reported, and the command succeeds; a package that genuinely fails still fails,
+with `--keep-going` as the per-run opt-in. It drew that line with two categories available,
+because in August every failure of the third kind arrived as `Retryability::Unknown` and there
+was nothing to key on. `M1` is what created the third: a rotated registry key or an index that
+will not verify is neither the config's fault nor fixable by editing the line.
+
+**RULED (owner, 2026-08-21): a key, configurable, with a sane default.** `[sync]
+continue_past_transient`, **on**. A failure Shall itself classified `Transient` or `Exhausted`
+no longer ends the run: the rest of the plan is attempted, what failed is named, and the command
+still exits non-zero. On by default because converging the machine IS what `sync` is for, and a
+flag the user has to already know about is that job half done.
+
+**Why this may have a file form when `--keep-going` deliberately may not.** The flag's own doc
+says a machine-wide setting that silently downgrades every future failure to a warning is the
+destructive default nobody typed, and that is still true — it is just not what this is. Nothing
+is downgraded: the exit code is unchanged, the summary names what failed, and the only thing
+decided here is whether the declarations *behind* the failed one are attempted before the run
+fails. `G1` already settled that continuing is not succeeding.
+
+**What keeps it from becoming `--keep-going` for everybody.** The mode reads the classification,
+not merely its own name. `Permanent`, `Refused` and `Unknown` all still end the run — `Permanent`
+says the request is wrong and you want to know before more of the plan runs on it, and `Unknown`
+means nobody looked, which is not a licence to continue. A round of failures carries on only if
+**every** failure in it was classified passing, so one `Permanent` among the transients stops the
+transaction. That cell has its own test, and without it the mode would be a rename.
+
+**Three things that did NOT change, each for a stated reason.** The flag outranks the key rather
+than combining with it — somebody at a keyboard said `--keep-going`, and the key is what the
+machine does when nobody said. Batching stays at `MAX_BATCH` under the new mode, because `G1`'s
+argument for one-package-per-command is about a bad NAME, which is a fact about one member of a
+batch, while the failures this mode carries on past are facts about the MANAGER and true of every
+member equally. And `TransactionConfig::patient()` — the library default that recovery and every
+hand-built transaction start from — stays all-or-nothing; only `from_config` reads the key.

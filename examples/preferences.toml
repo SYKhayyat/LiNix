@@ -77,6 +77,20 @@ show_progress = true
 # Enable verbose logging for debugging.
 verbose = false
 
+# The [sync] table: what a sync does when one member of the plan cannot be applied.
+[sync]
+# Carry on past a failure Shall itself classified as PASSING — a held lock, a rate-limit
+# window, a registry that rotated a signing key — instead of ending the run at it. On by
+# default.
+#
+# This is not `--keep-going` with a file form. The run still exits non-zero, still names what
+# it could not do, and still stops dead at a failure that is about your config: a package that
+# does not exist, a refusal, or anything Shall could not classify at all. The only thing this
+# decides is whether the declarations BEHIND the failed one are attempted before the run fails.
+#
+# Off makes a plan all-or-nothing again: the first failure of any kind ends the run.
+continue_past_transient = true
+
 # The [lock] table: what `shall lock` freezes, and whether a sync replays it.
 # Every value below is the default, so deleting the whole table changes nothing.
 [lock]

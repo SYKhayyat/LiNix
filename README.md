@@ -1350,8 +1350,16 @@ completion if you would rather pay it.
 `shall config init` writes a commented `preferences.toml` into your repo; `shall edit
 preferences.toml` opens it and re-checks that it still parses when you save. Every key is
 optional. Settings cover timeouts, concurrency (`max_parallel`), snapshot retention,
-notification channels, the `[lock]` and `[journal]` tables described above, and the `[guard]`
+notification channels, the `[lock]`, `[journal]` and `[sync]` tables, and the `[guard]`
 block that holds the removal rules described above.
+
+**One of them is worth knowing about before you meet it.** `[sync] continue_past_transient`
+is on, and it decides what happens when a package cannot be installed for a reason that is
+not about your config — a held lock, a rate-limit window, a registry that rotated a signing
+key. Shall finishes the rest of the plan, names what it could not do, and still exits
+non-zero. It does *not* carry on past a package that does not exist, a refusal, or a failure
+it could not classify: those say the plan itself is wrong, and the run ends there. Set it to
+`false` if you would rather a plan were all-or-nothing.
 
 **Where your repo lives is not a key in it.** `preferences.toml` sits *inside* the repo, so a
 key there could only be read from the directory it was trying to move away from. That one
