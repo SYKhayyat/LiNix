@@ -146,6 +146,21 @@ cache was 93 GB against a 7 GB working set. `docker builder prune` reclaims that
 touching a single image and without any rebuild — do that before deleting anything you would
 have to wait half a day to get back.
 
+**And the space is reclaimed twice, because WSL keeps its own.** Freeing bytes *inside* the
+distro does not shrink the virtual disk that holds it: on 2026-08-21 Docker went from 94 GB of
+build cache to zero and `C:` did not gain a byte, because
+`%LOCALAPPDATA%\wsl\{...}\ext4.vhdx` had already grown to **279 GB** and virtual disks do not
+shrink themselves. With Docker holding ~154 GB inside it, ~125 GB of that file was slack.
+
+```powershell
+wsl --shutdown                            # stops Docker with it
+wsl --manage Ubuntu --set-sparse true     # the disk returns free blocks from now on
+```
+
+`Get-ChildItem $env:LOCALAPPDATA\wsl -Recurse -Filter ext4.vhdx` shows the file and its real
+size. So the order to reclaim disk is: **prune the build cache, make the disk sparse, and only
+then consider deleting images** — the first two cost nothing and the third costs half a day.
+
 Docker lives **inside WSL** on this machine — there is no Docker Desktop, and `docker` missing
 from the Windows PATH means nothing. `scripts/docker-restore.sh` re-execs itself into the distro
 for you.
