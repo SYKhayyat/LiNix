@@ -175,6 +175,10 @@ for d in $DISTROS; do
     fi
 
     ENVFLAGS=""
+    # The `github:` lifecycle asks api.github.com, which rate limits by IP at 60/hour
+    # unauthenticated - low enough that a second run in the same hour loses a real
+    # install to it. Passed through when the caller has one; absent is not an error.
+    [ -n "${GITHUB_TOKEN:-}" ] && ENVFLAGS="$ENVFLAGS -e GITHUB_TOKEN=$GITHUB_TOKEN"
     smoke="${SMOKE_ONLY:-}"
     [ "$d" = gentoo ] && smoke=1
     [ -n "$smoke" ] && ENVFLAGS="$ENVFLAGS -e SMOKE_ONLY=$smoke"

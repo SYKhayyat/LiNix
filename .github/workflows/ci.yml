@@ -556,6 +556,17 @@ jobs:
   # to skip the gate, so they run only on manual dispatch.
   containers:
     name: Integration (${{ matrix.distro }})
+    # api.github.com rate limits by IP, and an Actions runner shares its IP with every
+    # other job on the pool - so the `github:` lifecycle ran at the 60/hour anonymous
+    # allowance and lost a real install to a rate limit, which the harness scored as a
+    # defect and the coverage ratchet as lost ground. Any authenticated token raises the
+    # allowance, so this one is scoped to the least that still counts as authenticated:
+    # the containers run third-party package managers, and a token they can reach is a
+    # token those managers can reach.
+    permissions:
+      contents: read
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -578,6 +589,7 @@ jobs:
     - name: Run the ${{ matrix.distro }} lifecycle
       run: |
         docker run --rm \
+          -e GITHUB_TOKEN \
           -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
           -v "$PWD/scripts/lifecycle-floor.txt:/src/scripts/lifecycle-floor.txt:ro" \
           shall-it-${{ matrix.distro }} ${{ matrix.backend }} ${{ matrix.pkg }}
@@ -625,6 +637,7 @@ jobs:
       if: matrix.distro == 'ubuntu'
       run: |
         docker run --rm --entrypoint sh \
+          -e GITHUB_TOKEN \
           -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
           -v "$PWD/scripts/lifecycle-floor.txt:/src/scripts/lifecycle-floor.txt:ro" \
           -v "$PWD/scripts/harness-mutation-test.sh:/src/scripts/harness-mutation-test.sh:ro" \
@@ -638,6 +651,17 @@ jobs:
   # and was not consulted, which is indistinguishable from not having it.
   slow-containers:
     name: Integration (${{ matrix.distro }}, nightly)
+    # api.github.com rate limits by IP, and an Actions runner shares its IP with every
+    # other job on the pool - so the `github:` lifecycle ran at the 60/hour anonymous
+    # allowance and lost a real install to a rate limit, which the harness scored as a
+    # defect and the coverage ratchet as lost ground. Any authenticated token raises the
+    # allowance, so this one is scoped to the least that still counts as authenticated:
+    # the containers run third-party package managers, and a token they can reach is a
+    # token those managers can reach.
+    permissions:
+      contents: read
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     strategy:
@@ -693,6 +717,7 @@ jobs:
       # one bolted on with the wrong name.
       run: |
         docker run --rm ${{ matrix.flags }} \
+          -e GITHUB_TOKEN \
           -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
           -v "$PWD/scripts/lifecycle-floor.txt:/src/scripts/lifecycle-floor.txt:ro" \
           shall-it-${{ matrix.distro }} ${{ matrix.backend }} ${{ matrix.pkg }}
@@ -744,6 +769,17 @@ jobs:
   # `--privileged` and the host's `/lib/modules`, and a matrix cannot vary `docker run` flags.
   storage:
     name: Integration (storage — btrfs/lvm/zfs on loopback devices)
+    # api.github.com rate limits by IP, and an Actions runner shares its IP with every
+    # other job on the pool - so the `github:` lifecycle ran at the 60/hour anonymous
+    # allowance and lost a real install to a rate limit, which the harness scored as a
+    # defect and the coverage ratchet as lost ground. Any authenticated token raises the
+    # allowance, so this one is scoped to the least that still counts as authenticated:
+    # the containers run third-party package managers, and a token they can reach is a
+    # token those managers can reach.
+    permissions:
+      contents: read
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v7
@@ -796,6 +832,7 @@ jobs:
         [ -e /dev/zfs ] && set -- --device /dev/zfs
         docker run --rm --privileged "$@" \
           -v /lib/modules:/lib/modules:ro \
+          -e GITHUB_TOKEN \
           -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
           -v "$PWD/scripts/lifecycle-floor.txt:/src/scripts/lifecycle-floor.txt:ro" \
           shall-it-storage apt jq
