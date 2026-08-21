@@ -1,0 +1,30 @@
+# modules/base.txt — the packages every one of your machines gets.
+#
+# A module is lines. A line is blank, a comment, a statement, or a block, and an
+# unrecognised line is an error naming the file and the line — never a silent typo.
+
+# A bare name is resolved through `priority` and then locked, so the machine that
+# writes the lock and the machine that reads it install the same thing.
+ripgrep
+fd
+
+# An explicit backend says which manager, and skips silently on a host that has not
+# got it. These three lines are one package under three names: each machine installs
+# its own and reports the other two as skipped, and `sync` still succeeds.
+apt:curl
+winget:cURL.cURL
+brew:curl
+
+# A chain is "the first one that has it".
+apt,cargo:bat
+
+# A version pin. `>=` and friends work where the manager understands them.
+apt:jq@version=1.6
+
+# Must NOT be installed. `absent:` is a declaration like any other, so it is checked
+# on every sync rather than being a one-off removal you have to remember to run.
+absent:snap:firefox
+
+# Whatever the manager calls it is what you write. A scoped npm name keeps its
+# leading @, and a later @ still opens the options.
+npm:@angular/cli@version=17.3.0

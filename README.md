@@ -142,6 +142,12 @@ adapters/      what you have taught Shall — see below (optional)
 preferences.toml   refusals and behaviour (written by `shall config init`)
 ```
 
+Working versions of all of these are in [`examples/`](examples/) — a module of packages, a
+module of the things that are not packages, a profile, and a fully commented
+`preferences.toml`. They are not illustrations: the test suite parses every one of them with
+the same grammar and the same `Config` type the program uses, so an example that stopped being
+true would fail the build rather than mislead you.
+
 Shall's own bookkeeping — what it currently owns, snapshot metadata — lives in
 `$SHALL_DATA_DIR`, never in the config repo and never in git.
 
@@ -1001,7 +1007,7 @@ worse than its host class has done before fails. The recorded floors:
 | native macOS runner | 8 |
 | `alpine`, `opensuse`, `slackware` images | 7 |
 | `guix` image | 3 |
-| `storage` image (btrfs/LVM/ZFS on loopback) | 5 |
+| `storage` image (btrfs/LVM/ZFS on loopback) | 8 |
 
 No single host runs them all, because no single host *has* them all — the Windows managers do
 not exist on Linux and the reverse. These numbers may rise and never fall, and the table above

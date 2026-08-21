@@ -11,6 +11,7 @@ is and whether you need it.
 | [`DEVELOPMENT.md`](DEVELOPMENT.md) | Build, run without wrecking your own machine, test, debug. |
 | [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | The working agreement: conventions, verification, what review asks. |
 | [`../README.md`](../README.md) | The user-facing manual. |
+| [`../examples/`](../examples/) | Working config files — a module, a resources module, a profile, a commented `preferences.toml`. Parsed by the test suite with the real grammar, so they cannot rot. |
 
 ## The specification
 

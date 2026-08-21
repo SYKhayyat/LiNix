@@ -1,0 +1,34 @@
+# modules/workstation.txt — the things that are not packages.
+#
+# Everything here is a declaration, which means it is converged on every sync and
+# torn down under the removal guard when it leaves the file. That is the difference
+# between this and a setup script: a script runs once and drifts afterwards.
+
+# Pull in another module by NAME — never a path, never a URL.
+use base
+
+# A managed file. The source is in your config repo, so it travels with it.
+link:./dotfiles/vimrc @target=~/.vimrc
+
+# A whole tree of them, placed as links.
+dotfiles:./dotfiles @target=~
+
+# A service, declared rather than enabled by hand.
+service:nginx @status=running
+
+# A PATH stand-in, so `node` means the one you chose.
+shim:node @source=/usr/local/bin/node18
+
+# A repository. Declared before the packages that need it, and removed with them.
+repo:apt:ppa:deadsnakes/ppa
+
+# A port. Declaring it IS opening it, so there is no @value= to write — a line
+# reading `443/tcp @value=deny` would say two opposite things at once. A default
+# policy is the one firewall line that takes a value:
+#   firewall:default/incoming @value=deny
+# Closing a port is a teardown with its own budget in the guard, because "no line
+# declares this any more" and "delete this" want different ceilings.
+firewall:443/tcp
+
+# A setting in a real settings store, not a file you hope nothing else writes.
+setting:org.gnome.desktop.interface/color-scheme @value=prefer-dark

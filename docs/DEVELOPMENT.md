@@ -233,6 +233,21 @@ The clap enum in `src/cli/args.rs` is the surface; the implementation goes in `s
 compares the map against `--help` in both directions. Classify it in `src/core/latency.rs` so it
 has a budget class, and check `tests/named_commands_exist_tests.rs` for what else expects it.
 
+### Changing the grammar, or what a config may say
+
+`examples/` is not documentation that sits beside the code — it is parsed by the code.
+`every_example_is_checked_tests` reads every `.toml` there into the real `Config` and every
+line of every `.txt` through the real grammar, so a syntax you remove or an option you rename
+fails the build at the example that still uses it. Update the examples in the same change; that
+is the point of them.
+
+The same applies to the words the grammar reserves. `every_prefix_advertises_a_line_this_grammar_accepts`
+parses each `KEYWORDS` entry's own `means` string, because that string is what an error hands
+the reader as the correct form. `service:` advertised `@state=running` when the option is
+`@status`, and `shim:` advertised `@target=` when it takes `@source=` — two of the eleven
+prefixes documenting an option the same file rejects. The first was found only because an
+example copied the advice; the second was found by the gate, thirty seconds later.
+
 ### Adding a test file
 
 Name it as a sentence describing the property, ending `_tests.rs`. Add it as a `mod` in
