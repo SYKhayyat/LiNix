@@ -2270,7 +2270,7 @@ mod tests {
         // A loop that matched nothing passes by finding nothing, and this one filters twice.
         assert!(
             checked >= 6,
-            "only {checked} prefix example(s) were checked; the filter above has stopped              matching the table and this test is asserting almost nothing"
+            "only {checked} prefix example(s) were checked; the filter above has stopped matching the table and this test is asserting almost nothing"
         );
     }
 
