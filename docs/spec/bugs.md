@@ -652,6 +652,17 @@ now folds the same way, with an `unreachable` entry counted `Permanent`: its man
 up on this machine, so the next `heal` fails identically until that changes, which is what the
 advice above it already says in words.
 
+**And the mutation shards could not see any of it.** The shard matrix targets files by path, so
+a file with no row has no coverage at all — and `src/core/error.rs` and `src/app/sync/mod.rs` had
+none, which is where all three of this fix's decision functions live: `Retryability::and_also`,
+`Error::with_note` and `summarise`. Branch logic deciding a run's reported class and its exit
+code, written the same day, with the one instrument built to probe branch logic blind to it. Two
+rows added, both single shards: `cargo mutants --list` counts 31 mutants and 73, and the nightly's
+wall clock is set by the removal guard at ~147 minutes, so neither extends it.
+
+That is the same omission the `M3` row above records — a shard follows the code, and code that
+moves into a new file leaves its coverage behind unless somebody says so.
+
 **Checked and not affected**: `search.rs` tags a backend error into a per-backend report rather
 than raising it, and nothing retries a search; the `map_err` wraps in `context.rs`, `hooks.rs`,
 `run.rs` and `shell/mod.rs` wrap join and serialisation errors, which never carried a class; and

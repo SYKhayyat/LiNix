@@ -1160,6 +1160,19 @@ jobs:
           # left mutation coverage on the day they moved - four shards still green over a file
           # that no longer holds them.
           - { what: the batch narrowing, file: src/core/batch.rs, slug: batch, shard: 0/1 }
+          # **The classification lives here, and no shard could see it.** `VI.11` and `M4`
+          # put three decision functions into these two files - `Retryability::and_also`,
+          # `Error::with_note` and `summarise` - and neither file had a row, so the branch
+          # logic that decides a run's reported class and exit code had zero mutation
+          # coverage on the day it was written. That is the same omission the row above
+          # exists to record, one file over.
+          #
+          # Single shards because both fit inside the critical path rather than extending
+          # it: `cargo mutants --list` counts 31 and 73 mutants, and `the exit codes` sets
+          # the scale at 31 minutes. The slowest shard here is the removal guard at ~147
+          # minutes, which is what the nightly's wall clock actually costs.
+          - { what: the error vocabulary, file: src/core/error.rs, slug: error, shard: 0/1 }
+          - { what: the sync engine, file: src/app/sync/mod.rs, slug: syncmod, shard: 0/1 }
     steps:
     - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@master

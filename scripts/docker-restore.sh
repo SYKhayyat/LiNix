@@ -7,7 +7,8 @@
 #
 # **Why this exists.** CI is the gate and it is comprehensive - every push builds and tests on
 # three platforms and runs seven integration images; the nightly adds tools, gentoo, guix,
-# slackware, macOS, Windows and thirteen mutation shards. What CI cannot do is answer WHY. When
+# slackware, macOS, Windows and thirteen `cargo mutants` shards. What CI cannot do is answer
+# WHY. When
 # a nightly goes red, the container is how you find out: it settled the 2026-08-21 cabal root
 # cause in four minutes when reasoning could not, and it proved a one-line harness fix in ninety
 # seconds against a forty-minute nightly on a broken `main`.
