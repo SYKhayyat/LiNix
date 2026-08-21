@@ -440,6 +440,228 @@ pub fn nimble() -> ExitPolicy {
     }
 }
 
+/// PHP / Packagist. Measured on the `tools` image, 2026-08-21:
+/// `composer global require <absent>` answers `Could not find a matching version of package
+/// <name>.`, and the same command with the network taken away answers
+/// `Temporary failure in name resolution` from inside a `could not be downloaded` line.
+///
+/// The marker is short because composer boxes its errors at 76 columns and wraps them mid
+/// sentence — anything longer than one line of that box matches nothing.
+pub fn composer() -> ExitPolicy {
+    ExitPolicy {
+        absent_markers: vec!["could not find a matching version of package"],
+        transient_markers: vec![
+            "temporary failure in name resolution",
+            "could not be downloaded",
+            "failed to open stream",
+            "could not resolve host",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
+/// OCaml. Measured on the `tools` image, 2026-08-21: `opam install -y <absent>` answers
+/// `[ERROR] No package named <name> found.` — and answers it identically with the network
+/// removed, because opam resolves against the switch's own copy of the repository.
+pub fn opam() -> ExitPolicy {
+    ExitPolicy {
+        absent_markers: vec!["no package named"],
+        transient_markers: vec![
+            "temporary failure in name resolution",
+            "could not resolve host",
+            "connection refused",
+            "failed to get sources",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
+/// HPC. Measured on the `tools` image, 2026-08-21: `spack install <absent>` answers
+/// `==> Error: cannot concretize '<name>', since '<name>' does not exist`.
+///
+/// `cannot concretize` and not `does not exist`: the second is a sentence half of these
+/// managers write about a directory, a mirror or a compiler, and spack itself writes it about
+/// a bootstrap fetch. Concretization is the step that resolves a name, so it is the step whose
+/// failure is about the name.
+pub fn spack() -> ExitPolicy {
+    ExitPolicy {
+        absent_markers: vec!["cannot concretize"],
+        transient_markers: vec![
+            "temporary failure in name resolution",
+            "all fetchers failed",
+            "fetchcacheerror",
+            "could not fetch manifest",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
+/// Python, the fast one. Measured on the `tools` image, 2026-08-21: `uv tool install <absent>`
+/// answers `Because <name> was not found in the package registry`.
+pub fn uv() -> ExitPolicy {
+    ExitPolicy {
+        absent_markers: vec!["was not found in the package registry"],
+        transient_markers: vec![
+            "temporary failure in name resolution",
+            "failed to fetch",
+            "error sending request",
+            "dns error",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
+/// kubectl plugins. Measured on the `tools` image, 2026-08-21: `kubectl krew install <absent>`
+/// answers `plugin "<name>" does not exist in the plugin index`, after saying it updated its
+/// copy of that index — which is what makes the answer a lookup rather than a guess.
+pub fn krew() -> ExitPolicy {
+    ExitPolicy {
+        absent_markers: vec!["does not exist in the plugin index"],
+        transient_markers: vec![
+            "temporary failure in name resolution",
+            "could not resolve host",
+            "connection refused",
+            "i/o timeout",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
+/// Dart. Measured on the `tools` image, 2026-08-21: `dart pub global activate <absent>` answers
+/// `could not find package <name> at https://pub.dev`.
+///
+/// **The first probe of this backend measured the wrong thing**, and the way it was wrong is
+/// the argument for measuring at all. A hyphenated bogus name answers `Not a valid package
+/// name` — pub names are `lower_snake_case` — which is a fact about the string and not about
+/// the registry, and taking it for an absent marker would have withdrawn a declaration for
+/// every real package whose name a user typed with a hyphen.
+pub fn pub_dart() -> ExitPolicy {
+    ExitPolicy {
+        absent_markers: vec!["could not find package"],
+        transient_markers: vec![
+            "temporary failure in name resolution",
+            "socketexception",
+            "connection refused",
+            "connection closed",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
+/// Elixir / Hex. Measured on the `tools` image, 2026-08-21, with Hex installed first:
+/// `mix archive.install hex --force <absent>` answers
+/// `** (Mix) No package with name <name> (from: mix.exs) in registry`.
+///
+/// **`failed to fetch record` is why this backend needs a transient list more than most.** The
+/// line above the verdict reads `Failed to fetch record for <name> from registry (using cache
+/// instead)`, so an unreachable Hex does not stop mix answering — it answers *from a stale
+/// cache*, in the same words it uses for a name that was never there. Withdrawing on that
+/// deletes a declaration whose package exists, and the transient guard in
+/// [`ExitPolicy::names_an_absent_package`] is the whole reason the absent marker is safe here.
+pub fn mix() -> ExitPolicy {
+    ExitPolicy {
+        absent_markers: vec!["no package with name"],
+        transient_markers: vec![
+            "failed to fetch record",
+            "temporary failure in name resolution",
+            "could not resolve host",
+            "connection refused",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
+/// Slackware. Measured on `vbatts/slackware:15.0`, 2026-08-21:
+/// `slackpkg -batch=on -default_answer=y install <absent>` answers
+/// `No packages match the pattern for install.`, and the same command with the network taken
+/// away never reaches that line at all — it stops at
+/// `Error downloading from http://slackware.osuosl.org/…`, having failed to resolve the mirror.
+///
+/// **That gap is what makes the marker safe, and it is not the usual shape.** Most managers here
+/// answer an unreachable index in the words they use for a missing name; slackpkg answers it in
+/// words about the mirror, and only reads its pattern once it has a list to read. There is no
+/// version axis to check either: `slackpkg` carries no `version_pin`, so a declaration behind it
+/// cannot name a version that the summary could be about.
+///
+/// This is the backend `docs/spec/bugs.md` records answering `Ok(vec![])` to a search for a
+/// package sitting in its own list. The same silence was the reason a wedged declaration behind
+/// `slackpkg:` could never be withdrawn.
+pub fn slackpkg() -> ExitPolicy {
+    ExitPolicy {
+        absent_markers: vec!["no packages match the pattern"],
+        transient_markers: vec![
+            "error downloading from",
+            "temporary failure in name resolution",
+            "unable to resolve host address",
+            "please check your mirror",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
+/// Haskell, the other one. Measured on the `tools` image, 2026-08-21, and NO absent marker came
+/// out of it: `stack install <absent>` never reaches the name. It fetches
+/// `haddock.stackage.org/snapshots.json` from S3 first, and on that day S3 answered 403 — so
+/// what stack reports about a package that does not exist is, in this image, a sentence about
+/// Amazon.
+///
+/// Recorded as transient-only rather than left with no policy at all, because the two are not
+/// the same claim. No policy says nobody looked; this says somebody looked and found that the
+/// only failures stack could be made to produce here were about the network.
+pub fn stack() -> ExitPolicy {
+    ExitPolicy {
+        transient_markers: vec![
+            "httpexceptionrequest",
+            "connectionfailure",
+            "statuscodeexception",
+            "temporary failure in name resolution",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
+/// Haskell. Measured on `ubuntu:24.04` with the `cabal-install 3.8.1.0` Ubuntu ships and again
+/// on 3.18.1.0 from ghcup, both 2026-08-21: `cabal install -- <absent>` answers
+/// `Unknown package "<name>".` — 3.18 puts `Error: [Cabal-7144]` above it, so the marker is the
+/// sentence rather than the code.
+///
+/// **The index half is why this policy exists at all.** Hackage signs its package index with
+/// TUF, and cabal verifies the root it downloads against trust anchors compiled into whichever
+/// `hackage-security` it was linked with. Hackage's root is now version 8 and takes 3
+/// signatures from 6 root keys; 3.8.1.0's anchors no longer supply them, so on 2026-08-21 every
+/// `cabal` command on a stock Ubuntu machine began answering `<repo>/root.json does not have
+/// enough signatures signed with the appropriate keys` — about the machine's index, not about
+/// the package anybody asked for.
+///
+/// Shall had no opinion. `cabal` was one of sixteen declarative backends with no policy, so the
+/// class line read `unknown`, and the nightly harness — which treats an unclassified repeat as a
+/// defect, correctly, because nothing looked — reported a working backend as broken.
+///
+/// Transient is the honest class for a repository that cannot be verified, and `Exhausted` is
+/// what makes it honest: `falsify_transience` retries, gets the same answer, and reports that
+/// somebody tested the claim and it did not clear. `Permanent` would promise the package can
+/// never install, which is false the moment the anchor is refreshed.
+///
+/// Naming the metadata files rather than one sentence is deliberate. An expired root, a rolled
+/// back timestamp and an unsigned snapshot are the same fact — this machine cannot verify this
+/// repository — and each names its own role file.
+pub fn cabal() -> ExitPolicy {
+    ExitPolicy {
+        absent_markers: vec!["unknown package"],
+        transient_markers: vec![
+            "does not have enough signatures",
+            "root.json",
+            "timestamp.json",
+            "snapshot.json",
+            "failed to download",
+            "could not resolve host",
+            "connection refused",
+            "resource vanished",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
 /// Lua rocks. The order of the marker lists is the whole policy here.
 ///
 /// luarocks reports an unreachable rock index as a fact about the *request*: three
@@ -464,6 +686,24 @@ pub fn nimble() -> ExitPolicy {
 /// problem was its `wget`, and Shall promised forever that `sync` would try again.
 pub fn luarocks() -> ExitPolicy {
     ExitPolicy {
+        // **STILL NO ABSENT MARKER, and 2026-08-21 is the day that stopped being a guess.**
+        //
+        // The note this entry carried asked for ONE measurement: whether an unreachable index
+        // prints the `failed searching manifest` warnings *alongside* the summary, which would
+        // let the transient guard tell the two cases apart. It does — four of them, measured
+        // under `--network none` — and on that evidence the summary was briefly made an absent
+        // marker.
+        //
+        // Then the version axis was measured, which the note had not thought to ask about.
+        // `luarocks install luafilesystem 99.99.99` — a rock that exists, on a machine whose
+        // index is fine — prints THE SAME SUMMARY, with no warning above it for any guard to
+        // catch. Believing it there withdraws the declaration for a real rock over a wrong
+        // version pin: the very failure this entry was written to prevent, arriving by a third
+        // road nobody had named. Not the rock, not the index — the constraint.
+        //
+        // `nimble` states the same distinction from the other side: `version not found` is
+        // PERMANENT and deliberately not absent, "because the line carries a `@version=` to
+        // correct". luarocks does not give us that sentence to match on, so it gets no marker.
         transient_markers: vec![
             "failed downloading",
             "failed searching manifest",
@@ -611,7 +851,8 @@ pub fn pixi() -> ExitPolicy {
 /// unaudited, or lose one and leave a name behind.
 pub const MANAGERS_WITH_A_POLICY: &[&str] = &[
     "apt", "dnf", "yum", "pacman", "apk", "brew", "choco", "winget", "cargo", "scoop", "nimble",
-    "luarocks", "helm", "npm", "gem", "pipx", "go", "pixi",
+    "luarocks", "helm", "npm", "gem", "pipx", "go", "pixi", "cabal", "composer", "opam", "spack",
+    "uv", "krew", "pub", "mix", "stack", "slackpkg",
 ];
 
 pub fn for_manager(name: &str) -> ExitPolicy {
@@ -627,6 +868,17 @@ pub fn for_manager(name: &str) -> ExitPolicy {
         "scoop" => scoop(),
         "nimble" => nimble(),
         "luarocks" => luarocks(),
+        "cabal" => cabal(),
+        "composer" => composer(),
+        "opam" => opam(),
+        "spack" => spack(),
+        "uv" => uv(),
+        "krew" => krew(),
+        // The backend is `pub`, which is a Rust keyword, so the function beside it cannot be.
+        "pub" => pub_dart(),
+        "mix" => mix(),
+        "stack" => stack(),
+        "slackpkg" => slackpkg(),
         "helm" => helm(),
         "npm" => npm(),
         "gem" => gem(),
@@ -835,6 +1087,46 @@ mod tests {
 
     /// A plugin source that carries no signature never grows one, so retrying is time spent
     /// reaching the same refusal. Measured against helm v4.2.3 on 2026-07-28.
+    #[test]
+    fn cabal_reads_an_unverifiable_hackage_root_as_the_index_and_not_as_the_package() {
+        let p = cabal();
+        let tuf = ExitPolicy::haystack(
+            b"<repo>/root.json does not have enough signatures signed with the appropriate keys",
+            b"",
+        );
+        assert_eq!(p.retryability(&tuf), Retryability::Transient);
+        // The whole reason this is not `Permanent`: withdrawing here deletes a declaration
+        // whose package is real and whose machine only needs its trust anchor refreshed.
+        assert!(!p.names_an_absent_package(&tuf));
+    }
+
+    #[test]
+    fn cabal_names_an_absent_package_in_both_versions_phrasings() {
+        let p = cabal();
+        for out in [
+            "cabal: Unknown package \"shall-no-such-pkg-zzz\".",
+            "Error: [Cabal-7144]
+Unknown package \"shall-no-such-pkg-zzz\". ",
+        ] {
+            assert!(
+                p.names_an_absent_package(&ExitPolicy::haystack(out.as_bytes(), b"")),
+                "cabal did not recognise its own words for a missing name: {out}"
+            );
+        }
+    }
+
+    /// A machine whose index never arrived says both things at once on some verbs. The
+    /// transient guard in `names_an_absent_package` is what keeps the first from being read
+    /// as the second, and this is the case that guard exists for.
+    #[test]
+    fn cabal_withdraws_nothing_when_the_index_failure_and_the_name_appear_together() {
+        assert!(!cabal().names_an_absent_package(&ExitPolicy::haystack(
+            b"<repo>/root.json does not have enough signatures signed with the appropriate keys
+Unknown package \"hello\".",
+            b""
+        )));
+    }
+
     #[test]
     fn helm_refusing_an_unsignable_source_is_permanent_not_transient() {
         assert_eq!(

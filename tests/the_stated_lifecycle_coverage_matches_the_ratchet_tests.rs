@@ -27,7 +27,7 @@ fn read(rel: &str) -> String {
         .replace("\r\n", "\n")
 }
 
-/// `container-linux-tools-local 26` -> `("container-linux-tools-local", 26)`.
+/// `container-linux-tools-local 28` -> `("container-linux-tools-local", 28)`.
 fn floors() -> BTreeMap<String, usize> {
     let mut out = BTreeMap::new();
     for line in read("scripts/lifecycle-floor.txt").lines() {

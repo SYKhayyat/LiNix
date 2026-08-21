@@ -390,6 +390,91 @@ for _src in $SOURCES; do
     fi
 done
 
+# The drift register, in both harnesses. `classify_install` above degrades an ecosystem failure
+# to `exhausted`, which the real-lifecycle ratchet then counts as coverage merely unmeasured —
+# right for a rate-limit window, wrong for Hackage rotating its TUF root past what the image's
+# cabal trusts, which no later run clears on its own. An excuse nothing ages is `|| true` with
+# better manners, so the excuse now needs a dated line and expires.
+#
+# Both halves are arithmetic on dates, which is exactly the shape that is wrong on a leap year
+# and right on every day somebody tests it by hand.
+echo "== an ecosystem excuse is dated, and expires"
+for _src in $SOURCES; do
+    TOTAL=$((TOTAL + 1))
+    _de="$(lift days_since_epoch "$_src")"
+    _dv="$(lift drift_verdict "$_src")"
+    if [ -z "$_de" ] || [ -z "$_dv" ]; then
+        echo "  BAD   $(basename "$_src") has no drift register: an ecosystem failure is excused forever"
+        BAD=$((BAD + 1))
+        continue
+    fi
+    (
+        # Read by the lifted `drift_verdict` and by nothing shellcheck can see through
+        # the `eval` below — the same suppression, and the same reason, as `TO_LONG` above.
+        # shellcheck disable=SC2034
+        DRIFT_WINDOW_DAYS=14
+        eval "$_de"
+        eval "$_dv"
+        _bad=0
+
+        # Civil-to-days, against dates computed elsewhere. The leap cases are the point: the
+        # formula shifts March to the start of the year precisely so 29 February needs no
+        # special case, and a wrong shift is invisible on any date in the second half of a year.
+        for _pair in 1970-01-01:0 2000-02-29:11016 2024-12-31:20088 2026-02-28:20512                      2026-03-01:20513 2026-08-21:20686; do
+            _want="${_pair#*:}"
+            _got="$(days_since_epoch "${_pair%%:*}")"
+            [ "$_got" = "$_want" ] || { echo "  BAD   ${_pair%%:*} is $_got days, not $_want"; _bad=1; }
+        done
+        # A date nobody can parse must not become day zero, which is 1970 and therefore an
+        # excuse fifty-six years past its expiry.
+        for _junk in "" "2026-8-21" "yesterday" "20260821" "2026-13-01"; do
+            days_since_epoch "$_junk" >/dev/null 2>&1 &&
+                { echo "  BAD   '$_junk' was accepted as a date"; _bad=1; }
+        done
+
+        _reg="$(mktemp)"
+        printf 'container-linux-tools-ci 25
+' > "$_reg"
+        printf 'drift container-linux-tools-ci cabal 2026-08-21
+' >> "$_reg"
+        _today=20686   # 2026-08-21, the day the line was written
+
+        _v="$(drift_verdict container-linux-tools-ci cabal "$_reg" "$_today")"
+        [ "${_v%% *}" = ok ] || { echo "  BAD   a register line dated today does not excuse (got '$1')"; _bad=1; }
+        _v="$(drift_verdict container-linux-tools-ci cabal "$_reg" $((_today + 14)))"
+        [ "${_v%% *}" = ok ] || { echo "  BAD   the last day of the window does not excuse (got '$1')"; _bad=1; }
+        _v="$(drift_verdict container-linux-tools-ci cabal "$_reg" $((_today + 15)))"
+        [ "${_v%% *}" = expired ] || { echo "  BAD   an excuse older than the window still excuses (got '$1')"; _bad=1; }
+
+        # The three ways to have no excuse, which must never be the same as having one: another
+        # backend, another host class, and a register that is not there at all. The host-class
+        # case is the one that matters — a drift line for the tools image must not excuse the
+        # same backend on ubuntu, where the lifecycle really did stop running.
+        _v="$(drift_verdict container-linux-tools-ci stack "$_reg" "$_today")"
+        [ "${_v%% *}" = unrecorded ] || { echo "  BAD   an unlisted backend was excused (got '$1')"; _bad=1; }
+        _v="$(drift_verdict container-linux-ubuntu-ci cabal "$_reg" "$_today")"
+        [ "${_v%% *}" = unrecorded ] || { echo "  BAD   one host class excused another's backend (got '$1')"; _bad=1; }
+        _v="$(drift_verdict container-linux-tools-ci cabal /no/such/register "$_today")"
+        [ "${_v%% *}" = unrecorded ] || { echo "  BAD   a missing register excused something (got '$1')"; _bad=1; }
+        # A line dated tomorrow is a typo, and must buy nothing.
+        _v="$(drift_verdict container-linux-tools-ci cabal "$_reg" $((_today - 1)))"
+        [ "${_v%% *}" = unrecorded ] || { echo "  BAD   a future-dated line was honoured (got '$1')"; _bad=1; }
+        # And a `drift` line whose date is rubbish must report, not excuse.
+        printf 'drift container-linux-tools-ci opam soon
+' >> "$_reg"
+        _v="$(drift_verdict container-linux-tools-ci opam "$_reg" "$_today")"
+        [ "${_v%% *}" = unrecorded ] || { echo "  BAD   an unparseable date was honoured (got '$1')"; _bad=1; }
+
+        rm -f "$_reg"
+        exit "$_bad"
+    )
+    if [ $? -eq 0 ]; then
+        echo "  ok    $(basename "$_src") dates an ecosystem excuse and expires it"
+    else
+        BAD=$((BAD + 1))
+    fi
+done
+
 # The coverage audit's floor. Both harnesses take `ALL_BACKENDS` and `HELP_CMDS` from the
 # program under test and then assert set-containment — and a `for` over an empty list runs
 # zero times, leaves the "untouched" string empty, and PASSes. Measured under a do-nothing

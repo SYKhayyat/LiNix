@@ -468,6 +468,102 @@ classify_install() { # be  install-spec  rc  logfile  [cleanup]
 }
 
 
+# ---------------------------------------------------------------------------------------------
+# An excuse with an expiry date.
+#
+# `classify_install` above degrades an ecosystem failure to `exhausted` — soft, and recorded in
+# `be-life-unmeasured` so the real-lifecycle ratchet counts it as measurABLE rather than as
+# coverage lost. That is right for the case it was built for, a rate-limit window with twenty
+# minutes left on it. It is wrong for the case that actually turned up: on 2026-08-21 Hackage
+# rotated its TUF root past what Ubuntu's cabal-install trusts, which is not a window that moves
+# on its own and which no later run clears until somebody changes the image.
+#
+# An excuse nothing ages is `|| true` with better manners. So a backend may be excused only
+# while a dated line in `lifecycle-floor.txt` says it is, and only for `DRIFT_WINDOW_DAYS`:
+#
+#     drift <host-class> <backend> <YYYY-MM-DD>   # what broke, in the tool's own words
+#
+# An unexcused backend does not count toward the floor, so the ratchet fails on the shortfall
+# and names it. The line to add is printed, with today's date, by the run that needed it.
+#
+# In `lifecycle-floor.txt` and not a file of its own, deliberately: `scripts/` is excluded from
+# the build context, so every gate that lives there reaches a container only by being mounted,
+# and a gate that is not mounted is a gate not in force — which this repository has already
+# paid for once, with the ratchet absent from five legs and every one of them green.
+DRIFT_WINDOW_DAYS=14
+
+# Days since 1970-01-01 for a YYYY-MM-DD, by arithmetic and not by `date -d`.
+#
+# This runs in a container (GNU date), on git-bash (GNU date) and on a macOS runner (BSD date),
+# and `-d` means a different thing on the third. Arithmetic means the same thing on all three.
+#
+# NO LINE IN THIS FUNCTION OR THE NEXT MAY END IN `}`. `harness-logic-test.sh` lifts them out of
+# both harnesses by name so the twins cannot drift, and its extractor stops at the first line
+# that closes a brace — a truncated lift is a syntax error blamed on the harness rather than on
+# the extractor. Hence `"${1#*-}"` quoted, and `if`/`fi` where a `{ …; }` guard would read
+# better.
+days_since_epoch() { # YYYY-MM-DD
+    case "$1" in
+        [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) : ;;
+        *) return 1 ;;
+    esac
+    _de_r="${1#*-}"
+    _de_y="${1%%-*}"
+    _de_m="${_de_r%%-*}"
+    _de_d="${_de_r#*-}"
+    # The padding comes off as TEXT, before any arithmetic. `$((10#08))` is a bashism, and this
+    # script is `#!/bin/sh` run by whatever the image calls `sh` — dash on Ubuntu, ash on
+    # Alpine — where it is a syntax error; plain `$((08))` is worse, because POSIX reads the
+    # leading zero as octal and `08` is not a number in base 8. Either way August and September
+    # are the two months of the year on which this gate would have failed to parse its own
+    # register, which is a fine example of why shellcheck runs on every push.
+    _de_m="${_de_m#0}"
+    _de_d="${_de_d#0}"
+    while :; do case "$_de_y" in 0?*) _de_y="${_de_y#0}" ;; *) break ;; esac; done
+    if [ "$_de_m" -lt 1 ] || [ "$_de_m" -gt 12 ]; then
+        return 1
+    fi
+    [ "$_de_m" -le 2 ] && _de_y=$((_de_y - 1))
+    _de_era=$((_de_y / 400))
+    _de_yoe=$((_de_y - _de_era * 400))
+    if [ "$_de_m" -gt 2 ]; then _de_mp=$((_de_m - 3)); else _de_mp=$((_de_m + 9)); fi
+    _de_doy=$(( (153 * _de_mp + 2) / 5 + _de_d - 1 ))
+    _de_doe=$(( _de_yoe * 365 + _de_yoe / 4 - _de_yoe / 100 + _de_doy ))
+    echo $(( _de_era * 146097 + _de_doe - 719468 ))
+}
+
+# Whether this host class may still excuse this backend, and what to say if not.
+#
+# Echoes one of `ok <days-left>`, `expired <days-old>`, `unrecorded`. Never fails the caller:
+# a register line nobody can parse is `unrecorded`, which is the direction that reports rather
+# than the direction that excuses.
+drift_verdict() { # host-class  backend  register-file  today-in-days
+    _dv_class="$1"; _dv_be="$2"; _dv_file="$3"; _dv_today="$4"
+    if [ ! -f "$_dv_file" ]; then
+        echo unrecorded
+        return 0
+    fi
+    _dv_seen="$(awk -v c="$_dv_class" -v b="$_dv_be" \
+        '$1 == "drift" && $2 == c && $3 == b { print $4; exit }' "$_dv_file")"
+    _dv_from="$(days_since_epoch "$_dv_seen" 2>/dev/null)"
+    if [ -z "$_dv_from" ]; then
+        echo unrecorded
+        return 0
+    fi
+    _dv_age=$((_dv_today - _dv_from))
+    # A line dated in the future is somebody's typo, not fourteen days of credit.
+    if [ "$_dv_age" -lt 0 ]; then
+        echo unrecorded
+        return 0
+    fi
+    if [ "$_dv_age" -gt "$DRIFT_WINDOW_DAYS" ]; then
+        echo "expired $_dv_age"
+    else
+        echo "ok $((DRIFT_WINDOW_DAYS - _dv_age))"
+    fi
+}
+
+
 # Is NAME runnable right now? `command -v` alone answers from the shell's hash table
 # and keeps naming a path after the file is gone, so a removal check written with it
 # cannot fail. A fresh `sh` has an empty cache and has to look.
@@ -2259,7 +2355,6 @@ LIFECYCLES=$(grep -c . "$LEDGER/be-life.u")
 # so a real collapse still fails this check.
 sort -u "$LEDGER/be-life-unmeasured" > "$LEDGER/be-life-unmeasured.u" 2>/dev/null || : > "$LEDGER/be-life-unmeasured.u"
 UNMEASURED=$(grep -c . "$LEDGER/be-life-unmeasured.u")
-MEASURABLE=$((LIFECYCLES + UNMEASURED))
 # A stable key. `uname -s` on git-bash is `MINGW64_NT-10.0-26200` — a Windows build number,
 # so keying on it would mint a fresh host class (and a free pass) at every OS update.
 case "$(uname -s 2>/dev/null)" in
@@ -2274,6 +2369,39 @@ HOST_FLAVOUR=""
 [ -r /etc/os-release ] && HOST_FLAVOUR="-$(. /etc/os-release 2>/dev/null; echo "${ID:-}")"
 HOST_CLASS="windows-native-${HOST_OS}${HOST_FLAVOUR}-$([ -n "${CI:-}" ] && echo ci || echo local)"
 FLOOR_FILE="$(dirname "$0")/lifecycle-floor.txt"
+
+# Which of the unmeasurable backends this host class is still allowed to excuse. See
+# `drift_verdict` above for why an excuse needs a date on it at all.
+EXCUSED=0
+: > "$LEDGER/be-life-drift-unrecorded"
+: > "$LEDGER/be-life-drift-expired"
+DRIFT_TODAY="$(days_since_epoch "$(date -u +%Y-%m-%d)")"
+while read -r _drift_be; do
+    [ -n "$_drift_be" ] || continue
+    _drift_v="$(drift_verdict "$HOST_CLASS" "$_drift_be" "$FLOOR_FILE" "$DRIFT_TODAY")"
+    case "${_drift_v%% *}" in
+        ok)      EXCUSED=$((EXCUSED + 1)) ;;
+        expired) echo "$_drift_be ${_drift_v#* }" >> "$LEDGER/be-life-drift-expired" ;;
+        *)       echo "$_drift_be" >> "$LEDGER/be-life-drift-unrecorded" ;;
+    esac
+done < "$LEDGER/be-life-unmeasured.u"
+while read -r _drift_be _drift_age; do
+    [ -n "$_drift_be" ] || continue
+    FAILC=$((FAILC + 1))
+    FAILED_NAMES="$FAILED_NAMES
+    - ecosystem drift: $_drift_be has been unmeasurable on $HOST_CLASS for $_drift_age days"
+    echo "  FAIL  ecosystem drift: $_drift_be excused on $HOST_CLASS for $_drift_age days, and the"
+    echo "        window is $DRIFT_WINDOW_DAYS. An ecosystem that has not come back on its own is not a"
+    echo "        window that moves — repair the image, or say in the register why it stays."
+done < "$LEDGER/be-life-drift-expired"
+while read -r _drift_be; do
+    [ -n "$_drift_be" ] || continue
+    soft "ecosystem drift: $_drift_be could not be measured on $HOST_CLASS and no register line excuses it"
+    echo "        It does NOT count toward the floor below, so the shortfall is reported rather"
+    echo "        than absorbed. To buy $DRIFT_WINDOW_DAYS days while the repair lands, add to $FLOOR_FILE:"
+    echo "            drift $HOST_CLASS $_drift_be $(date -u +%Y-%m-%d)"
+done < "$LEDGER/be-life-drift-unrecorded"
+MEASURABLE=$((LIFECYCLES + EXCUSED))
 if [ -f "$FLOOR_FILE" ]; then
     FLOOR=$(grep -E "^${HOST_CLASS} " "$FLOOR_FILE" 2>/dev/null | awk '{print $2}' | head -1)
     if [ -z "$FLOOR" ]; then
@@ -2290,17 +2418,18 @@ if [ -f "$FLOOR_FILE" ]; then
         echo "  FAIL  real-lifecycle ratchet: $LIFECYCLES, and $HOST_CLASS has done $FLOOR before"
         echo "        Something stopped running. A plan-smoke satisfies the audit above, so this"
         echo "        is the only check that notices coverage collapsing rather than breaking."
-        [ "$UNMEASURED" -gt 0 ] && echo "        ($UNMEASURED excused as unmeasurable, and it was still not enough.)"
+        [ "$EXCUSED" -gt 0 ] && echo "        ($EXCUSED excused by a dated register line, and it was still not enough.)"
     elif [ "$LIFECYCLES" -lt "$FLOOR" ]; then
         # Short of the floor, and the shortfall is exactly the backends nothing could measure.
         # Reported at full volume and never silently: a run that excuses coverage has to say so,
         # or "silent truncation reads as covered everything when it did not".
-        soft "real-lifecycle ratchet: $LIFECYCLES of $FLOOR on $HOST_CLASS, and $UNMEASURED backend(s) could not be measured this run"
+        soft "real-lifecycle ratchet: $LIFECYCLES of $FLOOR on $HOST_CLASS, and $EXCUSED backend(s) of $UNMEASURED unmeasurable are excused this run"
         echo "        unmeasurable: $(tr '
 ' ' ' < "$LEDGER/be-life-unmeasured.u")"
-        echo "        Each failed a real install for a reason Shall classed as passing, and did"
-        echo "        not clear on a retry — a rate-limit window, a held lock. The floor is NOT"
-        echo "        lowered for these: the next run on a clear window measures them again."
+        echo "        Each failed a real install for a reason Shall classed as passing, did not"
+        echo "        clear on a retry, and carries an unexpired \`drift\` line in $FLOOR_FILE. The"
+        echo "        floor is NOT lowered for these: the next clear run measures them again, and"
+        echo "        the register line expires in $DRIFT_WINDOW_DAYS days if it does not."
     else
         PASS=$((PASS + 1))
         echo "  PASS  real-lifecycle ratchet: $LIFECYCLES >= $FLOOR recorded for $HOST_CLASS"

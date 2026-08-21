@@ -999,7 +999,7 @@ worse than its host class has done before fails. The recorded floors:
 
 | host class | backends round-tripped |
 |---|---|
-| `tools` image (the broad ecosystem sweep) | 26 |
+| `tools` image (the broad ecosystem sweep) | 28 |
 | native Windows runner | 13 |
 | `arch` image | 12 |
 | `ubuntu` image | 10 |

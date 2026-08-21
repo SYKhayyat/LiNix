@@ -38,14 +38,33 @@ use std::sync::Arc;
 /// instead of wedging a config, and its phrasing has to come from that manager's own output —
 /// see the dated captures in `src/core/exit_policy.rs`. Never a guess: a wrong marker deletes
 /// a declaration whose package is real.
+///
+/// **Nine names left on 2026-08-21, and the instrument is the point. THREE QUESTIONS PER
+/// MANAGER, not one.** An install resolves a name, an index and a version, and a marker is only
+/// safe once all three have been asked — so each phrasing came from running that manager's own
+/// install argv three ways: against a name that does not exist, against the same name with
+/// `--network none`, and against a package that DOES exist at an impossible version.
+///
+/// Each pass caught something the others could not. Offline: `mix` answers from a stale cache
+/// when Hex is unreachable, in the same words it uses for a name that never existed, and only
+/// `Failed to fetch record` above it says which happened. Name shape: `dart pub` refuses a
+/// hyphenated name before it asks pub.dev at all, so the first capture taken for it described
+/// the string rather than the registry. And version: `luarocks` was given a marker on the
+/// strength of the offline pass and had it taken back out by this one — see below.
+///
+/// What is left here is what no machine to hand could ask. `guix`, `emerge`, `eopkg` and
+/// `slackpkg` have images, and nightly ones — their captures want that leg, not a guess. `yarn`
+/// is a different shape of gap and worth writing down: it answers
+/// `https://registry.yarnpkg.com/<name>: Not found`, which puts the package name BETWEEN the
+/// two halves that would identify the sentence, so no contiguous marker matches it and a bare
+/// `: not found` would match half the internet. `pnpm` and `asdf` never reach a lookup at all
+/// on the install path Shall drives.
 const CANNOT_REPORT_A_MISSING_NAME: &[&str] = &[
     // Registered and measured on this host.
     "appimage",
     "asdf",
     "btrfs",
     "bun",
-    "cabal",
-    "composer",
     "conda",
     "dotnet",
     "emacs",
@@ -53,41 +72,32 @@ const CANNOT_REPORT_A_MISSING_NAME: &[&str] = &[
     // helm's failures are all about names that exist — an already-installed plugin, an
     // unsignable source — so it has permanent markers and no absent ones.
     "helm",
-    "krew",
     "link",
-    // Deliberate, and documented at `exit_policy::luarocks`: luarocks reports an unreachable
-    // index as "no results for Lua 5.5", so believing it would withdraw declarations for rocks
-    // that exist. This entry is a decision, not a gap.
-    //
-    // Worth re-opening, but not on a guess: since 2026-08-02 a transient marker outranks an
-    // absent one, and luarocks already declares `failed searching manifest`. If an unreachable
-    // index prints that line *alongside* the "no results" one, the reason for this entry is
-    // gone. Nobody has measured it — the rock to run is `luarocks install <name>` against a
-    // dead `--server`, the same probe that settled choco.
+    // NOT a gap — a decision, and since 2026-08-21 a measured one. `luarocks` prints
+    // `No results matching query were found for Lua 5.1.` for THREE different facts: a rock
+    // that does not exist, an index it could not reach, and a rock that exists at a version
+    // the user did not ask for. The transient guard separates the second; nothing separates
+    // the third, so believing the summary withdraws a real declaration over a wrong version
+    // pin. See `exit_policy::luarocks`.
     "luarocks",
     "lvm",
     "mise",
-    "mix",
     "nix",
     // `nixos:` never asks nix whether an attribute exists — it writes the name into a generated
     // module and lets `nixos-rebuild` be the judge. A typo is caught at rebuild time, by nix,
     // with nix's own message about the attribute: a better error than Shall could synthesise,
     // arriving one step later than this table would prefer.
     "nixos",
-    "opam",
     "pip",
     "pkg",
     "pkg_add",
     "pkgin",
     "pnpm",
     "psresource",
-    "pub",
     "service",
     "setting",
     "snap",
-    "spack",
     "stack",
-    "uv",
     "vscode",
     "web",
     "yarn",
@@ -100,7 +110,6 @@ const CANNOT_REPORT_A_MISSING_NAME: &[&str] = &[
     "guix",
     "emerge",
     "eopkg",
-    "slackpkg",
     "mas",
     "macports",
 ];
@@ -248,6 +257,15 @@ fn a_covered_manager_recognises_its_own_words_for_a_missing_name() {
         ("choco", "shall-no-such-pkg-zzz not installed. The package was not found with the source(s) listed."),
         ("winget", "No package found matching input criteria."),
         ("nimble", "Error:  Package not found in nimble's package list."),
+        ("cabal", "cabal: Unknown package \"shall-no-such-pkg-zzz\"."),
+        ("composer", "  Could not find a matching version of package shall-no-such-pkg-zzz. Check   "),
+        ("opam", "[ERROR] No package named shall-no-such-pkg-zzz found."),
+        ("spack", "==> Error: cannot concretize 'shall-no-such-pkg-zzz', since 'shall-no-such-pkg-zzz' does not exist"),
+        ("uv", "  \u{2570}\u{2500}\u{25b6} Because shall-no-such-pkg-zzz was not found in the package registry"),
+        ("krew", "plugin \"shall-no-such-pkg-zzz\" does not exist in the plugin index"),
+        ("pub", "Because pub global activate depends on shall_no_such_zzz any which doesn't exist (could not find package shall_no_such_zzz at https://pub.dev), version solving failed."),
+        ("mix", "** (Mix) No package with name shall_no_such_zzz (from: mix.exs) in registry"),
+        ("slackpkg", "No packages match the pattern for install. Try:"),
     ];
 
     for (manager, output) in cases {
@@ -274,10 +292,22 @@ fn a_covered_manager_recognises_its_own_words_for_a_missing_name() {
 #[test]
 fn a_failure_about_a_name_that_exists_is_not_read_as_absent() {
     let cases = [
-        // luarocks names the wrong cause: the rock exists and the downloader is broken. This
-        // is the one manager deliberately left with no absent markers at all.
-        ("luarocks", "Error: No results matching query were found for Lua 5.5."),
+        // luarocks prints one summary for three different facts, and the third is why it
+        // still has no absent marker: `luarocks install luafilesystem 99.99.99` — a real rock,
+        // a working index, a version that does not exist — prints exactly this, with no
+        // warning above it for any guard to catch. Measured 2026-08-21.
+        ("luarocks", "Error: No results matching query were found for Lua 5.1."),
+        ("luarocks", "Warning: Failed searching manifest: Failed downloading https://luarocks.org/manifest-5.1\nError: No results matching query were found for Lua 5.1."),
         ("luarocks", "Warning: Failed searching manifest: Failed downloading https://luarocks.org/manifest-5.5"),
+        // Hex unreachable: mix answers from a STALE CACHE in the same words it uses for a
+        // name that never existed, and only the line above it says which happened.
+        ("mix", "Failed to fetch record for real_pkg from registry (using cache instead)\n** (Mix) No package with name real_pkg (from: mix.exs) in registry"),
+        // A dart name with a hyphen is refused before pub.dev is asked at all.
+        ("pub", "Not a valid package name: \"shall-no-such-pkg-zzz\""),
+        // slackpkg with no mirror never reaches its pattern at all, and says so about the
+        // mirror. Kept as a case because the marker above is only safe while that stays true.
+        ("slackpkg", "Error downloading from http://slackware.osuosl.org/slackware64-15.0/.
+Please check your mirror and try again."),
         // helm: the plugin is there twice over, and the source is real but unsignable.
         ("helm", "Error: plugin already exists"),
         ("helm", "Error: plugin source does not support verification. Use --verify=false"),
@@ -290,6 +320,9 @@ fn a_failure_about_a_name_that_exists_is_not_read_as_absent() {
         // A held lock is the classic transient, and the reason withdrawal reads existence
         // rather than permanence.
         ("apt", "E: Could not get lock /var/lib/dpkg/lock-frontend"),
+        // cabal cannot verify Hackage's root, so it has not looked the name up at all. The
+        // package is real and the machine's trust anchor is stale.
+        ("cabal", "<repo>/root.json does not have enough signatures signed with the appropriate keys"),
     ];
 
     for (manager, output) in cases {

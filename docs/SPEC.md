@@ -13,7 +13,7 @@ which point nobody could find a decision in it and 84 of them had no recorded an
 | [`spec/why.md`](spec/why.md) | V | The reason behind every Part II rule — each one the scar of a real bug. | **Before changing any Part II rule.** |
 | [`spec/plan.md`](spec/plan.md) | III + IV | The work in dependency order, each phase with its exit condition; then the proofs. | When picking up work. |
 | [`spec/bugs.md`](spec/bugs.md) | VI | Bugs killed by this design, and bugs carried forward. | Before building anything. |
-| [`spec/decisions.md`](spec/decisions.md) | — | **All 223 decisions. 218 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN.** Counted, not typed — `scripts/decision-count.sh --check`. | Before proposing anything. |
+| [`spec/decisions.md`](spec/decisions.md) | — | **All 224 decisions. 219 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN.** Counted, not typed — `scripts/decision-count.sh --check`. | Before proposing anything. |
 | [`attic/lessons.md`](attic/lessons.md) | — | Thirty-one lessons, each the residue of a shipped defect. For a person, once. | **Never.** It says so at the top, and it means agents. |
 
 **Parts VIII–XIII were proposal documents — artifacts and channels (`D1`–`D17`), `when`
@@ -54,7 +54,7 @@ exist across all platforms**, and how many have completed a real install → lis
 round trip is measured per host class rather than asserted here — the ratchet in
 [`scripts/lifecycle-floor.txt`](../scripts/lifecycle-floor.txt) is the number, and
 `the_stated_lifecycle_coverage_matches_the_ratchet` fails when a document disagrees with it. The
-best-covered image reaches **26**; the rest are smaller. **45 plan-smoked** on any one image.
+best-covered image reaches **28**; the rest are smaller. **45 plan-smoked** on any one image.
 
 *This sentence used to carry the count itself, and the count went stale.* It read "23 have ever
 been run against a real package manager — 7 per distro image, 18 in the `tools` image" while the

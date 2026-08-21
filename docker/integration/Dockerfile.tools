@@ -9,9 +9,14 @@
 #
 # The REAL run compiles Rust/OCaml/Haskell/Nim/HPC packages from source and can take 20–40 min;
 # that is intentional (the release owner asked for real, not simulated, coverage).
-# Every extra manager is installed/inited BEST-EFFORT (`|| true`): if one is
-# unavailable at build time the image still builds and that backend is simply not READY and
-# auto-skipped (and the COVERAGE AUDIT records that honestly).
+# Every extra manager is INSTALLED best-effort (`|| true`): if one is unavailable at build time
+# the image still builds, that backend is simply not READY and auto-skipped, and the COVERAGE
+# AUDIT records it honestly — `/etc/shall-image-managers` says which are ABSENT.
+#
+# Its INITIALISATION is not best-effort, and the difference is the whole point. A manager that is
+# missing is recorded as missing; a manager that is here with no index or no switch looks READY,
+# installs nothing, and reads as a defect in the backend. So `nix`, the opam switch and the
+# cabal/nimble/spack index steps are asserted and fail the build.
 FROM ubuntu:24.04
 ENV SHALL_IT_IMAGE=tools
 ENV DEBIAN_FRONTEND=noninteractive
@@ -142,9 +147,33 @@ RUN retry 'opam init --disable-sandboxing --bare -y \
  && opam switch show'
 # The index fetches, retried for the same reason the installers are: a manager whose index never
 # arrived is a manager whose every install fails at runtime, which reads as a backend defect.
-RUN (retry 'cabal update' || true) 2>/dev/null; echo done
-RUN (retry 'nimble -y refresh' || true) 2>/dev/null; echo done
-RUN (/opt/spack/bin/spack compiler find || true) 2>/dev/null; echo done
+#
+# ASSERTED, NOT `|| true`, and the opam block above already paid for this lesson once. Each of
+# these three is the only thing standing between its manager and an install that cannot resolve
+# anything, so a failure here does not degrade to a soft skip — it degrades to a backend the
+# nightly reports as broken, forty minutes later, under the wrong name. `flatpak` is the one
+# exemption and not an oversight: its lifecycle is soft-skipped on this image regardless (no
+# session bus), so a missing remote cannot be mistaken for a defect.
+#
+# `cabal` gets a verification command on top, for the reason the opam switch does: its failure
+# mode is a step that reports success having fetched nothing. `nimble` and `spack` get only the
+# dropped `|| true`, because a check nobody has run against a failing image is the gate this
+# repository keeps catching itself writing.
+#
+# Hackage's index is signed with TUF, and `cabal` checks the root it downloads against trust
+# anchors baked into the hackage-security it was linked with. Ubuntu 24.04 ships cabal-install
+# 3.8.1.0; Hackage's root is now version 8 and takes 3 signatures from 6 root keys, which
+# 3.8.1.0's anchors no longer supply — so `cabal update` answers `<repo>/root.json does not have
+# enough signatures signed with the appropriate keys` and the index never lands. Seeding the
+# repository's current root as the local anchor is what makes that cabal usable again; fetching
+# it per build rather than vendoring a copy is what makes the next rotation a no-op here.
+RUN retry 'mkdir -p /root/.cabal/packages/hackage.haskell.org \
+ && curl -fsSL --proto "=https" --tlsv1.2 https://hackage.haskell.org/root.json \
+      -o /root/.cabal/packages/hackage.haskell.org/root.json' \
+ && retry 'cabal update' \
+ && cabal info hello >/dev/null
+RUN retry 'nimble -y refresh'
+RUN /opt/spack/bin/spack compiler find
 RUN (retry 'flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo' || true) 2>/dev/null; echo done
 
 # The layers above delete `/var/lib/apt/lists` to stay small, which leaves apt unable to

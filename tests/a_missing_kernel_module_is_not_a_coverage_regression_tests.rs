@@ -71,9 +71,20 @@ fn every_kernel_bound_backend_records_itself_when_its_module_is_absent() {
 fn the_ratchet_counts_a_kernel_absent_backend_toward_the_floor() {
     let h = harness();
     assert!(
-        h.contains("MEASURABLE=$((LIFECYCLES + UNMEASURED + NOKERNEL))"),
+        h.contains("MEASURABLE=$((LIFECYCLES + EXCUSED + NOKERNEL))"),
         "the ratchet's MEASURABLE total does not include the kernel-absent backends, so a host \
          without a module still reads as a coverage regression"
+    );
+    // `NOKERNEL` goes in ungated and `EXCUSED` does not, and the asymmetry is the point. A
+    // missing kernel module is a fact about the machine that no retry and no repair to this
+    // repository can change, so it is excused unconditionally. An ecosystem that broke
+    // upstream is excused only against a dated `drift` line that expires (M1) — otherwise the
+    // fix for one silence installs another, and the coverage leaves while every run stays
+    // green.
+    assert!(
+        h.contains("EXCUSED=$((EXCUSED + 1))") && h.contains(r#"drift_verdict "$HOST_CLASS""#),
+        "EXCUSED no longer comes from the drift register, so an unmeasurable backend is \
+         counted toward the floor for ever and the expiry gates nothing"
     );
     assert!(
         h.contains(r#"NOKERNEL=$(grep -c . "$LEDGER/be-life-nokernel.u")"#),

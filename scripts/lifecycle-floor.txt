@@ -30,10 +30,47 @@
 # prints the exact edit when a run exceeds the record. Never lower a line to get green — that is
 # the one edit this file exists to make visible in a diff.
 #
+# THE FIRST EXCUSE IS DATED, and lives here too:
+#
+#     drift <host-class> <backend> <YYYY-MM-DD>   # and what broke, in the tool's own words
+#
+# It expires after fourteen days (`DRIFT_WINDOW_DAYS`, in both harnesses). A backend with no line
+# — or with an expired one — is NOT counted toward the floor, so the shortfall is reported rather
+# than absorbed, and the run prints the line to add with today's date on it.
+#
+# **Why an excuse needs a date at all.** The case it was built for clears by itself: a GitHub
+# rate-limit window has twenty minutes left on it and the next nightly measures the backend
+# again. The case that turned up on 2026-08-21 does not. Hackage rotated its TUF root past the
+# trust anchors compiled into the cabal-install Ubuntu ships, so every `cabal` install in the
+# `tools` image failed, and no later run would have cleared it — only an image change would.
+# Excused and never aged, that is `|| true` with better manners: the coverage leaves, the log
+# says so at full volume, and every run stays green. Fourteen days is long enough to land the
+# repair and short enough that nobody forgets it; the expiry is a FAIL naming the backend and
+# how long it has been excused, not a note.
+#
+# In THIS file and not one of its own, deliberately. `scripts/` is excluded from the Docker build
+# context, so a gate that lives there reaches a container only by being mounted — and a gate that
+# is not mounted is a gate not in force, which this repository has already paid for once, with
+# the ratchet absent from five legs and every one of them green. This file is mounted at all five
+# call sites already.
+#
+# **What this costs, stated rather than discovered.** Before the register, an `Exhausted` install
+# was excused automatically, so a GitHub rate-limit window stayed green with nobody touching
+# anything — which is what R-3 was for, after two red jobs over a classification the program had
+# already made. Now an unrecorded one does not count, so a genuine one-off flake turns a nightly
+# red once. That is the trade, and it is accepted in this direction because the two cases recover
+# differently: a real transient is measured again on the next run and goes green with no action at
+# all, while real drift stays red every night until somebody either repairs it or writes the line.
+# Red once and self-healing, against green for ever and silently uncovered.
+#
+# EMPTY ON PURPOSE, below. A `drift` line is a debt, and this is the file that makes one visible
+# in a diff. The 2026-08-21 cabal rotation needs no line: the `tools` image now seeds Hackage's
+# current root before `cabal update`, so the lifecycle is measured rather than excused.
+#
 # TWO THINGS ARE EXCUSED, and neither lowers a line. A backend whose install failed for a reason
 # Shall classed as passing and did not clear on a retry — a rate-limit window, a held lock — is
-# counted toward the floor and named in the run, because the next run on a clear window measures
-# it. So is a backend whose KERNEL MODULE this host does not have: a container borrows the host's
+# counted toward the floor and named in the run, PROVIDED an unexpired `drift` line below says
+# it may be. So is a backend whose KERNEL MODULE this host does not have: a container borrows the host's
 # kernel, so btrfs, device-mapper and the out-of-tree ZFS module are facts about the machine, and
 # no retry here ever measures them. The two are recorded apart because their remedies differ, and
 # a run that uses either says which. Before that second excuse existed, a correct run on a kernel
@@ -81,7 +118,13 @@ container-linux-alpine-local 7
 # install line refused to run as root and said so in a build log nobody read. It now installs,
 # lists, and removes `figlet` — a canary chosen because `hello`, its old one, is also cabal's
 # and cabal cannot uninstall.
-container-linux-tools-local 26
+# Raised 26 -> 28 on 2026-08-21, and the last of those two is the gate on this change. The
+# nightly of that morning measured **27** on CI with `cabal` broken by Hackage's root-key
+# rotation; the repaired image measures **28** locally, and the single lifecycle between the two
+# numbers IS cabal. Recording 27 would have left the repair ungated — the next time that index
+# fails to arrive, a run doing 27 would pass — which is the rot this file exists to prevent,
+# aimed at the very backend the change is about.
+container-linux-tools-local 28
 container-linux-opensuse-local 7
 # Added 2026-08-14 from that image's first run with no failures (pass=322 fail=1 -> the one
 # failure was a fixture this mirror does not carry, now softened, and the number below was read

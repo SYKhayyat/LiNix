@@ -3680,3 +3680,31 @@ a lockfile.
 draws: a version you typed is a decision, and the tool must not walk past it. A version Shall
 wrote down on your behalf is not a decision you made, so it may not brick every future sync
 without saying so.
+
+## II.58 A failure Shall cannot name is Shall's, and an excuse for one has a date (`M1`, V.197)
+
+**A manager's exit policy is how Shall has an opinion about what went wrong, and `Unknown` is
+not a safe default — it is Shall saying nobody looked.** Everything downstream then has to
+guess, and the integration harness guesses `defect`, which is how a working backend came to be
+reported as broken by an upstream key rotation.
+
+- **A repository or index that cannot be verified or reached is classified `Transient`.** Not
+  `Permanent`: that promises the package can never install, and it is false the moment the trust
+  anchor or the mirror is repaired. The transaction's `falsify_transience` retries it, gets the
+  same answer, and reports `Exhausted` — which is the honest claim, that somebody tested it and
+  it did not clear.
+- **A transient marker outranks an absent one in the same output.** A manager that could not
+  reach its index has not looked the name up, and several of them say so in the words they use
+  for a name that never existed — `luarocks` prints the same summary either way, `mix` answers
+  from a stale cache. Withdrawing a declaration on that deletes a line whose package is real.
+- **An absent marker comes from running the manager, never from reading about it.** Once online
+  and once with the network removed, because the second run is what shows which lines separate
+  the two cases. A backend with no marker is a **named** entry in
+  `tests/absent_marker_coverage_tests.rs`, not an unremarked default.
+- **The harnesses excuse an unmeasurable lifecycle only against a dated line.**
+  `drift <host-class> <backend> <YYYY-MM-DD>` in `scripts/lifecycle-floor.txt`, good for
+  `DRIFT_WINDOW_DAYS`. Unregistered or expired, the backend does not count toward the floor and
+  the run prints the line to add. An excuse nothing ages is `|| true` with better manners.
+- **An image asserts the setup steps its managers cannot work without.** An index fetch behind
+  `|| true` does not degrade to a soft skip; it degrades to a backend the nightly calls broken,
+  under the wrong name, forty minutes later.

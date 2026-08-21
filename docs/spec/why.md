@@ -7044,3 +7044,68 @@ counts its own holds instead, and `update` takes the lock only when nothing alre
 which is also what stops it deadlocking against itself, since `flock` is per open file
 description and a second handle in a process that already holds the lock waits for that process
 for ever.
+
+**V.197 — Why an unclassified failure is a defect in Shall, and why an excuse expires.** *(`M1`,
+answered 2026-08-21, built the same day.)*
+
+Hackage published root.json version 8. Its root role takes three signatures from six keys, and
+the cabal-install Ubuntu 24.04 ships — 3.8.1.0, released 2022, without an HTTPS transport at all
+— carries anchors that no longer supply them. `cabal update` answered `<repo>/root.json does not
+have enough signatures signed with the appropriate keys`, the `tools` image built cleanly with no
+Hackage index because that step was `|| true`, and forty minutes into the nightly the first
+`cabal install` failed. Shall printed `shall-failure-class: unknown`. The harness retried, got the
+same answer, and scored a defect — correctly, by rules it states in its own source: nothing
+classified it, so the retry *is* the evidence.
+
+**The interesting part is not cabal.** It is that `cabal` was one of sixteen declarative backends
+with no `ExitPolicy` at all, so `unknown` was the only answer any of them could ever give, and
+the file that records this describes it as the safe direction. It is safe for *withdrawal* — an
+unclassified failure keeps the declaration — and it is not safe for anything that has to act on
+the answer. The harness was the last component in the chain still willing to have an opinion, and
+it got blamed for having one.
+
+**Transient is the honest class for a repository that will not verify, and `Exhausted` is what
+makes it honest.** A retry one second later cannot clear a rotated root key, so `Transient` looks
+wrong — until you follow it: `falsify_transience` retries, fails, and downgrades to `Exhausted`,
+whose own doc says the claim was tested and *this can never work is more than was measured*.
+That is exactly the truth about a stale trust anchor. `Permanent` would have been a lie with a
+deletion attached.
+
+**Why the excuse needed a date.** `Exhausted` routes into `be-life-unmeasured`, which the
+real-lifecycle ratchet counts toward the floor — built for a GitHub rate-limit window with twenty
+minutes left on it, where the next nightly measures the backend again. A rotated root key never
+clears on its own. Left as it was, the correct fix to the classification would have turned a hard
+failure into a permanent soft one: coverage gone, log loud, every run green. So an excuse is now
+a dated line in `lifecycle-floor.txt` and expires in fourteen days, and a backend with no line
+does not count toward the floor. The register lives in that file and not one of its own because
+`scripts/` is outside the Docker build context: a gate there reaches a container only by being
+mounted, and this repository has already shipped a ratchet that was mounted nowhere and green
+everywhere.
+
+**And why the markers were measured three ways.** Ten backends gained a policy on the day —
+`cabal`, `composer`, `opam`, `spack`, `uv`, `krew`, `pub`, `mix`, `slackpkg` and `stack`, which
+got a transient list and no absent marker because the only failures it could be made to
+produce here were about Amazon S3. Absent-name coverage went from 12 to 20 of the 49 backends
+a Windows build registers. Each phrasing came from that manager's own output, three ways:
+once online against a name that does not exist, once under `--network none`,
+and once against a REAL package at an impossible version. The second pass caught `mix` answering
+from a stale cache when Hex is unreachable — identical words, with only `Failed to fetch record`
+above to say which happened — and `dart pub` rejecting a hyphenated name before it asks pub.dev at
+all, so the capture first taken for it described the string rather than the registry.
+
+**The third pass is the one worth arguing about, because it overturned an answer the second had
+just produced.** `luarocks` sat on the cannot-report list as a decision, with a note asking
+somebody to measure whether an unreachable index prints its `failed searching manifest` warnings
+alongside the `No results matching query` summary. It does — four of them — so the transient guard
+can separate those two cases, and the summary became an absent marker on that evidence. Then
+`luarocks install luafilesystem 99.99.99` printed **the same summary again**: a rock that exists,
+an index that is fine, a version that is not. No warning above it for any guard to catch. One
+sentence for three facts, and the marker came straight back out.
+
+**The lesson is about the shape of the question, not about luarocks.** The parked note named the
+axis it wanted measured and the measurement answered it correctly; the marker was still wrong,
+because a name and an index are two of the three things an install resolves and nobody had
+written down the third. `nimble` had the answer all along, from the other side: `version not
+found` is PERMANENT and deliberately not absent, *because the line carries a `@version=` to
+correct*. A manager that does not give you that sentence cannot have an absent marker, however
+cleanly it separates the other two cases.

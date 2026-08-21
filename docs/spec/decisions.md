@@ -1,4 +1,4 @@
-# The decision register — 223 entries, none open
+# The decision register — 224 entries, none open
 **One file, six features, four questions waiting on the owner.** Every decision this design forces
 lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -24,7 +24,7 @@ HALF RULED had no rows, the five that remained summed to 206 against 210, and
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **218** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **219** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 | **DEFERRED** | Asked, and the owner chose to answer it later. | A ruling, when the owner returns to it. | **1** |
 | **HALF RULED** | Part of the question was answered and part was not. | A ruling on the remaining half. | **2** |
@@ -111,8 +111,8 @@ whether a bare `shall lock` still freezes all three axes is not. `Q29`'s computa
 other one. The `G` round ran the opposite way round — `docs/GRADE-2026-08-12.md`'s work order was
 implemented in one pass and the nine changes in it that a user would notice shipped ahead of any
 ruling — and all twelve were confirmed by the owner on 2026-08-14, which is why nothing from it
-is waiting now. All 223 are accounted
-for: **218 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN** — and this line
+is waiting now. All 224 are accounted
+for: **219 ANSWERED, 2 PARKED, 1 DEFERRED, 2 HALF RULED, 0 BUILT NEVER RULED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -478,6 +478,12 @@ deliberately no longer has.*
 | **L2** | Do the six `locks/` ledgers come under a lock of their own? **ANSWERED 2026-08-18: fix it in the most robust way.** Not by moving them - `locks/` is generated, in git, and yours, and relocating it would remove a feature to close a race. `LockFile::update` holds one lock across the load, the change and the save; every write that does not is named in a gate with the sentence that says why. | Built the same day. |
 | **L3** | Do reader commands accept a torn cross-file view? **ANSWERED 2026-08-18: fix it, and the obvious fix is the wrong one.** A reader never waits on a writer; it detects one. `core::stable` reads the writer generation either side of a multi-file read and reads again if a writer committed in between. | Built the same day. |
 | **L4** | Should Part II's II.8 gain the three-scope lock model - `Writer`, `Deferred`, `Reader`? **ANSWERED 2026-08-18: the docs match the code.** II.8 and II.24 rewritten, V.194 added, and V.61's claim that the lock covers the `locks/` ledgers corrected - it never did. | Built the same day. |
+
+### M — the ecosystem-drift round of 2026-08-21 — 1
+
+| | question | answered |
+|---|---|---|
+| **M1** | An upstream ecosystem broke and the nightly called it a Shall defect. Whose problem is drift, and what absorbs it? — RULED 2026-08-21: Shall's, and a dated excuse that expires. | 2026-08-21 |
 
 ---
 
@@ -9330,3 +9336,59 @@ schedules one and the Portage one - and both are cited from `target-state.md`, s
 to V.192 pointed at either. The Portage entry is now V.193 and its citations follow it.
 
 ---
+
+---
+
+## M1
+
+**Status: ANSWERED — 2026-08-21, owner ruling, built in the same commit.**
+
+**M1 — An upstream ecosystem broke. Whose problem is that, and what absorbs it?** On 2026-08-21
+Hackage published root.json version 8, whose root role takes three signatures from six keys that
+the cabal-install Ubuntu 24.04 ships — 3.8.1.0, and no HTTPS transport either — does not have.
+`cabal update` answered `<repo>/root.json does not have enough signatures signed with the
+appropriate keys`, the `tools` image shipped with no Hackage index, and forty minutes into the
+nightly `cabal install hello` failed. The harness scored it `defect`, correctly by its own rules,
+and the terminator probe went red behind it because no cabal verb could resolve an operand.
+
+**The first answer written down was that this was ecosystem variance and the image's problem.**
+The owner's tayneh killed it in one line: *if Shall can't deal with ecosystem drift, it's a Shall
+problem.* And the measurement was worse than the one backend — **16 of 23 declarative backends
+had no `ExitPolicy` at all**, so every failure any of them ever produced classified as `unknown`,
+which is Shall saying *nobody looked*. The harness was not guessing wrong; it was the only thing
+in the chain still willing to have an opinion.
+
+**Ruled, in three parts.**
+
+1. **A failure Shall cannot name is a defect in Shall, not variance in the ecosystem.** A
+   repository or index that cannot be verified or reached classifies **transient**, so
+   `falsify_transience` retries it, gets the same answer and reports `Exhausted` — somebody
+   tested the claim and it did not clear. `Permanent` would promise the package can never
+   install, which is false the moment the trust anchor is repaired.
+2. **An excuse has an expiry date.** The harnesses may excuse an unmeasurable lifecycle only
+   against a dated `drift <host-class> <backend> <YYYY-MM-DD>` line in
+   `scripts/lifecycle-floor.txt`, and only for fourteen days. Unregistered or expired, the
+   backend does not count toward the floor. The rate-limit window this excuse was built for
+   clears itself in twenty minutes; a rotated root key never does, and excused-but-never-aged is
+   `|| true` with better manners.
+3. **Marker sets come from running the manager, not from reading its docs.** Ten backends
+   gained a policy on the day and nine of them an absent marker, taking absent-name coverage
+   from 12 to 20 of the 49 a Windows build registers. Every phrasing was captured from the
+   manager itself, three ways: online against a name that does not exist, under
+   `--network none`, and against a package that DOES exist at an impossible version.
+
+**A third pass was added mid-flight, and it overturned part of the second.** `mix` answers from
+a stale cache when Hex is unreachable, in identical words, with only `Failed to fetch record`
+above it to say so. `dart pub` refuses a hyphenated name before it asks pub.dev at all, so the
+capture first taken for it was a fact about the string. And `luarocks` — which sat on the
+cannot-report list as a *decision*, with a note asking for exactly the offline measurement — was
+given an absent marker on the strength of that measurement and then had it taken straight back
+out, because a real rock at an impossible version prints the same summary with no warning above
+it. The register now records the general form: **a name, an index and a version are three things
+an install resolves, and a marker is only safe once all three have been asked.**
+
+**And the image, which is still repaired, for a different reason than the one first given.** Not
+*not our bug* — a test rig whose cabal cannot reach Hackage measures nothing. It seeds Hackage's
+current root as the local trust anchor before `cabal update`, fetched per build so the next
+rotation is a no-op, and the three index steps that were `|| true` no longer are. That silence
+is what let an image ship broken and report it as a backend defect forty minutes later.
