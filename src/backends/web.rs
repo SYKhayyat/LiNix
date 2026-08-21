@@ -295,8 +295,10 @@ impl Installable for WebInstallable {
             // to 32 hex characters — this names a folder, it does not verify anything.
             let id = {
                 use sha2::{Digest, Sha256};
+                // `hex::encode`, not `format!("{:x}")`: the `LowerHex` impl belongs to the
+                // array type the digest returns, and the array type changes under `sha2`.
                 let digest = Sha256::digest(spec.name.as_bytes());
-                format!("{:x}", digest)[..32].to_string()
+                hex::encode(digest)[..32].to_string()
             };
             let dest_dir = self.core.install_dir.join(&id);
             if dest_dir.exists() {

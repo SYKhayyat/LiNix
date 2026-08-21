@@ -66,6 +66,17 @@ fn generate_checksum_blocking(path: &PathBuf) -> Result<String> {
     let mut file = File::open(path).map_err(Error::from)?;
     let mut hasher = Sha256::new();
     // Streamed, not read to a Vec: these files are arbitrarily large binaries.
-    io::copy(&mut file, &mut hasher).map_err(Error::from)?;
+    //
+    // Fed by hand rather than by `io::copy`, which needs the hasher to be an `io::Write` — an
+    // impl that comes from a crate feature `sha2` has since removed, so the copy is the line
+    // that stops compiling on the next major. `update` is the interface the hash actually has.
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = io::Read::read(&mut file, &mut buf).map_err(Error::from)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
     Ok(hex::encode(hasher.finalize()))
 }
