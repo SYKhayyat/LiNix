@@ -44,11 +44,11 @@ tokio = { version = "1.35", features = [
 ] }
 async-trait = "0.1"
 futures = "0.3"
-dashmap = "5.5" # Thread-safe LockMap implementation
+dashmap = "6.2" # Thread-safe LockMap implementation
 tokio-util = { version = "0.7", features = ["rt"] }
 
 # Graph Theory & Execution Planning
-petgraph = "0.6" # DAG support
+petgraph = "0.8" # DAG support
 
 # CLI & Configuration
 clap = { version = "4.4", features = ["derive"] }
@@ -67,7 +67,7 @@ thiserror = "2.0"
 # Scripting & Templating
 mlua = { version = "0.12", features = ["lua54", "vendored", "async"] }
 rhai = { version = "1.15", features = ["sync"] }
-tera = "1.19" 
+tera = "2.1" 
 
 # Networking & API Integration
 # rustls (not native-tls) so we don't drag in OpenSSL — that made static musl/Alpine
@@ -77,7 +77,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 # measured 200ms, once, on whichever thread got there first — a fifth of a second on `shall path`
 # for a GitHub API budget it never spends. `MonotonicClock` (std `Instant`) resolves to
 # nanoseconds, and the fastest quota here is 80 requests per MINUTE.
-governor = { version = "0.6", default-features = false, features = ["std", "jitter"] }
+governor = { version = "0.10", default-features = false, features = ["std", "jitter"] }
 
 # System Utilities & Persistence
 walkdir = "2.4"
