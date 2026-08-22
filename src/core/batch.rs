@@ -242,6 +242,18 @@ pub(super) async fn run_one_command(
         ),
     }
 }
+/// The members of `specs` covering `lo..hi`, or nothing at all.
+///
+/// **A removal carries no specs**, so `specs` is empty while `names` is not, and every slice of
+/// it has to survive that. Clamping only the END is not enough: `specs[p..0]` with `p > 0` has a
+/// start past its end, which panics rather than yielding nothing — so narrowing any removal batch
+/// of more than one member panicked its worker (`VI.12`). The bisecting path clamped both ends
+/// and was fine; the per-member path clamped one. One function now, because two of them is how
+/// they came to disagree.
+fn specs_for(specs: &[PackageSpec], lo: usize, hi: usize) -> &[PackageSpec] {
+    let end = hi.min(specs.len());
+    &specs[lo.min(end)..end]
+}
 
 /// Ask the manager again in pieces, and work out which members were actually the problem.
 ///
@@ -274,7 +286,7 @@ pub(super) async fn narrow_batch(
     if config.batch_recovery == BatchRecovery::Every {
         for p in 0..n {
             let out = run_one_command(
-                &specs[p..(p + 1).min(specs.len())],
+                specs_for(specs, p, p + 1),
                 &names[p..p + 1],
                 backend_cap,
                 b_name,
@@ -298,7 +310,7 @@ pub(super) async fn narrow_batch(
 
     let ask = |lo: usize, hi: usize| async move {
         run_one_command(
-            &specs[lo.min(specs.len())..hi.min(specs.len())],
+            specs_for(specs, lo, hi),
             &names[lo..hi],
             backend_cap,
             b_name,
@@ -320,12 +332,15 @@ pub(super) async fn narrow_batch(
         }
     }
 
+    // **Every range in here holds at least two members, so there is no one-member case to
+    // handle.** The first entry does because narrowing does not fire below two (`narrows`), and
+    // a pushed entry does because the arm above `Some(_) => work.push(...)` answers a failed
+    // half of one directly rather than queueing it. A `hi - lo == 1` guard used to sit at the
+    // top of this loop; it could not run, and the mutation shard reported its comparison as a
+    // survivor for exactly that reason - an equivalent mutant is what unreachable code looks
+    // like from the outside.
     let mut work: Vec<(usize, usize)> = vec![(0, n)];
     while let Some((lo, hi)) = work.pop() {
-        if hi - lo == 1 {
-            verdict[lo] = Some(err_of(ask(lo, hi).await).map_or(Ok(()), Err));
-            continue;
-        }
         let mid = lo + (hi - lo) / 2;
         let left = err_of(ask(lo, mid).await);
         let right = err_of(ask(mid, hi).await);

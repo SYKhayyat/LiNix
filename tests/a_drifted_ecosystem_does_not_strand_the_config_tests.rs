@@ -275,6 +275,92 @@ async fn off_asks_once_and_the_batch_fails_as_a_unit() {
     );
 }
 
+/// **Narrowing a batch of removals, which nothing had ever asked it to do.**
+///
+/// `run_one_command` hands `specs` to `install` and `names` to `remove`, and every narrowing
+/// test in this file drives installs — so the `names` slice it builds was never read by anything
+/// that could notice it being wrong. The mutation shard said so out loud: replacing `p + 1` with
+/// `p * 1` in `narrow_batch` makes that slice **empty**, and survived, because an unused slice
+/// cannot be observed to be the wrong one.
+///
+/// An empty name list handed to `remove` is a command that removes nothing while the run records
+/// a per-member verdict saying it did — the registry and the machine then disagree, which is the
+/// `S87` shape.
+async fn narrow_a_removal(kernel: &TestKernel, recovery: BatchRecovery) -> Vec<String> {
+    let backend = RecordingBackend::named(DRIFTED, &shared_log())
+        .unremovable("c")
+        .build();
+    let mut registry = BackendRegistry::new();
+    registry.register(capabilities(&backend));
+    let mut graph = StableDiGraph::new();
+    for name in ["a", "b", "c", "d"] {
+        graph.add_node(GraphAction::Remove {
+            name: name.into(),
+            backend: DRIFTED.into(),
+        });
+    }
+    let mut tx = Transaction::with_config(
+        graph,
+        Arc::new(registry),
+        kernel.app.journal.clone(),
+        kernel.app.diagnostics.clone(),
+        kernel.app.config.clone(),
+        quartet(recovery),
+    )
+    .guarded_by(shall::app::sync::guard::Reaped::for_reason(
+        shall::app::sync::guard::GuardScope::Remove,
+        "a unit test of batch narrowing over removals",
+    ));
+    let _ = tx.execute_with_telemetry().await;
+    backend.calls()
+}
+
+/// Every command a narrowed removal issues names the packages it is removing. The assertion that
+/// matters is not the shape of the bisection but that **no command is issued with an empty name
+/// list** — the one thing the surviving mutant produced.
+#[tokio::test]
+async fn a_narrowed_removal_never_asks_the_manager_to_remove_nothing() {
+    let kernel = TestKernel::new().await;
+
+    for recovery in [BatchRecovery::Bisect, BatchRecovery::Every] {
+        let calls = narrow_a_removal(&kernel, recovery).await;
+
+        assert!(
+            !calls.is_empty(),
+            "{recovery:?} issued no removal command at all, so this proves nothing"
+        );
+        assert!(calls.len() > 1, "{recovery:?} never narrowed: {calls:?}");
+        for call in &calls {
+            let names = call
+                .strip_prefix(&format!("{DRIFTED} remove "))
+                .unwrap_or_else(|| panic!("unexpected command shape: {call}"));
+            assert!(
+                !names.trim().is_empty(),
+                "{recovery:?} asked the manager to remove nothing: {calls:?}. A per-member \
+                 command whose name list is empty removes nothing and still reports a \
+                 verdict for that member."
+            );
+        }
+    }
+}
+
+/// And the verdict itself: the one bad member is the one that fails, and the other three are
+/// removed. Narrowing over removals has to earn its keep the same way it does over installs.
+#[tokio::test]
+async fn narrowing_a_removal_still_removes_every_good_member() {
+    let kernel = TestKernel::new().await;
+    let calls = narrow_a_removal(&kernel, BatchRecovery::Every).await;
+
+    for good in ["a", "b", "d"] {
+        assert!(
+            calls
+                .iter()
+                .any(|c| c == &format!("{DRIFTED} remove {good}")),
+            "`{good}` was never removed on its own, so the bad member took it down: {calls:?}"
+        );
+    }
+}
+
 /// `every` is the thorough answer and the expensive one: it asks about each member whatever the
 /// halves would have said. Five commands here against bisection's five - and on a manager-wide
 /// failure it is thirty-one against three, which is the trade the setting exists to let somebody

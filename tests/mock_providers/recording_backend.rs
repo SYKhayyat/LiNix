@@ -46,6 +46,10 @@ struct Machine {
     /// that is briefly unreachable, which is the only state in which the retry loop's backoff
     /// runs at all.
     flaky: BTreeSet<String>,
+    /// Names whose **removal** fails every time, and takes the rest of its command line down
+    /// with it. The removal twin of `always_flaky`: narrowing is not an install-only mechanism,
+    /// and until this existed nothing could ask it to narrow anything else.
+    unremovable: BTreeSet<String>,
 }
 
 pub struct RecordingBackend {
@@ -145,6 +149,14 @@ impl RecordingBackendBuilder {
         self
     }
 
+    /// **Removing** this name fails every time, and every other name on the same command line
+    /// fails with it — the removal half of [`Self::always_flaky`], and the only way to make a
+    /// batch of removals worth narrowing.
+    pub fn unremovable(mut self, name: &str) -> Self {
+        self.machine.unremovable.insert(name.to_string());
+        self
+    }
+
     pub fn build(self) -> Arc<RecordingBackend> {
         Arc::new(RecordingBackend {
             name: self.name,
@@ -238,6 +250,22 @@ impl Installable for RecordingBackend {
     async fn remove(&self, names: &[String], _sudo: bool, _reaped: Reaped) -> Result<()> {
         self.record(format!("{} remove {}", self.name, names.join(" ")));
         let mut machine = self.machine.lock().unwrap();
+        // Mirrors `always_flaky`, down to the `Transient`: one bad member fails the whole command
+        // line, because that is what a package manager does and what makes the line worth
+        // narrowing. **Transient and not `Permanent`** — `M3` deliberately does not narrow a
+        // permanent failure, since the transaction is ending over it and the pieces would be
+        // asked and thrown away. A `Permanent` here issues one command and no narrowing at all,
+        // which is what the first draft of this measured.
+        if let Some(bad) = names.iter().find(|n| machine.unremovable.contains(*n)) {
+            return Err(Error::CommandFailed {
+                message: format!(
+                    "`{}` could not reach its index to remove {}",
+                    self.name, bad
+                ),
+                retry: Retryability::Transient,
+                absent_name: false,
+            });
+        }
         for name in names {
             machine.installed.remove(name);
         }

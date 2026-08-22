@@ -675,3 +675,46 @@ allowance a single busy hour exhausts. Shall's own error says what to do about i
 `GITHUB_TOKEN` for a far larger allowance" — and no harness container was given one. All four now
 are, scoped `contents: read`, because a container running third-party package managers is a
 container those managers can read a token out of.
+
+## VI.12 Narrowing a batch of removals panicked, and one of the two slices four lines apart was right
+
+`M3` gave a failed batch a second chance by asking about its pieces. A removal carries **no
+`PackageSpec`** — the engine removes by name — so inside `narrow_batch` the `specs` slice is empty
+while `names` is not, and every slice of `specs` has to survive that.
+
+Two places slice it. They were written differently, and only one of them survives:
+
+```rust
+&specs[lo.min(specs.len())..hi.min(specs.len())]   // bisecting: clamps BOTH ends. Fine.
+&specs[p..(p + 1).min(specs.len())]                // per-member: clamps the END only.
+```
+
+Clamping the end is not enough. With `specs` empty the second reads `specs[p..0]`, whose start is
+past its end for every `p > 0` — not an empty slice, a panic:
+
+```
+panicked at src/core/batch.rs:277:23
+range start index 1 out of range for slice of length 0
+```
+
+So **`shall sync` narrowing two or more removals panicked its worker**, and the engine reported
+`Worker Panic` in place of the narrowing that was meant to save the good members. **FIXED**: one
+`specs_for(specs, lo, hi)` serves both call sites, because two of them is how they came to
+disagree.
+
+**Nothing could have found this by reading, and the thing that did find it was four steps away.**
+The nightly mutation shard reported a survivor: replacing `p + 1` with `p * 1` on the line *below*
+the panic, which makes the `names` slice empty. It survived because `run_one_command` hands
+`specs` to `install` and `names` to `remove` — and **every narrowing test in the repo drives
+installs**, so the `names` slice had never been read by anything that could notice it was wrong.
+Writing the first test that narrows removals is what ran the code at all.
+
+**The first draft of that test was wrong in the useful way.** The mock had no way to fail a
+removal, so one was added — and mirrored `failing` (`Permanent`) rather than `always_flaky`
+(`Transient`), which its own doc comment claimed to be the twin of. `M3` deliberately does not
+narrow a `Permanent` failure, since the transaction is ending over it. The test reported exactly
+that: one command, no narrowing. A test that discriminates says which of the two it is looking at.
+
+**Checked and not affected**: `names[lo..hi]` and `names[p..p + 1]` need no clamp — `names` is
+what `n` is measured from, so those indices are in range by construction. The `Off` path issues
+one command over the whole batch and slices nothing.
