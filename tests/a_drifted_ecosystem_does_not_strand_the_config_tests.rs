@@ -257,6 +257,73 @@ async fn two_failing_halves_is_the_manager_and_narrowing_stops_dead() {
     );
 }
 
+/// **Which half's error each member is given, when both halves failed.**
+///
+/// Narrowing stops when two halves both fail, and every member then inherits an error from the
+/// half it was in — `if p < mid { left } else { right }`. Nothing asserted that split: the
+/// mutation shard replaced `<` with `>` and with `==` and both survived, because every existing
+/// test here reads the command log rather than the verdicts.
+///
+/// It is worth getting right because each half's error is about a *shorter* command line than
+/// the parent's, so it names a smaller set of suspects. Handing a member the other half's error
+/// points the reader at packages that were never on its command line.
+#[tokio::test]
+async fn each_member_inherits_the_error_of_the_half_it_was_in() {
+    let kernel = TestKernel::new().await;
+    // One bad member in each half, and the mock names the one it choked on - so the two halves
+    // fail with textually different errors and the attribution is visible.
+    let backend = RecordingBackend::named(DRIFTED, &shared_log())
+        .always_flaky("a")
+        .always_flaky("c")
+        .build();
+
+    let mut registry = BackendRegistry::new();
+    registry.register(capabilities(&backend));
+    let mut graph = StableDiGraph::new();
+    for name in ["a", "b", "c", "d"] {
+        graph.add_node(install(name, DRIFTED));
+    }
+    let mut tx = Transaction::with_config(
+        graph,
+        Arc::new(registry),
+        kernel.app.journal.clone(),
+        kernel.app.diagnostics.clone(),
+        kernel.app.config.clone(),
+        quartet(BatchRecovery::Bisect),
+    );
+    let results = tx.execute_with_telemetry().await.unwrap_or_default();
+
+    let blamed: std::collections::HashMap<String, String> = results
+        .iter()
+        .filter_map(|r| {
+            r.result
+                .as_ref()
+                .err()
+                .map(|e| (r.package_name.clone(), e.to_string()))
+        })
+        .collect();
+
+    assert_eq!(
+        blamed.len(),
+        4,
+        "every member should have failed here: {blamed:?}"
+    );
+    for (member, expected_suspect) in [("a", "a"), ("b", "a"), ("c", "c"), ("d", "c")] {
+        let got = &blamed[member];
+        // **`contains("a")` is true of every one of these messages**, because the mock says
+        // "could not reach its index for <name>" and `reach` has an `a` in it. The first draft
+        // asserted exactly that and passed against a deliberately inverted comparison. The
+        // suspect is matched with the words in front of it, which only the real name follows.
+        let needle = format!("index for {expected_suspect}");
+        assert!(
+            got.contains(&needle),
+            "`{member}` was given an error naming something other than `{expected_suspect}`, so \
+             it inherited the wrong half's verdict and points the reader at a package that was \
+             never on its command line: {got}"
+        );
+    }
+}
+
 /// `off` is the behaviour every run had before `M3`, kept as a setting for anyone who measures
 /// the narrowing costing them more than it returns.
 #[tokio::test]

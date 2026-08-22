@@ -7,14 +7,17 @@ use thiserror::Error;
 /// backoff rounds against the second only delay the report. `Unknown` retries, because that
 /// is what every failure did before this distinction existed and a wrong guess in that
 /// direction costs time rather than correctness.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// **The variants are declared least-optimistic-last, and that order is the semantics.** `Ord`
+/// is derived from it, so "the worse of two verdicts" is `a.max(b)` rather than a hand-written
+/// comparison over a rank table. The rank table was the first version; its `>` had an
+/// equivalent mutant that no test could kill, because two ranks are equal exactly when the two
+/// variants are the same one and both branches then return the same value. A property carried
+/// by the type has nothing to compare and nothing to get wrong.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Retryability {
     /// A lock someone else holds, a dropped connection, a mirror that timed out.
     Transient,
-    /// The same command will fail the same way. Retrying cannot help.
-    Permanent,
-    /// Nothing classified it.
-    Unknown,
     /// It was called transient, retried, and came back the same. The claim was tested and
     /// failed — so a further retry is not worth suggesting, but "this can never work" is more
     /// than was measured: the cause may be a broken `wget` on the PATH, fixable tomorrow.
@@ -22,30 +25,23 @@ pub enum Retryability {
     /// Kept apart from `Unknown` because the two lead to different sentences. `Unknown` means
     /// nobody looked; this means somebody did.
     Exhausted,
+    /// Nothing classified it.
+    Unknown,
+    /// The same command will fail the same way. Retrying cannot help.
+    Permanent,
 }
 
 impl Retryability {
     /// The verdict for a run that carried on past several failures.
     ///
     /// One question is being answered — *will running this same command again succeed?* — so
-    /// the least optimistic answer wins: `Permanent` > `Unknown` > `Exhausted` > `Transient`.
-    /// `Unknown` outranks `Exhausted` and `Transient` because a failure nobody classified may
-    /// yet be a permanent one, and calling the run retryable on the strength of the classified
-    /// half is a promise about the half nobody looked at.
+    /// the least optimistic answer wins: `Permanent` > `Unknown` > `Exhausted` > `Transient`,
+    /// which is the order the variants are declared in. `Unknown` outranks `Exhausted` and
+    /// `Transient` because a failure nobody classified may yet be a permanent one, and calling
+    /// the run retryable on the strength of the classified half is a promise about the half
+    /// nobody looked at.
     pub fn and_also(self, other: Self) -> Self {
-        fn rank(r: Retryability) -> u8 {
-            match r {
-                Retryability::Transient => 0,
-                Retryability::Exhausted => 1,
-                Retryability::Unknown => 2,
-                Retryability::Permanent => 3,
-            }
-        }
-        if rank(other) > rank(self) {
-            other
-        } else {
-            self
-        }
+        self.max(other)
     }
 }
 
