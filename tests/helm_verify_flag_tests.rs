@@ -64,12 +64,25 @@ fn fake_tool(name: &str, fixture: &str) -> PathBuf {
     dir
 }
 
+/// Put the fakes' directory on `PATH`, **once for the whole binary**.
+///
+/// `std::env::set_var` mutates process-global state, and the tests in this file run on separate
+/// threads of one binary. Both used to call this, so two threads wrote `PATH` concurrently while
+/// a third read it to spawn a probe — and a probe that cannot find its program answers `None`,
+/// which is "could not tell" rather than "the flag is absent". That is exactly how this file
+/// failed on `x86_64-unknown-linux-gnu` in run #303 and passed on the re-run and on every other
+/// target: a writer-writer race, not a wrong answer.
+///
+/// Both tests hand in the same directory — `fake_tool` puts every fake in one place — so writing
+/// it once serves all of them, and `Once` also makes every later caller block until the write
+/// has finished rather than racing past it.
 fn with_dir_on_path(dir: &Path) {
-    let old = std::env::var("PATH").unwrap_or_default();
-    let sep = if cfg!(windows) { ";" } else { ":" };
-    if !old.starts_with(&*dir.to_string_lossy()) {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let old = std::env::var("PATH").unwrap_or_default();
+        let sep = if cfg!(windows) { ";" } else { ":" };
         std::env::set_var("PATH", format!("{}{}{}", dir.display(), sep, old));
-    }
+    });
 }
 
 #[test]
